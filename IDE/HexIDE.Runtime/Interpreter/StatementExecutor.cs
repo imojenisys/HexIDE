@@ -789,7 +789,16 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             var identifier = varOrProcCall.GetText() ?? throw new VBRunTimeException(context, VBStandardError.ObjectRequired, "Null variable name");
             // A UDT is a value type: `b = a` stores an independent deep copy so mutating b never touches a.
             if (!interpreter.ExecutionContext.TryGetVariable(currentEnv, identifier, out var oldLet))
-                throw new VBRunTimeException(context, VBStandardError.ObjectRequired, "Variable " + identifier + " is not declared");
+            {
+                // VB6 creates an undeclared variable on first use — a procedure-local Variant, Empty, fresh
+                // per call (all measured). "Require Variable Declaration" is OFF by default in VB6, so a
+                // module without Option Explicit is the ordinary case rather than a legacy one, and this
+                // used to raise Err 424 on it. (#171)
+                if (currentModule.PrePass.RequireVariableDefinitions)
+                    throw new VBVariableNotDefinedException(identifier);
+                interpreter.ExecutionContext.AllocVariable(currentEnv, identifier, Vb6Value.Variant);
+                interpreter.ExecutionContext.TryGetVariable(currentEnv, identifier, out oldLet);
+            }
             interpreter.ExecutionContext.TryUpdateVariable(currentEnv, identifier, BasicInterpreter.CopyIfValueType(value));
             // Refcount (Phase 4.2): a Variant slot that held an object and is now overwritten by a scalar drops
             // that reference — release it (no-op unless the old value was an object). The new value is non-object
