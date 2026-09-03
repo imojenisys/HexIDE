@@ -1,4 +1,7 @@
 using HexIDE.Lsp;
+using HexIDE.Lsp.Messages;
+using Microsoft.Extensions.Logging;
+using StreamJsonRpc;
 
 // NB: namespace deliberately avoids a `Lsp` segment — see VBLspClientTests.
 namespace HexIDE.Tests.LspClient;
@@ -23,14 +26,22 @@ namespace HexIDE.Tests.LspClient;
 /// </para>
 ///
 /// <para>
-/// These assertions read the compiled assembly manifest rather than the package graph, which is the
-/// stricter and more useful test: the compiler emits a reference only for an assembly actually
-/// <em>used</em>. <c>Newtonsoft.Json</c> is already in this project's transitive package closure —
-/// StreamJsonRpc brings it — so "is it in the closure" would fail today and tell us nothing. What
-/// matters is that we never bind to it, which is also an AOT requirement: the JSON path has to stay
-/// on the source-generated <c>LspJsonContext</c>, and every <c>JsonRpc</c> / message-handler
-/// construction has to use the 3-arg overload, because the shorter ones silently default to the
-/// Newtonsoft formatter.
+/// Two different instruments, deliberately. The OmniSharp guard reads the compiled assembly manifest
+/// rather than the package graph, because the compiler emits a reference only for an assembly actually
+/// <em>used</em> — so it catches binding, not mere presence. The formatter guard instead asserts the
+/// object the client really builds.
+/// </para>
+///
+/// <para>
+/// Neither is phrased as "Newtonsoft is absent from the closure", and that is the point: it is
+/// <em>present</em> today because StreamJsonRpc brings it, and that is a fact about StreamJsonRpc
+/// which is visibly in motion — its closure currently carries both the old <c>MessagePack</c> and the
+/// newer <c>Nerdbank.MessagePack</c>, and Microsoft is consolidating on System.Text.Json. A guard
+/// written against that fact would quietly become vacuous the day the dependency is dropped, while
+/// still passing. What must stay true regardless is that the JSON path never leaves the
+/// source-generated <c>LspJsonContext</c> — every <c>JsonRpc</c> and message-handler construction has
+/// to use the 3-arg overload, because the shorter ones silently default to a Newtonsoft formatter and
+/// that fails quietly under AOT rather than loudly.
 /// </para>
 /// </summary>
 public class LspSerializationBoundaryTests
@@ -40,16 +51,16 @@ public class LspSerializationBoundaryTests
             .Select(a => a.Name ?? string.Empty);
 
     [Fact]
-    public void TheGuardsInThisClassCanActuallyFail()
+    public void TheManifestReadCanActuallySeeAThirdPartyBinding()
     {
-        // The control. Both assertions below are "X is absent", which is exactly the shape that keeps
-        // passing after the instrument stops working — a trimming change, a compiler change, or a
-        // rename would leave two permanently-green tests guarding nothing. StreamJsonRpc is a
-        // third-party assembly this project genuinely binds, so seeing it proves the manifest read
-        // discriminates rather than returning an empty or BCL-only list.
+        // The control for the OmniSharp guard, which asserts an ABSENCE — exactly the shape that keeps
+        // passing after the instrument stops working. A trimming change, a compiler change or a rename
+        // would leave a permanently-green test guarding nothing. StreamJsonRpc is a third-party
+        // assembly this project genuinely binds, so seeing it proves the manifest read discriminates
+        // rather than returning an empty or BCL-only list.
         ReferencedAssembliesOfLspClient()
             .Should().Contain("StreamJsonRpc",
-                "if this disappears, the absence assertions below have stopped meaning anything");
+                "if this disappears, the OmniSharp assertion has stopped meaning anything");
     }
 
     [Fact]
@@ -63,15 +74,32 @@ public class LspSerializationBoundaryTests
     }
 
     [Fact]
-    public void TheLspClientDoesNotBindToNewtonsoftEvenThoughItIsInTheClosure()
+    public async Task TheClientHandsEveryTransportASystemTextJsonFormatter()
     {
-        // StreamJsonRpc puts Newtonsoft.Json in the package graph whether we want it or not. Present
-        // is fine; bound is not. Binding it would mean something took a JsonRpc or message-handler
-        // overload that defaults to the Newtonsoft formatter, bypassing the AOT-safe
-        // SystemTextJsonFormatter + LspJsonContext — which fails silently under AOT rather than loudly.
-        ReferencedAssembliesOfLspClient()
-            .Should().NotContain(name => name.StartsWith("Newtonsoft", StringComparison.OrdinalIgnoreCase),
-                "the JSON path must stay on the source-generated LspJsonContext; a Newtonsoft binding "
-              + "means a 1- or 2-arg JsonRpc/handler overload slipped in");
+        // The JSON path must stay on the source-generated LspJsonContext: the shorter JsonRpc and
+        // message-handler overloads silently default to a Newtonsoft formatter, and under AOT that
+        // fails quietly rather than loudly.
+        //
+        // Asserted against the object the client actually builds, NOT against what is in the package
+        // closure. Newtonsoft's presence there is a fact about StreamJsonRpc's own dependencies, which
+        // is visibly in motion — its closure currently carries both the old MessagePack and the newer
+        // Nerdbank.MessagePack — and Microsoft is consolidating on STJ. A guard phrased as "Newtonsoft
+        // is absent" would silently become vacuous the day that dependency is dropped, while still
+        // passing. This one keeps meaning the same thing either way.
+        var transport = Substitute.For<ILspTransport>();
+        transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IJsonRpcMessageHandler?>(null));
+
+        await new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>()).StartAsync();
+
+        var formatter = (IJsonRpcMessageFormatter?)transport.ReceivedCalls()
+            .Single(c => c.GetMethodInfo().Name == nameof(ILspTransport.ConnectAsync))
+            .GetArguments()[0];
+
+        formatter.Should().BeOfType<SystemTextJsonFormatter>();
+        ((SystemTextJsonFormatter)formatter!).JsonSerializerOptions.TypeInfoResolver
+            .Should().BeSameAs(LspJsonContext.Default,
+                "the AOT-safe source-generated resolver is the point — a plain SystemTextJsonFormatter "
+              + "without it reflects at runtime and fails under trimming");
     }
 }
