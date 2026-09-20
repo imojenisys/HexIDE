@@ -927,3 +927,55 @@ working route is the Properties window itself: `interact` with `set_property` on
 commit through the same validation the user gets. `set_value` on that row's `Edit` writes the text and does
 **not** commit — the binding updates on focus loss and Enter does not stand in for it — so a caller who uses
 the obvious verb sees success and no rename.
+
+## Every automation route to a new document saves it, so the pathless state cannot be reached
+
+**Symptom.** `add_file` says, in its own description, "Adds a new form or module to the project, **saves it
+to disk**, and returns the file path." `--newproject` — the flag the documented dev loop uses on every
+launch — goes further and saves the whole project into `%TEMP%` before the first tool call
+(`DesktopStartup.cs:47`). So a caller driving HexIDE through automation never sees a document that has no
+file.
+
+**Why that matters more than it sounds.** #489 measured that in real VB6 a document with no file is the
+*ordinary* state: nothing is written until the project is saved. #273 names such a document
+`untitled:<Project>/<Name>.<ext>` on the wire, and that branch was measured against five foreign language
+servers precisely because a branch nothing exercises is a branch that rots. A model asked to verify it
+through this surface will call `add_file`, see a `file:` URI, and reasonably conclude the `untitled:`
+spelling is dead code.
+
+**Workaround, and it is not obvious.** Drive the real menu: `dump_visual_tree` to find
+`MenuItem[Project]`, `interact` with `expand`, `dump_visual_tree` again scoped to it, then `interact` with
+`invoke` on `MenuItem[Add Module]`. That reaches `ProjectService.AddNewModule` — which, as of today, also
+writes (hexide-io/HexIDE#500). The only genuinely pathless document reachable at all is the initial `Form1`
+of a project created through `File > New Project` **in the UI**, which `--newproject` skips.
+
+**Suggested fix.** Two parts, and the first is cheap. (1) `add_file` should say which of the two states it
+leaves the document in, and gain a way to ask for the other — a caller cannot currently express "add it the
+way the user's own menu does". (2) A launch flag that creates a project without saving it, so the dev loop
+can reach the state the product will normally be in once #500 lands. Until then, any verification of
+`untitled:` naming through this surface is verifying something the surface itself prevents.
+
+## `invoke_menu_item` cannot resolve a built-in submenu item until its parent has been expanded
+
+**Symptom.** `invoke_menu_item(path: "Project/Add Module")` answers
+`{"success":false,"error":"Menu item 'Add Module' not found"}`. The path is correct, the header matches its
+documented normalisation, and the item is plainly there — `dump_visual_tree` after an `expand` lists it as
+`MenuItem[Add Module]` with an `invoke` provider, and invoking it that way works.
+
+**Cause.** Avalonia does not realise a `MenuItem`'s children until the parent opens, so the resolver walks a
+menu whose submenus are all empty. A dump of the menu bar before expanding shows every top-level item with
+`"children":[]`, which is the same evidence.
+
+**Why the reply misleads.** The tool's description already warns that built-in items using routed commands
+"may not execute correctly via this tool", so the natural reading of a failure is *that*: the item was found
+and the command would not run. It was not found at all, and for an unrelated reason that a caller cannot
+distinguish from a wrong path, a renamed item, or a disabled one. This is the `list_lsp_messages` shape
+again — one message covering several causes.
+
+**Workaround.** The generic trio: `dump_visual_tree`, `interact` with `expand` on the top-level item,
+`dump_visual_tree` scoped to it, then `interact` with `invoke`. Four calls where one was offered.
+
+**Suggested fix.** Expand the parent chain as part of resolution — the resolver already has the path, and
+opening a menu is exactly what a user does before clicking an item in it. Failing that, the error must say
+that the parent was found and its children were not realised, and name the `expand` route; "not found" for a
+path whose parent resolved is the ambiguity this file exists to remove.

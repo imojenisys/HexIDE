@@ -3837,8 +3837,24 @@ Across the whole session the only file VB6 wrote that was not asked for was a 16
 > Explorer renders it `Form2 (Form2)` — the name repeated where a filename goes — and the *Save changes to
 > the following files?* prompt lists it as a bare `Form2` beside `Project1.vbp`.
 
-This settles hexide-io/HexIDE#489 in favour of **never write until the project is saved**. That was already
-the route the tree was shaped for; it is also, simply, what VB6 does.
+This settles hexide-io/HexIDE#489 in favour of **never write until the project is saved**.
+
+**And HexIDE does not do that today, which this measurement is what established.** The sentence that first
+stood here said route B "was already the route the tree was shaped for". That was wrong, and it was wrong in
+the way this file exists to catch: it generalised a true statement about the *consumers* — the interpreter,
+the serializers and the sidecar all work from memory and never ask where a document lives — into a false one
+about the *creation* paths. Driving the real IDE is what showed the difference, and only because the gesture
+was performed rather than reasoned about:
+
+| how a document comes into being in HexIDE | has a file at once? |
+|---|---|
+| `File > New Project`, its initial `Form1` | **no** — `IProjectTemplate.StandardEXE` leaves the path null and nothing writes |
+| `--newproject`, its initial `Form1` | yes — `DesktopStartup` saves the whole project into `%TEMP%` straight away |
+| `Project > Add Form` / `Add Module` / `Add Class Module` / `Add User Control` / `Add Property Page` | **yes** — each mints `%TEMP%\hexide_<Name>_<guid>`, assigns the path and writes the file (`ProjectService.AddNewForm` and its four siblings) |
+
+So HexIDE is a hybrid of routes A and B, which is precisely the inconsistency #489's title reported: two Add
+commands answering differently. Reaching route B is implementation work, filed separately; this row of the
+table is the oracle's part of it.
 
 ### `Save Project` asks for every pathless file first, and the project last
 
