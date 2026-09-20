@@ -187,9 +187,26 @@
 - [ ] 2.4b Diagnostics under the old name are withdrawn as the close is sent: the pull result id is dropped,
   and for a push server the client records an empty set for that name on that connection, so the ledger and
   the caches keyed on it clear through the existing channel.
-- [ ] 2.5 Route every request through the session's current name, gated on the session being open, as the
+- [x] 2.5 Route every request through the session's current name, gated on the session being open, as the
   carried-file editor already does. The Object Browser's request for a document nobody opened goes through the
   same resolver.
+  — `GetDocumentUri()` is replaced by `LiveDocumentUri`, which reads the session and answers null when none
+  is open; the ten request methods answer emptily rather than asking. The mint survives in exactly one
+  place, the `LspDocumentSession` constructor.
+  — **The defect this closed was silent, and it is the one 2.1 would otherwise have shipped.** The session's
+  name is fixed at open, but every request minted a fresh one from the identity, which reads the path live.
+  So from a document's first save the lifecycle notifications still said `untitled:` while every request
+  said `file:`. The bundled server answers an unknown URI with an empty array and no error, so hover,
+  completion, folding, Go To Definition, rename and formatting went quiet with nothing logged and nothing
+  thrown, and the procedure dropdown emptied on the next diagnostics tick.
+  — `GetDocumentUriPublic` deliberately keeps a fallback to the minted name. Its two callers compare a
+  server's reply against "this document", and a null would read as "not this one" — the wrong answer for a
+  reply that can only have been about this document. A comparison is not a request, so it is not gated.
+  — **The spec delta does not reach this.** The contract is requirement prose in `specs/lsp-client/spec.md`
+  ("fixed when the document is opened … never by reading the document's current path") and its only scenario
+  is *Building the project*, which speaks about closed/opened/moved and so says nothing about a request sent
+  under a recomputed name. Covered by a deliberate test rather than a scenario count, and both new tests
+  were checked by reverting `LiveDocumentUri` to the old expression and watching them redden.
 - [x] 2.6 Retire scheme routing: `SchemeLanguageOf`, the scheme branch of `ClaimantsFor` and the identifier as
   a claim.
   — Done **after** 2.7 and 2.8, per 2.7a, and that ordering earned itself: the branch was already

@@ -729,11 +729,35 @@ public class PullDiagnosticsReportKindTests : IAsyncDisposable
     /// never happened" is the same message whether the client ignored something or the server fell over —
     /// this is where the second case gets to say so.
     /// </param>
+    /// <remarks>
+    /// <para>
+    /// <b>Thirty seconds, matching every other polling deadline in this suite.</b> It was ten, and ten is
+    /// roughly 4x what these tests take locally — which a loaded CI runner ate, twice, on commits that
+    /// touched nothing near this code (hexide-io/HexIDE#503). A generous deadline costs a passing run
+    /// nothing, because this returns the moment the condition holds.
+    /// </para>
+    /// <para>
+    /// <b>A timeout says so, in those words.</b> On expiry the old message rendered as
+    /// "it settled on: from before the file was closed" — a verbatim description of the very defect these
+    /// tests guard against, produced by an answer that had simply not arrived yet. Anyone reading it went
+    /// hunting a counter-monotonicity bug that was not there. "The wrong answer won" and "no answer
+    /// arrived" want opposite investigations, so they must not share a message.
+    /// </para>
+    /// </remarks>
     private static async Task Until(Func<bool> condition, string what, Func<string>? extra = null)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var limit = TimeSpan.FromSeconds(30);
+        var deadline = DateTime.UtcNow + limit;
         while (!condition() && DateTime.UtcNow < deadline) await Task.Delay(25);
-        condition().Should().BeTrue("{0}", extra is null ? what : $"{what} — {extra()}");
+
+        if (condition()) return;
+
+        var detail = extra is null ? what : $"{what} — {extra()}";
+        throw new TimeoutException(
+            $"Timed out after {limit.TotalSeconds:0}s waiting for a condition this test needs the server "
+          + $"to reach. THIS IS A TIMEOUT, not the condition being evaluated and found false: the last "
+          + $"observed state below is what had arrived so far, which on a slow machine is simply the "
+          + $"previous answer rather than the wrong one winning. {detail}");
     }
 
     [Fact]

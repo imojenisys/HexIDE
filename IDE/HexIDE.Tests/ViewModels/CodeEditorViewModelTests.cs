@@ -522,6 +522,57 @@ public class CodeEditorViewModelTests : IDisposable
         _lspClient.Received().DiagnosticsPublished -= Arg.Any<EventHandler<PublishDiagnosticsParams>>();
     }
 
+    // ── The name a request goes out under ────────────────────────────
+
+    [AvaloniaFact]
+    public async Task ARequestAfterAFirstSaveStillNamesTheDocumentTheSessionOpened()
+    {
+        // The defect 2.5 closes, and it was silent. The session's name is fixed when it opens, but every
+        // request used to be minted fresh from the identity -- which reads the path live. So from the
+        // moment a document was first saved, the lifecycle notifications still said `untitled:` while
+        // every request said `file:`. The bundled server answers an unknown URI with an empty array and no
+        // error, so hover, completion, folding, Go To Definition, rename and formatting simply went quiet.
+        //
+        // Since #489 established that a document normally HAS no file until the project is saved, a first
+        // save is the ordinary path into this, not a corner of it.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        var vm = CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        module.AbsolutePath = OperatingSystem.IsWindows() ? @"C:\proj\Module1.bas" : "/proj/Module1.bas";
+
+        await vm.RequestHoverAsync(new Position(0, 0));
+
+        await _lspClient.Received(1).RequestHoverAsync(
+            "untitled:TestProject/Module1.bas", Arg.Any<Position>(), Arg.Any<CancellationToken>());
+        await _lspClient.DidNotReceive().RequestHoverAsync(
+            Arg.Is<string>(u => u.StartsWith("file:")), Arg.Any<Position>(), Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public async Task NoRequestIsSentOnceTheSessionHasClosed()
+    {
+        // A request naming a document no server was told about is not a question with a wrong answer; it
+        // is one nobody can be expected to answer, and asking invites exactly the silence above. Disposal
+        // is the reachable way to observe it -- the editor is gone, but a pending completion task or a
+        // queued symbol refresh can still arrive.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        var vm = CreateSut().Initialize(module);
+        vm.Dispose();
+        _sut = null;
+        _lspClient.ClearReceivedCalls();
+
+        var hover = await vm.RequestHoverAsync(new Position(0, 0));
+        var folds = await vm.RequestFoldingRangesAsync();
+
+        hover.Should().BeNull();
+        folds.Should().BeEmpty();
+        await _lspClient.DidNotReceive().RequestHoverAsync(
+            Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>());
+        await _lspClient.DidNotReceive().RequestFoldingRangesAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
     // ── LSP delegation with Module URI ───────────────────────────────
 
     [AvaloniaFact]

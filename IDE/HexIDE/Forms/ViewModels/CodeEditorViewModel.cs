@@ -371,7 +371,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // isProjectMember: true -- this window opens forms, modules, classes, UserControls and
         // PropertyPages, and every one of them is a member. That is what gates a `.cls` away from a LaTeX
         // server claiming the same extension (#279); the carried-file editor states the opposite.
-        session = new LspDocumentSession(lspClient, Document, GetDocumentUri(), isProjectMember: true);
+        session = new LspDocumentSession(
+            lspClient, Document, DocumentWireName.For(Identity), isProjectMember: true);
 
         // Forwarded into this class's own event rather than re-exposed as a pass-through. The view
         // subscribes once when it attaches and never replays, so a subscription that landed on the session
@@ -443,7 +444,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     private async Task RefreshSymbolsAsync()
     {
         if (!lspClient.IsRunning) return;
-        var symbols = await lspClient.RequestDocumentSymbolsAsync(GetDocumentUri());
+        if (LiveDocumentUri is not { } uri) return;
+        var symbols = await lspClient.RequestDocumentSymbolsAsync(uri);
         _symbols = symbols;
         Avalonia.Threading.Dispatcher.UIThread.Post(() => RefreshProcedureNames());
     }
@@ -498,9 +500,30 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     private IEnumerable<DocumentSymbol> FlattenedSymbols() =>
         _symbols is null ? [] : _symbols.SelectMany(s => s.Flatten());
 
-    // Through the seam converter, never spelled out here: what a document is called on the wire is one
-    // decision, and this used to be one of eight places that each made it separately.
-    private string GetDocumentUri() => DocumentWireName.For(Identity);
+    /// <summary>
+    /// The name this document's LIVE session is known by, or null when no session is open.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Read off the session, not minted per request.</b> It used to call
+    /// <c>DocumentWireName.For(Identity)</c> on every request, which reads the path live — so from the
+    /// moment a document was first saved, every lifecycle notification still said <c>untitled:</c> while
+    /// every request said <c>file:</c>. The bundled server answers an unknown URI with an empty array and
+    /// no error, so hover, completion, folding, Go To Definition, rename and formatting simply went quiet,
+    /// and the procedure dropdown emptied on the next diagnostics tick. Nothing logged, nothing thrown.
+    /// </para>
+    /// <para>
+    /// Null when nothing is open, and the callers below answer emptily rather than asking. A request naming
+    /// a document no server was told about is not a question with a wrong answer; it is a question nobody
+    /// can be expected to have an answer to, and sending it invites exactly the silence above.
+    /// </para>
+    /// <para>
+    /// Make EXE is why this must not be recomputed even when a session IS open: it repoints every
+    /// document's path into a temporary folder and puts it back afterwards, so a name derived from the path
+    /// mid-build would name a document the server never opened, twice.
+    /// </para>
+    /// </remarks>
+    private string? LiveDocumentUri => session is { IsOpen: true } open ? open.Uri : null;
 
     public void SaveForm() => SaveWithFormattingAsync(() => projectService.SaveForm(formDefinition!, false)).ListenErrors();
     public void SaveModule() => SaveWithFormattingAsync(() => projectService.SaveModule(moduleDefinition!, false)).ListenErrors();
@@ -561,37 +584,45 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     }
 
     public Task<HoverResult?> RequestHoverAsync(Position position, CancellationToken ct = default)
-        => lspClient.RequestHoverAsync(GetDocumentUri(), position, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestHoverAsync(uri, position, ct) : Task.FromResult<HoverResult?>(null);
 
     public Task<FoldingRange[]> RequestFoldingRangesAsync(CancellationToken ct = default)
-        => lspClient.RequestFoldingRangesAsync(GetDocumentUri(), ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestFoldingRangesAsync(uri, ct) : Task.FromResult<FoldingRange[]>([]);
 
     public Task<CompletionItem[]> RequestCompletionAsync(Position position, CancellationToken ct = default)
-        => lspClient.RequestCompletionAsync(GetDocumentUri(), position, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestCompletionAsync(uri, position, ct) : Task.FromResult<CompletionItem[]>([]);
 
     public Task<SignatureHelp?> RequestSignatureHelpAsync(Position position, CancellationToken ct = default)
-        => lspClient.RequestSignatureHelpAsync(GetDocumentUri(), position, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestSignatureHelpAsync(uri, position, ct) : Task.FromResult<SignatureHelp?>(null);
 
     public Task<Location[]?> RequestDefinitionAsync(Position position, CancellationToken ct = default)
-        => lspClient.RequestDefinitionAsync(GetDocumentUri(), position, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestDefinitionAsync(uri, position, ct) : Task.FromResult<Location[]?>(null);
 
     public Task<Location[]?> RequestDeclarationAsync(Position position, CancellationToken ct = default)
-        => lspClient.RequestDeclarationAsync(GetDocumentUri(), position, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestDeclarationAsync(uri, position, ct) : Task.FromResult<Location[]?>(null);
 
     public Task<DocumentHighlight[]?> RequestDocumentHighlightAsync(Position position, CancellationToken ct = default)
-        => lspClient.RequestDocumentHighlightAsync(GetDocumentUri(), position, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestDocumentHighlightAsync(uri, position, ct) : Task.FromResult<DocumentHighlight[]?>(null);
 
     public Task<WorkspaceEdit?> RequestRenameAsync(Position position, string newName, CancellationToken ct = default)
-        => lspClient.RequestRenameAsync(GetDocumentUri(), position, newName, ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestRenameAsync(uri, position, newName, ct) : Task.FromResult<WorkspaceEdit?>(null);
 
     public Task<string?> ShowInputBoxAsync(string prompt, string title, string defaultText)
         => windowManager.InputBox(prompt, title, defaultText);
 
     public Task<TextEdit[]> RequestFormattingAsync(CancellationToken ct = default)
-        => lspClient.RequestFormattingAsync(GetDocumentUri(), ct);
+        => LiveDocumentUri is { } uri ? lspClient.RequestFormattingAsync(uri, ct) : Task.FromResult<TextEdit[]>([]);
 
-    /// <summary>Exposes the document URI for cross-file definition navigation.</summary>
-    public string GetDocumentUriPublic() => GetDocumentUri();
+    /// <summary>
+    /// Exposes the document URI for cross-file definition navigation and for the rename edit lookup.
+    /// </summary>
+    /// <remarks>
+    /// Falls back to what a session WOULD be opened under when none is open, because both callers are
+    /// comparing a server's answer against "this document" and a null would read as "not this one" —
+    /// which, for a reply that can only have been about this document, is the wrong answer rather than a
+    /// cautious one. The requests themselves are gated; a comparison is not a request.
+    /// </remarks>
+    public string GetDocumentUriPublic() => LiveDocumentUri ?? DocumentWireName.For(Identity);
 
     /// <summary>
     /// Opens the document a server's <c>Location</c> names and puts the caret on it.
