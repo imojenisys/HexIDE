@@ -122,6 +122,35 @@ public partial class FormDefinition : INotifyPropertyChanged
     public List<string> HeaderLines { get; } = [];
 
     /// <summary>
+    /// This form's designer half exactly as it was read: the first line of the file through the root
+    /// <c>End</c> inclusive. Null for a form HexIDE created, which has no file to have read one from.
+    /// </summary>
+    /// <remarks>
+    /// <b>Kept as text as well as parsed into <see cref="Components"/>, because the two answer different
+    /// questions.</b> The components are what the designer edits and what a save re-renders. This is what
+    /// the file actually said, and phase 3 of hexide-io/HexIDE#273 puts it in front of the developer as the
+    /// folded, read-only head of the code window — so that a line number means the same thing to the
+    /// editor, a language server, the interpreter and the debugger.
+    ///
+    /// <para>
+    /// It cannot be recovered from the model. The <c>VERSION</c> line is dropped at parse and regenerated
+    /// from a literal, and the block's own <c>Begin</c> and <c>End</c> are rebuilt at a computed indent, so
+    /// a re-render is a reproduction rather than the text. <see cref="HeaderLines"/> keeps only the run
+    /// between them and stays, because the serializer still replays it.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Not named <c>Original</c>-anything on purpose.</b> A save replaces it with the header that save
+    /// wrote, because the serializer is not byte-faithful to every file and the buffer has to follow the
+    /// file rather than the file it was opened from. It is the current designer text, not the first one.
+    /// </para>
+    /// </remarks>
+    public string? DesignerText { get; private set; }
+
+    /// <summary>Mirrors <c>ModuleDefinition.RecordOriginalHeader</c>: set by the reader, and by a save.</summary>
+    public void RecordDesignerText(string? text) => DesignerText = text;
+
+    /// <summary>
     /// Why saving this form would not reproduce it, or null when a save is faithful.
     ///
     /// HexIDE flattens nested <c>Begin</c> blocks — the component list has no parent link — so a menu
@@ -233,6 +262,24 @@ public partial class FormDefinition : INotifyPropertyChanged
         // same file and just as stale: keeping the old ones would write another file's Object= lines back.
         HeaderLines.Clear();
         HeaderLines.AddRange(fresh.HeaderLines);
+
+        // The designer half as the new file says it, for the same reason (#273 task 3.1). Keeping the old
+        // text would put the previous file's header in the code window and write it back on the next save.
+        DesignerText = fresh.DesignerText;
+
+        // ── Two more that were read from the file and were NOT being adopted ─────────────────────
+        //
+        // Found while adding the line above, and the first one is a data-loss path rather than a staleness
+        // one (hexide-io/HexIDE#506). CitedCompanionBlobCount is the guard on deleting the companion
+        // binary: ProjectService leaves the .frx/.ctx/.pgx alone when the form cites nothing, because a
+        // companion this form never referenced holds bytes that exist nowhere else. A reload that keeps a
+        // stale NON-zero count defeats that guard, so a form whose citations were removed externally and
+        // then saved deletes a file HexIDE cannot reproduce.
+        //
+        // LockControls is the milder sibling: read from the designer root at load, written back on save,
+        // and otherwise frozen at whatever the file said when it was first opened.
+        CitedCompanionBlobCount = fresh.CitedCompanionBlobCount;
+        LockControls = fresh.LockControls;
     }
 
     /// <summary>

@@ -539,9 +539,23 @@ Three consequences for this change, none of which move task 2.1:
   describes and goes with it, which the read-only provider can express by widening the deletable span. An
   orphaned run, however it arises, is inert text the next save preserves. Neither VB6's behaviour here nor
   the paste side is measured.
-- **Line endings.** The buffer and the file are the same text by construction. But today the header is
-  written CRLF while typed lines are LF, so a saved form can mix the two. That is a pre-existing defect, and
-  it becomes visible to servers now that they see the header.
+- **Line endings — measured while building 3.1, and the diagnosis here was incomplete.** This said the
+  header is written CRLF while *typed* lines are LF. The larger mechanism was that
+  `VbFrmFormatDeserializer` rebuilt the code body line by line with `StringBuilder.AppendLine`, which
+  terminates with `Environment.NewLine` — so **every** line of a VB6-authored form was re-terminated at
+  load with the host's newline, typed or not, and the save path writes `Code` back verbatim. On Windows
+  that is invisible (CRLF in, CRLF out). On Linux, where `build-ide` runs, merely opening and saving a form
+  rewrote its whole code body to LF beside a designer half pinned to CRLF.
+
+  Measured rather than argued: with the old accumulator restored, `WholeFileCompositionTests` fails **3 of
+  14 on Windows and 5 of 14 under WSL** — the two extra being the plain CRLF fixture and the real corpus
+  files, which cannot fail on a Windows host by construction. It also always appended a terminator, so a
+  file whose last line had none grew one.
+
+  3.1 replaces both halves with slices of the input, so terminators are the file's own and the composition
+  is byte-exact. What remains open is the narrower original point: text *typed* into the buffer arrives
+  with whatever the editor inserts, so a form edited and saved can still mix them. That is now the only
+  live part, and it becomes visible to servers once they see the header.
 - **Compiler diagnostics.** Their rows were keyed by `vb6://form/{Name}`, and the expression that parses
   them matches none of what the compiler actually writes (#477), so that consumer has had no live traffic
   at all. This change re-keys the rows to the wire name resolved from the

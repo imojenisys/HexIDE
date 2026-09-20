@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using HexIDE.Runtime.ProjectElements;
 
 namespace HexIDE.Runtime.Serialization;
 
@@ -86,6 +87,46 @@ public static class FormCodeText
         var block = AttributeBlock(existing);
         return block.Length == 0 ? incoming : block + incoming;
     }
+
+    /// <summary>
+    /// The whole file this form represents: its designer half, then its code section.
+    /// </summary>
+    /// <remarks>
+    /// <b>The composition phase 3 of hexide-io/HexIDE#273 rests on, and the invariant is exact</b>: for a
+    /// form read from disk and not since modified, this returns the file byte for byte, terminators
+    /// included. Both halves are slices of the text that was read.
+    ///
+    /// <para>
+    /// A form HexIDE created has no designer text, so this is its code alone — which is also right, because
+    /// there is no file yet for it to differ from. The same is true of a <c>.ctl</c> or <c>.pag</c> whose
+    /// designer block could not be parsed: nothing was split off, so nothing is put back.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately NOT a re-render from <c>Components</c>. A re-render is what a save produces and it is a
+    /// reproduction, not the text: the <c>VERSION</c> line comes from a literal and the block's
+    /// <c>Begin</c>/<c>End</c> are rebuilt at a computed indent. Composing from a render would show the
+    /// developer a file subtly unlike the one on disk.
+    /// </para>
+    /// </remarks>
+    public static string WholeFile(FormDefinition form) => (form.DesignerText ?? "") + form.Code;
+
+    /// <summary>
+    /// The whole file this module represents, whichever kind it is.
+    /// </summary>
+    /// <remarks>
+    /// Two different shapes behind one question, which is the point of having it in one place. A
+    /// <c>.bas</c> or <c>.cls</c> composes through <see cref="ModuleFileFormat.ToFileContent"/>, so it picks
+    /// up the preserved header or the canonical literal. A <c>.ctl</c> or <c>.pag</c> does not: its header
+    /// is a designer block, <see cref="ModuleFileFormat.HandlesHeader"/> is false for those kinds and
+    /// <c>ToFileContent</c> would hand the body straight back, so it composes from the <c>FormPart</c> that
+    /// carries the designer text with the MODULE's code beside it — which is the half the save path writes
+    /// for those kinds too.
+    /// </remarks>
+    public static string WholeFile(ModuleDefinition module) =>
+        ModuleFileFormat.HandlesHeader(module.Kind)
+            ? ModuleFileFormat.ToFileContent(module.Code, module.Name, module.Kind, module.OriginalHeader)
+            : (module.FormPart?.DesignerText ?? "") + module.Code;
 
     private static IEnumerable<string> Lines(string text)
     {

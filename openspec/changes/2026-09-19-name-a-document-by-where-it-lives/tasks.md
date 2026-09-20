@@ -483,9 +483,46 @@
 
 ## 3. The whole file in the code window
 
-- [ ] 3.1 Keep a form's, UserControl's and PropertyPage's designer text (`VERSION` through the root `End`) as
+- [x] 3.1 Keep a form's, UserControl's and PropertyPage's designer text (`VERSION` through the root `End`) as
   read, on the definition beside the model, so the interpreter, the syntax check and the standalone runner can
   compose the file without a code window. A reload adopts it with the rest of the fidelity state.
+  — **The designer half is `FormDefinition.DesignerText`, recorded by the reader and adopted on reload**,
+  mirroring `ModuleDefinition.OriginalHeader` exactly. Not named `Original`-anything, because 3.3a replaces
+  it with the header a save wrote: it is the current designer text, not the first one.
+  — **It cannot be recovered from the model, which is why it is kept at all.** The `VERSION` line is dropped
+  at parse and regenerated from the literal `VERSION 5.00`, and the block's own `Begin`/`End` are rebuilt at
+  a computed indent — so a re-render is a reproduction, not the text. `HeaderLines` keeps only the run
+  between them and stays, because the serializer still replays it.
+  — **Both halves are now slices of the input, and that was not cosmetic.** The code body was accumulated
+  with `StringBuilder.AppendLine`, which terminates with `Environment.NewLine`. Slicing only the designer
+  half would have made the composition CRLF-prefix + LF-body on Linux and left the invariant every later
+  task rests on false from the first commit. `_codeBuilder` is gone; `LinesWithEnds` walks the input with
+  offsets, following `TextReader.ReadLine`'s terminator rules exactly so the parse is unchanged.
+  — **The old behaviour was a live cross-platform defect, measured on both hosts.** With the accumulator
+  restored, `WholeFileCompositionTests` fails **3 of 14 on Windows and 5 of 14 under WSL** — the two extra
+  are the plain CRLF fixture and the real corpus files, which a Windows host cannot fail by construction.
+  So every `.frm`/`.ctl`/`.pag` opened on Linux had its whole code body rewritten to LF beside a designer
+  half pinned to CRLF. The design record's open question blamed *typed* lines; that diagnosis is corrected
+  there, and the narrower original point stays open.
+  — Two behaviour changes to `Code` come with it and are deliberate: terminators are the file's own rather
+  than the host's, and a file whose last line had no newline no longer grows one.
+  — **One accessor for both kinds**, `FormCodeText.WholeFile`, in Runtime because Core references nothing
+  and the module side needs `ModuleFileFormat`'s canonical-header fallback. A `.ctl`/`.pag` does **not** go
+  through `ToFileContent` — `HandlesHeader` is false for those kinds, so it would hand the body straight
+  back — it composes from the `FormPart`'s designer text with the module's own code, which is the pairing
+  the save path uses for them too.
+  — **Two fields the reload should already have been adopting, found while adding the third.**
+  `CitedCompanionBlobCount` is the guard on `File.Delete(companionPath)`: a stale non-zero count after a
+  reload defeats it, so a form whose citations were removed externally deletes a companion whose bytes
+  exist nowhere else — `serialization-outcomes.md` outcome 3, filed as
+  [#506](https://github.com/hexide-io/HexIDE/issues/506) rather than left inside a commit about the code
+  window. `LockControls` is the milder sibling. Both fixed here because leaving known-stale state beside a
+  third field being added to the same method is indefensible.
+  — Nine tests, all checked by removal: the three line-ending ones redden against the old accumulator, the
+  three adoption ones against the removed lines. The corpus cases are real VB6-authored files and assert
+  the corpus was found, so they cannot pass vacuously.
+  — Scope held: no consumer is wired (3.6), no buffer composition (3.2), and no render for a form with no
+  file (3.4).
 - [ ] 3.2 Compose the buffer as prefix plus `Code`, and split there on flush. **The prefix is not the protected
   region**: for `.bas`/`.cls` it is the whole header; for `.frm`/`.ctl`/`.pag` it is the designer part alone,
   because their `Code` already begins with the leading `Attribute` run; where load split nothing off (an
