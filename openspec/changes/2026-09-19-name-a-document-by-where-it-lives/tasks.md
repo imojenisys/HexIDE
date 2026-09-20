@@ -151,14 +151,31 @@
 > So a pathless document is a state this phase must *name*, not one the IDE could have designed away. 2.1 is
 > unchanged. See the design record, and `docs/vb6-fidelity-oracle.md` for the measurement.
 
-- [ ] 2.1 The seam converter: `file:` from the document's own path when it has one (for a UserControl or
+- [x] 2.1 The seam converter: `file:` from the document's own path when it has one (for a UserControl or
   PropertyPage, the module's path); otherwise
   `untitled:<Project>/<Name>.<ext>`, extension from the kind, no leading slash, built through the URI type so
   it is percent-encoded. Fixed when the session opens, never read live from the path.
-- [ ] 2.2 `LspDocumentUri`: `untitled` compares its path without regard to case; remove the `vb6` rules.
-- [ ] 2.3 The reverse: a server's reply naming a document resolves to its identity (the existing file-path
+  — `DocumentWireName.For` is the whole change; `LspDocumentUri.ForUntitled` owns the spelling, beside
+  `ForFile`, because construction and comparison have to agree. The extension comes from a new
+  `DocumentIdentity.Extension`, read off the kind rather than off a path a pathless document does not have.
+  **Fixing the name at session open is 2.5's half** — this answers what a session should be *opened* under.
+  Found on the way: `DocumentIdentity.AbsolutePath` was `module?.AbsolutePath ?? form!.AbsolutePath`, which
+  reads correctly and throws for any module with no file — `??` evaluates the right side and dereferences a
+  form that is null by construction. Nothing had asked a pathless document for its path until this did.
+- [x] 2.2 `LspDocumentUri`: `untitled` compares its path without regard to case; remove the `vb6` rules.
+  — Both segments are VB6 names. Asserted that an `untitled:` URI survives normalisation at all, on its own,
+  because it has no authority and is therefore not the hierarchical shape every `file:` case exercises: a
+  scheme the URI parser handled differently would make the other cases pass for the wrong reason.
+- [x] 2.3 The reverse: a server's reply naming a document resolves to its identity (the existing file-path
   resolver in `EditorService`, plus an `untitled:` branch). Used by diagnostics, definition, rename and
   workspace-symbol results.
+  — No `untitled:` branch was needed in the end: `EditorService.Names` already compared the URI against
+  `DocumentWireName.For(document)` as well as the file path, and 2.1 made the first of those the `untitled:`
+  spelling. The two branches now answer the same string for a document that has a file and diverge only for
+  one that does not, which is what lets a single method answer for modules, forms and carried files alike.
+  Proved by rewriting the navigation tests onto the new spellings, plus two cases the retired scheme could
+  not express at all: a `Module1` in another project of the same group, and the same name with the wrong
+  extension.
 - [ ] 2.4 Close and reopen on a name change: on the save event when the path differs from the session's
   (never on the path changing, which a build does temporarily), and on a rename of a document or its project
   when the document has no file. Close then open, ordered per connection, asserted on the wire. Save

@@ -262,17 +262,17 @@ public class LspDocumentSessionTests : IDisposable
     }
 
     [Fact]
-    public void AVb6UriDifferingOnlyInCaseStillMatches()
+    public void AnUntitledUriDifferingOnlyInCaseStillMatches()
     {
-        // The IDE's own scheme, and the case that matters most for the VB6 editor: a `vb6://` path segment
-        // is a VB6 identifier, and VB6 identifiers are case-insensitive on every platform. A server that
-        // echoes `module1` for our `Module1` is not disagreeing with us about anything.
-        var session = Session("Sub Main()", "vb6://module/Module1");
+        // Both segments of untitled:<Project>/<Name>.<ext> are VB6 names, and VB6 compares names without
+        // regard to case on every platform. A server that echoes `module1` for our `Module1` is not
+        // disagreeing with us about anything.
+        var session = Session("Sub Main()", "untitled:Project1/Module1.bas");
         IReadOnlyList<LspMarker>? seen = null;
         session.MarkersChanged += m => seen = m;
         session.Start();
 
-        Publish(OneDiagnostic("vb6://module/module1", 0, 0, 3));
+        Publish(OneDiagnostic("untitled:project1/module1.bas", 0, 0, 3));
 
         seen.Should().ContainSingle();
     }

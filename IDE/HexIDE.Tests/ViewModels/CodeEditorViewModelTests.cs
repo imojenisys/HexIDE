@@ -167,21 +167,21 @@ public class CodeEditorViewModelTests : IDisposable
     // ── Document URI ─────────────────────────────────────────────────
 
     [AvaloniaFact]
-    public void GetDocumentUri_Form_ReturnsCorrectUri()
+    public void GetDocumentUri_AFormWithNoFile_IsNamedUntitledUnderItsProject()
     {
         var form = TestHelpers.CreateForm(name: "Form1");
         var vm = CreateSut().Initialize(form);
 
-        vm.GetDocumentUriPublic().Should().Be("vb6://form/Form1");
+        vm.GetDocumentUriPublic().Should().Be("untitled:TestProject/Form1.frm");
     }
 
     [AvaloniaFact]
-    public void GetDocumentUri_Module_ReturnsCorrectUri()
+    public void GetDocumentUri_AModuleWithNoFile_IsNamedUntitledUnderItsProject()
     {
         var module = TestHelpers.CreateModule(name: "Module1");
         var vm = CreateSut().Initialize(module);
 
-        vm.GetDocumentUriPublic().Should().Be("vb6://module/Module1");
+        vm.GetDocumentUriPublic().Should().Be("untitled:TestProject/Module1.bas");
     }
 
     // ── LSP open on init ─────────────────────────────────────────────
@@ -195,7 +195,7 @@ public class CodeEditorViewModelTests : IDisposable
         CreateSut().Initialize(form);
 
         _lspClient.Received(1).OpenDocumentAsync(
-            "vb6://form/Form1",
+            "untitled:TestProject/Form1.frm",
             form.Code,
             Arg.Any<CancellationToken>());
     }
@@ -214,7 +214,7 @@ public class CodeEditorViewModelTests : IDisposable
 
         CreateSut().Initialize(form);
 
-        _lspClient.Received(1).OpenDocumentAsync("vb6://form/Form1", form.Code, Arg.Any<CancellationToken>());
+        _lspClient.Received(1).OpenDocumentAsync("untitled:TestProject/Form1.frm", form.Code, Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -226,7 +226,7 @@ public class CodeEditorViewModelTests : IDisposable
         CreateSut().Initialize(module);
 
         _lspClient.Received(1).OpenDocumentAsync(
-            "vb6://module/Module1",
+            "untitled:TestProject/Module1.bas",
             module.Code,
             Arg.Any<CancellationToken>());
     }
@@ -245,7 +245,7 @@ public class CodeEditorViewModelTests : IDisposable
 
         CreateSut().Initialize(module);
 
-        _lspClient.Received(1).OpenDocumentAsync("vb6://module/Module1", module.Code, Arg.Any<CancellationToken>());
+        _lspClient.Received(1).OpenDocumentAsync("untitled:TestProject/Module1.bas", module.Code, Arg.Any<CancellationToken>());
     }
 
     // ── LSP delegation ───────────────────────────────────────────────
@@ -257,7 +257,7 @@ public class CodeEditorViewModelTests : IDisposable
         var vm = CreateSut().Initialize(form);
         var pos = new Position(1, 5);
         var expected = new HoverResult(new MarkupContent("plaintext", "info"));
-        _lspClient.RequestHoverAsync("vb6://form/Form1", pos, Arg.Any<CancellationToken>())
+        _lspClient.RequestHoverAsync("untitled:TestProject/Form1.frm", pos, Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestHoverAsync(pos);
@@ -271,7 +271,7 @@ public class CodeEditorViewModelTests : IDisposable
         var form = TestHelpers.CreateForm(name: "Form1");
         var vm = CreateSut().Initialize(form);
         var expected = new[] { new FoldingRange(0, 10) };
-        _lspClient.RequestFoldingRangesAsync("vb6://form/Form1", Arg.Any<CancellationToken>())
+        _lspClient.RequestFoldingRangesAsync("untitled:TestProject/Form1.frm", Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestFoldingRangesAsync();
@@ -286,7 +286,7 @@ public class CodeEditorViewModelTests : IDisposable
         var vm = CreateSut().Initialize(form);
         var pos = new Position(0, 0);
         var expected = new[] { new CompletionItem("Dim", CompletionItemKind.Keyword) };
-        _lspClient.RequestCompletionAsync("vb6://form/Form1", pos, Arg.Any<CancellationToken>())
+        _lspClient.RequestCompletionAsync("untitled:TestProject/Form1.frm", pos, Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestCompletionAsync(pos);
@@ -302,7 +302,7 @@ public class CodeEditorViewModelTests : IDisposable
         var pos = new Position(0, 3);
         var expected = new SignatureHelp(
             new[] { new SignatureInformation("MsgBox", "Shows a message", Array.Empty<ParameterInformation>()) }, 0, 0);
-        _lspClient.RequestSignatureHelpAsync("vb6://form/Form1", pos, Arg.Any<CancellationToken>())
+        _lspClient.RequestSignatureHelpAsync("untitled:TestProject/Form1.frm", pos, Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestSignatureHelpAsync(pos);
@@ -316,8 +316,8 @@ public class CodeEditorViewModelTests : IDisposable
         var form = TestHelpers.CreateForm(name: "Form1");
         var vm = CreateSut().Initialize(form);
         var pos = new Position(2, 0);
-        var expected = new[] { new Location("vb6://form/Form1", new Lsp.Messages.Range(new Position(0, 0), new Position(0, 5))) };
-        _lspClient.RequestDefinitionAsync("vb6://form/Form1", pos, Arg.Any<CancellationToken>())
+        var expected = new[] { new Location("untitled:TestProject/Form1.frm", new Lsp.Messages.Range(new Position(0, 0), new Position(0, 5))) };
+        _lspClient.RequestDefinitionAsync("untitled:TestProject/Form1.frm", pos, Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestDefinitionAsync(pos);
@@ -335,7 +335,7 @@ public class CodeEditorViewModelTests : IDisposable
         {
             new DocumentHighlight(new Lsp.Messages.Range(new Position(0, 0), new Position(0, 5)), 1)
         };
-        _lspClient.RequestDocumentHighlightAsync("vb6://form/Form1", pos, Arg.Any<CancellationToken>())
+        _lspClient.RequestDocumentHighlightAsync("untitled:TestProject/Form1.frm", pos, Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestDocumentHighlightAsync(pos);
@@ -349,13 +349,13 @@ public class CodeEditorViewModelTests : IDisposable
         var form = TestHelpers.CreateForm(name: "Form1");
         var vm = CreateSut().Initialize(form);
         var pos = new Position(0, 12);
-        _lspClient.RequestRenameAsync("vb6://form/Form1", pos, "newName", Arg.Any<CancellationToken>())
+        _lspClient.RequestRenameAsync("untitled:TestProject/Form1.frm", pos, "newName", Arg.Any<CancellationToken>())
             .Returns((WorkspaceEdit?)null);
 
         var result = await vm.RequestRenameAsync(pos, "newName");
 
         await _lspClient.Received(1).RequestRenameAsync(
-            "vb6://form/Form1", pos, "newName", Arg.Any<CancellationToken>());
+            "untitled:TestProject/Form1.frm", pos, "newName", Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -364,7 +364,7 @@ public class CodeEditorViewModelTests : IDisposable
         var form = TestHelpers.CreateForm(name: "Form1");
         var vm = CreateSut().Initialize(form);
         var expected = Array.Empty<TextEdit>();
-        _lspClient.RequestFormattingAsync("vb6://form/Form1", Arg.Any<CancellationToken>())
+        _lspClient.RequestFormattingAsync("untitled:TestProject/Form1.frm", Arg.Any<CancellationToken>())
             .Returns(expected);
 
         var result = await vm.RequestFormattingAsync();
@@ -383,7 +383,7 @@ public class CodeEditorViewModelTests : IDisposable
         vm.Dispose();
         _sut = null; // prevent double-dispose in teardown
 
-        _lspClient.Received(1).CloseDocumentAsync("vb6://form/Form1", Arg.Any<CancellationToken>());
+        _lspClient.Received(1).CloseDocumentAsync("untitled:TestProject/Form1.frm", Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -440,7 +440,7 @@ public class CodeEditorViewModelTests : IDisposable
 
         saved!(new DocumentSavedEvent(null, module));
 
-        await _lspClient.Received(1).SaveDocumentAsync("vb6://module/Module1", Arg.Any<CancellationToken>());
+        await _lspClient.Received(1).SaveDocumentAsync("untitled:TestProject/Module1.bas", Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -488,7 +488,7 @@ public class CodeEditorViewModelTests : IDisposable
         saved!(new DocumentSavedEvent(designerHalf, control));
 
         await _lspClient.Received(1).SaveDocumentAsync(
-            "vb6://module/UserControl1", Arg.Any<CancellationToken>());
+            "untitled:P/UserControl1.ctl", Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -530,7 +530,7 @@ public class CodeEditorViewModelTests : IDisposable
         await vm.RequestHoverAsync(pos);
 
         await _lspClient.Received(1).RequestHoverAsync(
-            "vb6://module/Utils", pos, Arg.Any<CancellationToken>());
+            "untitled:TestProject/Utils.bas", pos, Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -543,7 +543,7 @@ public class CodeEditorViewModelTests : IDisposable
         await vm.RequestCompletionAsync(pos);
 
         await _lspClient.Received(1).RequestCompletionAsync(
-            "vb6://module/Utils", pos, Arg.Any<CancellationToken>());
+            "untitled:TestProject/Utils.bas", pos, Arg.Any<CancellationToken>());
     }
 
     // ── Constructor subscribes to events ─────────────────────────────
