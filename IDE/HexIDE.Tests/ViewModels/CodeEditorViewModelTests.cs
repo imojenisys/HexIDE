@@ -135,12 +135,58 @@ public class CodeEditorViewModelTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void Initialize_Module_SetsDocumentTextFromModuleCode()
+    public void Initialize_Module_SetsDocumentTextToTheWholeFile()
     {
+        // Renamed and retargeted rather than adjusted. It asserted buffer == Code, which was the contract
+        // #273 task 3.2 exists to replace: the buffer is now the whole file, so that one line number means
+        // the same thing to the editor, a language server, the interpreter and the debugger. A module
+        // HexIDE created has no preserved header, so its prefix is the canonical literal.
         var module = TestHelpers.CreateModule(name: "Module1");
         var vm = CreateSut().Initialize(module);
 
+        vm.Document.Text.Should().Be("Attribute VB_Name = \"Module1\"\r\n" + module.Code);
+        vm.BufferBody.Should().Be(module.Code, "the split has to invert the composition exactly");
+    }
+
+    [AvaloniaFact]
+    public void Initialize_Form_ShowsItsDesignerHalfInFrontOfItsCode()
+    {
+        // The form half of the same rule. A form HexIDE created has no designer text, so nothing is put in
+        // front of it -- there is no file yet for the buffer to differ from.
+        var form = TestHelpers.CreateForm(name: "Form1");
+        form.RecordDesignerText("VERSION 5.00\r\nBegin VB.Form Form1 \r\nEnd\r\n");
+        var vm = CreateSut().Initialize(form);
+
+        vm.Document.Text.Should().StartWith("VERSION 5.00").And.EndWith(form.Code);
+        vm.BufferBody.Should().Be(form.Code);
+    }
+
+    [AvaloniaFact]
+    public void AFormWithNoFileShowsItsCodeAlone()
+    {
+        var form = TestHelpers.CreateForm(name: "Form1");
+        var vm = CreateSut().Initialize(form);
+
+        vm.Document.Text.Should().Be(form.Code);
+        vm.BufferBody.Should().Be(form.Code);
+    }
+
+    [AvaloniaFact]
+    public void AModuleWhoseHeaderWasNotRecognisedGetsNoPrefix()
+    {
+        // hexide-io/HexIDE#472: recognition is positional and tests only line 0, so a leading blank line
+        // is enough to leave the WHOLE file in Code with an empty recorded header. Prepending the canonical
+        // literal on top of that would show the developer two headers. Null means "never read from disk";
+        // empty means "read, and nothing was split off" -- ToFileContent conflates them with IsNullOrEmpty,
+        // which is the defect, and the buffer must not.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.RecordOriginalHeader("");
+        module.UpdateCode("\r\nAttribute VB_Name = \"Module1\"\r\nOption Explicit\r\n");
+
+        var vm = CreateSut().Initialize(module);
+
         vm.Document.Text.Should().Be(module.Code);
+        vm.BufferBody.Should().Be(module.Code);
     }
 
     [AvaloniaFact]
@@ -229,7 +275,8 @@ public class CodeEditorViewModelTests : IDisposable
 
         _lspClient.Received(1).OpenDocumentAsync(
             "untitled:TestProject/Module1.bas",
-            module.Code,
+            // The whole file since #273 task 3.2 -- see the sibling assertion below.
+            "Attribute VB_Name = \"Module1\"\r\n" + module.Code,
             true,
             Arg.Any<CancellationToken>());
     }
@@ -248,8 +295,84 @@ public class CodeEditorViewModelTests : IDisposable
 
         CreateSut().Initialize(module);
 
+        // The WHOLE file, which is the point of the change rather than a side effect of it: a server that
+        // reads a document from disk and a server that is handed the buffer must see the same text, or the
+        // positions they report do not mean the same thing.
         _lspClient.Received(1).OpenDocumentAsync(
-            "untitled:TestProject/Module1.bas", module.Code, true, Arg.Any<CancellationToken>());
+            "untitled:TestProject/Module1.bas",
+            "Attribute VB_Name = \"Module1\"\r\n" + module.Code, true, Arg.Any<CancellationToken>());
+    }
+
+    // ── Dirty detection follows the split (#273 task 3.2a) ───────────
+
+    [AvaloniaFact]
+    public void AnUneditedOpenDocumentIsACleanReloadRatherThanAConflict()
+    {
+        // THE reason 3.2a ships with 3.2 rather than after it. Once the buffer is the whole file it never
+        // equals Code again, so a detector still comparing the raw buffer reports EVERY open document as
+        // edited. And Conflict is not merely "skip the reload" -- it queues the ConflictGate and raises a
+        // dialog, so every external change to any open file would prompt, and the silent CleanReload the
+        // file-watcher capability requires would never be reached once.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        var detector = new DirtyDetector(new FileBaselineStore(), Substitute.For<IProjectService>());
+
+        detector.Classify(new WatchedFileTarget("Module1.bas", null, module, vm, null))
+            .Should().Be(ReloadDecision.CleanReload);
+    }
+
+    [AvaloniaFact]
+    public void AnEditedOpenDocumentIsStillAConflict()
+    {
+        // The other side, and the one a careless split would break in the opposite direction: comparing
+        // the wrong pair could just as easily make everything look clean, and a CleanReload over unsaved
+        // work discards it silently.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        vm.Document.Text += "Dim x As Long\r\n";
+
+        var detector = new DirtyDetector(new FileBaselineStore(), Substitute.For<IProjectService>());
+
+        detector.Classify(new WatchedFileTarget("Module1.bas", null, module, vm, null))
+            .Should().Be(ReloadDecision.Conflict);
+    }
+
+    [AvaloniaFact]
+    public void EditingTheBodyFlushesTheBodyAloneBackToTheModel()
+    {
+        // The composition has to be invertible or the header ends up in Code, where the interpreter
+        // compiles it as VB -- and it would be written back into the file below its real header on the
+        // next save, doubling it.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        vm.Document.Text += "Dim x As Long\r\n";
+        vm.Dispose();
+
+        module.Code.Should().Be("Option Explicit\r\nDim x As Long\r\n");
+        module.Code.Should().NotContain("Attribute VB_Name");
+    }
+
+    [AvaloniaFact]
+    public void ReplacingTheBodyLeavesTheHeaderStanding()
+    {
+        // The write half of the same contract. Automation and the add-in surface both assign a bare body;
+        // before ReplaceBody they assigned it straight over Document.Text, which since 3.2 would destroy
+        // the header and leave the next flush splitting into the body.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        vm.ReplaceBody("Public Sub Main()\r\nEnd Sub\r\n");
+
+        vm.Document.Text.Should().Be(
+            "Attribute VB_Name = \"Module1\"\r\nPublic Sub Main()\r\nEnd Sub\r\n");
+        vm.BufferBody.Should().Be("Public Sub Main()\r\nEnd Sub\r\n");
     }
 
     // ── LSP delegation ───────────────────────────────────────────────

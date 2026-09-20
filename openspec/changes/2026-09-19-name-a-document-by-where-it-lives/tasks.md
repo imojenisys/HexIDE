@@ -523,15 +523,59 @@
   the corpus was found, so they cannot pass vacuously.
   — Scope held: no consumer is wired (3.6), no buffer composition (3.2), and no render for a form with no
   file (3.4).
-- [ ] 3.2 Compose the buffer as prefix plus `Code`, and split there on flush. **The prefix is not the protected
+- [x] 3.2 Compose the buffer as prefix plus `Code`, and split there on flush. **The prefix is not the protected
   region**: for `.bas`/`.cls` it is the whole header; for `.frm`/`.ctl`/`.pag` it is the designer part alone,
   because their `Code` already begins with the leading `Attribute` run; where load split nothing off (an
   unparseable `.ctl`/`.pag`, a `.bas`/`.cls` whose header was not recognised — #472) it is empty and the buffer
   is `Code`. Prepending the attribute run to a form would show it twice; splitting after it would strip
   `VB_Name` out of `Code` and write a form without one.
-- [ ] 3.2a Dirty detection compares the buffer's body — split exactly as the flush splits it — with `Code`,
+  — **`FormCodeText.Prefix` is the one rule, and `WholeFile` is now expressed through it**, so the
+  composition and the split cannot drift apart. `BodyOf` splits by the prefix's LENGTH and by the prefix the
+  buffer actually carries, not the one the model would render now: the two diverge the moment a document is
+  renamed, because `Attribute VB_Name = "Utilities"` is longer than `= "Mod1"`, and splitting at the model's
+  current length would cut into the body.
+  — **`ModuleFileFormat.BufferHeader` distinguishes null from empty, which `ToFileContent` does not.** Null
+  means never read from disk, so the canonical literal is what the file will say; empty means read and
+  nothing was split off, so the body already IS the file and the buffer must add nothing. `ToFileContent`
+  tests `IsNullOrEmpty` and falls back to the literal for both — that conflation **is** the mechanism of
+  #472, and without the distinction the code window would have shown a second header on exactly the files
+  that defect affects. This does not fix #472; it stops the buffer reproducing it.
+  — **The three external surfaces were redirected rather than left to change by accident.** Automation's
+  `get_file_content` and the add-in `GetContent` now read `BufferBody`, and `set_file_content`, the add-in
+  `SetContent` and `ApplyEdits` write through `ReplaceBody`. The write half is not cosmetic: those assigned
+  a bare body straight over `Document.Text`, which since this task would destroy the header and leave the
+  next flush splitting into the body. The read half is deliberately unchanged in behaviour — 3.18 and 3.19
+  move those contracts with their own docs and tests, and `set_file_content`'s own description promises it
+  accepts what `get_file_content` returns, so the pair has to move together or the tool contradicts itself.
+  — Servers now receive the whole file, which is the point rather than a side effect: a server that reads a
+  document from disk and one that is handed the buffer must see the same text or their positions do not
+  mean the same thing. Task 0.2 proved both grammars parse whole real files before anything relied on it.
+  — **Verified in the running IDE** against the spring-tide demo with its real foreign server attached:
+  `Attribute VB_Name = "TideTable"` is line 1 where the buffer used to open at `Option Explicit`, folds
+  still arrive from the server at 6/12/20/27, and the server's syntax error renders on line 48, on
+  `dim xyz = As Int` itself. That last one is the whole argument for the phase in miniature — that server reads
+  the file from disk and reports file lines, so with the buffer holding the body from file line 2 its
+  diagnostic could not have landed on the statement it describes.
+  — The demo's committed screenshot is now stale in two ways (it predates the `Module=` switch, so the
+  Project Explorer label differs, and it predates the visible header). **Not refreshed here on purpose**:
+  3.7, 3.14 and 3.15 change how the header looks again, and 3.22 is the task that snapshots the finished
+  appearance. Refreshing twice would be worse than refreshing once.
+  — Three existing tests pinned `buffer == Code` and were **retargeted rather than adjusted**, since that
+  identity is exactly what this task replaces. Four new ones cover the form half, a form with no file, and
+  the #472 empty-header case.
+- [x] 3.2a Dirty detection compares the buffer's body — split exactly as the flush splits it — with `Code`,
   for modules and forms alike. Comparing the whole buffer would class every open document as edited and turn
   every external change into a conflict, disabling the silent reload the file-watcher capability requires.
+  — Both comparisons go through the editor's own `BufferBody`, so the detector cannot disagree with the
+  flush about where the split is — the design asks for "split exactly as the flush splits it", and sharing
+  the accessor is the only way to mean it rather than assert it.
+  — **The failure this prevents is louder than "everything looks edited".** A `Conflict` verdict is not
+  merely "skip the reload": it queues the `ConflictGate` and raises a dialog, so every external change to
+  any open document would prompt, and the silent `CleanReload` the file-watcher capability requires would
+  never be reached once. Checked by removal — reverting either comparison reddens
+  `AnUneditedOpenDocumentIsACleanReloadRatherThanAConflict` and nothing else.
+  — The opposite direction is covered too (`AnEditedOpenDocumentIsStillAConflict`), because a careless split
+  could just as easily make everything look clean, and a `CleanReload` over unsaved work discards it.
 - [ ] 3.3 A "layout changed" notification on the form, raised on a designer commit and by the three paths that
   bypass the designer's undo stack today: the menu editor, the colour palette, and automation's property set
   with no designer open. It flushes the designer's working collections into the model before rendering (they

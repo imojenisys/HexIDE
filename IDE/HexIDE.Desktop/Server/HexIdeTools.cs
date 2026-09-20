@@ -83,7 +83,12 @@ internal sealed class HexIdeTools(IdeContext ctx)
 
             var editor = FindEditor(name);
             if (editor is not null)
-                return new FileContentResult(editor.Document.Text, true, null);
+                // BufferBody, not the raw buffer: since #273 task 3.2 the buffer is the whole file.
+                // This tool still answers with the code section, and its own description promises
+                // that set_file_content accepts what it returns -- so the pair has to move together,
+                // which is task 3.18. Returning the whole file here while set_file_content still
+                // refuses one would make the tool contradict itself.
+                return new FileContentResult(editor.BufferBody, true, null);
 
             var form = project.Forms.FirstOrDefault(f =>
                 string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
@@ -135,7 +140,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
 
                 var editor = FindEditor(name);
                 if (editor is not null)
-                    editor.Document.Text = kept;
+                    editor.ReplaceBody(kept);
                 else
                     form.UpdateCode(kept);
                 return (form, null, null);
@@ -150,7 +155,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
                 var body = HexIDE.Runtime.Serialization.ModuleFileFormat.StripHeader(content, module.Kind);
                 var editor = FindEditor(name);
                 if (editor is not null)
-                    editor.Document.Text = body;
+                    editor.ReplaceBody(body);
                 else
                     module.UpdateCode(body);
                 return (null, module, null);

@@ -18,6 +18,7 @@ using HexIDE.Lsp.Messages;
 using HexIDE.Projects;
 using HexIDE.Runtime.Components;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 using HexIDE.Utils;
 using PropertyChanged.SourceGenerator;
 using R3;
@@ -264,9 +265,13 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
             void Flush()
             {
-                formDefinition?.UpdateCode(Document.Text);
+                // Split at the prefix, not the whole buffer: the model keeps holding the code section, and
+                // writing the composed text back would put the designer block into Code, where the
+                // interpreter compiles it as VB.
+                var body = BufferBody;
+                formDefinition?.UpdateCode(body);
                 if (moduleDefinition is not null)
-                    moduleDefinition.UpdateCode(Document.Text);
+                    moduleDefinition.UpdateCode(body);
             }
         }));
         AutoDispose(this.eventBus.Subscribe<DocumentSavedEvent>(e =>
@@ -297,15 +302,42 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         }));
         AutoDispose(new ActionDisposable(() =>
         {
-            formDefinition?.UpdateCode(Document.Text);
+            var body = BufferBody;   // the same split as the flush above, for the same reason
+            formDefinition?.UpdateCode(body);
             if (moduleDefinition is not null)
-                moduleDefinition.UpdateCode(Document.Text);
+                moduleDefinition.UpdateCode(body);
             // Disposed from HERE rather than AutoDispose'd from Initialize. Dispose walks its
             // disposables in REVERSE registration order, so a session registered later would close the
             // document BEFORE the buffer above was written back to the definition.
             session?.Dispose();
         }));
     }
+
+    /// <summary>
+    /// The text this buffer carries in front of the document's code, and splits at on flush.
+    /// </summary>
+    /// <remarks>
+    /// <b>Stored rather than recomputed, because the buffer's prefix and the model's diverge.</b> Renaming
+    /// a module changes the header the model would render — <c>Attribute VB_Name = "Utilities"</c> is
+    /// longer than <c>= "Mod1"</c> — while the buffer still holds the old one until something replaces
+    /// both together. Splitting at the model's current length would then cut into the body.
+    /// </remarks>
+    private string bufferPrefix = "";
+
+    /// <summary>
+    /// The document's code, without the header the buffer shows in front of it.
+    /// </summary>
+    /// <remarks>
+    /// <b>Every reader that wants "the code" goes through this, and every writer through
+    /// <see cref="ReplaceBody"/>.</b> Since #273 task 3.2 the buffer is the whole file, so the two are no
+    /// longer the same string, and a caller that assigns <c>Document.Text</c> a bare body would silently
+    /// destroy the header — the next flush splits at the prefix's length and would take the first lines of
+    /// the body with it.
+    /// </remarks>
+    public string BufferBody => FormCodeText.BodyOf(Document.Text, bufferPrefix);
+
+    /// <summary>Replaces the code, leaving the header the buffer shows in front of it untouched.</summary>
+    public void ReplaceBody(string body) => Document.Text = bufferPrefix + body;
 
     public CodeEditorViewModel Initialize(FormDefinition formElement)
     {
@@ -320,7 +352,10 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
         AutoDispose(formElement.Owner.ObservePropertyChanged(x => x.Name)
             .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
-        Document.Text = formElement.Code;
+        // The whole file, not the code section (#273 task 3.2). One line number now means the same
+        // thing to the editor, a language server, the interpreter and the debugger.
+        bufferPrefix = FormCodeText.Prefix(formElement);
+        Document.Text = bufferPrefix + formElement.Code;
 
         PopulateObjectNames();
 
@@ -355,7 +390,10 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
         AutoDispose(moduleElement.Owner.ObservePropertyChanged(x => x.Name)
             .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
-        Document.Text = moduleElement.Code;
+        // As above. For a .ctl/.pag the prefix comes from the FormPart's designer half, and the body is
+        // the MODULE's code -- which is the pairing the save path writes for those kinds too.
+        bufferPrefix = FormCodeText.Prefix(moduleElement);
+        Document.Text = bufferPrefix + moduleElement.Code;
 
         // A module with a designer half lists its controls like a form's editor does; one without falls
         // back to "(General)" alone, which is what this used to hardcode.

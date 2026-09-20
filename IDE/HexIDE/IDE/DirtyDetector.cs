@@ -66,8 +66,13 @@ public sealed class DirtyDetector(IFileBaselineStore baselineStore, IProjectServ
         // can be compared directly against the last-known disk content while open.
         if (t.CodeEditor is not null || t.Designer is not null)
         {
+            // BufferBody, not Document.Text: since #273 task 3.2 the buffer is the whole file, so
+            // comparing it against Code would report every open document as edited -- and a Conflict is
+            // not merely "skip the reload", it queues the ConflictGate and raises a dialog. Every external
+            // change would prompt, and the silent CleanReload the file-watcher capability requires would
+            // never be reached. The editor owns the split so the two cannot disagree about where it is.
             var codeDirty = t.CodeEditor is not null
-                && !string.Equals(t.CodeEditor.Document.Text, module.Code, StringComparison.Ordinal);
+                && !string.Equals(t.CodeEditor.BufferBody, module.Code, StringComparison.Ordinal);
             return (codeDirty || designerDirty) ? ReloadDecision.Conflict : ReloadDecision.CleanReload;
         }
 
@@ -101,8 +106,9 @@ public sealed class DirtyDetector(IFileBaselineStore baselineStore, IProjectServ
                 ? ReloadDecision.Conflict
                 : ReloadDecision.CleanReload;
 
+        // BufferBody rather than the raw buffer -- see the note in ClassifyModule.
         var codeDirty = t.CodeEditor is not null
-            && !string.Equals(t.CodeEditor.Document.Text, t.Form!.Code, StringComparison.Ordinal);
+            && !string.Equals(t.CodeEditor.BufferBody, t.Form!.Code, StringComparison.Ordinal);
         var designerDirty = t.Designer is { CanUndo: true };
         return (codeDirty || designerDirty) ? ReloadDecision.Conflict : ReloadDecision.CleanReload;
     }

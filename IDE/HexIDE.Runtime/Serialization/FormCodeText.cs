@@ -109,7 +109,44 @@ public static class FormCodeText
     /// developer a file subtly unlike the one on disk.
     /// </para>
     /// </remarks>
-    public static string WholeFile(FormDefinition form) => (form.DesignerText ?? "") + form.Code;
+    public static string WholeFile(FormDefinition form) => Prefix(form) + form.Code;
+
+    /// <summary>
+    /// What the code window puts in front of this form's code: its designer half, or nothing.
+    /// </summary>
+    /// <remarks>
+    /// <b>The prefix is not the protected region, and conflating them corrupts a file in either
+    /// direction.</b> The region read-only protection covers is the top of the file through the last line
+    /// of the leading <c>Attribute</c> run, which for a form straddles this boundary — part of it is the
+    /// prefix and part of it is the first lines of <c>Code</c>. Prepending the attribute run here would
+    /// show it twice; splitting after it would take <c>VB_Name</c> out of <c>Code</c> and write a form
+    /// without one. They answer different questions and are computed separately.
+    /// </remarks>
+    public static string Prefix(FormDefinition form) => form.DesignerText ?? "";
+
+    /// <summary>What the code window puts in front of this module's code.</summary>
+    /// <remarks>
+    /// A <c>.ctl</c> or <c>.pag</c> takes its designer half from the <c>FormPart</c>; everything else takes
+    /// the module header, whose null-versus-empty rule is argued at
+    /// <see cref="ModuleFileFormat.BufferHeader"/>.
+    /// </remarks>
+    public static string Prefix(ModuleDefinition module) =>
+        ModuleFileFormat.HandlesHeader(module.Kind)
+            ? ModuleFileFormat.BufferHeader(module.Name, module.Kind, module.OriginalHeader)
+            : module.FormPart?.DesignerText ?? "";
+
+    /// <summary>
+    /// The body of a composed buffer: everything after the prefix it was composed with.
+    /// </summary>
+    /// <remarks>
+    /// <b>Split by the prefix's LENGTH, and by the prefix the buffer actually carries</b> rather than the
+    /// one the model would produce now. The two diverge the moment a document is renamed — a module called
+    /// <c>Utilities</c> has a longer <c>VB_Name</c> line than one called <c>Mod1</c> — and splitting at the
+    /// model's current length would then cut into the body or leave part of the header in it. The buffer's
+    /// own prefix is authoritative until something refreshes both together.
+    /// </remarks>
+    public static string BodyOf(string buffer, string prefix) =>
+        prefix.Length > 0 && buffer.Length >= prefix.Length ? buffer[prefix.Length..] : buffer;
 
     /// <summary>
     /// The whole file this module represents, whichever kind it is.
@@ -123,10 +160,7 @@ public static class FormCodeText
     /// carries the designer text with the MODULE's code beside it — which is the half the save path writes
     /// for those kinds too.
     /// </remarks>
-    public static string WholeFile(ModuleDefinition module) =>
-        ModuleFileFormat.HandlesHeader(module.Kind)
-            ? ModuleFileFormat.ToFileContent(module.Code, module.Name, module.Kind, module.OriginalHeader)
-            : (module.FormPart?.DesignerText ?? "") + module.Code;
+    public static string WholeFile(ModuleDefinition module) => Prefix(module) + module.Code;
 
     private static IEnumerable<string> Lines(string text)
     {

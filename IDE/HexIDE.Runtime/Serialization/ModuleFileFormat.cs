@@ -66,6 +66,37 @@ public static class ModuleFileFormat
             : RetargetVbName(preservedHeader, name) + body;
     }
 
+    /// <summary>
+    /// The header the code window puts in front of this module's body, which is <b>not</b> always the one
+    /// <see cref="ToFileContent"/> writes.
+    /// </summary>
+    /// <remarks>
+    /// <b>Null and empty mean different things here, and <c>ToFileContent</c> conflates them.</b> It tests
+    /// <c>IsNullOrEmpty</c> and falls back to the canonical literal for both, which is the mechanism of
+    /// hexide-io/HexIDE#472: a <c>.bas</c> or <c>.cls</c> whose header the reader did not recognise — a
+    /// leading blank line is enough, because recognition is positional and tests only line 0 — keeps its
+    /// WHOLE file in <c>Code</c> and records an empty header, so the next save prepends a second one.
+    ///
+    /// <list type="bullet">
+    /// <item><description><c>null</c> — never read from disk. A module HexIDE created, which has no
+    /// original to preserve, so the canonical literal is what its file will say.</description></item>
+    /// <item><description><c>""</c> — read, and nothing was split off. The body already IS the file, so
+    /// the buffer must add nothing in front of it or the developer sees the header twice.</description></item>
+    /// <item><description>anything else — the preserved header, with <c>VB_Name</c> retargeted so a rename
+    /// still round-trips.</description></item>
+    /// </list>
+    ///
+    /// <para>
+    /// This does not fix #472 — the save path still writes the duplicate — but it stops the code window
+    /// showing one, and it puts the distinction somewhere a fix can use.
+    /// </para>
+    /// </remarks>
+    public static string BufferHeader(string name, ModuleKind kind, string? preservedHeader) =>
+        !HandlesHeader(kind) ? ""
+        : preservedHeader is null ? Header(name, kind)
+        : preservedHeader.Length == 0 ? ""
+        : RetargetVbName(preservedHeader, name);
+
     /// <summary>Rewrites the <c>Attribute VB_Name</c> line so a renamed module still round-trips.</summary>
     private static string RetargetVbName(string header, string name)
     {

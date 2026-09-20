@@ -61,7 +61,10 @@ public sealed class AddinEditorService(
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (Open(document) is not { } editor) return false;
-            editor.Document.Text = content;
+            // ReplaceBody, not Document.Text: a bare body assigned over the composed buffer would
+            // destroy the header, and the next flush splits at the prefix's length and would take
+            // the first lines of the body with it (#273 task 3.2).
+            editor.ReplaceBody(content);
             return true;
         });
     }
@@ -143,7 +146,10 @@ public sealed class AddinEditorService(
     private static AddinDocument BuildDocument(CodeEditorViewModel editor) =>
         new(editor.Identity.Name,
             editor.Identity.AbsolutePath ?? string.Empty,
-            editor.Document.Text,
+            // The code section, which is what this surface has always handed an add-in. Task 3.19 changes
+            // it to the whole file deliberately, with its own contract note; changing it here as a side
+            // effect of composing the buffer would be a silent break of a shipped surface.
+            editor.BufferBody,
             GetKind(editor),
             editor.Identity.Project.Name);
 }
