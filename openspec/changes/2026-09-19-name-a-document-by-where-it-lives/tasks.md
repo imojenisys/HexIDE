@@ -358,8 +358,53 @@
   into one list — so "both are present" passed whether or not they shared a document. It now asserts one
   distinct `FileName`.
   — The attribute walk was checked by neutering `IsHiddenFromVb6LineCount` and watching its test redden.
-- [ ] 2.10 Export redaction pseudonymises `untitled:` path segments; the redactor's rationale and the
+- [x] 2.10 Export redaction pseudonymises `untitled:` path segments; the redactor's rationale and the
   disclosure's grouping key are rewritten.
+  — **The premise the redactor was built on is gone, and it was written down as a reason to do less.** Its
+  opening paragraph said VB6 forms and modules rode an opaque scheme carrying only a component name, so the
+  primary editor's traffic was already free of paths and only three places needed rewriting. Task 2.1
+  retired that scheme. The editor's traffic is now the *largest* source of real names in a capture, and
+  `untitled:<Project>/<Name>.<ext>` is made of two words the developer typed. Both paragraphs are rewritten
+  rather than amended, and the old claim is recorded, because a reader meeting it would reasonably conclude
+  this file had less to do than it does.
+  — Two places, and **both** were needed: the expression that finds a URI inside a body, and the guard in
+  `Uri`. Widening either alone leaves a working-looking redactor with a hole — the body path is the one
+  every export actually takes.
+  — Pseudonymised **segment by segment, as a path**, not replaced whole. The project's name and the
+  document's name stay distinguishable and stay related, so a reader can still see that two messages
+  concerned two documents of one project; that relationship is the only structure an `untitled:` name
+  carries. The extension survives for the same reason it does in a `file:` URI — routing is by extension,
+  so `.cls` against `.frm` is a diagnosis.
+  — Case is **not** folded, deliberately, and it matters more here than for a path: two `untitled:` names
+  are compared case-insensitively by the client, so two spellings reaching the wire is exactly the defect an
+  export is sent to diagnose.
+  — An unknown scheme is still left alone, and the test that used to assert this of `vb6:` is **retargeted
+  rather than deleted** — a guard that can no longer fail is worse than none. The rule it now states is the
+  one that survives: a scheme this file does not understand may not hold a path at all, so splitting it on
+  slashes would produce a plausible URI meaning something else.
+  — **The disclosure now counts per document rather than per filename.** It keyed on the URI's last
+  segment, so two projects each holding a `Module1` — or two directories, which is just as ordinary —
+  became one row whose copy count and byte total belonged to neither. The reader sees one modest file and
+  sends two. `DisclosedDocument` gains `Uri` (the key) beside `Document` (the label), because making
+  `Document` the URI would put a pseudonym-shaped wire name on the one surface addressed to the person who
+  owns the file.
+  — A colliding label is widened by one segment and no further — the project's name for an `untitled:`
+  document, the containing directory for a saved one. Widening everything would print a path in front of
+  every filename to someone who already knows where their own files live. The label unescapes and the key
+  does not, so a project called `Bill of Fare` reads as itself while the grouping still uses what was sent.
+  — `Trail` drops the scheme before splitting. An `untitled:` URI has no `//` after its colon, so its
+  scheme is part of the first path segment and a naive split hands the wire name straight back — caught by
+  a test rather than by reading.
+  — **Three of the six new redactor tests passed with the feature deleted** when first written: they
+  asserted the output ended in `.frm`, split into two segments, or differed from its sibling — all true of
+  the untouched input. Each gained a *was replaced at all* clause, and the removal check now reddens five of
+  six (the sixth is the unknown-scheme guard, which must stay green). Recorded because it is the same
+  vacuous-assertion shape this phase has now hit three times.
+  — Both shipped descriptions of what redaction covers are updated: the manifest note that travels inside
+  every export, and `export_lsp_conversation`'s tool description. An export that misstates its own coverage
+  is worse than one that never redacted, because it is believed.
+  — `LanguageServerRowViewModel` needed no change: the only URI it redacts is the workspace root, which is
+  a directory and always `file:`.
 - [x] 2.11 Tests, one per scenario in this phase's deltas, plus the rewrites the retired scheme forces: the routing tests that open `vb6://`, the ambiguous-extension
   guards against a real foreign server (now asserting the project-member gate, plus a carried `.cls` still
   reaching it), the per-server identifier test, the scheme theory. New: close-before-open asserted on the wire
