@@ -907,8 +907,21 @@ public class ProjectService : IProjectService
         // stops a .vbp being written that names forms which are not beside it. (#148)
         var refused = new List<string>();
         foreach (var form in project.Forms)
+        {
             if (!SerializeFormToFile(form, Path.Join(directory, form.Name + ".frm")))
+            {
                 refused.Add(form.Name);
+                continue;
+            }
+
+            // Announced, which it was not. SerializeFormToFile repoints the form's AbsolutePath, so this
+            // loop silently renames every form in the project as far as anything downstream is concerned —
+            // and the language layer names a document by its path. Without the event a server goes on
+            // holding each form under the name it had in the old directory, and every later change reaches
+            // it under a name it was never told about (#273 task 2.4a). The module loop below has always
+            // announced, through SaveModuleCore; the two halves simply disagreed.
+            eventBus.Publish(new DocumentSavedEvent(form, null));
+        }
 
         // Modules as well. Writing the forms and the .vbp but not the modules produced a directory whose
         // project file named .bas, .cls and .ctl files that were not in it — and, because every item is

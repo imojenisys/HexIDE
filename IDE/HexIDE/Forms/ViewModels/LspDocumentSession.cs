@@ -74,8 +74,26 @@ internal sealed class LspDocumentSession : IDisposable
     /// </summary>
     private readonly bool isProjectMember;
 
-    /// <summary>How this document is named to servers. Fixed for the session's lifetime.</summary>
-    public string Uri { get; }
+    /// <summary>
+    /// How this document is named to servers.
+    /// </summary>
+    /// <remarks>
+    /// Changes only through <see cref="RenameAsync"/>, which announces it. It is not derived from the
+    /// document's path, and must not be: Make EXE repoints every path into a temporary folder and puts it
+    /// back afterwards, so a name recomputed mid-build would name a document no server was told about.
+    /// </remarks>
+    public string Uri { get; private set; }
+
+    /// <summary>
+    /// True while a rename is in flight — closed under the old name, not yet opened under the new one.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="IsOpen"/> would otherwise stay true across the gap, because <c>started</c> and
+    /// <c>disposed</c> both describe the whole session rather than this moment. A request slipping through
+    /// there names a document neither the old connection nor the new one has heard of, which is precisely
+    /// the state the gate exists to exclude.
+    /// </remarks>
+    private bool renaming;
 
     /// <summary>
     /// True while the server has been told about this document and has not been told to forget it.
@@ -87,7 +105,7 @@ internal sealed class LspDocumentSession : IDisposable
     /// a less forgiving one may not survive. Asking through the session makes "we opened it" and "we may
     /// ask about it" one condition rather than two spellings of a similar one.
     /// </remarks>
-    public bool IsOpen => started && !disposed;
+    public bool IsOpen => started && !disposed && !renaming;
 
     /// <summary>Diagnostics for this document, converted to offsets in this buffer. Raised on the UI thread.</summary>
     public event Action<IReadOnlyList<LspMarker>>? MarkersChanged;
@@ -177,6 +195,51 @@ internal sealed class LspDocumentSession : IDisposable
         document.TextChanged -= OnTextChanged;
         client.DiagnosticsPublished -= OnDiagnosticsPublished;
         client.CloseDocumentAsync(Uri).ListenErrors();
+    }
+
+    /// <summary>
+    /// Announces that this document is now known by a different name: closed under the old one, opened
+    /// under the new one, in that order, on every connection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The protocol's own guidance for a rename, and for its reason</b> — more than the name can change,
+    /// so a server is told to forget and told afresh rather than asked to follow. Both halves are
+    /// <b>awaited</b>, unlike <see cref="Start"/> and <see cref="Dispose"/> which are fire-and-forget:
+    /// nothing else orders them, and an open that overtakes its close leaves the server holding the
+    /// document twice, under a name it will never be told to release.
+    /// </para>
+    /// <para>
+    /// <b><see cref="Uri"/> is reassigned only after the close returns.</b> The close raises a clearing
+    /// publication under the old name, and that comes back through <see cref="OnDiagnosticsPublished"/>,
+    /// which drops anything not naming this session. Reassigning first means the session ignores its own
+    /// withdrawal and the markers stay on screen — visibly wrong, and attributable to nothing.
+    /// </para>
+    /// <para>
+    /// The version counter restarts because the new name is a new document to the server, and its
+    /// <c>didOpen</c> establishes version 1.
+    /// </para>
+    /// </remarks>
+    public async Task RenameAsync(string newUri, CancellationToken cancellationToken = default)
+    {
+        if (disposed || !started || LspDocumentUri.AreSame(newUri, Uri)) return;
+
+        // Any debounced change belongs to the old name and would arrive after its close.
+        debounce?.Cancel();
+
+        renaming = true;
+        try
+        {
+            var old = Uri;
+            await client.CloseDocumentForRenameAsync(old, cancellationToken);
+            Uri = newUri;
+            version = 1;
+            await client.OpenDocumentAsync(newUri, document.Text, isProjectMember, cancellationToken);
+        }
+        finally
+        {
+            renaming = false;
+        }
     }
 
     private void OnTextChanged(object? sender, EventArgs e)

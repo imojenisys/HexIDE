@@ -57,6 +57,38 @@ internal sealed class DiagnosticLedger
     }
 
     /// <summary>
+    /// Drops everything EVERY source has said about ONE document, and returns the empty set to raise for
+    /// it — or null when nothing was recorded about it in the first place.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The mirror of <see cref="Withdraw"/>: that is one source across all documents, this is all sources
+    /// across one document. Neither substitutes for the other, and <see cref="Record"/> with an empty array
+    /// cannot do this job — it removes the caller's own row and returns the union of the rest, so a
+    /// document carrying both a language server's diagnostic and an injected compiler one still raises a
+    /// <b>non-empty</b> set. Under a name the document no longer answers to, those survivors are marks
+    /// nothing will ever clear.
+    /// </para>
+    /// <para>
+    /// For a rename, which is a close under the old name and an open under the new one. Not for an ordinary
+    /// close: a build's claim about a form outlives the editor that happened to be showing it, and the
+    /// document is still there.
+    /// </para>
+    /// </remarks>
+    public PublishDiagnosticsParams? Forget(string uri)
+    {
+        lock (_gate)
+        {
+            if (!_documents.TryGetValue(uri, out var document)) return null;
+            _documents.Remove(uri);
+
+            // The document's own spelling, not the caller's: that is the one every union was raised under,
+            // and a consumer keyed by raw string would not recognise any other.
+            return document.Empty();
+        }
+    }
+
+    /// <summary>
     /// Drops everything one source has published, anywhere, and returns what each affected document now
     /// says.
     ///
@@ -137,5 +169,8 @@ internal sealed class DiagnosticLedger
 
         public PublishDiagnosticsParams Publish() =>
             new(_uri, _rows.SelectMany(r => r.Diagnostics).ToArray());
+
+        /// <summary>The clearing publication for this document, under the spelling it is known by.</summary>
+        public PublishDiagnosticsParams Empty() => new(_uri, []);
     }
 }

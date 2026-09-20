@@ -522,6 +522,116 @@ public class CodeEditorViewModelTests : IDisposable
         _lspClient.Received().DiagnosticsPublished -= Arg.Any<EventHandler<PublishDiagnosticsParams>>();
     }
 
+    // ── A name change is announced, not assumed ──────────────────────
+
+    [AvaloniaFact]
+    public async Task AFirstSaveReopensTheDocumentUnderItsFileName()
+    {
+        // The trigger #489 made ordinary: a document has no file until the project is saved, so a first
+        // save is how nearly every document acquires one -- and a document is named by its file.
+        //
+        // Close THEN open, both under the right names. The protocol's guidance for a rename, and for its
+        // reason: more than the name can change, so the server is told to forget and told afresh.
+        Action<DocumentSavedEvent>? saved = null;
+        _eventBus.Subscribe(Arg.Do<Action<DocumentSavedEvent>>(h => saved = h))
+            .Returns(Substitute.For<IDisposable>());
+        var module = TestHelpers.CreateModule(name: "Module1");
+        CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        var path = OperatingSystem.IsWindows() ? @"C:\proj\Module1.bas" : "/proj/Module1.bas";
+        module.AbsolutePath = path;
+        saved!(new DocumentSavedEvent(null, module));
+
+        Received.InOrder(() =>
+        {
+            _lspClient.CloseDocumentForRenameAsync(
+                "untitled:TestProject/Module1.bas", Arg.Any<CancellationToken>());
+            _lspClient.OpenDocumentAsync(
+                LspDocumentUri.ForFile(path), Arg.Any<string>(), true, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [AvaloniaFact]
+    public async Task TheSaveIsAnnouncedUnderTheNewNameNotTheOld()
+    {
+        // Ordering, and it is not cosmetic: announcing the save first tells a server about a write to a
+        // document it is then immediately told to forget, and the server that matters never hears that the
+        // document it now holds was saved at all.
+        Action<DocumentSavedEvent>? saved = null;
+        _eventBus.Subscribe(Arg.Do<Action<DocumentSavedEvent>>(h => saved = h))
+            .Returns(Substitute.For<IDisposable>());
+        var module = TestHelpers.CreateModule(name: "Module1");
+        CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        var path = OperatingSystem.IsWindows() ? @"C:\proj\Module1.bas" : "/proj/Module1.bas";
+        module.AbsolutePath = path;
+        saved!(new DocumentSavedEvent(null, module));
+
+        await _lspClient.Received(1).SaveDocumentAsync(
+            LspDocumentUri.ForFile(path), Arg.Any<CancellationToken>());
+        await _lspClient.DidNotReceive().SaveDocumentAsync(
+            "untitled:TestProject/Module1.bas", Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public async Task AnOrdinarySaveThatChangesNoNameDoesNotReopenAnything()
+    {
+        // Most saves change nothing about the name, and a close-and-reopen on each would throw away the
+        // server's state on the file the developer is actually working in.
+        Action<DocumentSavedEvent>? saved = null;
+        _eventBus.Subscribe(Arg.Do<Action<DocumentSavedEvent>>(h => saved = h))
+            .Returns(Substitute.For<IDisposable>());
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.AbsolutePath = OperatingSystem.IsWindows() ? @"C:\proj\Module1.bas" : "/proj/Module1.bas";
+        CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        saved!(new DocumentSavedEvent(null, module));
+
+        await _lspClient.DidNotReceive().CloseDocumentForRenameAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _lspClient.Received(1).SaveDocumentAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public void RenamingAPathlessDocumentReopensItWithNoSaveInvolved()
+    {
+        // A document with no file is named untitled:<Project>/<Name>, so its own rename changes what
+        // servers should call it with nothing written to disk at all. After #489 that is the ordinary
+        // state of a new document, not a corner case -- and no save event will ever fire to catch it.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        module.Name = "Utilities";
+
+        _lspClient.Received(1).CloseDocumentForRenameAsync(
+            "untitled:TestProject/Module1.bas", Arg.Any<CancellationToken>());
+        _lspClient.Received(1).OpenDocumentAsync(
+            "untitled:TestProject/Utilities.bas", Arg.Any<string>(), true, Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public void RenamingTheProjectReopensItsPathlessDocuments()
+    {
+        // The project name is half the untitled: spelling, so renaming the project renames every document
+        // in it that has no file -- again with no save, and again invisibly without this.
+        var project = TestHelpers.CreateProject("TestProject");
+        var module = TestHelpers.CreateModule(owner: project, name: "Module1");
+        project.AddModule(module);
+        CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        project.Name = "Renamed";
+
+        _lspClient.Received(1).CloseDocumentForRenameAsync(
+            "untitled:TestProject/Module1.bas", Arg.Any<CancellationToken>());
+        _lspClient.Received(1).OpenDocumentAsync(
+            "untitled:Renamed/Module1.bas", Arg.Any<string>(), true, Arg.Any<CancellationToken>());
+    }
+
     // ── The name a request goes out under ────────────────────────────
 
     [AvaloniaFact]

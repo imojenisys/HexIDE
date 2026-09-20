@@ -155,6 +155,26 @@ public interface ILspClient : IAsyncDisposable
     Task CloseDocumentAsync(string uri, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Closes a document because it is about to be re-opened under a different name, and withdraws every
+    /// diagnostic recorded under the old one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="CloseDocumentAsync"/> because the two want opposite things. An ordinary
+    /// close must NOT withdraw everything: a build's claim about a form outlives the editor that happened
+    /// to be showing it, and the document still exists under that name. A rename must, because nothing
+    /// will ever answer to the old name again, so anything left under it is a mark with no way to be
+    /// cleared — which is hexide-io/HexIDE#269's shape arriving by a different route.
+    /// </para>
+    /// <para>
+    /// Not expressible as "close, then publish an empty set". An empty publication from a language server
+    /// removes only that server's rows; a document carrying an injected compiler diagnostic as well still
+    /// publishes a non-empty union, and those survivors are exactly the ones nothing can clear.
+    /// </para>
+    /// </remarks>
+    Task CloseDocumentForRenameAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Tells the servers holding this document that it has been written to disk.
     ///
     /// <para>

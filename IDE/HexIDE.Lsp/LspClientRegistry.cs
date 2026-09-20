@@ -258,6 +258,40 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         return Task.WhenAll(StartedClaimantsFor(uri).Select(c => c.ChangeDocumentAsync(uri, version, text, cancellationToken)));
     }
 
+    /// <summary>
+    /// Withdraws every diagnostic recorded under a name the document is about to stop answering to, and
+    /// raises the empty set so consumers clear it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a RENAME, and called by the close half of one. An ordinary close must not do this: a build's
+    /// claim about a form outlives the editor that was showing it, and the document still exists under
+    /// that name.
+    /// </para>
+    /// <para>
+    /// Necessary because an empty publication from a language server does not clear the document. The
+    /// ledger removes that server's row and raises the union of the rest, so a form carrying both a server
+    /// diagnostic and an injected compiler one still publishes a non-empty set — and under a name nothing
+    /// answers to any more, those survivors are marks nothing will ever clear. That is #269's shape
+    /// arriving by a different route.
+    /// </para>
+    /// </remarks>
+    public void ForgetDiagnosticsFor(string uri)
+    {
+        if (_diagnostics.Forget(uri) is { } cleared)
+            DiagnosticsPublished?.Invoke(this, cleared);
+    }
+
+    public async Task CloseDocumentForRenameAsync(string uri, CancellationToken cancellationToken = default)
+    {
+        // The connections first, so each drops its own state and a push server stops republishing under the
+        // old name; then the ledger, which is what actually clears a mark no single connection owns.
+        await Task.WhenAll(StartedClaimantsFor(uri)
+            .Select(c => c.CloseDocumentForRenameAsync(uri, cancellationToken)));
+        _open.TryRemove(uri, out _);
+        ForgetDiagnosticsFor(uri);
+    }
+
     public Task CloseDocumentAsync(string uri, CancellationToken cancellationToken = default)
     {
         // Routed BEFORE the record is dropped, or the close would be offered to a different set of servers

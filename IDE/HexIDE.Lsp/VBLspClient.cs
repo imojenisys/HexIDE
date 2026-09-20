@@ -803,6 +803,22 @@ public sealed class VBLspClient : ILspClient
           + "pull model for this connection instead.");
     }
 
+    /// <summary>
+    /// A close that also says, for certain, that this connection now has nothing to report about the name.
+    /// </summary>
+    /// <remarks>
+    /// The clearing publication is unconditional here, where <see cref="ForgetPullState"/> raises it only
+    /// for a server that answers when asked. For an ordinary close that gate is right: a PUSH server clears
+    /// a document by publishing an empty set itself, and pre-empting it would fight a server that has a
+    /// view. For a rename it is wrong — the name is going away, so there is no later publication to wait
+    /// for and a push server will never send one about a document it was told to close.
+    /// </remarks>
+    public async Task CloseDocumentForRenameAsync(string uri, CancellationToken cancellationToken = default)
+    {
+        await CloseDocumentAsync(uri, cancellationToken);
+        RaisePublishDiagnostics(DiagnosticOwner.LanguageServer, new PublishDiagnosticsParams(uri, []));
+    }
+
     private void ForgetPullState(string uri)
     {
         // The result identifier goes, because it names an answer about a document this client has stopped

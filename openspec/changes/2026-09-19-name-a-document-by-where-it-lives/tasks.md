@@ -176,17 +176,53 @@
   Proved by rewriting the navigation tests onto the new spellings, plus two cases the retired scheme could
   not express at all: a `Module1` in another project of the same group, and the same name with the wrong
   extension.
-- [ ] 2.4 Close and reopen on a name change: on the save event when the path differs from the session's
+- [x] 2.4 Close and reopen on a name change: on the save event when the path differs from the session's
   (never on the path changing, which a build does temporarily), and on a rename of a document or its project
   when the document has no file. Close then open, ordered per connection, asserted on the wire. Save
   notification afterwards under the new name.
-- [ ] 2.4a Two signals the trigger needs and does not have: saving a project into another directory repoints
+  — `LspDocumentSession.RenameAsync`: cancel the debounce (it belongs to the old name), close under the old
+  name, reassign, reset the version, open under the new one. **Both halves awaited**, unlike `Start` and
+  `Dispose` which are fire-and-forget — nothing else orders them, and an open that overtakes its close
+  leaves the server holding the document twice under a name it will never be told to release.
+  — **`Uri` is reassigned only after the close returns.** The close raises a clearing publication under the
+  old name, which comes back through the session's own diagnostics filter; reassigning first makes the
+  session ignore its own withdrawal and the markers stay on screen, attributable to nothing.
+  — A `renaming` flag, because `IsOpen` is `started && !disposed` and both describe the whole session rather
+  than this moment. Without it a hover issued between the close and the open passes 2.5's gate and names a
+  document neither connection has heard of.
+  — Three triggers, not one. A save (via `ReconcileThenAnnounceSaveAsync`, which renames **then** announces
+  — the other order tells a server about a write to a document it is about to be told to forget); the
+  document's own rename; and its **project's** rename, since the project name is half the `untitled:`
+  spelling. The last two fire with no save at all, which after #489 is the ordinary case for a new document.
+  — Compared against `DocumentWireName.For(Identity)`, never against the event's own `Form.AbsolutePath`:
+  the event matches either half of a UserControl and the code window's Save repoints the form part's path
+  alone (#474), so reading the path off the event re-opens a UserControl under the wrong name, sometimes.
+  — All five view-model tests checked by disabling both triggers and watching four of them redden.
+- [x] 2.4a Two signals the trigger needs and does not have: saving a project into another directory repoints
   every form without raising the save event (add it, beside the module loop that already does), and a form's
   rename is not announced until the designer's pending state is flushed (the "layout changed" notification of
   3.3 carries it).
-- [ ] 2.4b Diagnostics under the old name are withdrawn as the close is sent: the pull result id is dropped,
+  — One publish in `SaveProjectToDirectory`'s form loop. `SerializeFormToFile` repoints every form's
+  `AbsolutePath`, so that loop renames each of them as far as the language layer is concerned — and the
+  module loop beside it had always announced, through `SaveModuleCore`. Two halves of one method
+  disagreeing, which is why it survived: the existing test asserts the modules and passes either way.
+  — The form-**rename** half of this task is deferred to 3.3 and is stated rather than silently dropped: a
+  `FormDefinition`'s `Name` is derived from its root component and only raises `PropertyChanged` when
+  `UpdateComponents` runs, so a rename in the designer is not observable until the pending state is flushed.
+- [x] 2.4b Diagnostics under the old name are withdrawn as the close is sent: the pull result id is dropped,
   and for a push server the client records an empty set for that name on that connection, so the ledger and
   the caches keyed on it clear through the existing channel.
+  — Needed a new ledger operation, and the reason is worth keeping: `Record(uri, owner, [])` removes that
+  owner's row and returns the union of the **rest**, so a form carrying both a server diagnostic and an
+  injected compiler one still publishes a non-empty set. Under a name the document no longer answers to,
+  the compiler's rows are marks nothing will ever clear. `DiagnosticLedger.Forget(uri)` is the per-URI,
+  all-owners counterpart to `Withdraw`'s per-owner, all-documents.
+  — A **rename-specific close** (`CloseDocumentForRenameAsync`) rather than widening the existing gate.
+  `ForgetPullState` raises its clearing publication only for a server that answers when asked, and that is
+  right for an ordinary close — a push server clears a document itself, and pre-empting it fights a server
+  that has a view. For a rename it is wrong: the name is going away, so no later publication is coming.
+  — An ordinary close deliberately still leaves the compiler's rows alone, and that has its own test. A
+  build's claim about a form outlives the editor that happened to be showing it.
 - [x] 2.5 Route every request through the session's current name, gated on the session being open, as the
   carried-file editor already does. The Object Browser's request for a document nobody opened goes through the
   same resolver.
@@ -256,10 +292,14 @@
   **before** dropping the record, or the close would reach a different set of servers than the open did.
   — The five view-model assertions now pin the **value** (`true` from the code window, `false` from the
   carried-file editor) rather than `Arg.Any`, because stating the wrong one is the defect.
-- [ ] 2.7a Order 2.6 after 2.7, and prove the gate before the scheme goes. `Claims()` exists because of
+- [x] 2.7a Order 2.6 after 2.7, and prove the gate before the scheme goes. `Claims()` exists because of
   #277, where a VB6 server attached as `vba` started, initialized and was then never sent a document, and it
   is reachable today only from the branch 2.6 retires. Retiring that branch before 2.7's gate is built and
   asserted against a real foreign server reopens exactly that silence, with nothing to catch it.
+  — Honoured, and it bought more than it promised. The branch was not merely *about* to become unreachable:
+  it already was, so the `.cls` gate had gone with it and #279 was live on the branch. Building 2.7 first
+  is what surfaced that; deleting the branch first would have turned every negative routing assertion
+  vacuous instead of red, and there would have been nothing left to notice with.
 - [x] 2.8 Open documents survive a root restart: the registry re-opens every document it knows is open on
   each restarted connection before forwarding any change (#469; required here).
   — Driven from 2.7's record rather than from the triggering document's claimants, because those are two

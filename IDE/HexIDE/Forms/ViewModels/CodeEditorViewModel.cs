@@ -283,7 +283,11 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             var mine = (e.Module is not null && ReferenceEquals(e.Module, moduleDefinition))
                     || (e.Form is not null && ReferenceEquals(e.Form, formDefinition));
 
-            if (mine && session is { } open) open.NotifySavedAsync().ListenErrors();
+            // A save is also the commonest way a document's NAME changes: a first save gives it a file,
+            // and saving a project into another directory repoints every one of them. So reconcile the
+            // session's name before announcing the save, and announce the save under the new name -- the
+            // other order tells a server about a write to a document it has just been told to forget.
+            if (mine && session is { } open) ReconcileThenAnnounceSaveAsync(open).ListenErrors();
         }));
 
         AutoDispose(this.eventBus.Subscribe<FormUnloadedEvent>(e =>
@@ -307,10 +311,15 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     {
         this.formDefinition = formElement;
         this.identity = DocumentIdentity.For(formElement);
+        // Both subscriptions also reconcile the wire name. A document with no file is named
+        // untitled:<Project>/<Name>, so BOTH its own rename and its project's change what servers should
+        // call it, with no save involved at all -- and after #489 that is the ordinary state of a new
+        // document rather than a corner case. A document that HAS a file is unaffected: its name is its
+        // path, RenameAsync compares before acting, and a no-op rename costs one comparison.
         AutoDispose(formElement.ObservePropertyChanged(x => x.Name)
-            .Subscribe(_ => Title = ComputeTitle()));
+            .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
         AutoDispose(formElement.Owner.ObservePropertyChanged(x => x.Name)
-            .Subscribe(_ => Title = ComputeTitle()));
+            .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
         Document.Text = formElement.Code;
 
         PopulateObjectNames();
@@ -337,10 +346,15 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // formDefinition stays correct for them without a kind check.
         this.formDefinition = moduleElement.FormPart;
         this.identity = DocumentIdentity.For(moduleElement);
+        // Both subscriptions also reconcile the wire name. A document with no file is named
+        // untitled:<Project>/<Name>, so BOTH its own rename and its project's change what servers should
+        // call it, with no save involved at all -- and after #489 that is the ordinary state of a new
+        // document rather than a corner case. A document that HAS a file is unaffected: its name is its
+        // path, RenameAsync compares before acting, and a no-op rename costs one comparison.
         AutoDispose(moduleElement.ObservePropertyChanged(x => x.Name)
-            .Subscribe(_ => Title = ComputeTitle()));
+            .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
         AutoDispose(moduleElement.Owner.ObservePropertyChanged(x => x.Name)
-            .Subscribe(_ => Title = ComputeTitle()));
+            .Subscribe(_ => { Title = ComputeTitle(); ReconcileWireName(); }));
         Document.Text = moduleElement.Code;
 
         // A module with a designer half lists its controls like a form's editor does; one without falls
@@ -432,6 +446,29 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             if (name is { Length: > 0 })
                 ObjectNames.Add(name);
         }
+    }
+
+    /// <summary>
+    /// Brings the session's name back into agreement with the document, then tells servers it was saved.
+    /// </summary>
+    /// <remarks>
+    /// Compared against <c>DocumentWireName.For(Identity)</c> rather than against anything on the event.
+    /// The event matches EITHER half of a UserControl, and the code window's Save repoints the form part's
+    /// path alone (#474) while the identity and the project file both use the module's — so reading the
+    /// path off the event would re-open a UserControl under the wrong name, and only sometimes.
+    /// </remarks>
+    /// <summary>
+    /// Re-announces this document under its current name, if that has changed. Does nothing otherwise.
+    /// </summary>
+    private void ReconcileWireName()
+    {
+        if (session is { } open) open.RenameAsync(DocumentWireName.For(Identity)).ListenErrors();
+    }
+
+    private async Task ReconcileThenAnnounceSaveAsync(LspDocumentSession open)
+    {
+        await open.RenameAsync(DocumentWireName.For(Identity));
+        await open.NotifySavedAsync();
     }
 
     /// <summary>
