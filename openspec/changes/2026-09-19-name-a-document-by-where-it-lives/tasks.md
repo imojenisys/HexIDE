@@ -405,10 +405,12 @@
   in the gutter of a snapshot, `get_project_info` reporting a module and no related documents, and
   `get_diagnostics` reporting the squiggle at line 48. Which server, and which published build, is recorded
   in `demo/spring-tide/README.md`, which is where this tree names it.
-  — **No `didOpen` is sent, and that is correct**: that server advertises no `textDocumentSync` at all, so
-  HexIDE tells it nothing about the buffer and it reads the file from disk. Worth recording because an
-  absent open notification is otherwise indistinguishable from a document that failed to open, and the
-  README now says so.
+  — **No `didOpen` is sent, and that is correct** at the commit measured: the server advertises no
+  `textDocumentSync`, so HexIDE tells it nothing about the buffer and it reads the file from disk. Worth
+  recording because an absent open notification is otherwise indistinguishable from a document that failed
+  to open. Pinned to the commit rather than stated as a property of that server — its maintainers confirmed
+  the sync handlers are written and merely unregistered, so the trace gains three notifications the day
+  they are wired. HexIDE needs no change either way; it gates on the advertised capability.
   — `Module=` takes `Name; File` and rejects a bare path — `Module=TideTable.bas` makes `vb6.exe` call the
   whole project file corrupt, naming no line. Measured with the other four item keys, which do not all
   agree; the README points at that oracle section rather than restating it.

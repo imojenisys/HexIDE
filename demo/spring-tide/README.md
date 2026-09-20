@@ -99,10 +99,16 @@ acceptance test.** Two things made a real module unusable here, and both are now
   ([#446](https://github.com/hexide-io/HexIDE/issues/446)), where the carried-document view asked again
   once diagnostics arrived. Fixed independently.
 
-**No `didOpen` is sent, and that is correct.** RDCore advertises no `textDocumentSync` at all, so HexIDE
-tells it nothing about the buffer and RDCore reads the file from disk. If you are looking at the Protocol
-Inspector expecting an open notification, its absence is the server's capabilities being honoured rather
-than a document that failed to open.
+**No `didOpen` is sent, and that is correct — at `d1c04b5`.** At that commit RDCore registers three
+handlers and advertises no `textDocumentSync`, so HexIDE tells it nothing about the buffer and it reads the
+file from disk. If you are looking at the Protocol Inspector expecting an open notification, its absence is
+the server's stated capabilities being honoured rather than a document that failed to open.
+
+Stated against the commit rather than as a property of the server, because it is a registration away from
+changing: the open, change and close handlers are written and wired, just not yet passed to
+`WithHandler<>()`. HexIDE needs no change when they are — it gates every lifecycle notification on the
+advertised capability — but the trace you see here will gain three notifications, so check the commit before
+concluding the client has started doing something new.
 
 **The error is after the last member, not inside one.** RDCore's parser does not recover after a syntax
 error: everything below the first one gets no folds and no diagnostics, and the member containing it is cut
