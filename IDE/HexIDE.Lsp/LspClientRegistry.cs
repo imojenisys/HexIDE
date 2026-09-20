@@ -52,12 +52,28 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     /// </remarks>
     private readonly ConcurrentDictionary<string, OpenDocument> _open = new(StringComparer.Ordinal);
 
-    /// <summary>What was stated about a document when it was opened.</summary>
+    /// <summary>What is known about a document that is open.</summary>
     /// <param name="IsProjectMember">
     /// Whether it belongs to a VB6 project. Stated by the caller rather than worked out here: see
     /// <see cref="OpenDocumentAsync(string, string, bool, CancellationToken)"/>.
     /// </param>
-    private sealed record OpenDocument(bool IsProjectMember);
+    /// <param name="Text">
+    /// The latest text this registry has been given for it. Kept because a workspace move replaces every
+    /// client, and a fresh client has no history to replay from — the per-connection tracker went with the
+    /// connection. Updated on every change <b>before</b> the change is routed, so text that arrives while
+    /// no client is up is still what the re-open sends. Routed-path-only bookkeeping would re-open the
+    /// document with the text from before that change and silently undo it.
+    /// </param>
+    private sealed record OpenDocument(bool IsProjectMember, string Text);
+
+    /// <summary>
+    /// Serialises workspace-move handling. Without it two opens can both pass the
+    /// <see cref="SameDirectory"/> check before either reaches <c>_rootedAt = current</c> — which is
+    /// ordinary, since loading a <c>.vbg</c> opens several editors and nothing gates
+    /// <c>LspDocumentSession.Start</c>. Before this change that raced to a duplicate <c>StopAsync</c> and
+    /// was swallowed; now it would replay every open document twice onto the new connection.
+    /// </summary>
+    private readonly SemaphoreSlim _restartGate = new(1, 1);
 
     /// <summary>The workspace the running servers were told about, so a move can be noticed.</summary>
     private string? _rootedAt;
@@ -208,15 +224,17 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     public async Task OpenDocumentAsync(
         string uri, string text, bool isProjectMember, CancellationToken cancellationToken = default)
     {
-        // Before anything starts or is used: a server told about one project must not go on serving another.
-        await RestartIfWorkspaceMovedAsync();
+        // Before anything starts or is used: a server told about one project must not go on serving
+        // another. This document is named so the replay inside can skip it — it is opened below either
+        // way, and opening it twice is the failure this argument exists to prevent.
+        await RestartIfWorkspaceMovedAsync(uri, cancellationToken);
 
         // Recorded before routing, so change, close and save answer the same question this open did. The
         // registry deliberately holds no model of the project, and it could not work membership out for
         // itself: an `untitled:` name would have to be parsed back into project and document names, which
         // this change forbids everywhere else, and a path match cannot see a document that has no file.
         // The opener already knows -- the code window opens members, the carried-file editor does not.
-        _open[uri] = new OpenDocument(isProjectMember);
+        _open[uri] = new OpenDocument(isProjectMember, text);
 
         // The one place a server starts. Opening a document is the first moment its language is known to be
         // present, which is exactly the trigger lazy start is defined against.
@@ -227,9 +245,18 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
             .Select(e => e.Client!.OpenDocumentAsync(uri, text, cancellationToken)));
     }
 
-    public Task ChangeDocumentAsync(string uri, int version, string text, CancellationToken cancellationToken = default) =>
+    public Task ChangeDocumentAsync(string uri, int version, string text, CancellationToken cancellationToken = default)
+    {
+        // Recorded BEFORE routing, and deliberately even when routing reaches nobody. Between a workspace
+        // move tearing the clients down and the next one starting, StartedClaimantsFor yields nothing and
+        // this change goes nowhere — so if the record were only updated on the routed path, the re-open
+        // would send the text from before it and quietly undo the developer's typing. Same reasoning as
+        // VBLspClient tracking a document before its own gate.
+        if (_open.TryGetValue(uri, out var known)) _open[uri] = known with { Text = text };
+
         // No start here: a change to a document nothing has opened is not a reason to launch a server.
-        Task.WhenAll(StartedClaimantsFor(uri).Select(c => c.ChangeDocumentAsync(uri, version, text, cancellationToken)));
+        return Task.WhenAll(StartedClaimantsFor(uri).Select(c => c.ChangeDocumentAsync(uri, version, text, cancellationToken)));
+    }
 
     public Task CloseDocumentAsync(string uri, CancellationToken cancellationToken = default)
     {
@@ -588,11 +615,24 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     /// cost paid repeatedly.
     /// </para>
     /// </summary>
-    private async Task RestartIfWorkspaceMovedAsync()
+    private async Task RestartIfWorkspaceMovedAsync(string? triggeringUri, CancellationToken cancellationToken)
     {
         if (_workspace is null) return;
 
-        var current = _workspace.Directory;
+        await _restartGate.WaitAsync(cancellationToken);
+        try
+        {
+            await RestartIfWorkspaceMovedCoreAsync(triggeringUri, cancellationToken);
+        }
+        finally
+        {
+            _restartGate.Release();
+        }
+    }
+
+    private async Task RestartIfWorkspaceMovedCoreAsync(string? triggeringUri, CancellationToken cancellationToken)
+    {
+        var current = _workspace!.Directory;
 
         // Nothing is running, so whatever the workspace is now is what the first server will be told.
         if (!_entries.Any(e => e.Client is not null))
@@ -628,7 +668,46 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         }
 
         _rootedAt = current;
+
+        // Re-open everything that was open, before anything else is forwarded. The teardown above covers
+        // EVERY entry, while the caller goes on to start and open only the claimants of the one document
+        // that triggered it — so without this a Markdown server holding a carried file is stopped with
+        // nothing to re-open it, and every later change to those documents reaches a server that never saw
+        // them opened (hexide-io/HexIDE#469). A first save of a never-saved project moves the root, so
+        // since #489 this is the ordinary path rather than an edge case.
+        await ReopenKnownDocumentsAsync(triggeringUri, cancellationToken);
+
         ConnectionsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Opens every document the registry knows to be open on the connections that now claim it.
+    /// </summary>
+    /// <remarks>
+    /// Driven from the record rather than from the triggering document's claimants: those are two
+    /// different sets, and the teardown used the wider one.
+    /// <para>
+    /// <paramref name="triggeringUri"/> is skipped because its caller opens it immediately afterwards.
+    /// It is not yet in the record on a first open — the record is written after this returns — but a
+    /// re-open of a document already known would otherwise be sent twice.
+    /// </para>
+    /// </remarks>
+    private async Task ReopenKnownDocumentsAsync(string? triggeringUri, CancellationToken cancellationToken)
+    {
+        foreach (var (uri, known) in _open)
+        {
+            if (triggeringUri is not null && string.Equals(uri, triggeringUri, StringComparison.Ordinal))
+                continue;
+
+            foreach (var e in ClaimantsFor(uri, known.IsProjectMember))
+            {
+                // A failed entry is not revived by a document arriving, which is the rule EnsureStartedAsync
+                // already applies; the null check is what keeps that true here rather than restating it.
+                await EnsureStartedAsync(e, cancellationToken);
+                if (e.Client is { } client)
+                    await client.OpenDocumentAsync(uri, known.Text, cancellationToken);
+            }
+        }
     }
 
     /// <summary>

@@ -226,8 +226,31 @@
   #277, where a VB6 server attached as `vba` started, initialized and was then never sent a document, and it
   is reachable today only from the branch 2.6 retires. Retiring that branch before 2.7's gate is built and
   asserted against a real foreign server reopens exactly that silence, with nothing to catch it.
-- [ ] 2.8 Open documents survive a root restart: the registry re-opens every document it knows is open on
+- [x] 2.8 Open documents survive a root restart: the registry re-opens every document it knows is open on
   each restarted connection before forwarding any change (#469; required here).
+  — Driven from 2.7's record rather than from the triggering document's claimants, because those are two
+  different sets and the teardown used the wider one: every entry is stopped, while the caller goes on to
+  start and open only the claimants of the one document that triggered it. So a Markdown server holding a
+  carried file was stopped with nothing to re-open it.
+  — The record carries the latest **text**, updated on change **before** the change is routed. Between the
+  teardown and the next server starting, `StartedClaimantsFor` yields nothing and a change goes nowhere;
+  remembering only text that had been routed successfully would re-open the document with the text from
+  before it and silently undo what was typed.
+  — The triggering URI is skipped, because its caller opens it immediately afterwards. It is not yet in the
+  record on a first open — the record is written after the restart check returns — but a re-open of a
+  document already known would otherwise be sent twice.
+  — `RestartIfWorkspaceMovedAsync` now holds a `SemaphoreSlim` across the whole of the teardown and the
+  replay. Without it two opens can both pass the `SameDirectory` check before either reaches
+  `_rootedAt = current`, which is ordinary — loading a `.vbg` opens several editors and nothing gates
+  `LspDocumentSession.Start`. That used to race to a duplicate `StopAsync` and be swallowed; it would now
+  replay every open document twice.
+  — **The five tests were each checked by removal, not just written.** Deleting the replay reddens two;
+  the other three pass vacuously without it, which is recorded here rather than left to be discovered:
+  they constrain the replay's behaviour and only bite once it exists. Removing the triggering-URI skip
+  reddens the duplicate guard specifically.
+  — Not covered, and filed as a gap rather than papered over: **Save Project As of an already-saved project
+  moves the root with no document event at all**, because `SaveProject` hardcodes `saveAs: false` for every
+  document and only the `.vbp` is repointed. It is a 2.8 trigger with no 2.4 counterpart.
 - [ ] 2.9 Compiler diagnostics injected under the wire name resolved from the compiler's own (absolute) file
   path, for every kind, not only forms by file stem. Parse the format the compiler actually writes (0.3), and
   convert its line number there and nowhere else: file line = `N + 1 + hidden lines above it`, where hidden
