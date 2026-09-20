@@ -405,6 +405,24 @@
   is worse than one that never redacted, because it is believed.
   — `LanguageServerRowViewModel` needed no change: the only URI it redacts is the workspace root, which is
   a directory and always `file:`.
+  — **Verified in the running IDE, and the verification turned up something worth stating plainly.** The
+  export preview was driven end to end (Tools → Protocol Inspector → Export conversation): it reports
+  *"Includes 266 B of your source code: Form1.frm"* — the leaf, unwidened, because nothing collides — and
+  the body shows every path segment replaced (`file:///C:/hx-Aconite/hx-knot/…/hx-Solstice.frm`) with the
+  drive letter and the extension kept. The account name, `AppData`, `Local`, `Temp` and the scratch GUID are
+  all gone from a path that carried them.
+  — **But that was a `file:` URI, and `untitled:` did not appear — because the IDE does not currently
+  produce one.** Measured twice on a fresh `--newproject` session: the startup form opened as
+  `file:///…/Temp/hexide_Project1_<guid>/Form1.frm`, and a module added afterwards opened as
+  `…/Ledger.bas` in the same scratch directory. That is route A (#500) — every `AddNew*` writes into a
+  scratch folder at Add time — and the spec is explicit that a file in a folder the IDE chose is named by
+  its `file:` URI like any other.
+  — So **this task closes a leak that the default flow cannot currently reach**, and that is recorded rather
+  than left to be inferred from a green suite. It is still the right change: the converter emits
+  `untitled:` for any document whose `AbsolutePath` is null, the model permits that (the NRE fixed in 2.1
+  was exactly such a module), and #500 is open on whether route A should become route B — under which every
+  document is genuinely pathless until the project is saved and this becomes the ordinary case overnight.
+  A redactor that had to be extended at that moment would be extended in a hurry.
 - [x] 2.11 Tests, one per scenario in this phase's deltas, plus the rewrites the retired scheme forces: the routing tests that open `vb6://`, the ambiguous-extension
   guards against a real foreign server (now asserting the project-member gate, plus a carried `.cls` still
   reaching it), the per-server identifier test, the scheme theory. New: close-before-open asserted on the wire
