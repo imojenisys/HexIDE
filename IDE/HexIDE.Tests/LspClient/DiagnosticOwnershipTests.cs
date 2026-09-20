@@ -11,7 +11,7 @@ namespace HexIDE.Tests.LspClient;
 
 public class DiagnosticOwnershipTests
 {
-    private const string Form1 = "vb6://form/Form1";
+    private const string Form1 = "untitled:Project1/Form1.frm";
 
     private const string FullCapabilities = """
         {"textDocumentSync":{"openClose":true,"change":1}}

@@ -190,8 +190,25 @@
 - [ ] 2.5 Route every request through the session's current name, gated on the session being open, as the
   carried-file editor already does. The Object Browser's request for a document nobody opened goes through the
   same resolver.
-- [ ] 2.6 Retire scheme routing: `SchemeLanguageOf`, the scheme branch of `ClaimantsFor` and the identifier as
+- [x] 2.6 Retire scheme routing: `SchemeLanguageOf`, the scheme branch of `ClaimantsFor` and the identifier as
   a claim.
+  — Done **after** 2.7 and 2.8, per 2.7a, and that ordering earned itself: the branch was already
+  unreachable, so removing it first would have turned every negative routing assertion vacuous instead of
+  red, with nothing left to notice.
+  — The identifier's claim is the one behavioural loss, and it is asserted rather than left implicit.
+  `AnEntryDeclaringTheSchemeLanguageStillWorksWhateverItsExtensions` is **inverted** into
+  `DeclaringTheLanguageWithoutClaimingAnExtensionNoLongerRoutesAnything`, with a companion,
+  `DeclaringTheLanguageIsStillWhatLetsAnEntryBeOfferedAProjectsClassModules`, so that the inversion cannot
+  be read as "the identifier means nothing now" and the 2.7 gate deleted after it. Nothing real regresses:
+  an entry claiming a made-up extension and nothing else was never going to be handed a `.bas` on disk
+  either, so this removes an inconsistency rather than a capability.
+  — `OnlyHexIdesOwnSchemeNamesALanguage` tested a function that no longer exists and is **replaced** by
+  `OnlyAVb6ClaimEstablishesVb6`, which covers what took its job. Its `.md` row is the load-bearing one:
+  said loosely as "an extension no other language uses", the rule would admit a Markdown server.
+  — The sweep: the `Vb6Doc` / `Form1` / `Form1Uri` constants in five suites, the workspace-symbol open, the
+  foreign-server exclusion guard and one integration publish. Two `vb6://` uses are deliberately left —
+  `UserSidecarService` still *reads* the old key, which is the migration phase 1 recorded, and
+  `ConversationDisclosureTests` uses opaque URIs that 2.10 owns.
 - [x] 2.7 The project-member gate: a project member on an ambiguous extension is offered only to servers that
   claim a VB6 extension no other language uses (every VB6 source extension but `.cls`) or declare `vb6`.
   Membership is stated by the caller when the document is opened and remembered with the session — the

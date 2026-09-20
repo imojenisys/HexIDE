@@ -510,13 +510,17 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     /// <summary>
     /// Every server that claims this document. Keyed on the EXTENSION, not on a language name, so two
     /// servers claiming one extension are both offered it even when they disagree about what to call it.
+    ///
+    /// <para>
+    /// There used to be a branch above this one for HexIDE's own <c>vb6://</c> scheme, which carried no
+    /// extension. #273 retired the scheme, and the branch became unreachable the moment nothing minted one
+    /// — taking the <c>.cls</c> gate that lived inside it with it. The gate is now
+    /// <paramref name="isProjectMember"/>, below, and is reached on every document rather than on one
+    /// spelling of one.
+    /// </para>
     /// </summary>
     private List<Entry> ClaimantsFor(string? uri, bool isProjectMember)
     {
-        // A scheme that names a language wins: HexIDE's own documents carry no extension to match on.
-        if (DocumentLanguage.SchemeLanguageOf(uri) is { } schemeLanguage)
-            return _entries.Where(e => Claims(e.Registration, schemeLanguage)).ToList();
-
         if (DocumentLanguage.ExtensionOf(uri) is not { } extension) return [];
 
         return _entries
@@ -533,31 +537,6 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     /// </summary>
     private bool IsProjectMember(string? uri) =>
         uri is not null && _open.TryGetValue(uri, out var record) && record.IsProjectMember;
-
-    /// <summary>
-    /// Whether a registration claims documents of a language named by a URI scheme.
-    ///
-    /// <para>
-    /// <b>An entry's extensions are what it claims to SERVE; its language identifier is what it wants that
-    /// thing CALLED.</b> Routing already reads the first for files on disk. Reading only the second here
-    /// meant the configuration file required a field it then ignored, and silently depended on one whose
-    /// single working value was written down nowhere — so a VB6 server attached as <c>vba</c>, which is
-    /// what the wider ecosystem calls the language, started, initialized, and was never sent a document
-    /// (hexide-io/HexIDE#277). That defeated the configurable server list for the one language this IDE is
-    /// about, while every other file type worked, so it read as the user's server being broken.
-    /// </para>
-    ///
-    /// <para>
-    /// Both readings are accepted rather than the second being replaced: an entry naming the language
-    /// directly is claiming these documents whatever it says about extensions, which is how the bundled
-    /// entry and anything modelled on it works.
-    /// </para>
-    /// </summary>
-    private static bool Claims(LanguageServerRegistration registration, string schemeLanguage) =>
-        registration.LanguageId.Equals(schemeLanguage, StringComparison.OrdinalIgnoreCase)
-        || (schemeLanguage.Equals(DocumentLanguage.Vb6, StringComparison.OrdinalIgnoreCase)
-            && registration.Extensions.Intersect(
-                   DocumentLanguage.UnambiguousVb6Extensions, StringComparer.OrdinalIgnoreCase).Any());
 
     private IEnumerable<ILspClient> StartedClaimantsFor(string? uri) =>
         ClaimantsFor(uri, IsProjectMember(uri)).Select(e => e.Client).Where(c => c is not null).Select(c => c!);

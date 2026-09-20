@@ -29,7 +29,7 @@ namespace HexIDE.Tests.IDE;
 /// </summary>
 public class Vb6ToolchainDiagnosticsTests
 {
-    private const string Form1Uri = "vb6://form/Form1";
+    private const string Form1Uri = "untitled:Project1/Form1.frm";
 
     private readonly ILspClient _lsp;
     private readonly ILspClient _server = Substitute.For<ILspClient>();
