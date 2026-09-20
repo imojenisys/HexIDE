@@ -120,6 +120,25 @@ public class Vb6ServerRoutingTests
     }
 
     [Fact]
+    public async Task AnEntryClaimingOnlyTheAmbiguousExtensionIsNotOfferedARealProjectClassModule()
+    {
+        // The same guarantee as the test above, asserted against the URI a class module actually carries
+        // since #273 task 2.1. The test above opens `vb6://module/Module1`, which nothing mints any more:
+        // that string has no extension, so routing returns no claimants and the assertion passes without
+        // testing anything. This one names the document the way the IDE now does.
+        var latex = FakeServer();
+        var sut = RegistryOf(new LanguageServerRegistration(
+            "latex", "LaTeX", [".cls", ".sty", ".tex"], "latex", () => latex));
+
+        await sut.OpenDocumentAsync(
+            "untitled:Project1/Class1.cls", "Option Explicit", isProjectMember: true,
+            TestContext.Current.CancellationToken);
+
+        await latex.DidNotReceive().OpenDocumentAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task TwoVb6ServersUnderDifferentNamesBothGetTheDocument()
     {
         // The same plurality that already holds for files: two servers may serve one language and

@@ -368,7 +368,10 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     {
         // GetDocumentUri(), not a form-or-module expression written out again: a UserControl or
         // PropertyPage sets BOTH definition fields (#152) and the module must win. One rule, one place.
-        session = new LspDocumentSession(lspClient, Document, GetDocumentUri());
+        // isProjectMember: true -- this window opens forms, modules, classes, UserControls and
+        // PropertyPages, and every one of them is a member. That is what gates a `.cls` away from a LaTeX
+        // server claiming the same extension (#279); the carried-file editor states the opposite.
+        session = new LspDocumentSession(lspClient, Document, GetDocumentUri(), isProjectMember: true);
 
         // Forwarded into this class's own event rather than re-exposed as a pass-through. The view
         // subscribes once when it attaches and never replays, so a subscription that landed on the session

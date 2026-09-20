@@ -197,6 +197,7 @@ public class CodeEditorViewModelTests : IDisposable
         _lspClient.Received(1).OpenDocumentAsync(
             "untitled:TestProject/Form1.frm",
             form.Code,
+            true,
             Arg.Any<CancellationToken>());
     }
 
@@ -214,7 +215,8 @@ public class CodeEditorViewModelTests : IDisposable
 
         CreateSut().Initialize(form);
 
-        _lspClient.Received(1).OpenDocumentAsync("untitled:TestProject/Form1.frm", form.Code, Arg.Any<CancellationToken>());
+        _lspClient.Received(1).OpenDocumentAsync(
+            "untitled:TestProject/Form1.frm", form.Code, true, Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -228,6 +230,7 @@ public class CodeEditorViewModelTests : IDisposable
         _lspClient.Received(1).OpenDocumentAsync(
             "untitled:TestProject/Module1.bas",
             module.Code,
+            true,
             Arg.Any<CancellationToken>());
     }
 
@@ -245,7 +248,8 @@ public class CodeEditorViewModelTests : IDisposable
 
         CreateSut().Initialize(module);
 
-        _lspClient.Received(1).OpenDocumentAsync("untitled:TestProject/Module1.bas", module.Code, Arg.Any<CancellationToken>());
+        _lspClient.Received(1).OpenDocumentAsync(
+            "untitled:TestProject/Module1.bas", module.Code, true, Arg.Any<CancellationToken>());
     }
 
     // ── LSP delegation ───────────────────────────────────────────────

@@ -125,6 +125,32 @@ public interface ILspClient : IAsyncDisposable
     Task StartAsync(CancellationToken cancellationToken = default);
     Task StopAsync();
     Task OpenDocumentAsync(string uri, string text, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a document, stating whether it belongs to a VB6 project.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A project member is known to be VB6 whatever its extension shares with another language, so it is
+    /// offered only to servers whose own claim establishes VB6 (hexide-io/HexIDE#279). <c>.cls</c> is the
+    /// case that matters: a VB6 class module and a LaTeX class file spell the same.
+    /// </para>
+    /// <para>
+    /// <b>An overload, not a defaulted parameter on the method above.</b> A <c>bool</c> defaulted after the
+    /// cancellation token would compile at every existing call site and then quietly change what they mean:
+    /// every <c>Received().OpenDocumentAsync(uri, text, Arg.Any&lt;CancellationToken&gt;())</c> in the suite
+    /// would start asserting against an implicit <c>false</c> that production no longer passes, and the
+    /// resulting wall of red reads as a routing regression rather than as a signature change.
+    /// </para>
+    /// <para>
+    /// The caller states it because the registry cannot work it out. It holds no model of the project by
+    /// design, and neither parsing an <c>untitled:</c> name back into its parts nor matching a path would
+    /// answer — the first is forbidden everywhere else in this seam, and the second cannot see a document
+    /// that has no file. The opener already knows.
+    /// </para>
+    /// </remarks>
+    Task OpenDocumentAsync(
+        string uri, string text, bool isProjectMember, CancellationToken cancellationToken = default);
     Task ChangeDocumentAsync(string uri, int version, string text, CancellationToken cancellationToken = default);
     Task CloseDocumentAsync(string uri, CancellationToken cancellationToken = default);
 

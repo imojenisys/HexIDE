@@ -192,11 +192,36 @@
   same resolver.
 - [ ] 2.6 Retire scheme routing: `SchemeLanguageOf`, the scheme branch of `ClaimantsFor` and the identifier as
   a claim.
-- [ ] 2.7 The project-member gate: a project member on an ambiguous extension is offered only to servers that
+- [x] 2.7 The project-member gate: a project member on an ambiguous extension is offered only to servers that
   claim a VB6 extension no other language uses (every VB6 source extension but `.cls`) or declare `vb6`.
   Membership is stated by the caller when the document is opened and remembered with the session — the
   workspace projection exposes only a directory and folders, and neither parsing an `untitled:` name nor
   matching a path can answer it. Change, close and save route by the same record.
+  — **Done first, and it turned out to be repairing a live regression rather than adding a guard.**
+  `SchemeLanguageOf` requires a literal `://`, which neither `untitled:` nor a `file:` URI's `vb6` test can
+  satisfy, so once 2.1 stopped minting `vb6://` the scheme branch of `ClaimantsFor` became unreachable and
+  the `.cls` gate went with it. Both existing guards stayed green because both opened
+  `vb6://module/Module1` — a string with no extension, so routing returned no claimants and the assertion
+  held without reaching the rule it names. Proved by writing the same assertion against
+  `untitled:Project1/Class1.cls`: red before this task, green after. `ALatexServerClaimingClsIsNotOfferedVb6Modules`
+  was **retargeted rather than supplemented**, because a guard that cannot fail is worse than no guard, and
+  it now runs against real texlab.
+  — The predicate is `DocumentLanguage.EstablishesVb6(extensions, languageId)`, lifted from the dead
+  `Claims`. Applying it to *every* member is the same rule as applying it only on ambiguous extensions, so
+  there is one predicate and no second test: on `.bas`, `.frm`, `.ctl` or `.pag` the extension that matched
+  is itself unambiguous, so the entry satisfies the gate and it is the identity. `.cls` is the only VB6
+  source extension it can exclude, and excluding it is the point.
+  — An **overload** on `ILspClient`, never a defaulted `bool`. A `bool` defaulted after the cancellation
+  token compiles at every call site and then silently changes what each means: every
+  `Received().OpenDocumentAsync(uri, text, Arg.Any<CancellationToken>())` would assert against an implicit
+  `false` production no longer passes, and the resulting red reads as a routing regression. The same
+  reasoning as the add-in overloads in phase 1, for the same reason.
+  — The registry's record is keyed **ordinally**, deliberately not `LspDocumentUri.Comparer`: the
+  per-connection tracker it shadows uses the default comparer, and two stores keyed differently
+  desynchronise on exactly the case-folding case a URI comparer exists for. `CloseDocumentAsync` routes
+  **before** dropping the record, or the close would reach a different set of servers than the open did.
+  — The five view-model assertions now pin the **value** (`true` from the code window, `false` from the
+  carried-file editor) rather than `Arg.Any`, because stating the wrong one is the defect.
 - [ ] 2.7a Order 2.6 after 2.7, and prove the gate before the scheme goes. `Claims()` exists because of
   #277, where a VB6 server attached as `vba` started, initialized and was then never sent a document, and it
   is reachable today only from the branch 2.6 retires. Retiring that branch before 2.7's gate is built and

@@ -42,7 +42,7 @@ public class LspDocumentSessionTests : IDisposable
         // in a suite this size that is whichever test class got there first — so pumping from here passes
         // alone and throws "a different thread owns it" in the full run. Injecting the hop removes the
         // dependency rather than racing it.
-        var session = new LspDocumentSession(_client, _document, uri, work => work());
+        var session = new LspDocumentSession(_client, _document, uri, postToUiThread: work => work());
         _sessions.Add(session);
         return session;
     }
@@ -66,7 +66,7 @@ public class LspDocumentSessionTests : IDisposable
     {
         Session("# hi").Start();
 
-        await _client.Received(1).OpenDocumentAsync(Uri, "# hi", Arg.Any<CancellationToken>());
+        await _client.Received(1).OpenDocumentAsync(Uri, "# hi", false, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class LspDocumentSessionTests : IDisposable
 
         Session("# hi").Start();
 
-        await _client.Received(1).OpenDocumentAsync(Uri, "# hi", Arg.Any<CancellationToken>());
+        await _client.Received(1).OpenDocumentAsync(Uri, "# hi", false, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class LspDocumentSessionTests : IDisposable
         session.Start();
 
         await _client.Received(1).OpenDocumentAsync(Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<CancellationToken>());
+            Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     // ── Synchronization ───────────────────────────────────────────────────────────────────────────────
@@ -356,7 +356,7 @@ public class LspDocumentSessionTests : IDisposable
         // Reproduced by queuing the posted work instead of running it, closing, and only then draining.
         var queued = new List<Action>();
         _document.Text = "hello world";
-        var session = new LspDocumentSession(_client, _document, Uri, queued.Add);
+        var session = new LspDocumentSession(_client, _document, Uri, postToUiThread: queued.Add);
         _sessions.Add(session);
         IReadOnlyList<LspMarker>? seen = null;
         session.MarkersChanged += m => seen = m;

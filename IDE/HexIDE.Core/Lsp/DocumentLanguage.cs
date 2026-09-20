@@ -103,4 +103,33 @@ public static class DocumentLanguage
     /// </summary>
     public static readonly string[] UnambiguousVb6Extensions =
         [".bas", ".frm", ".ctl", ".pag", ".dob", ".dsr"];
+
+    /// <summary>
+    /// Whether a server's own claim establishes that it serves VB6 — it claims a VB6 extension no other
+    /// language uses, or it declares the identifier outright.
+    /// </summary>
+    /// <param name="extensions">the extensions the entry claims.</param>
+    /// <param name="languageId">the identifier the entry declares.</param>
+    /// <remarks>
+    /// <para>
+    /// This is the gate a <b>project member</b> passes through, and only a project member: a carried
+    /// <c>.cls</c> is an ordinary file and goes wherever its extension leads. A member is known to be VB6
+    /// whatever its extension shares with another language, so offering it to a server that has not
+    /// established VB6 would hand a LaTeX server the developer's source (hexide-io/HexIDE#279).
+    /// </para>
+    /// <para>
+    /// <b>Applying it to every member is the same rule as applying it only to ambiguous extensions</b>,
+    /// which is why there is no second predicate. On <c>.bas</c>, <c>.frm</c>, <c>.ctl</c> or <c>.pag</c>
+    /// the very extension that matched is itself unambiguous, so an entry that routed on it satisfies this
+    /// too and the gate is the identity. <c>.cls</c> is the only VB6 source extension it can actually
+    /// exclude, and excluding it is the whole point.
+    /// </para>
+    /// <para>
+    /// Said loosely as "an extension no other language uses", the rule would admit a Markdown server
+    /// through <c>.md</c>. It is deliberately about <em>VB6's</em> unambiguous extensions.
+    /// </para>
+    /// </remarks>
+    public static bool EstablishesVb6(IEnumerable<string> extensions, string? languageId) =>
+        Vb6.Equals(languageId, StringComparison.OrdinalIgnoreCase)
+        || extensions.Intersect(UnambiguousVb6Extensions, StringComparer.OrdinalIgnoreCase).Any();
 }

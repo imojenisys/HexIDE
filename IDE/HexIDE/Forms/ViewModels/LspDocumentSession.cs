@@ -57,13 +57,22 @@ internal sealed class LspDocumentSession : IDisposable
     /// pump it.
     /// </param>
     public LspDocumentSession(
-        ILspClient client, TextDocument document, string uri, Action<Action>? postToUiThread = null)
+        ILspClient client, TextDocument document, string uri, bool isProjectMember = false,
+        Action<Action>? postToUiThread = null)
     {
         this.client = client;
         this.document = document;
+        this.isProjectMember = isProjectMember;
         this.postToUiThread = postToUiThread ?? (work => Avalonia.Threading.Dispatcher.UIThread.Post(work));
         Uri = uri;
     }
+
+    /// <summary>
+    /// Whether this document belongs to a VB6 project, as its opener stated. Carried for the session's
+    /// lifetime because routing has to answer the same question on a change, a close and a save as it did
+    /// on the open, and a document does not change project mid-session.
+    /// </summary>
+    private readonly bool isProjectMember;
 
     /// <summary>How this document is named to servers. Fixed for the session's lifetime.</summary>
     public string Uri { get; }
@@ -111,7 +120,7 @@ internal sealed class LspDocumentSession : IDisposable
         started = true;
 
         client.DiagnosticsPublished += OnDiagnosticsPublished;
-        client.OpenDocumentAsync(Uri, document.Text).ListenErrors();
+        client.OpenDocumentAsync(Uri, document.Text, isProjectMember).ListenErrors();
         document.TextChanged += OnTextChanged;
     }
 

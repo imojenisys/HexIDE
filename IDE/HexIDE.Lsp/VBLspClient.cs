@@ -691,6 +691,16 @@ public sealed class VBLspClient : ILspClient
         }
     }
 
+    /// <summary>
+    /// Membership is a ROUTER concern, so one connection ignores it: by the time a document reaches this
+    /// class the registry has already decided that this server should see it. Implemented rather than
+    /// refused because the interface is what the registry itself implements, and a connection used
+    /// directly (the tests, and the single-server path) must accept the same call.
+    /// </summary>
+    public Task OpenDocumentAsync(
+        string uri, string text, bool isProjectMember, CancellationToken cancellationToken = default) =>
+        OpenDocumentAsync(uri, text, cancellationToken);
+
     public async Task OpenDocumentAsync(string uri, string text, CancellationToken cancellationToken = default)
     {
         // Tracked BEFORE the gate, deliberately: a document opened while no server is up must still be

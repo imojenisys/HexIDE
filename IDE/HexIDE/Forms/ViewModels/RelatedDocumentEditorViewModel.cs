@@ -154,7 +154,11 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient)
         // drawn over a banner that says the file could not be read.
         if (LoadError is not null) return;
 
-        session = AutoDispose(new LspDocumentSession(lspClient, Document, LspDocumentUri.ForFile(path)));
+        // isProjectMember: false -- a carried file is an ordinary file the project happens to reference,
+        // so it goes wherever its extension leads. A carried `.cls` reaching a LaTeX server is correct, and
+        // is the case that stops the #279 gate being written as "anything the project names".
+        session = AutoDispose(new LspDocumentSession(
+            lspClient, Document, LspDocumentUri.ForFile(path), isProjectMember: false));
         session.MarkersChanged += markers =>
         {
             Markers = markers;
