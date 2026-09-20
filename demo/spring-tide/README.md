@@ -28,7 +28,16 @@ To see it for yourself rather than take the screenshot's word for it, launch wit
 [rubberduck-vba/RDCore#260](https://github.com/rubberduck-vba/RDCore/pull/260)** (merged as `0ed29c9`).
 Before it, answering `textDocument/diagnostic` killed the server's entire output channel, so the first pull
 silenced everything after it. From an RDCore checkout at or after that commit, run its `PlatformPublish.ps1`.
-Measured on Windows, over a named pipe.
+Measured on Windows, over a named pipe — most recently against RDCore `d1c04b5`, which has `0ed29c9` as an
+ancestor.
+
+Two things about the published server are worth knowing before you point HexIDE at it:
+
+- **Keep the whole published tree, and set `command` to the executable inside it.** The server derives its
+  platform root as the *parent* of its own directory, and reads its configuration, its parse server and its
+  extensions from there. An executable copied out on its own starts and then analyses nothing.
+- **The build is framework-dependent**, so the machine needs a .NET 10 runtime. `PlatformPublish.ps1` does
+  not produce a self-contained binary.
 
 **1. Make a profile.** HexIDE keeps settings, layout and its language server configuration in a per-user
 directory, and `--user-data-dir` points a session at a different one. So the demo brings its own, and your
@@ -65,18 +74,35 @@ records an absolute path to the local Office install's `VBE7.DLL`, and an empty 
 same folds and diagnostics without tying the file to one machine. Keys are PascalCase; a camelCase file loads
 without complaint and lists no modules.
 
-**`RelatedDoc=`, not `Module=`.** `SpringTide.vbp` carries `TideTable.bas` as a related document. That is a
-workaround, and it is the reason this demo works at all:
+**`Module=`, and note the shape.** `SpringTide.vbp` carries `TideTable.bas` as an ordinary module:
 
-- As a module, HexIDE names the file to servers as `vb6://module/TideTable`
-  ([#273](https://github.com/hexide-io/HexIDE/issues/273)). RDCore implements no document sync, never
-  receives the text, and knows the file only by its `file:` path, so every answer about the `vb6:` name
-  comes back empty. A carried document is named by its real path.
-- A module opened before its server has initialized also never asks for folds
-  ([#446](https://github.com/hexide-io/HexIDE/issues/446)). The carried-document view asks again once
-  diagnostics arrive; the module view does not.
+```
+Module=TideTable; TideTable.bas
+```
 
-When #273 is fixed this should become an ordinary `Module=` line, and that change is the test that it was.
+`Module=` requires `Name; File` and a bare path is rejected — `Module=TideTable.bas` makes `vb6.exe` report
+that *the project file is corrupt*, naming no line. That is measured, along with the other four item keys,
+which do **not** all agree: see *A `.vbp` item line has two shapes* in
+[`docs/vb6-fidelity-oracle.md`](../../docs/vb6-fidelity-oracle.md).
+
+**It used to be `RelatedDoc=`, as a workaround, and that is worth recording because it was the demo's own
+acceptance test.** Two things made a real module unusable here, and both are now closed:
+
+- As a module, HexIDE named the file to servers as `vb6://module/TideTable`
+  ([#273](https://github.com/hexide-io/HexIDE/issues/273)) — a scheme HexIDE invented for itself. RDCore
+  implements no document sync, never receives the text, and knows a file only by its `file:` path, so every
+  answer about the `vb6:` name came back empty. A document is now named by its file, and this demo is what
+  proved it: measured on the wire, HexIDE sends
+  `file:///…/demo/spring-tide/TideTable.bas`, and RDCore answers with six folding regions and one
+  `VBC00001` — the same answers it gave the carried document.
+- A module opened before its server had initialized never asked for folds
+  ([#446](https://github.com/hexide-io/HexIDE/issues/446)), where the carried-document view asked again
+  once diagnostics arrived. Fixed independently.
+
+**No `didOpen` is sent, and that is correct.** RDCore advertises no `textDocumentSync` at all, so HexIDE
+tells it nothing about the buffer and RDCore reads the file from disk. If you are looking at the Protocol
+Inspector expecting an open notification, its absence is the server's capabilities being honoured rather
+than a document that failed to open.
 
 **The error is after the last member, not inside one.** RDCore's parser does not recover after a syntax
 error: everything below the first one gets no folds and no diagnostics, and the member containing it is cut

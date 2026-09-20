@@ -553,6 +553,39 @@ public class CodeEditorViewModelTests : IDisposable
     }
 
     [AvaloniaFact]
+    public async Task AFirstSaveOfAPathlessFormReopensItUnderItsFrmFile()
+    {
+        // The form half of the same rule, and it is the half that had no event to act on until #273 task
+        // 2.4a: SaveProjectToDirectory's module loop announced through SaveModuleCore while its form loop
+        // wrote through SerializeFormToFile and announced nothing, so a form whose path that method had
+        // just repointed went on being named untitled: forever. A server then held it under a name the
+        // editor no longer used, and every later change reached it under a name it had never been told
+        // about -- silently, because an unknown URI is answered with an empty result rather than an error.
+        //
+        // Written against a form rather than a module deliberately. The two are separate Initialize
+        // overloads with separate subscriptions, and this suite's module tests passed throughout the
+        // period the form path was broken.
+        Action<DocumentSavedEvent>? saved = null;
+        _eventBus.Subscribe(Arg.Do<Action<DocumentSavedEvent>>(h => saved = h))
+            .Returns(Substitute.For<IDisposable>());
+        var form = TestHelpers.CreateForm(name: "Form1");
+        CreateSut().Initialize(form);
+        _lspClient.ClearReceivedCalls();
+
+        var path = OperatingSystem.IsWindows() ? @"C:\proj\Form1.frm" : "/proj/Form1.frm";
+        form.AbsolutePath = path;
+        saved!(new DocumentSavedEvent(form, null));
+
+        Received.InOrder(() =>
+        {
+            _lspClient.CloseDocumentForRenameAsync(
+                "untitled:TestProject/Form1.frm", Arg.Any<CancellationToken>());
+            _lspClient.OpenDocumentAsync(
+                LspDocumentUri.ForFile(path), Arg.Any<string>(), true, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [AvaloniaFact]
     public async Task TheSaveIsAnnouncedUnderTheNewNameNotTheOld()
     {
         // Ordering, and it is not cosmetic: announcing the save first tells a server about a write to a
@@ -630,6 +663,42 @@ public class CodeEditorViewModelTests : IDisposable
             "untitled:TestProject/Module1.bas", Arg.Any<CancellationToken>());
         _lspClient.Received(1).OpenDocumentAsync(
             "untitled:Renamed/Module1.bas", Arg.Any<string>(), true, Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public void ABuildSaysNothingAtAllAlthoughItRepointsEveryPath()
+    {
+        // Make EXE writes every form and module into a temporary directory, repointing each AbsolutePath
+        // on the way in and restoring it in a finally -- so for the length of one build, the path a
+        // document would be NAMED from is a file in TEMP that is about to be deleted.
+        //
+        // The wire name has to sit that out, and it does so structurally rather than by recognising a
+        // temporary path: it is fixed when the document is opened and moves only when a rename or an
+        // announced save says so. Nothing polls AbsolutePath, and this test is what stops one starting to
+        // -- a reconcile driven off the path would rename the document into TEMP and back on every build,
+        // twice, handing servers two names that never existed and discarding whatever state they held.
+        //
+        // The build's own silence is the other half, pinned separately: Make EXE passes announceSave:
+        // false for its modules and writes its forms through SerializeFormToFile, which announces nothing
+        // at all (DocumentSavedAnnouncementTests).
+        var module = TestHelpers.CreateModule(name: "Module1");
+        var real = OperatingSystem.IsWindows() ? @"C:\proj\Module1.bas" : "/proj/Module1.bas";
+        module.AbsolutePath = real;
+        CreateSut().Initialize(module);
+        _lspClient.ClearReceivedCalls();
+
+        // Composed rather than written out: this is a real filesystem path, so Path is the right tool
+        // (the rule against it governs paths going into a VB6 file), and a literal one under a user
+        // profile is indistinguishable to a scanner from somebody's actual machine.
+        var staged = Path.Combine(Path.GetTempPath(), "hexide-make-1234", "Module1.bas");
+
+        module.AbsolutePath = staged;   // into the build's temp directory
+        module.AbsolutePath = real;     // and back, in Make EXE's finally
+
+        _lspClient.DidNotReceive().CloseDocumentForRenameAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>());
+        _lspClient.DidNotReceive().OpenDocumentAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     // ── The name a request goes out under ────────────────────────────

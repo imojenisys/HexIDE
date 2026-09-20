@@ -360,12 +360,61 @@
   — The attribute walk was checked by neutering `IsHiddenFromVb6LineCount` and watching its test redden.
 - [ ] 2.10 Export redaction pseudonymises `untitled:` path segments; the redactor's rationale and the
   disclosure's grouping key are rewritten.
-- [ ] 2.11 Tests, one per scenario in this phase's deltas, plus the rewrites the retired scheme forces: the routing tests that open `vb6://`, the ambiguous-extension
+- [x] 2.11 Tests, one per scenario in this phase's deltas, plus the rewrites the retired scheme forces: the routing tests that open `vb6://`, the ambiguous-extension
   guards against a real foreign server (now asserting the project-member gate, plus a carried `.cls` still
   reaching it), the per-server identifier test, the scheme theory. New: close-before-open asserted on the wire
   bytes, in the style of the shutdown wire-shape tests; a build sends nothing; a first save of a pathless form.
-- [ ] 2.12 Acceptance: `demo/spring-tide` carries its module as `Module=` rather than `RelatedDoc=`, and the
+  — **Not a step of its own: each scenario's tests landed with the task that implemented it**, and are
+  recorded there rather than restated here. What this item was still owed was the three the list names
+  separately, which belong to no single earlier task.
+  — **Close-before-open, on the wire bytes** — `RenameWireShapeTests`, in `ShutdownWireShapeTests`' style,
+  over a server spoken by hand. The five existing assertions all run against an `ILspClient` substitute,
+  which proves the caller invoked its client in order with the right arguments; it cannot prove a server
+  saw anything. That gap is not hypothetical here: **both notifications are gated on the server's
+  `textDocumentSync.openClose` and both swallow their own exceptions**, so the calls can return cleanly
+  having put nothing on the wire at all, and every substitute assertion records that as a pass. Checked by
+  removal — with the probe server answering `"openClose":false`, all five redden.
+  — The guarantee is deliberately split across two layers rather than driven end to end. A wire test
+  through `LspDocumentSession` would need the session's `TextDocument`, and **AvaloniaEdit's `TextDocument`
+  carries thread affinity of its own**, separate from Avalonia's dispatcher: every `await` on a real
+  transport resumes on a pool thread and the next read of `.Text` throws. `SetOwnerThread(null)` does not
+  help — it is a two-step handoff, and a null owner makes `VerifyAccess` throw for *every* thread. So the
+  substitutes pin that the session closes the OLD name before opening the new one, and the wire file pins
+  what those two calls become in bytes.
+  — A timeout there reports what it was waiting for and what did arrive, because a frame this client
+  declines to send is dropped silently and the caller's await completes normally. Left bare, the expected
+  shape of that bug reads as a hung test.
+  — **A build sends nothing** — `ABuildSaysNothingAtAllAlthoughItRepointsEveryPath`. Make EXE repoints
+  every `AbsolutePath` into `%TEMP%` and restores it in a `finally`, so for the length of a build the path
+  a document would be named from is a file about to be deleted. `AbsolutePath` is a `SetField` property and
+  does raise `PropertyChanged`, so a reconcile subscribed to it is a one-line mistake rather than a
+  theoretical one — this test is what stops it. Checked by removal: adding that subscription reddens it.
+  Make EXE itself cannot be driven from a unit test (it refuses without a published standalone runtime),
+  so its own silence is pinned separately in `DocumentSavedAnnouncementTests`.
+  — **A first save of a pathless form** — `AFirstSaveOfAPathlessFormReopensItUnderItsFrmFile`. The form
+  half of 2.4a, written against a form on purpose: the two kinds are separate `Initialize` overloads with
+  separate subscriptions, and every module test in this file passed throughout the period the form path
+  was broken.
+- [x] 2.12 Acceptance: `demo/spring-tide` carries its module as `Module=` rather than `RelatedDoc=`, and the
   demo's server reads it from disk.
+  — **Done, and measured against the demo's real foreign server rather than argued.** `SpringTide.vbp`
+  now carries `Module=TideTable; TideTable.bas`, and HexIDE names it on the wire as
+  `file:///…/demo/spring-tide/TideTable.bas`. The server answered `textDocument/foldingRange` with six
+  regions and `textDocument/diagnostic` with one syntax error at 0-based line 47 — the same answers it gave
+  the carried document. Confirmed four ways rather than one: the frame in the protocol capture, the folds
+  in the gutter of a snapshot, `get_project_info` reporting a module and no related documents, and
+  `get_diagnostics` reporting the squiggle at line 48. Which server, and which published build, is recorded
+  in `demo/spring-tide/README.md`, which is where this tree names it.
+  — **No `didOpen` is sent, and that is correct**: that server advertises no `textDocumentSync` at all, so
+  HexIDE tells it nothing about the buffer and it reads the file from disk. Worth recording because an
+  absent open notification is otherwise indistinguishable from a document that failed to open, and the
+  README now says so.
+  — `Module=` takes `Name; File` and rejects a bare path — `Module=TideTable.bas` makes `vb6.exe` call the
+  whole project file corrupt, naming no line. Measured with the other four item keys, which do not all
+  agree; the README points at that oracle section rather than restating it.
+  — The demo's README section that made the case for `RelatedDoc=` is rewritten as history, because it was
+  this change's acceptance test and losing the record of *why* it was a workaround would lose the point.
+  Both reasons it gave are now closed: 2.1 for the `vb6://module/TideTable` naming, and #446 independently.
 
 ## 3. The whole file in the code window
 
