@@ -325,11 +325,39 @@
   — Not covered, and filed as a gap rather than papered over: **Save Project As of an already-saved project
   moves the root with no document event at all**, because `SaveProject` hardcodes `saveAs: false` for every
   document and only the `.vbp` is repointed. It is a 2.8 trigger with no 2.4 counterpart.
-- [ ] 2.9 Compiler diagnostics injected under the wire name resolved from the compiler's own (absolute) file
+- [x] 2.9 Compiler diagnostics injected under the wire name resolved from the compiler's own (absolute) file
   path, for every kind, not only forms by file stem. Parse the format the compiler actually writes (0.3), and
   convert its line number there and nowhere else: file line = `N + 1 + hidden lines above it`, where hidden
   means the header **and** every `Attribute` line above the error, so the count is computed from the document
   rather than taken as a constant per kind. Depends on #477.
+  — **The line conversion counts rather than offsets, and is correct today rather than after phase 3.**
+  VB6's `N` is a 0-based index into the code view, which excludes **every** `Attribute` line, module-level
+  and procedure-level alike (oracle probe d1). The editor's buffer today hides a module's header run,
+  shows a form's attribute run, and shows procedure-level attributes in both — so no per-kind offset is
+  right for all three, and one that is right today would be wrong the moment phase 3 composes the whole
+  file. `EditorLineOf` walks the buffer skipping exactly what VB6 skipped; when 3.2 puts the header in the
+  buffer, `IsHiddenFromVb6LineCount` gains the header's lines and nothing else changes. The rejected
+  alternative was building `N + 1 + hidden` now and accepting a marker 1–25 lines too low until phase 3,
+  which is a wrong answer that runs.
+  — The regex matched `path(N) : error C0001: …`, which is a C compiler's format and nothing VB6 has ever
+  written, so that consumer had never had live traffic at all (#477). Anchored on `', Line ` and on ` : `
+  rather than on the message, because a message may contain a colon (`Expected: expression`, measured) and
+  a path may contain an apostrophe.
+  — The log is read through `Vb6TextFile.Decode` rather than `File.ReadAllText`, which assumes UTF-8 when
+  the log is ANSI. A non-ASCII character anywhere in the absolute path became U+FFFD before the regex saw
+  it, and the path is how a diagnostic finds its document — so every error in such a project would have
+  been dropped in silence. Latin-1 only; a true ANSI codepage needs `System.Text.Encoding.CodePages`, a
+  package and a licence row, and is not worth that here.
+  — Resolution is by **path, across every kind**. It matched `project.Forms` only, by file stem, so a
+  `.bas`, `.cls`, `.ctl` and `.pag` were all dropped, and so was a form whose file is not named after it —
+  which VB6 permits and the oracle records.
+  — No severity is parsed, because `vb6.exe` writes none: the log says `Compile Error in File` and a
+  compile error is never a warning.
+  — `AFailedBuildsErrorsSitBesideTheServersOnTheSameForm` now proves its own name. Its fixture published
+  under one URI while production injected under another, two ledger documents that `GetAll()` flattens
+  into one list — so "both are present" passed whether or not they shared a document. It now asserts one
+  distinct `FileName`.
+  — The attribute walk was checked by neutering `IsHiddenFromVb6LineCount` and watching its test redden.
 - [ ] 2.10 Export redaction pseudonymises `untitled:` path segments; the redactor's rationale and the
   disclosure's grouping key are rewritten.
 - [ ] 2.11 Tests, one per scenario in this phase's deltas, plus the rewrites the retired scheme forces: the routing tests that open `vb6://`, the ambiguous-extension
