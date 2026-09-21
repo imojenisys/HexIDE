@@ -628,8 +628,11 @@
   — **Recorded at the write, not at the announcement**, so every announce site is covered by construction:
   `SerializeFormToFile`, the `.ctl`/`.pag` branch of `SaveModuleCore`, and — which was not in the task and
   matters more than it reads — `AddNewUserControl` and `AddNewPropertyPage`, which write the file at
-  creation. After #489 a document getting its file at creation is the ordinary case, and without this a
-  brand-new UserControl opened with no header in the window while its file had one.
+  creation, so without this a brand-new UserControl opened with no header in the window while its file had
+  one. **That sentence used to say "after #489 a document getting its file at creation is the ordinary
+  case", which reads #489 backwards.** #489 decided the opposite — VB6 writes nothing until the project is
+  saved — and #500 is the implementation. The creation paths do write today, so this is the ordinary case
+  now and will not be; 3.4 is what covers the document that has no file.
   — **The clause "before the save is announced" already holds on the wire, and it is worth saying why.**
   `LspDocumentSession.NotifySavedAsync` flushes a pending `didChange` before sending `didSave`, so the
   header this writes reaches the server ahead of the save notice even though the write is debounced. Nothing
@@ -691,7 +694,43 @@
   sidecar restores the marks in the numbering of the file as it was before that change. Seen during the live
   verification, where the first external edit landed while the designer had an undo history and was
   therefore classified as a conflict; the reload that followed a restart shifted correctly.
-- [ ] 3.4 Header render for a form with no file uses `<Name>.frx`. A form held read-only is never re-rendered.
+- [x] 3.4 Header render for a form with no file uses `<Name>.frx`. A form held read-only is never re-rendered.
+  — **The read-only half was already done, and saying why is the deliverable.** Being unable to reproduce a
+  form is the ONLY thing in the tree that holds one read-only: both `IsReadOnly` properties that can be
+  backed by a form are the same one-line expression over `CanSaveFaithfully`, there is no disk-attribute
+  check, no project-level or safe-mode gate, and a running project prompts rather than locks. So 3.3's
+  fidelity gate is the whole of it, and a second check would have been a second answer to one question.
+  — **The no-file branch cannot reach an unfaithful form, by construction.** Only `FormDeserializer` ever
+  marks a form unfaithful, so a form with no file has never been through it. Pinned by a test rather than
+  left as reasoning, because a third cause added later would quietly make the sentence above false.
+  — **`<Name>.frx` is right only for a `.frm`.** The companion extension is derived by the serializer from
+  the file name's own (`.ctl` → `.ctx`, `.pag` → `.pgx`), so the spelling comes from `DocumentIdentity` —
+  its `Name` and its `Extension`, the same two pieces `DocumentWireName` puts after `untitled:`. One
+  `FormCodeText.RenderFileNameFor` answers for both the has-a-file and the no-file case, so the save path
+  and the refresh cannot drift apart about what a form is rendered against.
+  — **The name reaches the rendered text through exactly one thing: the companion citations.**
+  `FormSerializer` reads the argument only to derive the `.frx` name, and writes that name only for a
+  property holding a blob. Every form HexIDE has just created carries none, so for them this changes the
+  render not at all — which means a test that only removed the gate could not tell `<Name>.frx` from any
+  other string. The test therefore puts an `Icon` on the form and asserts the citation.
+  — **An empty name is refused rather than rendered.** `Path.ChangeExtension("", ".frx")` returns `""`
+  (measured on .NET 10), so a nameless document would have emitted a citation of `"":HHHH` — a file that
+  looks valid and names nothing. Nothing produces a nameless form; if one arrives it gets no render.
+  — **The existing gate test did not model the production case and was rebuilt, not inverted.** It set
+  `AbsolutePath = null` on a form read from disk, which is a state nothing produces and left the subject
+  with a header already. The fixture is now `new FormDefinition(project, FormComponentClass.Instance, ...)`,
+  which is what `IProjectTemplate` builds — no file AND no designer text.
+  — `AFormHexideCreatedComposesToItsCodeAlone` was **kept** rather than inverted: it pins the state before
+  the first commit, which is still right. Its sibling asserts the state after one, and the prose in
+  `FormCodeText` now says *when* the header appears instead of implying it never does.
+  — **What this task does NOT close, recorded in `design.md` as an open question of this phase**: a created
+  form that is opened and never touched still shows no header, while the code-editor delta says a document
+  with no file shall hold the header its first save will write. It needs a trigger the design record does
+  not have, and it cannot be settled apart from 3.17 — a header appearing at open has no previous header to
+  measure a mark shift against, and the sidecar's own numbering may already count it.
+  — **Verified in the running IDE** on a `File > New Project` Standard EXE, whose `Form1` genuinely has no
+  file: the code window opened with no header, and adding a control in the designer put the whole designer
+  block in front of `Option Explicit`.
 - [ ] 3.5 Where a document's header carries `VB_Name`, it follows a rename, as an edit the IDE makes itself
   (#473: a form's is never retargeted today, so a renamed form's file names two different forms). A form
   HexIDE created carries no attribute block at all, unlike one imported from VB6, which writes five — a

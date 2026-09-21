@@ -1,5 +1,6 @@
 using System.Text;
 using HexIDE.IDE;
+using HexIDE.Runtime.Components;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Runtime.Serialization;
 
@@ -133,14 +134,55 @@ public class WholeFileCompositionTests
     }
 
     [Fact]
-    public void AFormHexideCreatedComposesToItsCodeAlone()
+    public void AFormHexideCreatedComposesToItsCodeAloneUntilSomethingCommits()
     {
-        // No file was read, so there is no designer text and nothing to put in front of the code. Composing
-        // "" + Code is right rather than a gap: there is no file yet for this to differ from.
+        // No file was read, so there is nothing recorded to put in front of the code, and composing
+        // "" + Code is right rather than a gap while that lasts: nothing has decided what the file will say.
+        // Task 3.4 gives it one on the first committed designer change -- see the sibling below, and the
+        // open question in that task about the window in between.
         var form = new FormDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), [], "Form1");
 
         form.DesignerText.Should().BeNull();
         FormCodeText.WholeFile(form).Should().Be(form.Code);
+    }
+
+    [Fact]
+    public void AndComposesBothHalvesOnceItHasOne()
+    {
+        // The other side of the same state, held here rather than only in HeaderRefresherTests because the
+        // composition is this file's subject: a form that acquires a header composes exactly like one read
+        // from disk, with no special case for where the header came from.
+        var form = new FormDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), FormComponentClass.Instance, "Form1");
+        var rendered = new FormSerializer().SerializeDesignerText(form, "Form1.frm");
+        form.RecordDesignerText(rendered);
+
+        FormCodeText.Prefix(form).Should().Be(rendered);
+        FormCodeText.WholeFile(form).Should().Be(rendered + form.Code);
+    }
+
+    [Fact]
+    public void TheNameAFormWithNoFileRendersAgainstIsTheOneItsFirstSaveWillUse()
+    {
+        // <Name>.frx in the task's wording is right only for a .frm. The spelling comes from the identity,
+        // which resolves a UserControl's designer half to its module and answers the extension that kind is
+        // saved with -- the same two pieces DocumentWireName puts after untitled:.
+        var project = new ProjectDefinition(VBProjectType.EXE, "P");
+        var form = new FormDefinition(project, FormComponentClass.Instance, "Form1");
+
+        FormCodeText.RenderFileNameFor(form).Should().Be("Form1.frm");
+
+        var module = new ModuleDefinition(project, "MyControl", ModuleKind.UserControl);
+        var part = new FormDefinition(project, [], "MyControl");
+        module.UpdateFormPart(part);
+
+        // And a form that HAS a file renders against the FILE name, not its VB6 name. The two diverge as
+        // soon as a form is renamed or saved elsewhere, and a companion is cited by the name beside it on
+        // disk -- citing the VB6 name would name a .frx that is not there.
+        form.AbsolutePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Renamed.frm");
+        FormCodeText.RenderFileNameFor(form).Should().Be("Renamed.frm");
+
+        FormCodeText.RenderFileNameFor(part).Should().Be("MyControl.ctl",
+            "the companion is then .ctx, which the serializer derives from this");
     }
 
     // ── And the same cut, made from the other side ────────────────────────────────

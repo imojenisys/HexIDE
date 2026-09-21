@@ -97,9 +97,17 @@ public static class FormCodeText
     /// included. Both halves are slices of the text that was read.
     ///
     /// <para>
-    /// A form HexIDE created has no designer text, so this is its code alone — which is also right, because
-    /// there is no file yet for it to differ from. The same is true of a <c>.ctl</c> or <c>.pag</c> whose
-    /// designer block could not be parsed: nothing was split off, so nothing is put back.
+    /// A form HexIDE created has no designer text <b>until something commits a change to it</b>, so until
+    /// then this is its code alone. That is right rather than a gap while it lasts: nothing has decided what
+    /// the file will say. The first committed designer change renders the header the form's first save will
+    /// write and records it (task 3.4), after which this composes both halves like any other form. What
+    /// still has no answer is the window in between — a form opened and never touched shows no header, and
+    /// what ought to appear there is recorded as an open question under task 3.4.
+    /// </para>
+    ///
+    /// <para>
+    /// The same is true of a <c>.ctl</c> or <c>.pag</c> whose designer block could not be parsed: nothing
+    /// was split off, so nothing is put back.
     /// </para>
     ///
     /// <para>
@@ -161,6 +169,48 @@ public static class FormCodeText
     /// </remarks>
     public static string DesignerHalfOf(string rendered, string code) =>
         code.Length > 0 && rendered.Length >= code.Length ? rendered[..^code.Length] : rendered;
+
+    /// <summary>
+    /// The file name a form's designer half is rendered against: the name of its file, or — for a form that
+    /// has none yet — the name its first save will use.
+    /// </summary>
+    /// <remarks>
+    /// <b>It reaches the rendered text through exactly one thing: the companion citations.</b>
+    /// <c>FormSerializer</c> reads the argument only to derive the <c>.frx</c> / <c>.ctx</c> / <c>.pgx</c>
+    /// name, and that name is written only for a property holding a blob — so for a form carrying none, and
+    /// every form HexIDE has just created carries none, the render is the same string whatever is passed.
+    /// The rule is therefore about being right for the one form that does carry one, which it acquires by
+    /// being pasted into from a form that was loaded.
+    ///
+    /// <para>
+    /// <b>Spelled from the identity, so there is one answer rather than a second one.</b>
+    /// <c>DocumentIdentity</c> already resolves a UserControl's or PropertyPage's designer half to its
+    /// module and answers the extension that kind is saved with, which is also what
+    /// <c>DocumentWireName</c> puts after an <c>untitled:</c> name. <c>&lt;Name&gt;.frx</c> in the task's
+    /// own wording is right only for a <c>.frm</c>; the other two kinds take <c>.ctx</c> and <c>.pgx</c>,
+    /// derived from this by the serializer.
+    /// </para>
+    ///
+    /// <para>
+    /// <b><c>Path.GetFileName</c> is correct here</b>, in spite of the rule against host path APIs on VB6
+    /// paths: <c>AbsolutePath</c> is a real filesystem path that HexIDE resolved, not a path that came out
+    /// of a <c>.vbp</c>, and this is the same call the save path makes to get the same argument.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The empty guard is not defensive tidiness.</b> <c>Path.ChangeExtension("", ".frx")</c> returns
+    /// <c>""</c> (measured on .NET 10), so a render handed a nameless document would emit a citation of
+    /// <c>"":HHHH</c> rather than failing — a file that looks valid and names nothing. A form with no name
+    /// is not a state anything here produces, and if one ever arrives it gets no render at all.
+    /// </para>
+    /// </remarks>
+    public static string? RenderFileNameFor(FormDefinition form)
+    {
+        var identity = DocumentIdentity.For(form);
+        if (identity.AbsolutePath is { } path)
+            return System.IO.Path.GetFileName(path);
+        return identity.Name.Length == 0 ? null : identity.Name + identity.Extension;
+    }
 
     /// <summary>
     /// The whole file this module represents, whichever kind it is.

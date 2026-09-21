@@ -219,6 +219,28 @@ region is found from the text rather than from the model.
   IDE cannot reproduce it is never re-rendered. A form with no file renders its companion references from
   the name its first save will use.
 
+**Open, and it belongs to this phase rather than to a later one: where a created form's FIRST header comes
+from.** The three triggers below are a committed designer change, a save and a reload; none of them is
+creation or opening a window. So a form that has just been created and not yet touched shows no header at
+all, while the code-editor spec says a document with no file "SHALL hold the header its first save will
+write". Task 3.4 closes the render, not that gap.
+
+It is not a gap to patch with a fourth trigger, for two reasons that have to be settled together:
+
+- **A header that materialises when a window opens has no *before*.** Every refresh shifts the document's
+  marks by the change in the header's height, and that needs a recorded previous header to measure against.
+  Rendering lazily out of the accessor looks like the answer and is not: the accessor is also what the
+  refresh reads to find out what the header WAS, so a lazy render would return the post-change value and the
+  marks would never move at all. Whatever supplies the first header has to store it.
+- **It collides with the sidecar's numbering.** Marks restored from the sidecar are numbered against the
+  buffer as it stood when they were written. If a header appears at open and the marks then shift, a
+  document whose sidecar already counted the header is shifted twice. That is task 3.17's question and it
+  cannot be answered separately from this one.
+
+And #500 raises the stakes rather than lowering them: it implements what #489 decided, which is that a new
+document gets no file until the project is saved — so after it, *every* newly created document is in this
+state rather than only the template's `Form1` and the Project Explorer's Add Form.
+
 **The prefix lives on the model, not in the editor.** The interpreter, the pre-run syntax check and the
 standalone runner all read the definition and have no access to a code window, and a form open only in its
 designer has no code window at all. So `FormDefinition` carries its designer text beside its components, the

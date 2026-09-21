@@ -42,20 +42,33 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
     /// the header, when the render moved and when the form is one HexIDE may render at all.
     /// </summary>
     /// <remarks>
-    /// <b>Two gates, and neither is defensive tidiness.</b>
-    /// <list type="number">
-    /// <item><description>A form HexIDE cannot reproduce is never re-rendered. <c>FormSerializer</c> carries
+    /// <b>One gate: a form HexIDE cannot reproduce is never re-rendered.</b> <c>FormSerializer</c> carries
     /// no fidelity check of its own — <c>SerializeFormToFile</c> refuses <em>before</em> calling it — so a
-    /// refresh without this gate would put a flattened menu hierarchy in the code window as though it were
-    /// the file, for exactly the forms whose save is refused to stop that reaching disk. The developer's
-    /// window would then disagree with both the file and the refusal.</description></item>
-    /// <item><description>A form with no file yet is left alone until task 3.4 settles what its companion
-    /// references should be called. Read from the <em>identity</em>, not from
-    /// <c>FormDefinition.AbsolutePath</c>: a UserControl's two halves diverge (#474) and the module's is the
-    /// one the project file names.</description></item>
-    /// </list>
-    /// Both log at Debug, because "the header did not refresh" is otherwise indistinguishable from "nothing
-    /// was raised".
+    /// refresh without this would put a flattened menu hierarchy in the code window as though it were the
+    /// file, for exactly the forms whose save is refused to stop that reaching disk. The developer's window
+    /// would then disagree with both the file and the refusal. That gate is also the whole of the design
+    /// record's "a form held read-only is never re-rendered": being unable to reproduce a form is the only
+    /// thing in the tree that holds one read-only, and both read-only properties that can be backed by a
+    /// form are the same expression over <c>CanSaveFaithfully</c>.
+    ///
+    /// <para>
+    /// <b>A form with no file is rendered, under the name its first save will use</b> (task 3.4). It used
+    /// to be skipped. The name only reaches the output through the companion citations, so for the forms
+    /// that carry no blob — which is every form HexIDE has just created — this changes the render not at
+    /// all; it is right for the one that has been pasted into from a form that was loaded.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>That branch cannot reach an unfaithful form, and the reason is structural rather than checked
+    /// twice.</b> Only <c>FormDeserializer</c> ever marks a form unfaithful, so a form with no file has
+    /// never been through it and is faithful by construction. The gate above still runs, because a form
+    /// that HAS a file reaches the same line.
+    /// </para>
+    ///
+    /// <para>
+    /// Both refusals log at Debug, because "the header did not refresh" is otherwise indistinguishable from
+    /// "nothing was raised".
+    /// </para>
     /// </remarks>
     public void LayoutChanged(FormDefinition form)
     {
@@ -68,13 +81,14 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
             return;
         }
 
-        if (identity.AbsolutePath is not { } path)
+        if (FormCodeText.RenderFileNameFor(form) is not { } fileName)
         {
-            Log.Debug("HeaderRefresher: not re-rendering {Document} — it has no file yet", identity.Display);
+            Log.Debug("HeaderRefresher: not re-rendering {Document} — it has no name to render against",
+                identity.Display);
             return;
         }
 
-        ApplyHeader(form, new FormSerializer().SerializeDesignerText(form, Path.GetFileName(path)));
+        ApplyHeader(form, new FormSerializer().SerializeDesignerText(form, fileName));
     }
 
     /// <summary>

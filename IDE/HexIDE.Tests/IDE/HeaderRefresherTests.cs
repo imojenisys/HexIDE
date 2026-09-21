@@ -188,18 +188,82 @@ public class HeaderRefresherTests
     }
 
     [Fact]
-    public void AFormWithNoFileIsNotReRenderedYet()
+    public void AFormWithNoFileRendersTheHeaderItsFirstSaveWillWrite()
     {
-        // Deferred to task 3.4, which settles what a fileless form's companion references are called. Left
-        // alone rather than rendered against a guessed name: the .frx citations are written from it.
-        var form = Deserialize(OneLabel);
-        form.AbsolutePath = null;
-        var asRead = form.DesignerText;
-        form.UpdateComponents([.. form.Components, AButton("Command1")]);
+        // Task 3.4. The fixture is a form built the way IProjectTemplate builds Form1 -- constructed, never
+        // parsed -- because that is the production state: it has no file AND no designer text. Setting
+        // AbsolutePath = null on a form read from disk, which this test used to do, is a state nothing
+        // produces and would have tested a form that already had a header.
+        var form = new FormDefinition(Project, FormComponentClass.Instance, "Form1");
+
+        form.DesignerText.Should().BeNull("a created form has nothing recorded until something commits");
 
         CreateSut().LayoutChanged(form);
 
-        form.DesignerText.Should().Be(asRead);
+        form.DesignerText.Should().NotBeNull();
+        form.DesignerText.Should().StartWith("VERSION 5.00").And.EndWith("End\r\n");
+        FormCodeText.WholeFile(form).Should().Be(form.DesignerText + form.Code);
+    }
+
+    [Fact]
+    public void AndItsCompanionCitationNamesTheFileThatSaveWillCreate()
+    {
+        // The only way the file name reaches the rendered text at all. FormSerializer reads it solely to
+        // derive the companion name, and writes that name solely for a property holding a blob -- so
+        // without one here the test could not tell <Name>.frx from any other string, and the rule would be
+        // asserted by a render that does not contain it.
+        var form = new FormDefinition(Project, FormComponentClass.Instance, "Splash");
+        form.Components[0].SetProperty(VBProperties.IconProperty, new byte[] { 1, 2, 3, 4 });
+
+        CreateSut().LayoutChanged(form);
+
+        form.DesignerText.Should().Contain("\"Splash.frx\":",
+            "the citation names the companion the form's first save will write beside it");
+    }
+
+    [Fact]
+    public void AFirstHeaderMovesTheMarksByItsWholeHeight()
+    {
+        // A created form's buffer is its code alone, so marks in it are numbered from the first line of the
+        // code. The moment a header appears in front of that code, every one of them moves by its height --
+        // the same rule as any other refresh, with an empty header as the before.
+        var form = new FormDefinition(Project, FormComponentClass.Instance, "Form1");
+        var document = DocumentIdentity.For(form);
+        breakpoints.SetDocument(document, [1, 4]);
+
+        CreateSut().LayoutChanged(form);
+
+        var height = form.DesignerText!.Count(c => c == '\n');
+        height.Should().BeGreaterThan(0);
+        breakpoints.GetBreakpoints(document).Should().Equal(1 + height, 4 + height);
+    }
+
+    [Fact]
+    public void AFormWithNoNameAtAllIsStillNotRendered()
+    {
+        // Path.ChangeExtension("", ".frx") returns "" (measured on .NET 10), so a render handed a nameless
+        // document would emit a citation of ""(colon)HHHH -- a file that looks valid and names nothing.
+        // Nothing here produces a nameless form; if one ever arrives it gets no render rather than that.
+        var form = new FormDefinition(Project, FormComponentClass.Instance, "Form1");
+        form.Components[0].SetProperty(VBProperties.NameProperty, "");
+
+        CreateSut().LayoutChanged(form);
+
+        form.DesignerText.Should().BeNull();
+    }
+
+    [Fact]
+    public void OnlyTheReaderEverHoldsAFormReadOnly()
+    {
+        // The design record says a form held read-only is never re-rendered, and the fidelity gate is the
+        // whole of it -- which is only true while being unable to reproduce a form is the ONLY thing that
+        // holds one read-only. This pins that, because a second cause added later would silently make the
+        // sentence false: a form with no file has never been through the deserializer, so the branch that
+        // renders one cannot reach an unfaithful form by construction rather than by a second check.
+        var created = new FormDefinition(Project, FormComponentClass.Instance, "Form1");
+
+        created.CanSaveFaithfully.Should().BeTrue();
+        created.UnfaithfulSaveCauses.Should().Be(UnfaithfulSaveCause.None);
     }
 
     // -- End to end, with nothing open -------------------------------------------------------------

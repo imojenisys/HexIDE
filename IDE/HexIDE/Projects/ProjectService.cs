@@ -989,8 +989,11 @@ public class ProjectService : IProjectService
         var serializer = new FormSerializer();
         var (ctl, _) = serializer.Serialize(formPart, module.Code, name + ".ctl");
         // The header the code window will show, recorded from the render that reached disk. Without this a
-        // brand-new UserControl opens with no header at all while its file has one -- and after #489 a
-        // document getting its file at creation is the ordinary case, not a rare one.
+        // brand-new UserControl opens with no header at all while its file has one.
+        //
+        // This path writes at creation, which is what #489 was opened about and decided AGAINST: VB6 writes
+        // nothing until the project is saved, and #500 is the implementation of that. Until it lands a
+        // created UserControl has a file at once, so this is the ordinary case today and will not be.
         formPart.RecordDesignerText(FormCodeText.DesignerHalfOf(ctl, module.Code));
         Vb6TextFile.WriteAllText(module.AbsolutePath, ctl);
         baselineStore.Record(module.AbsolutePath, Vb6TextFile.Encode(ctl));
