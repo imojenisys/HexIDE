@@ -149,6 +149,20 @@ public static class FormCodeText
         prefix.Length > 0 && buffer.Length >= prefix.Length ? buffer[prefix.Length..] : buffer;
 
     /// <summary>
+    /// The designer half of a rendered form file: everything <c>FormSerializer</c> wrote before the code it
+    /// was given.
+    /// </summary>
+    /// <remarks>
+    /// <b>The inverse of the render, taken by length, exactly as <see cref="BodyOf"/> takes the body.</b>
+    /// The serializer appends the code verbatim as its last write, with no separator in front of it, so the
+    /// remainder is the designer half and is the same span <c>FormDeserializer</c> records when it reads a
+    /// file. <c>DesignerHalfIsTheRenderMinusTheCode</c> pins that, because a separator introduced there
+    /// later would move this split silently and put a stray line into the code window on every save.
+    /// </remarks>
+    public static string DesignerHalfOf(string rendered, string code) =>
+        code.Length > 0 && rendered.Length >= code.Length ? rendered[..^code.Length] : rendered;
+
+    /// <summary>
     /// The whole file this module represents, whichever kind it is.
     /// </summary>
     /// <remarks>

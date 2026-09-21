@@ -339,6 +339,46 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// <summary>Replaces the code, leaving the header the buffer shows in front of it untouched.</summary>
     public void ReplaceBody(string body) => Document.Text = bufferPrefix + body;
 
+    /// <summary>
+    /// Replaces the header the buffer shows in front of the code with a freshly-rendered one, leaving the
+    /// code untouched. Does nothing when the two are the same string.
+    /// </summary>
+    /// <remarks>
+    /// <b>Replaces the REGION, rather than assigning <see cref="Document"/>.Text.</b> A whole-document
+    /// assignment collapses every anchor AvaloniaEdit holds over the buffer -- the caret, the selection,
+    /// the marker segments the diagnostics hang off, the folding sections a server sent -- so the
+    /// developer's cursor would jump to the top of the file on every nudge of a control in the designer.
+    /// Replacing the first <c>bufferPrefix.Length</c> characters moves everything below it by the
+    /// difference instead, which is what actually happened.
+    ///
+    /// <para>
+    /// The region is taken by the prefix's LENGTH, exactly as <see cref="BufferBody"/> splits, so the two
+    /// cannot disagree about where the header ends. Until task 3.7 of hexide-io/HexIDE#273 puts a
+    /// read-only provider over it the developer can still edit the header, and a hand-edited header makes
+    /// both wrong together rather than one of them silently.
+    /// </para>
+    ///
+    /// <para>
+    /// The view-model's own <see cref="CaretOffset"/> is moved with the text. The editor control moves its
+    /// real caret itself on a document replace, but nothing pushes that back while the replace is in
+    /// flight, and a document with no view attached has only this copy.
+    /// </para>
+    /// </remarks>
+    internal void RefreshPrefix(string newPrefix)
+    {
+        if (string.Equals(newPrefix, bufferPrefix, StringComparison.Ordinal))
+            return;
+
+        // Clamped because the buffer is the developer's until 3.7: a header deleted by hand leaves a
+        // document shorter than the prefix it is supposed to start with, and Replace would throw.
+        var replaced = Math.Min(bufferPrefix.Length, Document.TextLength);
+        var caret = CaretOffset;
+        bufferPrefix = newPrefix;
+        Document.Replace(0, replaced, newPrefix);
+        if (caret >= replaced)
+            CaretOffset = Math.Clamp(caret + newPrefix.Length - replaced, 0, Document.TextLength);
+    }
+
     public CodeEditorViewModel Initialize(FormDefinition formElement)
     {
         this.formDefinition = formElement;
@@ -456,17 +496,32 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     }
 
     /// <summary>
-    /// Replaces the editor buffer with <paramref name="newCode"/> after the file watcher reloaded the
-    /// underlying file from disk. Preserves the caret position best-effort. The <c>Document.Text</c>
-    /// assignment raises <c>TextChanged</c>, which debounces a didChange to the LSP server so diagnostics
-    /// refresh — no explicit LSP call is needed. Must be called on the UI thread.
+    /// Replaces the whole buffer -- header and code both -- after the file watcher reloaded the underlying
+    /// file from disk. Preserves the caret position best-effort. The <c>Document.Text</c> assignment raises
+    /// <c>TextChanged</c>, which debounces a didChange to the LSP server so diagnostics refresh — no
+    /// explicit LSP call is needed. Must be called on the UI thread.
     /// </summary>
-    internal void ReloadFrom(string newCode)
+    /// <remarks>
+    /// <b>Both halves, and the prefix with them.</b> This took the code section alone and assigned it over
+    /// a buffer whose prefix was still the header read when the document was opened. Since task 3.2 of
+    /// hexide-io/HexIDE#273 the buffer is the whole file, so that dropped the header from the window and —
+    /// because <see cref="BufferBody"/> then split at the stale prefix's length — the next flush cut the
+    /// first line or two off the reloaded code and wrote the remainder back as the document. Silent data
+    /// loss, and only on a file whose code section is longer than its header, which is most of them.
+    ///
+    /// <para>
+    /// Unlike <see cref="RefreshPrefix"/> this does assign <c>Document.Text</c>, because the body changed
+    /// too: there is no region to replace and no anchor below the change to preserve.
+    /// </para>
+    /// </remarks>
+    internal void ReloadFrom(string newPrefix, string newBody)
     {
-        if (string.Equals(Document.Text, newCode, StringComparison.Ordinal))
+        var whole = newPrefix + newBody;
+        bufferPrefix = newPrefix;
+        if (string.Equals(Document.Text, whole, StringComparison.Ordinal))
             return;
         var caret = CaretOffset;
-        Document.Text = newCode;
+        Document.Text = whole;
         CaretOffset = Math.Clamp(caret, 0, Document.TextLength);
     }
 

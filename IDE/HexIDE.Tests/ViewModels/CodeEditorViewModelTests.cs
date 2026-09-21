@@ -7,6 +7,7 @@ using HexIDE.Lsp;
 using HexIDE.Lsp.Messages;
 using HexIDE.Projects;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 
 namespace HexIDE.Tests.ViewModels;
 
@@ -373,6 +374,98 @@ public class CodeEditorViewModelTests : IDisposable
         vm.Document.Text.Should().Be(
             "Attribute VB_Name = \"Module1\"\r\nPublic Sub Main()\r\nEnd Sub\r\n");
         vm.BufferBody.Should().Be("Public Sub Main()\r\nEnd Sub\r\n");
+    }
+
+    // -- The header is refreshed in place (#273 tasks 3.3/3.3a) -------
+
+    [AvaloniaFact]
+    public void ARefreshedHeaderReplacesTheHeaderAndLeavesTheBodyWhereItWas()
+    {
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\nDim x As Long\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        vm.RefreshPrefix("Attribute VB_Name = \"RenamedToSomethingMuchLonger\"\r\n");
+
+        vm.Document.Text.Should().Be(
+            "Attribute VB_Name = \"RenamedToSomethingMuchLonger\"\r\nOption Explicit\r\nDim x As Long\r\n");
+        vm.BufferBody.Should().Be("Option Explicit\r\nDim x As Long\r\n");
+    }
+
+    [AvaloniaFact]
+    public void ARefreshedHeaderCarriesTheCaretWithTheLineItWasOn()
+    {
+        // The whole reason this replaces the header REGION rather than assigning Document.Text: a
+        // whole-document assignment collapses every anchor AvaloniaEdit holds -- the caret, the selection,
+        // the LSP marker segments, the folds -- and the developer's cursor jumps to the top of the file
+        // every time they nudge a control in the designer.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\nDim x As Long\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        var header = "Attribute VB_Name = \"Module1\"\r\n";
+        vm.CaretOffset = header.Length + "Option Explicit\r\nDim x".Length;
+
+        vm.RefreshPrefix("Attribute VB_Name = \"RenamedToSomethingMuchLonger\"\r\n");
+
+        vm.Document.GetText(vm.CaretOffset - 5, 5).Should().Be("Dim x");
+    }
+
+    [AvaloniaFact]
+    public void AnUnchangedHeaderIsNotWrittenAtAll()
+    {
+        // A committed designer change re-renders whether or not the render moved. Writing an identical
+        // header anyway would put an undo entry and a didChange on the wire for every nudge.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        var changed = 0;
+        vm.Document.TextChanged += (_, _) => changed++;
+
+        vm.RefreshPrefix("Attribute VB_Name = \"Module1\"\r\n");
+
+        changed.Should().Be(0);
+    }
+
+    [AvaloniaFact]
+    public void AReloadReplacesBOTHHalvesSoTheNextFlushDoesNotCutIntoTheBody()
+    {
+        // The live defect 3.2 left on the reload path. FileReloader pushed the bare code section into a
+        // buffer whose prefix was still the header read at open, so BufferBody split at the stale prefix's
+        // length -- and when the code section is longer than the header, that silently truncates real
+        // source on the next flush. It is data loss, not a display fault.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        module.UpdateCode("Public Sub Main()\r\n    Debug.Print 1\r\nEnd Sub\r\n");
+        vm.ReloadFrom(FormCodeText.Prefix(module), module.Code);
+
+        vm.Document.Text.Should().Be(
+            "Attribute VB_Name = \"Module1\"\r\nPublic Sub Main()\r\n    Debug.Print 1\r\nEnd Sub\r\n");
+        vm.BufferBody.Should().Be("Public Sub Main()\r\n    Debug.Print 1\r\nEnd Sub\r\n");
+
+        vm.Dispose();
+        module.Code.Should().Be("Public Sub Main()\r\n    Debug.Print 1\r\nEnd Sub\r\n");
+    }
+
+    [AvaloniaFact]
+    public void AReloadThatChangesTheHeaderFollowsIt()
+    {
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+
+        // What a reload of a .cls looks like: the file on disk carries an attribute block the canonical
+        // literal does not, and the buffer has to follow the file rather than the file it was opened from.
+        module.RecordOriginalHeader(
+            "Attribute VB_Name = \"Module1\"\r\nAttribute VB_Description = \"Rewritten elsewhere\"\r\n");
+        vm.ReloadFrom(FormCodeText.Prefix(module), module.Code);
+
+        vm.Document.Text.Should().StartWith(
+            "Attribute VB_Name = \"Module1\"\r\nAttribute VB_Description = \"Rewritten elsewhere\"\r\n");
+        vm.BufferBody.Should().Be("Option Explicit\r\n");
     }
 
     // ── LSP delegation ───────────────────────────────────────────────

@@ -60,7 +60,8 @@ public class DocumentSavedAnnouncementTests : IDisposable
             Substitute.For<IReferenceLibraryService>(),
             sidecar,
             new FileBaselineStore(),
-            Substitute.For<HexIDE.Localization.ILocalizationService>());
+            Substitute.For<HexIDE.Localization.ILocalizationService>(),
+            Substitute.For<IHeaderRefresher>());
     }
 
     private ProjectDefinition AProjectWith(params string[] moduleNames)

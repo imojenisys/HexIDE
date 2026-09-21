@@ -30,6 +30,7 @@ public class ProjectService : IProjectService
     private readonly IUserSidecarService sidecar;
     private readonly IFileBaselineStore baselineStore;
     private readonly ILocalizationService localization;
+    private readonly IHeaderRefresher headerRefresher;
 
     public ProjectService(Func<NewProjectViewModel> newProjectVm,
         IWindowManager windowManager,
@@ -39,7 +40,8 @@ public class ProjectService : IProjectService
         IReferenceLibraryService referenceLibraryService,
         IUserSidecarService sidecar,
         IFileBaselineStore baselineStore,
-        ILocalizationService localization)
+        ILocalizationService localization,
+        IHeaderRefresher headerRefresher)
     {
         this.newProjectVm = newProjectVm;
         this.windowManager = windowManager;
@@ -50,6 +52,7 @@ public class ProjectService : IProjectService
         this.sidecar = sidecar;
         this.baselineStore = baselineStore;
         this.localization = localization;
+        this.headerRefresher = headerRefresher;
     }
 
     private async Task<IAddinProjectTemplate?> ChooseNewProject()
@@ -984,6 +987,10 @@ public class ProjectService : IProjectService
         module.AbsolutePath = Path.Join(dir, name + ".ctl");
         var serializer = new FormSerializer();
         var (ctl, _) = serializer.Serialize(formPart, module.Code, name + ".ctl");
+        // The header the code window will show, recorded from the render that reached disk. Without this a
+        // brand-new UserControl opens with no header at all while its file has one -- and after #489 a
+        // document getting its file at creation is the ordinary case, not a rare one.
+        formPart.RecordDesignerText(FormCodeText.DesignerHalfOf(ctl, module.Code));
         Vb6TextFile.WriteAllText(module.AbsolutePath, ctl);
         baselineStore.Record(module.AbsolutePath, Vb6TextFile.Encode(ctl));
         project.AddModule(module);
@@ -1001,6 +1008,7 @@ public class ProjectService : IProjectService
         module.AbsolutePath = Path.Join(dir, name + ".pag");
         var serializer = new FormSerializer();
         var (pag, _) = serializer.Serialize(formPart, module.Code, name + ".pag");
+        formPart.RecordDesignerText(FormCodeText.DesignerHalfOf(pag, module.Code));
         Vb6TextFile.WriteAllText(module.AbsolutePath, pag);
         baselineStore.Record(module.AbsolutePath, Vb6TextFile.Encode(pag));
         project.AddModule(module);
@@ -1352,6 +1360,14 @@ public class ProjectService : IProjectService
         // Neither is correct, but a crash should fail towards the one the developer is told about.
         WriteCompanionBinary(formPath, frxContent, form);
         AtomicWriteText(formPath, frmText);
+
+        // The second refresh trigger (#273 task 3.3a). The header the buffer shows becomes the header this
+        // save wrote, which is NOT always the one it was opened with: the serializer is a reproduction
+        // rather than a byte-faithful copy, and a Save As or a first save to a name of the developer's
+        // choosing also rewrites every .frx citation in it. Below the write and above the announcement, so
+        // a server reading the buffer and a server reading the file agree about what line one is -- the
+        // announcement flushes a pending didChange before its didSave, so the order holds on the wire too.
+        headerRefresher.ApplyHeader(form, FormCodeText.DesignerHalfOf(frmText, form.Code));
         return true;
     }
 
@@ -1566,6 +1582,9 @@ public class ProjectService : IProjectService
             // crash leaving a laundered file and a crash leaving a refused one.
             WriteCompanionBinary(modulePath, binary, designerPart);
             AtomicWriteText(modulePath, text);
+            // As SerializeFormToFile: the .ctl/.pag half of the same trigger. The code here is the
+            // MODULE's, which is the pairing this path writes and the one the code window composes from.
+            headerRefresher.ApplyHeader(designerPart, FormCodeText.DesignerHalfOf(text, module.Code));
             return true;
         }
 

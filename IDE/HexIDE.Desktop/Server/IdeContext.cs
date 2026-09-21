@@ -15,6 +15,7 @@ internal sealed class IdeContext : IDisposable
     public IEditorService EditorService { get; }
     public IProjectRunnerService ProjectRunnerService { get; }
     public IProjectService ProjectService { get; }
+    public IEventBus EventBus { get; }
     public IBookmarkService BookmarkService { get; }
     public HexIDE.Debugging.IBreakpointService BreakpointService { get; }
     public HexIDE.Runtime.Debugging.IDebugController DebugController { get; }
@@ -38,6 +39,7 @@ internal sealed class IdeContext : IDisposable
         IEditorService editorService,
         IProjectRunnerService projectRunnerService,
         IProjectService projectService,
+        IEventBus eventBus,
         IBookmarkService bookmarkService,
         HexIDE.Debugging.IBreakpointService breakpointService,
         HexIDE.Runtime.Debugging.IDebugController debugController,
@@ -55,6 +57,7 @@ internal sealed class IdeContext : IDisposable
         EditorService = editorService;
         ProjectRunnerService = projectRunnerService;
         ProjectService = projectService;
+        EventBus = eventBus;
         BookmarkService = bookmarkService;
         BreakpointService = breakpointService;
         DebugController = debugController;

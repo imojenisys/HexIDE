@@ -143,6 +143,47 @@ public class WholeFileCompositionTests
         FormCodeText.WholeFile(form).Should().Be(form.Code);
     }
 
+    // ── And the same cut, made from the other side ────────────────────────────────
+
+    [Fact]
+    public void DesignerHalfIsTheRenderMinusTheCode()
+    {
+        // Three things depend on this and none of them could see it break: the header a save records
+        // (FormCodeText.DesignerHalfOf slices by the code's length), the header a committed designer change
+        // renders (FormSerializer.SerializeDesignerText passes no code at all), and the split the code
+        // window makes. They agree only because WriteCode is a bare Write with no separator in front of it.
+        //
+        // A separator added there later -- a blank line between the designer block and the code would look
+        // like tidying -- moves all three at once and silently: the save would record a header one line
+        // short, the next flush would take that line out of the body, and the code window would show the
+        // form's Attribute run indented under a stray blank.
+        var form = Load(Crlf);
+        var serializer = new FormSerializer();
+
+        var (whole, _) = serializer.Serialize(form, "Gauge.ctl");
+        var designerHalf = serializer.SerializeDesignerText(form, "Gauge.ctl");
+
+        whole.Should().Be(designerHalf + form.Code);
+        FormCodeText.DesignerHalfOf(whole, form.Code).Should().Be(designerHalf);
+    }
+
+    [Fact]
+    public void ARenderOfAFormWithNoCodeIsAllDesignerHalf()
+    {
+        // The degenerate case DesignerHalfOf has to get right, because a form HexIDE has just created has
+        // an empty Code and is written exactly once -- at creation, where the header is recorded. Slicing
+        // [..^0] on an empty code is the whole string, which is correct and easy to write as [..^code.Length]
+        // without noticing that it is.
+        var form = Load(Crlf);
+        form.UpdateCode("");
+        var serializer = new FormSerializer();
+
+        var (whole, _) = serializer.Serialize(form, "Gauge.ctl");
+
+        FormCodeText.DesignerHalfOf(whole, form.Code).Should().Be(whole);
+        serializer.SerializeDesignerText(form, "Gauge.ctl").Should().Be(whole);
+    }
+
     // ── A reload has to take it too ───────────────────────────────────────────────────────────────────
 
     [Fact]

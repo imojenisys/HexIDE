@@ -93,8 +93,22 @@ public partial class FormDefinition : INotifyPropertyChanged
     {
         this.components.Clear();
         this.components.AddRange(components);
-        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Name)));
+        NotifyRootPropertiesChanged();
     }
+
+    /// <summary>
+    /// Announces that the root component's properties changed in place, so <see cref="Name"/> — which is
+    /// derived from them and has no setter of its own — is read again.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="UpdateComponents"/> does this as a side effect of replacing the list, which covers every
+    /// path that goes through the designer's flush. A path that mutates a component the list already holds
+    /// has nothing to replace and has to say so itself — automation's <c>set_control_property</c> with no
+    /// designer open is the one that does. Renaming a form through it is otherwise invisible to the tab
+    /// title and to the language layer, which is the half of hexide-io/HexIDE#273 task 2.4a deferred to 3.3.
+    /// </remarks>
+    public void NotifyRootPropertiesChanged() =>
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(Name)));
 
     public string RootVBTypeName { get; private set; } = "VB.Form";
 

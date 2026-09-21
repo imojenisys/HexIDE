@@ -576,16 +576,102 @@
   `AnUneditedOpenDocumentIsACleanReloadRatherThanAConflict` and nothing else.
   — The opposite direction is covered too (`AnEditedOpenDocumentIsStillAConflict`), because a careless split
   could just as easily make everything look clean, and a `CleanReload` over unsaved work discards it.
-- [ ] 3.3 A "layout changed" notification on the form, raised on a designer commit and by the three paths that
+- [x] 3.3 A "layout changed" notification on the form, raised on a designer commit and by the three paths that
   bypass the designer's undo stack today: the menu editor, the colour palette, and automation's property set
   with no designer open. It flushes the designer's working collections into the model before rendering (they
   run ahead of it until the apply-unsaved-changes event, so a render before the flush misses the control just
   added), refreshes the prefix once per commit, never per drag step, and carries a rename of the form.
-- [ ] 3.3a A save is the second refresh trigger: the prefix becomes the header that was just written, before
+  — **One notification, `FormLayoutChangedEvent`, carried on the event bus rather than hung off
+  `FormDefinition`.** The four raisers are all in the IDE assembly and the single subscriber is a service
+  that has to exist whether or not any window is open; an event on the model would have needed that service
+  to subscribe to every form as it is added and unsubscribe as it goes, which is lifecycle work the bus
+  already does. Every other cross-cutting notification here — `ApplyAllUnsavedChangesEvent`,
+  `FormUnloadedEvent`, `DocumentSavedEvent` — goes the same way.
+  — **Raised from `Push`, `Undo` and `Redo`, and deliberately NOT from `Clear`.** The undo stack's existing
+  `Changed` event fires from all four, which is right for the CanExecute plumbing it was written for and
+  wrong here: `Clear` runs when the designer is rebuilt from a freshly-reloaded model, so treating it as a
+  commit would re-render the form and replace the text just read from disk with a reproduction of it —
+  exactly what the invariant forbids outside a save. `ClearingTheUndoStackIsNotACommit` pins it.
+  — **Once per gesture is free, because the stack already had the shape.** `Push` discards while
+  `IsDragging` and `EndDrag` pushes one `MoveResizeCommand`, so a twenty-step drag announces once.
+  `ADragAnnouncesOnceWhenItEndsRatherThanPerPointerMove` asserts the zero as well as the one — every pointer
+  move writes the model through a two-way `Canvas.Left` binding, so the wrong hook is one property write
+  away and would cost a full render and a whole-document `didChange` per pixel.
+  — **The flush runs before the publish, and the test reads both facts inside the handler.** Checking after
+  the publish would pass just as happily with the flush second, and second is useless: whatever re-renders
+  the form does so while handling the event. Checked by removal — swapping the two lines reddens it.
+  — **Two gates on the render, neither of them tidiness.** A form that cannot be saved faithfully is never
+  re-rendered: `FormSerializer` carries no fidelity check of its own (`SerializeFormToFile` refuses *before*
+  calling it), so without the gate the code window would show a flattened menu hierarchy as though it were
+  the file — for precisely the forms whose save is refused to stop that reaching disk. And a form with no
+  file is left alone until 3.4 settles what its companion references are called. Both log at Debug, because
+  "the header did not refresh" is otherwise indistinguishable from "nothing was raised".
+  — **The rename half of 2.4a is closed, for both paths.** The designer's is closed by the flush, since
+  `UpdateComponents` is what raises `PropertyChanged(Name)`. Automation's `set_control_property` with no
+  designer open has nothing to flush, so `FormDefinition.NotifyRootPropertiesChanged` was added and it calls
+  that — renaming a form through the automation surface was otherwise invisible to the tab title and to the
+  language layer.
+  — The menu editor's refresh will usually stop at the fidelity gate, since HexIDE flattens nested `Begin`
+  blocks and a form with a real menu is one it refuses to save. That is the correct outcome rather than a
+  missing one, and the comment at the call site says so.
+  — **Verified in the running IDE** on a scratch copy of `demo/neon-aurora`: adding a `CommandButton`
+  through the designer grew the code window's header from twelve lines to twenty, with `Option Explicit`
+  moving from line 13 to line 21 and its breakpoint and bookmark moving with it.
+- [x] 3.3a A save is the second refresh trigger: the prefix becomes the header that was just written, before
   the save is announced, so the buffer follows the file even when the render differs from what was read and
   when a companion reference changes with the file's name. A reload is the third.
-- [ ] 3.3b A refresh that changes the prefix's line count shifts that document's breakpoints and bookmarks by
+  — **Recorded at the write, not at the announcement**, so every announce site is covered by construction:
+  `SerializeFormToFile`, the `.ctl`/`.pag` branch of `SaveModuleCore`, and — which was not in the task and
+  matters more than it reads — `AddNewUserControl` and `AddNewPropertyPage`, which write the file at
+  creation. After #489 a document getting its file at creation is the ordinary case, and without this a
+  brand-new UserControl opened with no header in the window while its file had one.
+  — **The clause "before the save is announced" already holds on the wire, and it is worth saying why.**
+  `LspDocumentSession.NotifySavedAsync` flushes a pending `didChange` before sending `didSave`, so the
+  header this writes reaches the server ahead of the save notice even though the write is debounced. Nothing
+  new was needed; it would have been a silent ordering bug had that flush not been there.
+  — **`FormCodeText.DesignerHalfOf` is the inverse of the render and is pinned by a test.** The serializer
+  appends the code verbatim as its last write with no separator, so the header is `rendered[..^code.Length]`
+  — and `DesignerHalfIsTheRenderMinusTheCode` asserts that three-way agreement (whole render, designer-only
+  render, slice) because a blank line introduced between the two halves later would look like tidying and
+  would move the save's recorded header, the code window's split and the next flush all at once.
+  — **The reload was a live defect, not merely an unimplemented trigger.** `FileReloader` pushed the bare
+  code section into a buffer whose prefix was still the header read at open: the window lost its header and,
+  because `BufferBody` splits by the prefix's length, the next flush cut the head off the reloaded code and
+  wrote the remainder back as the document. Silent data loss on any file whose code section is longer than
+  its header, which is most of them. `ReloadFrom` now takes both halves and sets the prefix;
+  `AReloadReplacesBOTHHalvesSoTheNextFlushDoesNotCutIntoTheBody` was written first and went red on the
+  branch.
+  — A refused save leaves the header alone, through the same `CanSaveFaithfully` gate the write uses. A
+  buffer re-headed from a render the save refused to write would show a file that does not exist.
+- [x] 3.3b A refresh that changes the prefix's line count shifts that document's breakpoints and bookmarks by
   the difference, in the stores rather than the gutter, so a document with no open code window moves too.
+  — **`RefreshPrefix` replaces the REGION rather than assigning `Document.Text`.** A whole-document
+  assignment collapses every anchor AvaloniaEdit holds — the caret, the selection, the marker segments the
+  diagnostics hang off, the folding sections a server sent — so the cursor would jump to the top of the file
+  on every nudge of a control. Replacing the first `bufferPrefix.Length` characters moves everything below
+  by the difference, which is what actually happened, and it leaves one undo entry of the shape 3.7 needs.
+  `ReloadFrom` is the exception and still assigns, because the body changed too.
+  — **A mark inside the header stays where it is**, rather than being clamped to the new first body line.
+  The header is being replaced by another header, so its line 3 is still its line 3; clamping would pile
+  every header mark onto one line. 3.7 stops a mark being set there at all.
+  — **The two stores disagree about the base and the test has a mark on the boundary in each.** Breakpoints
+  are 1-based, bookmarks 0-based; the same source line is a different integer in each store, so only a mark
+  on the header's last line and one on the code's first can tell the two rules apart. Without those, the
+  test passes whichever rule the code uses — checked by removal in both directions.
+  — Counted by `'\n'`, never `Environment.NewLine`, and tested on both terminators: `build-ide` runs on
+  `ubuntu-latest`, and a count that asked the host what a line ending is would move every mark on one
+  machine and not the other.
+  — **The no-code-window case is tested directly, because it is the clause this task exists for.** A
+  refresher that lived on the code editor would move the marks of whatever happens to be open and leave
+  every closed document pointing at the wrong statements. Verified live too: the reload shift was measured
+  with only the code window open and no designer, and separately with neither.
+  — Twenty-eight tests across five files, and **every mechanism they cover was checked by removal**: both
+  render gates, both shift bases in both directions, the no-op guards on the shift and on the re-head, the
+  caret carry, the bus subscription, the prefix tracking on both write paths, the save's recording and its
+  slice, and each of the four undo-stack hooks. Twenty-two mutations; all of them redden.
+  — **Left standing, and it belongs to 3.17:** the sidecar persists marks as buffer lines and restores them
+  unshifted, so a header that changed while the project was closed restores its marks in the old numbering.
+  Observed during the live verification.
 - [ ] 3.4 Header render for a form with no file uses `<Name>.frx`. A form held read-only is never re-rendered.
 - [ ] 3.5 Where a document's header carries `VB_Name`, it follows a rename, as an edit the IDE makes itself
   (#473: a form's is never retargeted today, so a renamed form's file names two different forms). A form

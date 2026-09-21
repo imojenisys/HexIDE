@@ -360,6 +360,20 @@ internal sealed class HexIdeTools(IdeContext ctx)
 
             designerVm?.PushSetPropertyCommand(control, propClass, before, parsed);
 
+            // The third path that bypasses the designer's undo stack (#273 task 3.3). With a designer open
+            // the push above commits, flushes and announces; with none there is nothing to push to, so the
+            // model is changed and nothing tells the code window its header may have moved -- including
+            // when the property set was the form's own (Name).
+            //
+            // It overlaps the save below almost entirely, and is not redundant with it: the save can be
+            // refused (an unfaithful form), can have nowhere to go (a UserControl with no path), or can
+            // throw. In those cases this is the only thing that keeps the buffer honest.
+            if (designerVm is null)
+            {
+                form.NotifyRootPropertiesChanged();
+                ctx.EventBus.Publish(new HexIDE.Events.FormLayoutChangedEvent(form));
+            }
+
             return (form, ownerModule, null);
         });
 
