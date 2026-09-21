@@ -312,7 +312,10 @@ Measured, both ways, in one afternoon:
 
 So the condition is the state of the attachment when the session began, not whether the process has
 restarted since. **If the IDE was up and answering at session start, do the rebuild cycle and try the tool
-before asking.** If it was not, stop and ask for a resume.
+before asking.** If it was not, relaunch the IDE, wait for `/health`, and ask the user to run **`/mcp` and
+reconnect `hexide`** — which attaches a session that started without it, no resume needed (measured
+2026-09-21: a session whose `hexide` connection was refused at start got all 64 tools after one reconnect).
+A resume works too, and is the slower of the two.
 
 **Never reach for raw HTTP either way.** That rule is unchanged and is not about schemas: a bypass proves
 nothing about the surface a real caller uses.
@@ -409,8 +412,9 @@ If `shutdown_ide` is unavailable (MCP disconnected), use PowerShell: `Stop-Proce
 4. Use MCP tools to inspect and interact with the running IDE
 
 **MCP session note:** MCP tools are discovered at session start. If HexIDE is not running when a Claude
-Code session starts, the tools will not appear **and relaunching it will not make them appear** — that
-session has no attachment, and only a resume creates one. If HexIDE *was* running at session start, the
+Code session starts, the tools will not appear **and relaunching it will not make them appear by itself**
+— that session has no attachment. Relaunch, then have the user run `/mcp` and reconnect `hexide`, which
+creates one (a resume also does, more slowly). If HexIDE *was* running at session start, the
 attachment survives a relaunch: existing schemas stay usable (Streamable HTTP is stateless — each call is
 a fresh POST) **and newly added tools are picked up**, which is measured rather than assumed. See the
 restart note above.

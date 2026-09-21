@@ -771,6 +771,13 @@
   attributes on nineteen of its twenty forms, and whether VB6 defaults a missing `VB_PredeclaredId` to
   `False` decides whether a HexIDE-created form can still be shown by name.
   — Fifteen mutations, all reddening.
+  — **Verified in the running IDE** on a scratch copy of `demo/bill-of-fare` (VB6-authored, five
+  attributes): renaming the form in the Properties window moved the `Begin` line and `VB_Name` together in
+  the open code window; typing a line, renaming again and pressing Ctrl+Z there removed the typed line and
+  kept both new names; and the saved `.frm` equals the original with exactly those two lines changed. That
+  save had to be taken with Format on Save off, because the default save destroys the top of the code —
+  recorded under 3.9, and not caused by this task. Found on the way: the Properties window applies a value
+  only on leaving the box, never on Enter (#518).
 - [ ] 3.6 The interpreter and the pre-run syntax check parse the whole text (after 0.2).
 - [ ] 3.7 Protection: one section provider subclassing the stock one over the header and member-attribute
   regions, overriding both of its virtual methods — refusing insertion at a region's edges, which it allows,
@@ -855,6 +862,25 @@
   Replace, Replace All, completion, Insert File, Enter auto-close, event stubs, add-in `SetContent` and
   `ApplyEdits`, automation `set_file_content`, `type_text` and `press_key`; reload and the Edit-and-Continue
   revert as owner.
+  — **HAZARD, open until this task and 3.10, and measured rather than predicted: Format on Save destroys the
+  top of every form's code.** Probed on 2026-09-21 against a scratch copy of `demo/bill-of-fare`: open the
+  code window, press Ctrl+S, touch nothing else. The saved `.frm` has lost its whole `Attribute` block and
+  the first sixteen lines of code, and ends the designer block with a stray `"`. `FormatOnSave` defaults to
+  **true**, so this is every save from a form's code window with the bundled server running.
+  — **The mechanism, read off the wire** (protocol inspector, `--capture-lsp`): the bundled server answers
+  `textDocument/formatting` with ONE edit from `(0,0)` to the end of the document, whose text re-indents
+  every designer line to column zero and uses `
+` throughout. `ApplyFormattingToDocumentAsync` applies it
+  unfiltered. The header in the buffer is then hundreds of characters shorter than `bufferPrefix`, and the
+  flush splits by that length — so the body loses exactly what the header lost. The save writes the model's
+  own designer block, which is why the damage is all in the code; the header the buffer then shows is
+  put back by the adopt-on-save, which hides the cause.
+  — **Since 3.2, and only on this branch.** Before the buffer held the whole file the server was handed the
+  code section alone and there was nothing of the header for it to flatten. `main` does not contain 3.2.
+  — **Proposed: this task and 3.10 move ahead of 3.6**, for the reason 3.8 moved ahead of 3.5: a live data-loss
+  path on the commonest keystroke there is, opened by an earlier task of this phase. The design record's
+  policy for formatting (reduce the edit to the lines it changes; drop changes inside a read-only region)
+  is the fix; nothing new has to be decided.
 - [ ] 3.10 The bundled server keeps to its own new requirement: no diagnostic inside a header, the formatter
   leaves it untouched, and rename and highlight skip it and member attribute runs, through one shared helper
   so the three cannot drift apart. The client clipping stays as the guard against servers that do not.
