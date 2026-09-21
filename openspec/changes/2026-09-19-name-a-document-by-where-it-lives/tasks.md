@@ -700,12 +700,62 @@
   *region* is the header or a member's attribute run and nothing else: a form held read-only as a whole must
   still take breakpoints and answer Find, so the mark, Find and attribute rules test the region, never the
   whole-document gate.
-- [ ] 3.8 **Ahead of 3.5 — there is an open data-loss path until this lands; see the hazard under 3.3b.**
+- [x] 3.8 **Ahead of 3.5 — there is an open data-loss path until this lands; see the hazard under 3.3b.**
   Undo, by the mechanism 0.5 settled: record the refresh in a marked group so every offset stays
   valid; when the developer undoes and the stack reports that group as the most recent, revert it, undo the
   edit beneath, and re-apply the current header. The redo stack is lost at that point, which is stated in the
   release notes rather than left to be discovered. Test: a code edit, a designer move, then undo — the edit is
   undone, the move is not, and a second undo still undoes the right text.
+  — **`LastGroupDescriptor` cannot do the job, and 0.5's own wording is what gave it away.** It reports the
+  last group *opened*; an `Undo()` clears it to null even when marked groups remain below, a plain change
+  clears it too, it is already null inside `Changed` during the replay, and an empty group leaves it set with
+  nothing behind it. So it answers "is the top of the stack mine" only when nothing has happened since — and
+  the ordinary sequence *type, designer change, type, undo, undo* is not that. All measured against
+  AvaloniaEdit 12.0.0 by reflection over the exact assembly the repo ships.
+  — **What replaces it is an `IUndoableOperation` inside the group**, carrying the buffer's prefix: `Undo()`
+  restores the old prefix, `Redo()` the new, and it tells the view model that the group it sat in was the
+  one undone. Pushed BEFORE the text change, so a group replays it after the text on undo and before it on
+  redo — the prefix is therefore right at every point an observer could look, in both directions.
+  — **That gives two layers, and both earn their place.** The operation is unconditional safety: whatever
+  pops the entry, the buffer and the prefix move together. It matters because HexIDE does not own every
+  route — AvaloniaEdit answers **Ctrl+Y** itself and nothing in the keymap binds it, so an undo or redo can
+  reach the document without passing through the command HexIDE does own. On top of that sits the policy
+  loop, which is what makes a designer change not undoable *from the code window*.
+  — **The loop, and why it is a loop.** Pop entries while each one turns out to be a header write; stop on
+  the first that is not; put the current header back if any header write came off. One Ctrl+Z therefore
+  costs two real pops and reads as one, at any depth — two designer commits in a row still cost one undo.
+  The re-application is conditional, because doing it after an ordinary undo would push an entry and take
+  the developer's redo with it.
+  — **The header is undone rather than stepped over, and that is the whole mechanism.** An undo entry holds
+  an absolute offset: the developer's edit was recorded against a document with the OLD header, so it only
+  replays correctly once that header is back. Stepping over the header write would put the edit's offsets
+  into shifted text. 0.5 measured the same thing from the other side, which is why "simply do not record
+  it" was refused.
+  — **The redo stack is lost at that point**, stated in `CHANGELOG.md` under Unreleased rather than left to
+  be discovered, alongside the two smaller behaviour changes below.
+  — **Two pre-existing defects closed on the way, because the loop walks straight into both.**
+  `Initialize` assigns `Document.Text`, AvaloniaEdit records every assignment, and nothing cleared it — so
+  the first Ctrl+Z in a freshly opened code window emptied the buffer (measured). And `ReloadFrom` left a
+  history describing a document that had just been replaced wholesale from disk; it now clears it, as the
+  designer half of the same reload already did.
+  — **A third defect, and it was mine from 3.3a.** Make packages every form into a temporary directory under
+  a name built from the form's own name, and `SerializeFormToFile` was adopting that render as the
+  document's header — citations and all — with nothing to put it back, because unlike the paths beside it
+  the model keeps no second copy. `adoptHeader` now says so, and the `.ctl`/`.pag` half rides on the
+  `announceSave` flag that already existed for exactly this condition.
+  — **`HeaderRefresher.ApplyHeader` now refreshes an open buffer unconditionally.** It used to return early
+  whenever the render equalled what was recorded, which after an undo meant a window showing a header for a
+  form that no longer looked like it — *permanently*, because every later render would equal the record too.
+  — Sixteen tests, fourteen mutations, all of which redden: the loop, its conditional re-application, its
+  termination, the operation's push, its two directions, its self-report, the group that makes the pair
+  atomic, both cleared histories, both halves of the packaging gate, and the refresher's unconditional half.
+  — **Verified in the running IDE** on a scratch copy of `demo/neon-aurora`, driven by real keystrokes:
+  typed a line at the end of Form1's code, added a `CommandButton` in the designer, pressed Ctrl+Z in the
+  code window. The typed line went; the `Begin VB.CommandButton Command0` block stayed at lines 12-19; and
+  `get_file_content` answered from `Option Explicit` with nothing of the header in it.
+  — **Recorded, not fixed:** AvaloniaEdit's redo gesture is Ctrl+Y and HexIDE binds nothing to it, so that
+  one route bypasses the command HexIDE owns. Harmless here — the operation keeps it honest — but it is a
+  keymap gap, and VB6 used Ctrl+Y for Delete Line, so it wants deciding rather than patching.
 - [ ] 3.9 One guarded write path, with the policy in the design record for each of the twenty programmatic
   writers: formatting reduced to changed lines and clipped; server rename refused if it touches the header;
   Replace, Replace All, completion, Insert File, Enter auto-close, event stubs, add-in `SetContent` and

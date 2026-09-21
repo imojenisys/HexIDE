@@ -67,7 +67,20 @@ public partial class CodeEditorView : UserControl
 
     public CodeEditorView()
     {
-        Undo = new DelegateCommand(() => TextEditor.Undo(), () => TextEditor?.CanUndo ?? false);
+        // Through the view model, because a designer change reaches this window as a header write and a
+        // header write is not an edit the developer made here (#273 task 3.8). TextEditor.Undo is still
+        // what pops each entry -- it is AvaloniaEdit's own command route and does the caret and selection
+        // work that Document.UndoStack.Undo alone does not -- so the view supplies the mechanism and the
+        // view model decides how many times to use it.
+        Undo = new DelegateCommand(
+            () =>
+            {
+                if (DataContext is CodeEditorViewModel vm)
+                    vm.UndoRequested(() => TextEditor.Undo());
+                else
+                    TextEditor.Undo();
+            },
+            () => TextEditor?.CanUndo ?? false);
         Redo = new DelegateCommand(() => TextEditor.Redo(), () =>
             TextEditor?.CanRedo ?? false);
         Copy = new DelegateCommand(() => TextEditor.Copy(), () => true);

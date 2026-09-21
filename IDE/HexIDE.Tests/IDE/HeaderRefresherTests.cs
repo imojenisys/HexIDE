@@ -301,6 +301,30 @@ public class HeaderRefresherTests
         editor.Dispose();
     }
 
+    [AvaloniaFact]
+    public void AWindowShowingAnOlderHeaderThanTheModelIsBroughtBackIntoLine()
+    {
+        // An undo in the code window puts the previous header back in the buffer while the model keeps the
+        // current one, so the two can disagree with nobody at fault. Gating the buffer half on "the model
+        // moved" would leave that window showing a header for a form that no longer looks like it, and
+        // leave it FOREVER: the next render equals what is recorded, so nothing would repair it.
+        var form = Deserialize(OneLabel);
+        var editor = NewCodeEditor().Initialize(form);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+
+        var current = "VERSION 5.00\r\nBegin VB.Form Form1\r\n   Caption = \"x\"\r\nEnd\r\n";
+        sut.ApplyHeader(form, current);
+        editor.Document.UndoStack.Undo();                       // the buffer drifts back; the model does not
+        editor.Document.Text.Should().NotStartWith(current);
+
+        sut.ApplyHeader(form, current);                         // the same header the model already holds
+
+        editor.Document.Text.Should().StartWith(current);
+        editor.BufferBody.Should().Be(form.Code);
+        editor.Dispose();
+    }
+
     /// <summary>A code editor with every collaborator stubbed: only the buffer is under test here.</summary>
     private static CodeEditorViewModel NewCodeEditor()
     {

@@ -814,7 +814,8 @@ public class ProjectService : IProjectService
         try
         {
             foreach (var form in projectDefinition.Forms)
-                if (!SerializeFormToFile(form, Path.Join(tempPath, Path.ChangeExtension(form.Name, "frm"))))
+                if (!SerializeFormToFile(form, Path.Join(tempPath, Path.ChangeExtension(form.Name, "frm")),
+                        adoptHeader: false))
                     refused.Add(form.Name);
 
             // Modules too. SaveModuleCore rather than SaveModule, because this is a batch: a refusal is
@@ -1313,7 +1314,16 @@ public class ProjectService : IProjectService
     /// Returns false when the form was refused, in which case nothing was written and nothing on the model
     /// was repointed. Reporting is the caller's: a lone save says so immediately, a batch collects.
     /// </summary>
-    private bool SerializeFormToFile(FormDefinition form, string formPath)
+    /// <param name="adoptHeader">
+    /// False for a write that is a COPY rather than the developer's file. Make packages every form into a
+    /// temporary directory under a name built from the form's own name, so the header it renders cites a
+    /// companion that may not be the one the real file cites -- and adopting it would leave that in the
+    /// model and in the open code window after the temp directory has been deleted. The path repointing
+    /// beside it is already undone in a finally for the same reason; this is the half that could not be.
+    /// </param>
+    // internal rather than private so the adoptHeader contract can be asserted directly; the Make
+    // path that depends on it cannot be driven from a test (it needs the published standalone runtime).
+    internal bool SerializeFormToFile(FormDefinition form, string formPath, bool adoptHeader = true)
     {
         // ONE ruler, asked ONCE, before either half is written. (#148)
         //
@@ -1367,7 +1377,8 @@ public class ProjectService : IProjectService
         // choosing also rewrites every .frx citation in it. Below the write and above the announcement, so
         // a server reading the buffer and a server reading the file agree about what line one is -- the
         // announcement flushes a pending didChange before its didSave, so the order holds on the wire too.
-        headerRefresher.ApplyHeader(form, FormCodeText.DesignerHalfOf(frmText, form.Code));
+        if (adoptHeader)
+            headerRefresher.ApplyHeader(form, FormCodeText.DesignerHalfOf(frmText, form.Code));
         return true;
     }
 
@@ -1528,12 +1539,12 @@ public class ProjectService : IProjectService
     /// </remarks>
     internal async Task<bool> SaveModuleCore(ModuleDefinition module, bool saveAs, bool announceSave = true)
     {
-        var written = await WriteModuleToDisk(module, saveAs);
+        var written = await WriteModuleToDisk(module, saveAs, adoptHeader: announceSave);
         if (written && announceSave) eventBus.Publish(new DocumentSavedEvent(module.FormPart, module));
         return written;
     }
 
-    private async Task<bool> WriteModuleToDisk(ModuleDefinition module, bool saveAs)
+    private async Task<bool> WriteModuleToDisk(ModuleDefinition module, bool saveAs, bool adoptHeader)
     {
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
 
@@ -1584,7 +1595,11 @@ public class ProjectService : IProjectService
             AtomicWriteText(modulePath, text);
             // As SerializeFormToFile: the .ctl/.pag half of the same trigger. The code here is the
             // MODULE's, which is the pairing this path writes and the one the code window composes from.
-            headerRefresher.ApplyHeader(designerPart, FormCodeText.DesignerHalfOf(text, module.Code));
+            // Gated for the same reason announceSave exists -- Make writes a copy into a
+            // temporary directory and restores every path afterwards, so neither the save nor the header it
+            // rendered there is the developer's.
+            if (adoptHeader)
+                headerRefresher.ApplyHeader(designerPart, FormCodeText.DesignerHalfOf(text, module.Code));
             return true;
         }
 

@@ -38,8 +38,12 @@ public class SaveRecordsTheHeaderTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    /// <summary>The real refresher over real stores and an empty dock — the slice is what is under test.</summary>
-    private ProjectService MakeService()
+    /// <summary>
+    /// The real refresher over real stores and an empty dock — the slice is what is under test. A test that
+    /// needs to assert the adoption was not REACHED passes a substitute instead, because for a document
+    /// citing no companion the two renders are the same string and no effect distinguishes them.
+    /// </summary>
+    private ProjectService MakeService(IHeaderRefresher? refresher = null)
     {
         var projectManager = Substitute.For<IProjectManager>();
         projectManager.LoadedProjects.Returns(_ => loaded);
@@ -61,7 +65,7 @@ public class SaveRecordsTheHeaderTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            new HeaderRefresher(new EventBus(), dock, new BreakpointService(), new BookmarkService()));
+            refresher ?? new HeaderRefresher(new EventBus(), dock, new BreakpointService(), new BookmarkService()));
     }
 
     private sealed class NullSink : IDeserializeErrorSink
@@ -137,6 +141,74 @@ public class SaveRecordsTheHeaderTests : IDisposable
         FormCodeText.WholeFile(module).Should().Be(onDisk);
         module.FormPart!.DesignerText.Should().NotContain("Public Sub Spin",
             "the slice takes the module's code off the render, so the code must not end up in the header");
+    }
+
+    [Fact]
+    public void AWriteThatIsOnlyACopyDoesNotBecomeTheDocumentsHeader()
+    {
+        // Make packages every form into a temporary directory under a name built from the form's OWN name,
+        // which is not always the name of its file -- so the header it renders there cites a companion the
+        // real file does not. Adopting that would leave it on the model and in the open code window after
+        // the temp directory had been deleted. The path repointing beside it is already undone in a finally;
+        // this is the half that could not be, because the model has no second copy of the header.
+        var project = new ProjectDefinition(VBProjectType.EXE, "Test") { AbsolutePath = Path.Join(dir, "Test.vbp") };
+        loaded.Add(project);
+        var form = new FormDeserializer().Deserialize(project, OddlyFormatted, NullSink.Instance)!;
+        form.AbsolutePath = Path.Join(dir, "Form1.frm");
+        project.AddForm(form);
+        var asRead = form.DesignerText!;
+
+        var copyPath = Path.Join(dir, "packaged", "Form1.frm");
+        Directory.CreateDirectory(Path.GetDirectoryName(copyPath)!);
+        MakeService().SerializeFormToFile(form, copyPath, adoptHeader: false).Should().BeTrue();
+
+        File.Exists(copyPath).Should().BeTrue("the copy is still written -- only the adoption is skipped");
+        form.DesignerText.Should().Be(asRead);
+    }
+
+    [Fact]
+    public void AndTheSameWriteWithAdoptionOnDoesBecomeIt()
+    {
+        // The other side of the same parameter, so the test above cannot pass because the write silently
+        // did nothing.
+        var project = new ProjectDefinition(VBProjectType.EXE, "Test") { AbsolutePath = Path.Join(dir, "Test.vbp") };
+        loaded.Add(project);
+        var form = new FormDeserializer().Deserialize(project, OddlyFormatted, NullSink.Instance)!;
+        form.AbsolutePath = Path.Join(dir, "Form1.frm");
+        project.AddForm(form);
+        var asRead = form.DesignerText!;
+
+        MakeService().SerializeFormToFile(form, Path.Join(dir, "Form1.frm")).Should().BeTrue();
+
+        form.DesignerText.Should().NotBe(asRead);
+    }
+
+    [Fact]
+    public async Task AUserControlWrittenAsACopyDoesNotAdoptTheHeaderItWroteThere()
+    {
+        // The .ctl half of the same rule, asserted as a call rather than as an effect -- and deliberately.
+        // A designer half's render depends on the file name only through its COMPANION citations, and a
+        // UserControl carrying no blob cites none, so for the common case the packaged render and the real
+        // one are the same string and no effect exists to observe. The rule still has to hold for the one
+        // that does carry a blob, and what it turns on is whether the adoption is reached at all.
+        var refresher = Substitute.For<IHeaderRefresher>();
+        var project = new ProjectDefinition(VBProjectType.EXE, "Test") { AbsolutePath = Path.Join(dir, "Test.vbp") };
+        loaded.Add(project);
+        var service = MakeService(refresher);
+        var module = await service.AddNewUserControl(project, "MyControl");
+        module.AbsolutePath = Path.Join(dir, "MyControl.ctl");
+
+        (await service.SaveModuleCore(module, saveAs: false)).Should().BeTrue();
+        refresher.Received(1).ApplyHeader(module.FormPart!, Arg.Any<string>());
+
+        refresher.ClearReceivedCalls();
+        module.AbsolutePath = Path.Join(dir, "packaged-ctl", "MyControl.ctl");
+        Directory.CreateDirectory(Path.GetDirectoryName(module.AbsolutePath)!);
+
+        (await service.SaveModuleCore(module, saveAs: false, announceSave: false)).Should().BeTrue();
+
+        File.Exists(module.AbsolutePath).Should().BeTrue("the copy is still written");
+        refresher.DidNotReceive().ApplyHeader(Arg.Any<FormDefinition>(), Arg.Any<string>());
     }
 
     [Fact]

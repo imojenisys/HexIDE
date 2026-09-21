@@ -8,6 +8,22 @@ there isn't one yet. Anything may change between 0.x releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **The code window shows the whole file, header included, and one line number now means the same thing
+  everywhere** - to the editor, to a language server, to the interpreter and to the debugger. A form's
+  designer block and a module's `Attribute` header are no longer hidden from the code window.
+- **Undo in the code window never undoes a designer change.** A change committed in the form designer
+  reaches the code window as a rewrite of the header at the top of it, and Ctrl+Z there undoes the last
+  thing typed in that window, exactly as before. **One consequence is worth knowing:** undoing a code edit
+  made *before* a designer change costs the redo for it. The header has to be put back afterwards, and
+  putting anything back is itself a change, which is what clears a redo stack. The alternatives were worse -
+  discarding the whole history, or refusing to undo past the designer change at all.
+- **Opening a file leaves nothing to undo.** Previously the first Ctrl+Z in a newly opened code window
+  emptied it, because loading the text counted as an edit.
+- **Reloading a file changed outside the IDE discards that window's undo history**, as reloading it into
+  the form designer already did. The history described a document that is no longer there.
+
 ## [0.1.0] — unreleased
 
 The first versioned build. Before this, nothing in the tree carried a version at all, so a shipped

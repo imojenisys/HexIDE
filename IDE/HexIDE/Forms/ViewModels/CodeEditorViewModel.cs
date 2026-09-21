@@ -325,6 +325,60 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     private string bufferPrefix = "";
 
     /// <summary>
+    /// Set while an undo is replaying a header write, so the caller of <see cref="UndoRequested"/> can tell
+    /// what it just undid. Reset by that caller before each pop; nothing else reads it.
+    /// </summary>
+    private bool headerWriteWasUndone;
+
+    /// <summary>
+    /// The header the MODEL would show now — which is not always the one the buffer carries, and the
+    /// difference is the point: after an undo the buffer holds the previous header and this holds the
+    /// current one, so this is what gets put back.
+    /// </summary>
+    private string ModelHeader =>
+        moduleDefinition is { } module ? FormCodeText.Prefix(module)
+        : formDefinition is { } form ? FormCodeText.Prefix(form)
+        : bufferPrefix;
+
+    /// <summary>
+    /// The half of a header write that AvaloniaEdit cannot undo for us: <see cref="bufferPrefix"/>, which
+    /// says where the header ends and is not part of the document.
+    /// </summary>
+    /// <remarks>
+    /// <b>Pushed into the same undo group as the text change, which is what makes the pair atomic.</b> The
+    /// buffer is "header + code" and the split is by the prefix's LENGTH, so a text change that moves the
+    /// header without moving the prefix does not merely look wrong — the next flush takes the body from the
+    /// wrong offset and writes a truncated document. Measured before this existed: type <c>Dim x As Long</c>,
+    /// grow the header, press Ctrl+Z, and the body came back as <c>x As Long</c>.
+    ///
+    /// <para>
+    /// <b>Why an operation rather than bookkeeping.</b> <c>UndoStack.LastGroupDescriptor</c> looks like the
+    /// way to ask "is the top of the stack the IDE's own write", and it is not: it reports the last group
+    /// <em>opened</em>, an <c>Undo()</c> clears it to null even when marked groups remain below, and it is
+    /// already null inside <c>Changed</c> during the replay (all measured against AvaloniaEdit 12.0.0). An
+    /// operation inside the group is told when that group is undone, at any depth, whatever route the undo
+    /// came in by — including the Ctrl+Y that AvaloniaEdit handles itself and HexIDE never sees.
+    /// </para>
+    ///
+    /// <para>
+    /// It is pushed BEFORE the text change, so on undo it runs after it (a group replays its operations in
+    /// reverse) and on redo before it. The prefix is therefore correct at every point an observer could
+    /// look, in both directions.
+    /// </para>
+    /// </remarks>
+    private sealed class HeaderWrite(CodeEditorViewModel owner, string before, string after)
+        : IUndoableOperation
+    {
+        public void Undo()
+        {
+            owner.bufferPrefix = before;
+            owner.headerWriteWasUndone = true;
+        }
+
+        public void Redo() => owner.bufferPrefix = after;
+    }
+
+    /// <summary>
     /// The document's code, without the header the buffer shows in front of it.
     /// </summary>
     /// <remarks>
@@ -373,10 +427,79 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // document shorter than the prefix it is supposed to start with, and Replace would throw.
         var replaced = Math.Min(bufferPrefix.Length, Document.TextLength);
         var caret = CaretOffset;
-        bufferPrefix = newPrefix;
-        Document.Replace(0, replaced, newPrefix);
+        var before = bufferPrefix;
+
+        // One undo group holding two things: the prefix change and the text change. Every write to this
+        // document is recorded -- AvaloniaEdit has no unrecorded path, and NOT recording one would be worse
+        // than recording it, because an undo entry holds an absolute offset and an unrecorded change above
+        // it makes it replay against the wrong text.
+        Document.UndoStack.StartUndoGroup();
+        try
+        {
+            Document.UndoStack.Push(new HeaderWrite(this, before, newPrefix));
+            bufferPrefix = newPrefix;
+            Document.Replace(0, replaced, newPrefix);
+        }
+        finally
+        {
+            Document.UndoStack.EndUndoGroup();
+        }
+
         if (caret >= replaced)
             CaretOffset = Math.Clamp(caret + newPrefix.Length - replaced, 0, Document.TextLength);
+    }
+
+    /// <summary>
+    /// Undo in the code window: undoes the developer's last code edit, and never a designer change.
+    /// </summary>
+    /// <param name="popOne">
+    /// Pops one undo entry. Supplied by the view as <c>TextEditor.Undo()</c> so the editor control still
+    /// does its own caret and selection work; a test supplies <c>Document.UndoStack.Undo</c>.
+    /// </param>
+    /// <remarks>
+    /// <b>A designer change reaches this window as a header write, and a header write is not an edit the
+    /// developer made here.</b> The capability is explicit: a committed designer change shall not be
+    /// undoable from the code window, shall not block the code window's undo of an earlier code edit, and
+    /// shall not make that earlier edit undo the wrong text. Those three pull against each other, and this
+    /// loop is what satisfies all of them: pop header writes until an ordinary edit comes off with them,
+    /// then put the current header back.
+    ///
+    /// <para>
+    /// <b>Why the header goes back rather than the write simply being skipped.</b> An undo entry holds an
+    /// absolute offset. The developer's edit was recorded against a document with the OLD header, so it can
+    /// only replay correctly once that header is back — which is why the header write is undone first
+    /// rather than stepped over. Re-applying afterwards leaves the window showing the form as it now is.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>The cost is the redo stack</b>, which the re-application clears: a code edit undone across a
+    /// designer change cannot be redone. That is a real loss, stated in the changelog rather than left to be
+    /// found. It is smaller than either alternative — clearing the history destroys the undo the developer
+    /// still wants, and stopping at the header write blocks undo altogether.
+    /// </para>
+    ///
+    /// <para>
+    /// The loop terminates: each turn pops an entry, and it stops at the first that is not a header write.
+    /// A window holding nothing but designer changes undoes them all and puts the header back, which is the
+    /// honest answer — there is no code edit in it to undo.
+    /// </para>
+    /// </remarks>
+    internal void UndoRequested(Action popOne)
+    {
+        var undidHeaderWrite = false;
+        while (Document.UndoStack.CanUndo)
+        {
+            headerWriteWasUndone = false;
+            popOne();
+            if (!headerWriteWasUndone)
+                break;
+            undidHeaderWrite = true;
+        }
+
+        // Only when one was actually undone. Doing it unconditionally would push an entry and clear the
+        // redo stack on every ordinary undo, which is the one thing an undo must not do.
+        if (undidHeaderWrite)
+            RefreshPrefix(ModelHeader);
     }
 
     public CodeEditorViewModel Initialize(FormDefinition formElement)
@@ -396,6 +519,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // thing to the editor, a language server, the interpreter and the debugger.
         bufferPrefix = FormCodeText.Prefix(formElement);
         Document.Text = bufferPrefix + formElement.Code;
+        ClearUndoHistoryAfterLoad();
 
         PopulateObjectNames();
 
@@ -434,6 +558,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // the MODULE's code -- which is the pairing the save path writes for those kinds too.
         bufferPrefix = FormCodeText.Prefix(moduleElement);
         Document.Text = bufferPrefix + moduleElement.Code;
+        ClearUndoHistoryAfterLoad();
 
         // A module with a designer half lists its controls like a form's editor does; one without falls
         // back to "(General)" alone, which is what this used to hardcode.
@@ -444,6 +569,17 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         Title = ComputeTitle();
         return this;
     }
+
+    /// <summary>
+    /// Discards the undo entry the initial load leaves behind.
+    /// </summary>
+    /// <remarks>
+    /// Loading the document is a <c>Document.Text</c> assignment, and AvaloniaEdit records every one — so
+    /// without this the first Ctrl+Z in a freshly opened code window empties the buffer to nothing
+    /// (measured, and a defect in its own right). It also matters to <see cref="UndoRequested"/>, which
+    /// pops one entry past the header writes on the assumption that it is something the developer typed.
+    /// </remarks>
+    private void ClearUndoHistoryAfterLoad() => Document.UndoStack.ClearAll();
 
     /// <summary>
     /// Hands this document to the language layer.
@@ -523,6 +659,14 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         var caret = CaretOffset;
         Document.Text = whole;
         CaretOffset = Math.Clamp(caret, 0, Document.TextLength);
+
+        // The history is discarded, because what it describes is gone: every entry holds an absolute offset
+        // into a document that has just been replaced wholesale from disk, and undoing back across the
+        // reload would put content the file no longer has back into the buffer. The designer half of the
+        // same reload already does exactly this (FormEditViewModel.ReloadFromModel clears its own stack),
+        // so the two halves of a reloaded document now agree rather than one of them keeping a history the
+        // other threw away.
+        Document.UndoStack.ClearAll();
     }
 
     private void PopulateObjectNames()

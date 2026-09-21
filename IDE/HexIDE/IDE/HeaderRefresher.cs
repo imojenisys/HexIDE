@@ -89,13 +89,22 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
     /// </remarks>
     public void ApplyHeader(FormDefinition form, string header)
     {
-        var current = FormCodeText.Prefix(form);
-        if (string.Equals(current, header, StringComparison.Ordinal))
-            return;
-
         var identity = DocumentIdentity.For(form);
-        form.RecordDesignerText(header);
-        ShiftMarks(identity, current, header);
+        var current = FormCodeText.Prefix(form);
+
+        // The model half only when the model actually moves, because the marks move with it and a shift of
+        // zero must not announce itself to two stores, three gutters and the sidecar.
+        if (!string.Equals(current, header, StringComparison.Ordinal))
+        {
+            form.RecordDesignerText(header);
+            ShiftMarks(identity, current, header);
+        }
+
+        // The buffer half unconditionally, and that is not belt-and-braces. An open window can hold a header
+        // the model does not -- an undo puts the previous one back in the buffer while the model keeps the
+        // current one -- and gating this on the model having moved would leave that window showing a header
+        // for a form that no longer looks like it, permanently: the next render equals what is recorded, so
+        // nothing would ever repair it. RefreshPrefix is a no-op when the two already agree.
         EditorFor(identity)?.RefreshPrefix(header);
     }
 
