@@ -83,6 +83,11 @@
   throws on an unsorted list and skips a zero-length fold; undo entries hold absolute offsets, are internal and
   immutable, cannot be rebased, and any push clears the redo stack, while a group can carry a caller's marker
   that identifies the most recent group. The design records what each one settles.
+  — **The last clause is true and insufficient, found while implementing 3.8 and corrected in `design.md`.**
+  `LastGroupDescriptor` identifies the most recent group *opened*, which is not the same as the top of the
+  stack: an `Undo()` clears it, an ordinary change clears it, and an empty group sets it with nothing behind
+  it. It cannot answer the question after a second undo. What does is an `IUndoableOperation` inside the
+  group — see 3.8.
 
 ## 1. Identity inside the IDE
 
@@ -753,9 +758,23 @@
   typed a line at the end of Form1's code, added a `CommandButton` in the designer, pressed Ctrl+Z in the
   code window. The typed line went; the `Begin VB.CommandButton Command0` block stayed at lines 12-19; and
   `get_file_content` answered from `Option Explicit` with nothing of the header in it.
-  — **Recorded, not fixed:** AvaloniaEdit's redo gesture is Ctrl+Y and HexIDE binds nothing to it, so that
-  one route bypasses the command HexIDE owns. Harmless here — the operation keeps it honest — but it is a
-  keymap gap, and VB6 used Ctrl+Y for Delete Line, so it wants deciding rather than patching.
+  — **Also verified live, because a unit test cannot reach it:** a keystroke typed immediately AFTER a
+  designer commit does not fuse into the header write's group. AvaloniaEdit coalesces typing through
+  `StartContinuedUndoGroup`, and if that merged with the group this opens, one Ctrl+Z would take the
+  keystroke, the header and the edit below it together. Measured through real key events: commit, type,
+  Ctrl+Z — the typed line went and the control's block stayed.
+  — **Recorded and filed rather than fixed:** AvaloniaEdit's redo gesture is Ctrl+Y and HexIDE binds nothing
+  to it, so that route bypasses both the command HexIDE owns and the user's keymap. Harmless to this work
+  — the operation keeps the split honest whatever route arrives — but it wants deciding rather than
+  patching, because VB6 used Ctrl+Y for Delete Line. Filed with two neighbours found in the same pass
+  (`InsertAtEnd` costing two or three undos, Replace All pushing an entry into every other open window) as
+  hexide-io/HexIDE#513.
+  — **One claim this phase had been making is false and is corrected**: the region replace does NOT preserve
+  the diagnostic markers. `LspMarker` is a record struct of two offsets in a plain list, not an anchored
+  segment, so a header that changes height leaves every underline drawn at a stale offset until the next
+  `publishDiagnostics` — which the replace's own debounced `didChange` brings within a few hundred
+  milliseconds. Transient and self-healing; anchoring them properly is hexide-io/HexIDE#512. The caret, the
+  selection and the folds ARE preserved, which is what was measured.
 - [ ] 3.9 One guarded write path, with the policy in the design record for each of the twenty programmatic
   writers: formatting reduced to changed lines and clipped; server rename refused if it touches the header;
   Replace, Replace All, completion, Insert File, Enter auto-close, event stubs, add-in `SetContent` and
@@ -766,7 +785,12 @@
   so the three cannot drift apart. The client clipping stays as the guard against servers that do not.
 - [ ] 3.11 Find and Replace search outside read-only regions only.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
-- [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt.
+- [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so
+  this task is narrower than it reads**: the prompt is raised from `OnTextEntering` and `OnEditorKeyDown`
+  only, never from a document event, so a header refresh does not reach it today. What DOES need this task
+  is the prompt's own "No" arm: it reverts by restoring a whole-buffer snapshot taken when the prompt opened
+  (`CodeEditorView.axaml.cs`), without touching `bufferPrefix` — so a designer commit or a save landing while
+  the prompt is open makes answering No reproduce exactly the header/prefix split 3.8 closed everywhere else.
 - [ ] 3.14 Folds: the header fold is merged into every fold application, including an empty or absent server
   answer, with the merged list sorted by start offset (the manager throws otherwise) and zero-length folds
   discarded (it skips them silently). It sets its own folded state rather than relying on the library's

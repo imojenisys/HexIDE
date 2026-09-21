@@ -400,10 +400,17 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// <remarks>
     /// <b>Replaces the REGION, rather than assigning <see cref="Document"/>.Text.</b> A whole-document
     /// assignment collapses every anchor AvaloniaEdit holds over the buffer -- the caret, the selection,
-    /// the marker segments the diagnostics hang off, the folding sections a server sent -- so the
-    /// developer's cursor would jump to the top of the file on every nudge of a control in the designer.
-    /// Replacing the first <c>bufferPrefix.Length</c> characters moves everything below it by the
-    /// difference instead, which is what actually happened.
+    /// the folding sections a server sent -- so the developer's cursor would jump to the top of the file on
+    /// every nudge of a control in the designer. Replacing the first <c>bufferPrefix.Length</c> characters
+    /// moves everything below it by the difference instead, which is what actually happened.
+    ///
+    /// <para>
+    /// <b>The diagnostic markers are NOT among them, and this used to claim they were.</b> An
+    /// <c>LspMarker</c> is a plain record struct of two offsets in a list, not an anchored segment, so a
+    /// header that changes height leaves every underline drawn against stale offsets until the next
+    /// <c>publishDiagnostics</c> arrives -- which it does, because the replace debounces a <c>didChange</c>.
+    /// Transient and self-healing, and hexide-io/HexIDE#512 covers making it not happen at all.
+    /// </para>
     ///
     /// <para>
     /// The region is taken by the prefix's LENGTH, exactly as <see cref="BufferBody"/> splits, so the two

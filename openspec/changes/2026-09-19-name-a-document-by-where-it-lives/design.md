@@ -302,7 +302,7 @@ the region, never the whole-document gate.
 
 | Writer | Policy |
 |---|---|
-| Designer or model header refresh; a save's rendered header; module rename's `VB_Name` | Owner. Writes the region, off the undo history, and shifts marks by the change in line count. |
+| Designer or model header refresh; a save's rendered header; module rename's `VB_Name` | Owner. Writes the region, not undoable from the code window (see **Undo** below, which supersedes the "off the undo history" this row used to say), and shifts marks by the change in line count. |
 | A member's own `Attribute <Member>.…` qualifiers, on that member's rename | Owner. Follows the rename, whether the IDE or a server makes it. |
 | Formatting (server answer, any server) | The whole-document edit is reduced to the lines it changes, and changes inside a read-only region are dropped. The bundled formatter also leaves the header alone. |
 | Server rename | Refused as a whole if any edit lands in the header region, with a reason. Edits to the renamed member's own attribute qualifiers are allowed. Refusing is not rare: the bundled server's rename is lexical and whole-word over the buffer, so with the designer block in it, renaming a local called `Text`, `Top`, `Caption` or `Index` would otherwise reach the header. The bundled server therefore skips those regions itself, using the same rule, so the refusal is reserved for a server that does not. |
@@ -329,14 +329,30 @@ was decompiled (2026-09-19, AvaloniaEdit 12.0.0) and these are its actual mechan
   the header refresh?" is answerable exactly when it matters: when nothing has been recorded since.
 - Pushing any change clears the redo stack.
 
-That settles the mechanism. The refresh is recorded in a marked group, so every offset stays valid. When the
-developer undoes and the top group is that refresh, the code window reverts it, undoes the edit beneath it —
-whose offsets are now valid again, because the document is back in the state that edit left — and re-applies
-the current header. The designer's change is not undone, the developer's edit is, and nothing points at the
+That settles the shape. The refresh is recorded in a group, so every offset stays valid. When the developer
+undoes and the thing that came off is that refresh, the code window undoes the edit beneath it — whose
+offsets are valid again, because the document is back in the state that edit left it — and re-applies the
+current header. The designer's change is not undone, the developer's edit is, and nothing points at the
 wrong text. **The cost is the redo stack**, which the re-application clears, so a code edit undone across a
 designer change cannot be redone. That is a real and stateable loss, and it is smaller than either
 alternative: clearing the history destroys the undo the developer still wants, and stopping undo at the
 refresh blocks it.
+
+**Correction, 2026-09-21, from implementing it: the marker is not how the question gets asked.** The third
+bullet above is true and insufficient, and the gap is not subtle once seen. `LastGroupDescriptor` reports
+the last group *opened*: an `Undo()` clears it to null even when marked groups remain below, an ordinary
+change clears it too, it is already null inside `Changed` during the replay, and an empty group leaves it
+set with nothing behind it. So it answers "is the top of the stack the IDE's own write" only when nothing
+has happened since — and the ordinary sequence *type, designer change, type, undo, undo* is not that: by the
+second undo the descriptor is null and the header write reads as an ordinary edit.
+
+What asks the question instead is an `IUndoableOperation` pushed into the same group as the text change,
+carrying the buffer's prefix. It restores the old prefix on undo and the new one on redo, and it reports
+that the group it sat in was the one undone — at any depth, and whatever route the undo arrived by, which
+matters because AvaloniaEdit answers **Ctrl+Y** itself and nothing in HexIDE's keymap binds it. The policy
+above then runs as a loop: pop while each entry turns out to be a header write, stop at the first that is
+not, and re-apply only if one came off. Everything in this paragraph was measured against the same
+AvaloniaEdit 12.0.0 assembly the repo ships, by reflection and by probe.
 
 **Marks are refused in a read-only region.** A header line never executes, and the folded header is a single
 visual line, so a click on it would otherwise set a mark on whichever line it happened to map to. A form the
