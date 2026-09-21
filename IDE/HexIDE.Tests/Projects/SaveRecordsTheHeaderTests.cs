@@ -119,6 +119,27 @@ public class SaveRecordsTheHeaderTests : IDisposable
     }
 
     [Fact]
+    public async Task AUserControlsHeaderFollowsASubsequentSaveToo()
+    {
+        // The .ctl/.pag branch of SaveModuleCore is a separate write with a separate slice -- the code it
+        // pairs the designer half with is the MODULE's, not the FormPart's -- and nothing else exercises it
+        // with a real refresher. A UserControl whose code changed and was saved must still compose to its
+        // file, or the code window's line numbers drift from the ones a server reading the file reports.
+        var project = new ProjectDefinition(VBProjectType.EXE, "Test") { AbsolutePath = Path.Join(dir, "Test.vbp") };
+        loaded.Add(project);
+        var service = MakeService();
+        var module = await service.AddNewUserControl(project, "MyControl");
+
+        module.UpdateCode("Option Explicit\r\nPublic Sub Spin()\r\nEnd Sub\r\n");
+        (await service.SaveModule(module, saveAs: false)).Should().BeTrue();
+
+        var onDisk = await File.ReadAllTextAsync(module.AbsolutePath!, TestContext.Current.CancellationToken);
+        FormCodeText.WholeFile(module).Should().Be(onDisk);
+        module.FormPart!.DesignerText.Should().NotContain("Public Sub Spin",
+            "the slice takes the module's code off the render, so the code must not end up in the header");
+    }
+
+    [Fact]
     public async Task ARefusedSaveLeavesTheHeaderAlone()
     {
         // The gate is the same one the write path uses, and it has to be: a buffer re-headed from a render

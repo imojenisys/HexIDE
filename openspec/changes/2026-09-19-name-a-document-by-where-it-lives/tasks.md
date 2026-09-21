@@ -649,8 +649,20 @@
   assignment collapses every anchor AvaloniaEdit holds — the caret, the selection, the marker segments the
   diagnostics hang off, the folding sections a server sent — so the cursor would jump to the top of the file
   on every nudge of a control. Replacing the first `bufferPrefix.Length` characters moves everything below
-  by the difference, which is what actually happened, and it leaves one undo entry of the shape 3.7 needs.
-  `ReloadFrom` is the exception and still assigns, because the body changed too.
+  by the difference, which is what actually happened. `ReloadFrom` is the exception and still assigns,
+  because the body changed too.
+  — **HAZARD, open until 3.8, and measured rather than predicted.** The region replace lands on the
+  editor's own undo stack, so Ctrl+Z in the code window after a designer commit reverts the header while
+  `bufferPrefix` still holds the new one — and the split is by length, so the body is then taken from the
+  wrong offset. Probed on 2026-09-21: type `Dim x As Long`, refresh the header from
+  `Attribute VB_Name = "Module1"` to a longer one, press Ctrl+Z. The buffer is back to the short header
+  correctly, and `BufferBody` answers `x As Long` — the next flush would write that as the whole document.
+  It is the same data-loss class this task fixed on the reload path, on the commonest keystroke there is.
+  — **So 3.8 moves ahead of 3.5**, and this is the reason. The fix is the marked-group protocol 0.5 settled
+  from the decompiled library, not "do not record it" — which 0.5 measured as unsafe, because an unrecorded
+  change above an existing entry invalidates that entry's absolute offset. 3.5 adds a second owner write
+  (`VB_Name` on rename) into the same hole, so closing it first is cheaper than widening it. `ReloadFrom`
+  has always had the same exposure, since a whole-text assignment is recorded too; 3.8 closes both.
   — **A mark inside the header stays where it is**, rather than being clamped to the new first body line.
   The header is being replaced by another header, so its line 3 is still its line 3; clamping would pile
   every header mark onto one line. 3.7 stops a mark being set there at all.
@@ -665,13 +677,15 @@
   refresher that lived on the code editor would move the marks of whatever happens to be open and leave
   every closed document pointing at the wrong statements. Verified live too: the reload shift was measured
   with only the code window open and no designer, and separately with neither.
-  — Twenty-eight tests across five files, and **every mechanism they cover was checked by removal**: both
+  — Twenty-nine tests across five files, and **every mechanism they cover was checked by removal**: both
   render gates, both shift bases in both directions, the no-op guards on the shift and on the re-head, the
   caret carry, the bus subscription, the prefix tracking on both write paths, the save's recording and its
   slice, and each of the four undo-stack hooks. Twenty-two mutations; all of them redden.
-  — **Left standing, and it belongs to 3.17:** the sidecar persists marks as buffer lines and restores them
-  unshifted, so a header that changed while the project was closed restores its marks in the old numbering.
-  Observed during the live verification.
+  — **Left standing, and it belongs to 3.17:** an external change the dirty detector calls a Conflict is
+  not applied, so its header delta never reaches the stores — and when the project is next opened the
+  sidecar restores the marks in the numbering of the file as it was before that change. Seen during the live
+  verification, where the first external edit landed while the designer had an undo history and was
+  therefore classified as a conflict; the reload that followed a restart shifted correctly.
 - [ ] 3.4 Header render for a form with no file uses `<Name>.frx`. A form held read-only is never re-rendered.
 - [ ] 3.5 Where a document's header carries `VB_Name`, it follows a rename, as an edit the IDE makes itself
   (#473: a form's is never retargeted today, so a renamed form's file names two different forms). A form
@@ -686,7 +700,8 @@
   *region* is the header or a member's attribute run and nothing else: a form held read-only as a whole must
   still take breakpoints and answer Find, so the mark, Find and attribute rules test the region, never the
   whole-document gate.
-- [ ] 3.8 Undo, by the mechanism 0.5 settled: record the refresh in a marked group so every offset stays
+- [ ] 3.8 **Ahead of 3.5 — there is an open data-loss path until this lands; see the hazard under 3.3b.**
+  Undo, by the mechanism 0.5 settled: record the refresh in a marked group so every offset stays
   valid; when the developer undoes and the stack reports that group as the most recent, revert it, undo the
   edit beneath, and re-apply the current header. The redo stack is lost at that point, which is stated in the
   release notes rather than left to be discovered. Test: a code edit, a designer move, then undo — the edit is
