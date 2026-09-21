@@ -731,10 +731,46 @@
   — **Verified in the running IDE** on a `File > New Project` Standard EXE, whose `Form1` genuinely has no
   file: the code window opened with no header, and adding a control in the designer put the whole designer
   block in front of `Option Explicit`.
-- [ ] 3.5 Where a document's header carries `VB_Name`, it follows a rename, as an edit the IDE makes itself
+- [x] 3.5 Where a document's header carries `VB_Name`, it follows a rename, as an edit the IDE makes itself
   (#473: a form's is never retargeted today, so a renamed form's file names two different forms). A form
   HexIDE created carries no attribute block at all, unlike one imported from VB6, which writes five — a
   fidelity gap of its own, recorded rather than fixed here.
+  — **Three kinds, three homes for the line, one entry point.** `IHeaderRefresher.NameChanged(identity)`
+  makes the `VB_Name` a document carries say its current name. A `.bas`/`.cls` keeps it in the header, which
+  the model already renders from the live name, so only an open buffer can be stale and re-heading it is the
+  whole job. A `.frm` keeps it in `Code`, a `.ctl`/`.pag` in its module's `Code` — below the prefix, because
+  their code section opens with the attribute run — so for those the model's text is rewritten as well, which
+  is what makes a closed document's next save right. `LayoutChanged` calls it on every commit, because a
+  form's rename is a change to its root control; a module has no rename gesture at all (#493), and the
+  comment there names this as the call it will need.
+  — **Only a live rename in the tree today is a form's.** `ModuleDefinition.Name` has no assignment outside
+  its constructor. The module half is therefore tested by setting `Name` on the model, exactly as the
+  identity tests already do.
+  — **It follows the document's name, which for a UserControl is its module's**, not the root control's. The
+  two are separate fields nothing connects, so renaming a UserControl's root in its designer moves the
+  `Begin` line alone — #473 again, in a `.ctl`. Following the root here would make the file disagree with
+  the name the project knows it by instead, so that is recorded on #493, where the rename belongs.
+  — **The locator walks the text's own offsets**, not a normalised copy. `FormCodeText.AttributeBlock` counts
+  one character per terminator after splitting on `'
+'` and so cuts one short per CRLF line (#465); the
+  span here is handed straight to a document replace, where that would glue two lines together. #465 itself
+  is a `good first issue` and was left for a contributor rather than fixed in passing.
+  — **Compared by value, not by the line's text**, because it runs on every committed nudge of a control: a
+  line VB6 did not space the way HexIDE writes one would otherwise be rewritten by the first nudge. A commit
+  that renames nothing pushes no undo entry.
+  — **3.8's protocol widened to cover it.** The `VB_Name` write is marked as the IDE's own by a stateless
+  operation beside the header write's; the code window's Undo re-applies BOTH afterwards (re-applying the
+  header alone would leave the code naming the old form with nothing that would ever repair it); and one
+  commit's writes are wrapped in one outer group, so an undo that does not come through the code window's own
+  (#513) cannot separate a rename's two halves. The marker matters on its own for a `.ctl`, where the
+  `VB_Name` write is the only write.
+  — **Not in `FormSerializer`**, although `ModuleFileFormat.ToFileContent` retargets at save for modules. For
+  a form the line is in the developer's text, and a save-time rewrite would make the file differ from the
+  buffer — the one thing 3.21's "an unchanged save writes the buffer" forbids.
+  — **The created-form gap is now #516**, with the measurement it needs: VB6's own template corpus has five
+  attributes on nineteen of its twenty forms, and whether VB6 defaults a missing `VB_PredeclaredId` to
+  `False` decides whether a HexIDE-created form can still be shown by name.
+  — Fifteen mutations, all reddening.
 - [ ] 3.6 The interpreter and the pre-run syntax check parse the whole text (after 0.2).
 - [ ] 3.7 Protection: one section provider subclassing the stock one over the header and member-attribute
   regions, overriding both of its virtual methods — refusing insertion at a region's edges, which it allows,

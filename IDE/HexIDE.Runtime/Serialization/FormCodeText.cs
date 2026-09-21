@@ -89,6 +89,102 @@ public static class FormCodeText
     }
 
     /// <summary>
+    /// Where the <c>Attribute VB_Name</c> line sits in a code section's leading <c>Attribute</c> run: the
+    /// offset and length of the line's text, its terminator excluded. Null when the run carries none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Walks the original string's own offsets rather than a normalised copy of it.</b> A code section
+    /// is CRLF or LF depending on where it came from — the <c>.frm</c> reader rebuilds it with the host's
+    /// line ending, and an editor buffer carries whatever was typed into it — and the span is handed straight
+    /// to a document replace. Counting one character per terminator after splitting on <c>'\n'</c> would come
+    /// up one short per CRLF line above it and cut into the text, which is exactly what
+    /// hexide-io/HexIDE#465 records <see cref="AttributeBlock"/> doing.
+    /// </para>
+    /// <para>
+    /// Only the LEADING run counts, for the same reason as <see cref="AttributeBlock"/>: an
+    /// <c>Attribute</c> line further down belongs to a procedure. Blank lines before it are skipped.
+    /// </para>
+    /// </remarks>
+    public static (int Start, int Length)? VbNameLine(string code)
+    {
+        var pos = 0;
+        while (pos < code.Length)
+        {
+            var newline = code.IndexOf('\n', pos);
+            var next = newline < 0 ? code.Length : newline + 1;
+            var end = newline < 0 ? code.Length : newline;
+            if (end > pos && code[end - 1] == '\r')
+                end--;
+
+            var line = code.AsSpan(pos, end - pos).Trim();
+            if (line.Length > 0)
+            {
+                if (!line.StartsWith("Attribute ", StringComparison.OrdinalIgnoreCase))
+                    return null;
+                if (VbNameValue(line) is not null)
+                    return (pos, end - pos);
+            }
+            pos = next;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// <paramref name="code"/> with its <c>Attribute VB_Name</c> saying <paramref name="name"/>, and every
+    /// other character left exactly as it was. Returns <paramref name="code"/> itself when the line already
+    /// says that name, or when there is no such line.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Compared by value, not by the line's text.</b> This runs on every committed designer change, and a
+    /// file whose line VB6 did not write the way <see cref="VbNameAttribute"/> does — different spacing —
+    /// would otherwise be rewritten by the first nudge of a control, which is a change nobody made.
+    /// </para>
+    /// <para>
+    /// <b>Adds nothing where there is nothing.</b> A form HexIDE created carries no attribute block at all,
+    /// and inventing one here would be a decision about what the file says taken by a routine that only
+    /// exists to keep a name in step — recorded as a gap of its own rather than papered over.
+    /// </para>
+    /// </remarks>
+    public static string RetargetVbName(string code, string name)
+    {
+        if (VbNameLine(code) is not var (start, length))
+            return code;
+        if (string.Equals(VbNameValue(code.AsSpan(start, length).Trim()), name, StringComparison.Ordinal))
+            return code;
+        return string.Concat(code.AsSpan(0, start), VbNameAttribute(name), code.AsSpan(start + length));
+    }
+
+    /// <summary>The line VB6 writes for a document called <paramref name="name"/>.</summary>
+    public static string VbNameAttribute(string name) => $"Attribute VB_Name = \"{name}\"";
+
+    /// <summary>
+    /// The name an <c>Attribute VB_Name = "…"</c> line gives, or null when the line is some other attribute.
+    /// </summary>
+    /// <remarks>
+    /// Parsed as keyword, attribute name, <c>=</c>, value, rather than tested with a prefix: a prefix test
+    /// for <c>Attribute VB_Name</c> would also claim an attribute whose name merely starts with it.
+    /// </remarks>
+    private static string? VbNameValue(ReadOnlySpan<char> line)
+    {
+        const string keyword = "Attribute";
+        const string attribute = "VB_Name";
+        if (!line.StartsWith(keyword, StringComparison.OrdinalIgnoreCase))
+            return null;
+        var rest = line[keyword.Length..];
+        if (rest.Length == 0 || !char.IsWhiteSpace(rest[0]))
+            return null;
+        rest = rest.TrimStart();
+        if (!rest.StartsWith(attribute, StringComparison.OrdinalIgnoreCase))
+            return null;
+        rest = rest[attribute.Length..].TrimStart();
+        if (rest.Length == 0 || rest[0] != '=')
+            return null;
+        return rest[1..].Trim().Trim('"').ToString();
+    }
+
+    /// <summary>
     /// The whole file this form represents: its designer half, then its code section.
     /// </summary>
     /// <remarks>

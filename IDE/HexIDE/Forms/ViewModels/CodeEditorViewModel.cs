@@ -325,10 +325,11 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     private string bufferPrefix = "";
 
     /// <summary>
-    /// Set while an undo is replaying a header write, so the caller of <see cref="UndoRequested"/> can tell
-    /// what it just undid. Reset by that caller before each pop; nothing else reads it.
+    /// Set while an undo is replaying one of the IDE's own writes — a header write or a <c>VB_Name</c> write
+    /// — so the caller of <see cref="UndoRequested"/> can tell what it just undid. Reset by that caller
+    /// before each pop; nothing else reads it.
     /// </summary>
-    private bool headerWriteWasUndone;
+    private bool ownerWriteWasUndone;
 
     /// <summary>
     /// The header the MODEL would show now — which is not always the one the buffer carries, and the
@@ -372,10 +373,26 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         public void Undo()
         {
             owner.bufferPrefix = before;
-            owner.headerWriteWasUndone = true;
+            owner.ownerWriteWasUndone = true;
         }
 
         public void Redo() => owner.bufferPrefix = after;
+    }
+
+    /// <summary>
+    /// Marks a <c>VB_Name</c> write as the IDE's own, so <see cref="UndoRequested"/> treats it exactly as it
+    /// treats a header write.
+    /// </summary>
+    /// <remarks>
+    /// It carries no state because the write it marks needs none restored: the line is in the body, below
+    /// the prefix, so the split does not move. What it is for is telling the undo loop that the entry it
+    /// just popped was not an edit the developer made here.
+    /// </remarks>
+    private sealed class NameWrite(CodeEditorViewModel owner) : IUndoableOperation
+    {
+        public void Undo() => owner.ownerWriteWasUndone = true;
+
+        public void Redo() { }
     }
 
     /// <summary>
@@ -457,6 +474,65 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     }
 
     /// <summary>
+    /// Makes the <c>Attribute VB_Name</c> line in the buffer's code say <paramref name="name"/>. Does
+    /// nothing when it already does, or when the code carries no such line.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>For a form, a UserControl and a PropertyPage the line is in the body, not the header</b> — their
+    /// code section opens with the leading <c>Attribute</c> run, which is why the prefix stops at the
+    /// designer block's <c>End</c>. So this replaces one line below the prefix and leaves
+    /// <see cref="bufferPrefix"/> alone. A <c>.bas</c> or <c>.cls</c> keeps its <c>VB_Name</c> in the
+    /// header, where <see cref="RefreshPrefix"/> puts it; its body opens with no attribute run, so this finds
+    /// nothing there and does nothing.
+    /// </para>
+    /// <para>
+    /// <b>Recorded, and marked as the IDE's own</b>, for the reasons <see cref="RefreshPrefix"/> gives: an
+    /// unrecorded change above an undo entry makes that entry replay against the wrong text, and the mark is
+    /// what stops Ctrl+Z in this window undoing a rename the developer made in the Properties window.
+    /// </para>
+    /// </remarks>
+    internal void RetargetVbName(string name)
+    {
+        var body = BufferBody;
+        if (FormCodeText.VbNameLine(body) is not var (start, length))
+            return;
+        var retargeted = FormCodeText.RetargetVbName(body, name);
+        if (ReferenceEquals(retargeted, body))
+            return;
+
+        var line = FormCodeText.VbNameAttribute(name);
+        var offset = bufferPrefix.Length + start;
+        var caret = CaretOffset;
+
+        Document.UndoStack.StartUndoGroup();
+        try
+        {
+            Document.UndoStack.Push(new NameWrite(this));
+            Document.Replace(offset, length, line);
+        }
+        finally
+        {
+            Document.UndoStack.EndUndoGroup();
+        }
+
+        if (caret >= offset + length)
+            CaretOffset = Math.Clamp(caret + line.Length - length, 0, Document.TextLength);
+        else if (caret > offset)
+            CaretOffset = Math.Min(caret, offset + line.Length);
+    }
+
+    /// <summary>
+    /// Puts back everything the IDE owns in this buffer: the header, and the name the code section gives.
+    /// </summary>
+    private void ReassertOwnedText()
+    {
+        RefreshPrefix(ModelHeader);
+        if (identity is { Name: { Length: > 0 } name })
+            RetargetVbName(name);
+    }
+
+    /// <summary>
     /// Undo in the code window: undoes the developer's last code edit, and never a designer change.
     /// </summary>
     /// <param name="popOne">
@@ -468,8 +544,9 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// developer made here.</b> The capability is explicit: a committed designer change shall not be
     /// undoable from the code window, shall not block the code window's undo of an earlier code edit, and
     /// shall not make that earlier edit undo the wrong text. Those three pull against each other, and this
-    /// loop is what satisfies all of them: pop header writes until an ordinary edit comes off with them,
-    /// then put the current header back.
+    /// loop is what satisfies all of them: pop the IDE's own writes until an ordinary edit comes off with
+    /// them, then put back what the IDE owns — the current header, and since task 3.5 the <c>VB_Name</c> a
+    /// rename wrote below it.
     ///
     /// <para>
     /// <b>Why the header goes back rather than the write simply being skipped.</b> An undo entry holds an
@@ -493,20 +570,23 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// </remarks>
     internal void UndoRequested(Action popOne)
     {
-        var undidHeaderWrite = false;
+        var undidOwnerWrite = false;
         while (Document.UndoStack.CanUndo)
         {
-            headerWriteWasUndone = false;
+            ownerWriteWasUndone = false;
             popOne();
-            if (!headerWriteWasUndone)
+            if (!ownerWriteWasUndone)
                 break;
-            undidHeaderWrite = true;
+            undidOwnerWrite = true;
         }
 
         // Only when one was actually undone. Doing it unconditionally would push an entry and clear the
-        // redo stack on every ordinary undo, which is the one thing an undo must not do.
-        if (undidHeaderWrite)
-            RefreshPrefix(ModelHeader);
+        // redo stack on every ordinary undo, which is the one thing an undo must not do. Both halves go back,
+        // not only the header: a rename writes the VB_Name line in the same entry, and putting back the
+        // header alone would leave the code section naming the form as it was before the rename, with
+        // nothing afterwards that would ever repair it.
+        if (undidOwnerWrite)
+            ReassertOwnedText();
     }
 
     public CodeEditorViewModel Initialize(FormDefinition formElement)

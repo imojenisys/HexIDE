@@ -43,6 +43,17 @@ public interface IHeaderRefresher
     void ApplyHeader(FormDefinition form, string header);
 
     /// <summary>
+    /// Makes the <c>Attribute VB_Name</c> the document carries say the document's current name — on the
+    /// model, and in an open buffer — when it carries one and it says something else.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="LayoutChanged"/> calls this, because a form's rename is a change to its root control and
+    /// reaches the IDE as a designer commit. A module has no rename gesture at all yet
+    /// (hexide-io/HexIDE#493); when it gets one, this is what it calls.
+    /// </remarks>
+    void NameChanged(DocumentIdentity document);
+
+    /// <summary>
     /// Moves a document's breakpoints and bookmarks by the change in the header's line count. Marks inside
     /// the old header stay where they are.
     /// </summary>

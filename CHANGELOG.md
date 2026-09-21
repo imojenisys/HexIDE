@@ -24,6 +24,12 @@ there isn't one yet. Anything may change between 0.x releases.
 - **Reloading a file changed outside the IDE discards that window's undo history**, as reloading it into
   the form designer already did. The history described a document that is no longer there.
 
+### Fixed
+
+- **Renaming a form now renames it in its file's `Attribute VB_Name` line as well as its `Begin` line.**
+  Previously a renamed form was saved naming two different forms, one in each. The code window follows
+  the rename as it happens, and Ctrl+Z there does not undo it.
+
 ## [0.1.0] — unreleased
 
 The first versioned build. Before this, nothing in the tree carried a version at all, so a shipped

@@ -88,7 +88,23 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
             return;
         }
 
-        ApplyHeader(form, new FormSerializer().SerializeDesignerText(form, fileName));
+        var header = new FormSerializer().SerializeDesignerText(form, fileName);
+
+        // One undo entry per commit, however many of the IDE's writes it takes. A rename moves both the
+        // designer block's Begin line and the code section's VB_Name, and two entries would let any undo that
+        // does not come through UndoRequested (#513 lists the routes that still do not) separate the two
+        // halves of one gesture. AvaloniaEdit folds a nested group into the outer one.
+        var undo = EditorFor(identity)?.Document.UndoStack;
+        undo?.StartUndoGroup();
+        try
+        {
+            ApplyHeader(form, header);
+            NameChanged(identity);
+        }
+        finally
+        {
+            undo?.EndUndoGroup();
+        }
     }
 
     /// <summary>
@@ -120,6 +136,60 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
         // for a form that no longer looks like it, permanently: the next render equals what is recorded, so
         // nothing would ever repair it. RefreshPrefix is a no-op when the two already agree.
         EditorFor(identity)?.RefreshPrefix(header);
+    }
+
+    /// <summary>
+    /// Makes the <c>Attribute VB_Name</c> the document carries say the document's current name, on the model
+    /// and in an open buffer (task 3.5; hexide-io/HexIDE#473).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Where the line lives depends on the kind, and so does the write.</b> A <c>.bas</c> or <c>.cls</c>
+    /// keeps it in the header, which the model already renders from the live name, so only an open buffer
+    /// can be stale and re-heading it is the whole job. A form keeps it in <c>Code</c>, and a UserControl or
+    /// PropertyPage in its module's <c>Code</c>, because their code section opens with the attribute run —
+    /// so for those the model's text is rewritten too, which is what makes a closed document's next save say
+    /// the right thing.
+    /// </para>
+    /// <para>
+    /// <b>It follows the document's name, which for a UserControl is its module's.</b> Renaming the root of a
+    /// UserControl in its designer renames the <c>Begin</c> line and nothing else, because the module's name
+    /// is a separate field nothing connects to it — the rename itself is missing (hexide-io/HexIDE#493), and
+    /// following the root here would make the file disagree with the name the project knows it by instead.
+    /// </para>
+    /// <para>
+    /// <b>No mark moves.</b> One line is replaced by one line, so no line number below it changes.
+    /// </para>
+    /// </remarks>
+    public void NameChanged(DocumentIdentity document)
+    {
+        var name = document.Name;
+        if (name.Length == 0)
+            return;
+
+        if (document.Module is { } module)
+        {
+            if (!ModuleFileFormat.HandlesHeader(module.Kind))
+                RetargetCode(module.Code, name, module.UpdateCode);
+        }
+        else if (document.Form is { } form)
+        {
+            RetargetCode(form.Code, name, form.UpdateCode);
+        }
+
+        if (EditorFor(document) is { } editor)
+        {
+            if (document.Module is { } headed && ModuleFileFormat.HandlesHeader(headed.Kind))
+                editor.RefreshPrefix(FormCodeText.Prefix(headed));
+            editor.RetargetVbName(name);
+        }
+    }
+
+    private static void RetargetCode(string code, string name, Action<string> update)
+    {
+        var retargeted = FormCodeText.RetargetVbName(code, name);
+        if (!ReferenceEquals(retargeted, code))
+            update(retargeted);
     }
 
     /// <summary>

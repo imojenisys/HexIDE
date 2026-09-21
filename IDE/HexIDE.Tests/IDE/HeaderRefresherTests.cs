@@ -389,6 +389,244 @@ public class HeaderRefresherTests
         editor.Dispose();
     }
 
+    // -- VB_Name follows a rename (task 3.5, #473) ---------------------------------------------------
+
+    private const string FiveAttributes = """
+        VERSION 5.00
+        Begin VB.Form Form1
+           Caption         =   "Orders"
+        End
+        Attribute VB_Name = "Form1"
+        Attribute VB_GlobalNameSpace = False
+        Attribute VB_Creatable = False
+        Attribute VB_PredeclaredId = True
+        Attribute VB_Exposed = False
+        Option Explicit
+        """;
+
+    private static void Rename(FormDefinition form, string name) =>
+        form.Components.Single(c => c.BaseClass.VBTypeName == "VB.Form")
+            .SetProperty(VBProperties.NameProperty, name);
+
+    [Fact]
+    public void ARenamedFormsFileNamesOneFormNotTwo()
+    {
+        // #473, as filed: the Begin line followed a rename and the attribute did not, so the file HexIDE
+        // wrote named two different forms. Asserted on what a save writes, because that is where it bit.
+        var form = Deserialize(FiveAttributes);
+        Rename(form, "frmOrders");
+
+        CreateSut().LayoutChanged(form);
+
+        var (frm, _) = new FormSerializer().Serialize(form, "Form1.frm");
+        frm.Should().Contain("Begin VB.Form frmOrders");
+        frm.Should().Contain("Attribute VB_Name = \"frmOrders\"");
+        frm.Should().NotContain("\"Form1\"");
+    }
+
+    [Fact]
+    public void OnlyTheNameMovesAndTheOtherFourAttributesAreLeftAsTheyWere()
+    {
+        // VB_PredeclaredId and VB_Exposed are how VB6 encodes what a form IS to other code. A retarget that
+        // regenerated the block, rather than rewriting one line of it, would reset them.
+        var form = Deserialize(FiveAttributes);
+        var asRead = form.Code;
+        Rename(form, "frmOrders");
+
+        CreateSut().LayoutChanged(form);
+
+        form.Code.Should().Be(asRead.Replace("\"Form1\"", "\"frmOrders\""));
+    }
+
+    [Fact]
+    public void AFormHexIdeCreatedGainsNoAttributeBlock()
+    {
+        // The fidelity gap the task records rather than fixes: VB6 writes five attributes for a form it
+        // creates, HexIDE writes none, and inventing them is not this routine's decision to take.
+        var form = new FormDefinition(Project, FormComponentClass.Instance, "Form1");
+        var asCreated = form.Code;
+        Rename(form, "frmOrders");
+
+        CreateSut().LayoutChanged(form);
+
+        form.Code.Should().Be(asCreated);
+    }
+
+    [Fact]
+    public void AFormThatCannotBeSavedFaithfullyKeepsTheNameItWasReadWith()
+    {
+        // The same gate as the header: a form HexIDE cannot reproduce is not edited by it either. Its save
+        // is refused, so what matters is that the code window goes on showing the file that refusal protects.
+        var form = Deserialize(FiveAttributes);
+        var asRead = form.Code;
+        form.MarkUnfaithfulToSave(UnfaithfulSaveCause.NestedContainers, "a menu was flattened");
+        Rename(form, "frmOrders");
+
+        CreateSut().LayoutChanged(form);
+
+        form.Code.Should().Be(asRead);
+    }
+
+    [Fact]
+    public void AUserControlFollowsItsModulesName()
+    {
+        // A .ctl keeps VB_Name in its module's Code, not in the designer half, and the document's name is the
+        // module's. The rename gesture itself does not exist yet (#493); this is what it will call.
+        var module = TestHelpers.CreateModule(name: "ucGauge", kind: ModuleKind.UserControl);
+        module.Code.Should().Be("Attribute VB_Name = \"ucGauge\"\r\n");
+        module.Name = "ucDial";
+
+        CreateSut().NameChanged(DocumentIdentity.For(module));
+
+        module.Code.Should().Be("Attribute VB_Name = \"ucDial\"\r\n");
+    }
+
+    [AvaloniaFact]
+    public void AnOpenWindowFollowsTooAndTheBufferIsStillTheFile()
+    {
+        // The invariant the phase rests on, after a rename: prefix + code is what a save would write. The
+        // header half is the refresh 3.3 built; the VB_Name half is below the prefix and is this task's.
+        var form = Deserialize(FiveAttributes);
+        var editor = NewCodeEditor().Initialize(form);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+        Rename(form, "frmOrders");
+
+        sut.LayoutChanged(form);
+
+        editor.BufferBody.Should().Be(form.Code);
+        editor.BufferBody.Should().StartWith("Attribute VB_Name = \"frmOrders\"");
+        editor.Document.Text.Should().Be(form.DesignerText + form.Code);
+        editor.Dispose();
+    }
+
+    [AvaloniaFact]
+    public void AStandardModulesOpenWindowIsReHeadedOnARename()
+    {
+        // A .bas keeps VB_Name in its header, which the model already renders from the live name -- so the
+        // model is right the moment the name changes, and the open buffer is the only thing left stale.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var editor = NewCodeEditor().Initialize(module);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+        module.Name = "Utilities";
+        editor.Document.Text.Should().StartWith("Attribute VB_Name = \"Module1\"", "nothing has told the window");
+
+        sut.NameChanged(DocumentIdentity.For(module));
+
+        editor.Document.Text.Should().Be("Attribute VB_Name = \"Utilities\"\r\nOption Explicit\r\n");
+        editor.BufferBody.Should().Be("Option Explicit\r\n");
+        editor.Dispose();
+    }
+
+    [AvaloniaFact]
+    public void ACommitThatRenamesNothingPushesNothing()
+    {
+        // LayoutChanged fires on every committed nudge of a control. An undo entry per nudge would be one
+        // Ctrl+Z the developer did not earn, and pushing any entry clears their redo stack.
+        var form = Deserialize(FiveAttributes);
+        var editor = NewCodeEditor().Initialize(form);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+        sut.LayoutChanged(form);                  // settle the header on the serializer's own formatting
+        editor.Document.UndoStack.ClearAll();
+
+        sut.LayoutChanged(form);
+
+        editor.Document.UndoStack.CanUndo.Should().BeFalse();
+    }
+
+    [AvaloniaFact]
+    public void ARenameIsOneUndoEntryWhateverUndoesIt()
+    {
+        // The Begin line and the VB_Name line are one gesture. Popped by a route that does not come through
+        // the code window's own Undo (#513), two entries would separate them and leave the buffer naming the
+        // form one way in its header and another in its code.
+        var form = Deserialize(FiveAttributes);
+        var editor = NewCodeEditor().Initialize(form);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+        sut.LayoutChanged(form);
+        editor.Document.UndoStack.ClearAll();
+        var beforeRename = editor.Document.Text;
+        Rename(form, "frmOrders");
+        sut.LayoutChanged(form);
+
+        editor.Document.UndoStack.Undo();
+
+        editor.Document.Text.Should().Be(beforeRename, "both halves go back together");
+        editor.Document.UndoStack.CanUndo.Should().BeFalse("the rename was one entry, not two");
+    }
+
+    [AvaloniaFact]
+    public void UndoInTheCodeWindowAfterARenameUndoesTheEditAndKeepsTheNewName()
+    {
+        // 3.8's policy, now that a commit writes below the prefix as well as in it. The code window's Undo
+        // pops the IDE's own writes to reach the developer's edit and then puts back what the IDE owns --
+        // which has to include the VB_Name line, or that line would be left naming the old form with nothing
+        // afterwards that would ever repair it.
+        var form = Deserialize(FiveAttributes);
+        var editor = NewCodeEditor().Initialize(form);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+        var asOpened = editor.BufferBody;
+
+        editor.Document.Insert(editor.Document.TextLength, "\r\nDim x As Long");
+        Rename(form, "frmOrders");
+        sut.LayoutChanged(form);
+
+        editor.UndoRequested(() => editor.Document.UndoStack.Undo());
+
+        editor.BufferBody.Should().Be(asOpened.Replace("\"Form1\"", "\"frmOrders\""),
+            "the typed line is gone and the code still names the form as it now is");
+        editor.Document.Text.Should().Be(form.DesignerText + editor.BufferBody);
+        form.DesignerText.Should().Contain("Begin VB.Form frmOrders");
+        editor.Dispose();
+    }
+
+    [AvaloniaFact]
+    public void AVbNameWriteWithNoHeaderWriteBesideItIsStillTheIdesOwn()
+    {
+        // A form's rename always moves its Begin line too, so a header write rides in the same entry and
+        // would mark it on its own. A UserControl's does not: its name is its module's, its designer half is
+        // untouched, and the VB_Name line is the ONLY write. Unmarked, the code window's Undo would take it
+        // for the developer's edit, undo the rename and stop there, leaving the typed line in place.
+        var module = TestHelpers.CreateModule(name: "ucGauge", kind: ModuleKind.UserControl);
+        module.UpdateCode("Attribute VB_Name = \"ucGauge\"\r\nOption Explicit\r\n");
+        var editor = NewCodeEditor().Initialize(module);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+
+        editor.Document.Insert(editor.Document.TextLength, "Dim x As Long\r\n");
+        module.Name = "ucDial";
+        sut.NameChanged(DocumentIdentity.For(module));
+
+        editor.UndoRequested(() => editor.Document.UndoStack.Undo());
+
+        editor.BufferBody.Should().Be("Attribute VB_Name = \"ucDial\"\r\nOption Explicit\r\n");
+        editor.Dispose();
+    }
+
+    [AvaloniaFact]
+    public void TheCaretBelowTheRenamedLineStaysOnTheTextItWasOn()
+    {
+        // The view-model's own caret is moved with the text, because nothing pushes the control's back while
+        // the replace is in flight and a document with no view attached has only this copy.
+        var module = TestHelpers.CreateModule(name: "ucGauge", kind: ModuleKind.UserControl);
+        module.UpdateCode("Attribute VB_Name = \"ucGauge\"\r\nOption Explicit\r\n");
+        var editor = NewCodeEditor().Initialize(module);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
+        editor.CaretOffset = editor.Document.Text.IndexOf("Explicit", StringComparison.Ordinal);
+
+        module.Name = "ucDialLonger";
+        sut.NameChanged(DocumentIdentity.For(module));
+
+        editor.Document.Text[editor.CaretOffset..].Should().StartWith("Explicit");
+        editor.Dispose();
+    }
+
     /// <summary>A code editor with every collaborator stubbed: only the buffer is under test here.</summary>
     private static CodeEditorViewModel NewCodeEditor()
     {
