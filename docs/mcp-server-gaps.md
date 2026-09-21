@@ -955,30 +955,34 @@ way the user's own menu does". (2) A launch flag that creates a project without 
 can reach the state the product will normally be in once #500 lands. Until then, any verification of
 `untitled:` naming through this surface is verifying something the surface itself prevents.
 
-## `invoke_menu_item` cannot resolve a built-in submenu item until its parent has been expanded
+## `invoke_menu_item` cannot reach an item whose access key is not its first letter
 
 **Symptom.** `invoke_menu_item(path: "Project/Add Module")` answers
-`{"success":false,"error":"Menu item 'Add Module' not found"}`. The path is correct, the header matches its
-documented normalisation, and the item is plainly there — `dump_visual_tree` after an `expand` lists it as
-`MenuItem[Add Module]` with an `invoke` provider, and invoking it that way works.
+`{"success":false,"error":"Menu item 'Add Module' not found"}`. The item is plainly there:
+`dump_visual_tree` after an `expand` lists it as `MenuItem[Add Module]` with an `invoke` provider, and
+invoking it that way works. The top-level `Format` menu fails the same way, so `Format/Align/Lefts` never
+gets past its first segment.
 
-**Cause.** Avalonia does not realise a `MenuItem`'s children until the parent opens, so the resolver walks a
-menu whose submenus are all empty. A dump of the menu bar before expanding shows every top-level item with
-`"children":[]`, which is the same evidence.
+**Cause.** The resolver matches each segment against the item's raw header, and strips only a **leading**
+access-key underscore. `Add _Module` and `F_ormat` carry theirs mid-word, so no spelling a caller would type
+matches them. The resolver walks the menu's logical `Items`, which are complete whether or not the menu has
+been opened.
 
-**Why the reply misleads.** The tool's description already warns that built-in items using routed commands
-"may not execute correctly via this tool", so the natural reading of a failure is *that*: the item was found
-and the command would not run. It was not found at all, and for an unrelated reason that a caller cannot
-distinguish from a wrong path, a renamed item, or a disabled one. This is the `list_lsp_messages` shape
-again — one message covering several causes.
+**This entry first recorded the wrong cause**, and it is worth keeping as the trap it was: it blamed
+Avalonia for not realising a closed menu's children, on the evidence that a dump of the closed menu bar
+shows every item with `"children":[]`. That is true of the *visual* tree `dump_visual_tree` walks and
+irrelevant to the logical tree the resolver walks. Corrected by the session working hexide-io/HexIDE#501.
+
+**Why the reply misleads.** The tool's description warns that built-in items using routed commands "may not
+execute correctly", so the natural reading of a failure is that the item was found and its command would
+not run. It was never found, and "not found" cannot tell a caller a wrong path from a spelling the matcher
+does not normalise.
 
 **Workaround.** The generic trio: `dump_visual_tree`, `interact` with `expand` on the top-level item,
-`dump_visual_tree` scoped to it, then `interact` with `invoke`. Four calls where one was offered.
+`dump_visual_tree` scoped to it, then `interact` with `invoke`.
 
-**Suggested fix.** Expand the parent chain as part of resolution — the resolver already has the path, and
-opening a menu is exactly what a user does before clicking an item in it. Failing that, the error must say
-that the parent was found and its children were not realised, and name the `expand` route; "not found" for a
-path whose parent resolved is the ambiguity this file exists to remove.
+**Fix.** hexide-io/HexIDE#519 (draft, #501) strips the access-key underscore wherever it falls, and makes a
+miss name the menu it looked in and every item that menu holds. Archive this entry when it merges.
 
 ## `add_control` on a document with no file opens a native picker and stops the whole server
 
