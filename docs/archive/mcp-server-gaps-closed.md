@@ -838,7 +838,7 @@ does not normalise.
 
 ---
 
-## Insert File opened a native picker that `answer_next_file_dialog` could not answer — **CLOSED** (#273 task 3.9, 2026-09-22)
+## Insert File opened a native picker that `answer_next_file_dialog` could not answer — **CLOSED** (#532, 2026-09-22)
 
 > **Fixed** by moving Insert File into `CodeEditorViewModel.InsertFileAsync`, which asks
 > `IWindowManager.OpenFilePickerAsync`: the picker every other file dialog in the IDE uses, and the one an

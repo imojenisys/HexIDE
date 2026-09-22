@@ -933,7 +933,7 @@
   which stays valid because Replace All works backwards. (3) **Insert File was unreachable by
   automation:** it called the storage provider directly, the only picker in the IDE that did, so
   `answer_next_file_dialog` never answered it and an automated run left a native dialog waiting. Moved to
-  the view model and routed through the window manager (recorded in the closed-gaps archive). Its
+  the view model and routed through the window manager (#532, and the closed-gaps archive). Its
   hard-coded "Open Text File" title is now a key, translated in every pack from that pack's own Insert
   File menu item.
   — **Verified live**, on a copy of `demo/bill-of-fare`. `set_file_content` with a changed attribute block
@@ -961,6 +961,10 @@
   is the prompt's own "No" arm: it reverts by restoring a whole-buffer snapshot taken when the prompt opened
   (`CodeEditorView.axaml.cs`), without touching `bufferPrefix` — so a designer commit or a save landing while
   the prompt is open makes answering No reproduce exactly the header/prefix split 3.8 closed everywhere else.
+  — **One more, found by reading 3.9's guards (not yet measured):** both call sites raise the prompt before
+  anything decides whether the edit will land. `OnEditorKeyDown` calls `MaybeStartResetPrompt` ahead of the
+  Enter guard, and `OnTextEntering` ahead of the read-only section provider 3.7 installs. So while a project
+  runs, a key in the header that writes nothing still asks the developer to reset the project for it.
 - [ ] 3.14 Folds: the header fold is merged into every fold application, including an empty or absent server
   answer, with the merged list sorted by start offset (the manager throws otherwise) and zero-length folds
   discarded (it skips them silently). It sets its own folded state rather than relying on the library's
