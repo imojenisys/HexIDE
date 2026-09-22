@@ -1037,6 +1037,9 @@
   `ComponentNaming.RefusalFor` check and a `catch (DataValidationException)`; this branch adds
   `NotifyRootPropertiesChanged` and the `FormLayoutChangedEvent` publish after the set. Keep both: the check
   and try around the set, the notification after it, and a refused rename returning before the notification.
+  **And:** #666 (hexide-io/HexIDE#664) adds an edit counter to `LspDocumentSession` (`edits`,
+  `editsWhenLastPublished`, `AwaitingDiagnostics`) and `CodeEditorViewModel.AwaitingDiagnostics`; additive, keep
+  both sides where this branch's session hunks sit beside it.
 - [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so
   this task is narrower than it reads**: the prompt is raised from `OnTextEntering` and `OnEditorKeyDown`
   only, never from a document event, so a header refresh does not reach it today. What DOES need this task
