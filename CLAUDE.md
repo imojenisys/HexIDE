@@ -259,7 +259,7 @@ HexIDE is a visual tool used by humans. Visual verification is not optional.
 - Treat every UI feature as incomplete until verified against the running IDE: `take_snapshot` for rendering/layout, and `dump_visual_tree` / `inspect_element` for **structured** assertions (a control exists, is enabled, has the expected value / selection / toggle state / providers) — which often replace a pixel snapshot.
 - Discover and drive UI with the generic trio — `dump_visual_tree` to find a control, `interact` to navigate and act (select a page, click a button, toggle, type, open a dialog), `inspect_element` to confirm — plus `add_control` / `activate_document_tab` / `view_designer` for designer/tab setup. Set up required state autonomously; never ask the user to do something a tool can do.
 - Build a **new** dedicated MCP tool only when the generic trio genuinely can't reach a surface **and** the tool-authoring policy in `openspec/specs/hexide-mcp-server/spec.md` justifies it (reads a model the tree can't see, persists/transacts, or beats path addressing). Otherwise, `interact` is the tool.
-- **Record every MCP dev-server shortcoming you hit** — a surface it can't observe (e.g. a runtime modal layered over a running form), a property it can't set (e.g. an enum/colour), a lifecycle gotcha (e.g. tools dropping on `shutdown_ide`) — in [`docs/mcp-server-gaps.md`](docs/mcp-server-gaps.md), with symptom → workaround → suggested fix, so the tooling is improved deliberately instead of re-worked around each session.
+- **Record every MCP dev-server shortcoming you hit** — a surface it can't observe (e.g. a runtime modal layered over a running form), a property it can't set (e.g. an enum/colour), a lifecycle gotcha (e.g. tools dropping on `shutdown_ide`) — in [`docs/mcp-server-gaps.md`](docs/mcp-server-gaps.md), with symptom → workaround → suggested fix, so the tooling is improved deliberately instead of re-worked around each session. **State the exact call it failed with, arguments included** — a gap concluded from `dump_visual_tree`'s default `interactiveOnly: true` once recorded readable content as unreadable, and stood for weeks because nobody could tell the defaults had been used (#362).
 
 **MUST NOT:**
 - Assume AXAML renders as expected — Avalonia has rendering quirks invisible to tests
@@ -294,7 +294,8 @@ So, for any tool added here:
   default value is still *required* on the wire, so the simplest question can cost five arguments while
   the C# reads as optional.
 - **Enumerate the vocabulary a reply uses.** A `kind` of `Unconsumed` means nothing to somebody who was
-  never told the set.
+  never told the set. Where the reply renders an enum, put `[DescribesEnum(typeof(T))]` on the tool:
+  `ToolDescriptionEnumTests` then fails the build if the description leaves a member out (#400).
 - **Explain anything that looks like a defect and is not.** Sequence gaps beside a field called
   `framesDropped` read as data loss.
 - **A reply that mutates reports the new state**, and reports it even when that state is empty.
@@ -350,7 +351,7 @@ HexIDE exposes an embedded MCP server (opt-in via `--server-port <port>`). **The
 | `get_lsp_capture_state()` | What is being recorded: every known connection, whether its bodies are kept, and what it has discarded. Read-only — ask this rather than arming something to find out what is armed. |
 | `answer_next_file_dialog(path?)` | Pre-answers the next file dialog, so a Save As / Open / Export flow can be driven end to end. A native picker is outside the control tree and no other tool can reach it. Omit `path` to answer as cancelled. Single-shot: arm it immediately before the action.  |
 | `clear_file_dialog_answers()` | Discards armed answers, and reports how many there were — which is how you find out a step you thought opened a picker did not. |
-| `interact(target, action, value?)` | Drive a control. Provider actions: `invoke`/`select`/`set_value`/`toggle`/`expand`/`collapse`. Reflection actions (DataContext VM): `invoke_command`/`set_property`. `select` also reaches a **DataGrid row**, whose own peer offers no provider — clicking a row is how every master-detail window here is used. The generic substitute for per-interaction tools. |
+| `interact(target, action, value?)` | Drive a control. Provider actions: `invoke`/`select`/`double_click`/`set_value`/`set_range_value`/`toggle`/`expand`/`collapse`/`scroll`. Reflection actions (DataContext VM): `invoke_command`/`set_property`. `select` also reaches a **DataGrid row**, whose own peer offers no provider — clicking a row is how every master-detail window here is used. The generic substitute for per-interaction tools. |
 
 **CLI flags** (both `--` and `/` prefixes accepted, aligning with VB6 convention):
 - `--help` — print usage and exit without starting the IDE; also `-h`, `/?`, `-?`
@@ -397,7 +398,9 @@ When you need to rebuild while HexIDE is running, always follow this cycle — d
 1. **Shut down**: call `shutdown_ide` MCP tool (clean shutdown, releases all file locks)
 2. **Build**: `cd IDE && dotnet build HexIDE.Desktop/HexIDE.Desktop.csproj -c Debug`
 3. **Relaunch**: `Start-Process "$PWD\IDE\HexIDE.Desktop\bin\Debug\net10.0\HexIDE.Desktop.exe" "--server-port 5123 --newproject"`
-4. **Wait for ready**: poll `http://localhost:5123/health` until HTTP 200 (use a loop with 1 s sleep, up to 30 s)
+4. **Wait for ready**: poll `http://localhost:5123/health` until HTTP 200 **whose `pid` is the process you just
+   launched** (`Start-Process -PassThru` gives you it; use a loop with 1 s sleep, up to 30 s). A 200 alone is not
+   enough: if another HexIDE still holds the port, it answers, and yours exits with code 3 (#53).
 5. **Continue**: MCP tools are immediately usable once `/health` returns 200
 
 If `shutdown_ide` is unavailable (MCP disconnected), use PowerShell: `Stop-Process -Name HexIDE.Desktop -ErrorAction SilentlyContinue` then proceed from step 2.

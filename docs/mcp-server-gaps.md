@@ -12,6 +12,13 @@ because what each one records is a *measurement*, and that is the part which sto
 rediscovered as a new one. Retiring them is also what lets this document's length mean something: it is
 a count of what still bites.
 
+**Record the exact call an entry failed with, arguments included.** A conclusion drawn from a call with
+unstated arguments cannot be checked by the next reader, and it can be wrong without anyone noticing: one
+entry here concluded that a document tab's content was "neither drivable nor readable" from a
+`dump_visual_tree` run with its default `interactiveOnly: true`, which filters out plain text. With
+`interactiveOnly: false` every field was there (#362). Write `dump_visual_tree(root: …, interactiveOnly: false,
+maxDepth: 14)`, not "`dump_visual_tree` returns only the tab chrome".
+
 ---
 
 ## 2. `set_control_property` only handles string / number / bool
@@ -34,7 +41,7 @@ coercion the designer's property grid uses**, so every editable property type is
 
 **Symptom.** MCP tools are discovered at session start. Shutting the IDE down — which is **required** to run
 the `vb6.exe` oracle and for any rebuild that holds file locks on the runtime DLLs — disconnects the `hexide`
-server and **removes its 38 tools from the session**; `ToolSearch("mcp__hexide__…")` then returns "no matching
+server and **removes every one of its tools from the session**; `ToolSearch("mcp__hexide__…")` then returns "no matching
 deferred tools." Relaunching the IDE (health 200) does **not** re-register them mid-session; it took a user
 **session resume** to bring them back.
 
@@ -85,7 +92,21 @@ without a full resume.
 
 ---
 
-## 5. Can't select / delete / reorder a designer control via MCP
+## 5. A designer control is reported under its view-model's type name, not its own (narrowed 2026-09-22)
+
+**Was:** *Can't select / delete / reorder a designer control via MCP.* Measured again for #362, and most of
+it no longer holds. With default arguments, `dump_visual_tree(root: ".../Pane[#0]")` lists each canvas
+control as a `ListItem` (`ControlItem`) with `selectionItem`. `interact select` on it selected it,
+`press_key(key: "Delete")` on it deleted it (`get_form_controls` confirmed `Command0` gone; the Edit menu
+then offered *Undo Delete: Command0*), and `invoke_designer_undo` / `invoke_designer_redo` both exist. The
+`FormEditor.BringToFront` / `SendToBack` toolbar buttons are addressable by `automationId`; reordering was
+not driven in this pass.
+
+**What remains.** The node's name is `HexIDE.VisualDesigner.ComponentInstanceViewModel`, the view model's
+`ToString()`, so the path is `ListItem[HexIDE.VisualDesigner.ComponentInstanceViewModel]` for every
+control. With more than one control on a form, a caller cannot tell from the tree which node is
+`Command1`; it has to fall back on position or index. Filed as #526. The rest of this entry is the original record.
+
 
 **Symptom.** A control placed with `add_control` is created and auto-selected, but there is no way to (a) select a
 *different, existing* control, (b) delete a control, or (c) exercise undo/redo of a designer edit through MCP. The
@@ -107,27 +128,6 @@ the designer's selection/delete/undo aren't exposed as `ICommand`s reachable via
 existing `invoke_designer_undo` — plus surfacing each canvas control as a `dump_visual_tree` node with its name, so
 `interact` can click/rubber-band it. That would make the whole designer edit loop (add → select → move → delete →
 undo/redo) MCP-verifiable.
-
----
-
-## 6. Can't open a Debug-menu dialog (e.g. Add Watch) via MCP to snapshot it
-
-**Symptom.** Verifying debugger P6a's **Add Watch** dialog rendering couldn't be driven through MCP. The dialog opens
-from a Debug-menu item / keyboard shortcut backed by a *routed* command (AvaloniaLabs CommandManager), not a VM
-`ICommand`: `interact invoke_command AddWatchCommand` finds no such property on `MainViewViewModel`; `interact invoke`
-on `MenuItem[Debug]` reports "element does not support 'invoke'" (a top-level menu exposes no invoke provider until
-opened, and its children aren't in the tree until then). The Watches rows render as `TreeViewItem`s but don't
-advertise a `selectionItem` provider, so selecting a row to enable `EditWatchCommand` (which opens the same dialog)
-wasn't reachable either.
-
-**How it bit (debugger P6a).** The Watches *window* was fully verified live — it renders (columns + rows in
-`dump_visual_tree`, snapshot after Stop) and evaluates correctly while paused (`get_watches`: x=42, s=hello, x*2=84,
-arr expandable). Only the **Add Watch dialog's** live render couldn't be reached; deferred to P6b (where its
-Break-type radios become functional and it's exercised again), backed meanwhile by the dialog-VM unit tests.
-
-**Fix consideration.** Best: (a) surface a `selectionItem` provider on tool-window TreeView rows so `interact select`
-can set the selection (unlocking the row's context-menu commands like Edit/Delete); also useful: (b) make a top-level
-`MenuItem` invoke open the menu and realize its children, or (c) a thin MCP action to open a named debugger dialog.
 
 ---
 
@@ -373,36 +373,6 @@ calls, so expand again immediately before `select`.
 `itemsRealized: false` alongside it would be enough. A partial list that looks complete is worse than no
 list, because it supports a confident wrong conclusion; an empty array with a flag supports none.
 
-## A Project Explorer node that is not a form or module cannot be selected or opened
-
-**Symptom.** There is no way to drive "select this tree node, then open it" for any node kind beyond forms
-and modules. Verified against a related-document node (a file the project carries but does not compile):
-
-- `interact select` on its `TreeViewItem` → `element does not support 'select'`; the item exposes only a
-  `scroll` provider, no `selectionItem`.
-- `press_key` on the `TreeView` does nothing useful — `inspect_element` reports the tree as
-  `isKeyboardFocusable: false`, so arrow keys never reach a selection model.
-- `interact set_property` cannot help either: `ProjectToolViewModel.SelectedItem` is typed `Object`, and the
-  reflection fallback coerces a **string** to the property type. There is no way to name an existing
-  view-model instance as a value.
-- `open_file(name)` opens a form or module by name only, so it cannot reach anything else.
-
-**Consequence.** The double-click-to-open gesture is unverifiable through MCP for any new node kind. That
-matters because CLAUDE.md requires a UI feature be confirmed against the running IDE, and here the *tree*
-can be confirmed by snapshot while the *gesture* cannot be driven at all.
-
-**Workaround.** Split the verification and say which half was driven. The node's presence, icon and caption
-are visible in `take_snapshot` and assertable via `dump_visual_tree` (the node reports its
-`dataContextType`, so its type is checkable). The routing — selection to the right editor — and the editor's
-own behaviour are covered by tests instead. State plainly that the gesture itself was not driven.
-
-**Suggested fix.** Either surface a `selectionItem` provider on tree items so `interact select` works, or
-add a selection-by-path action (`interact select_node` taking the same `path` the tree dump already
-returns). The second is probably better: paths are already the addressing scheme everywhere else in this
-server, and it would work for every current and future node kind rather than needing a provider per
-control. A narrower `open_file` that accepts any project member would help too, but would not fix
-selection, which is what several context-menu commands key on.
-
 ## take_snapshot renders DIPs while Win32 coordinates are physical pixels
 
 **Symptom.** Driving a synthetic mouse click from a `boundingRect` needs a scale conversion that nothing in
@@ -423,55 +393,14 @@ the usual Windows 1.25/1.5 either — measure it.
 path (and `inspect_element` naming the space its `boundingRect` is in) would remove the guesswork; the
 values are already known to the server.
 
-## get_project_info omits every project member that is not a form or module
+## take_snapshot's default capture picks a modeless dialog (narrowed 2026-09-22)
 
-**Symptom.** `get_project_info` returns `forms` and `modules` only. A project carrying a related document (a
-file it does not compile) reports it nowhere, so after adding one the tool's output is byte-identical to
-before.
+**Was:** *take_snapshot of the IDE fails while a menu is open, and the default capture picks a modeless
+dialog.* The first half is closed. Measured for #362: `interact(target: ".../MenuItem[Edit]", action:
+"expand", window: "ide")` then `take_snapshot(window: "ide")` returned an image with the open Edit menu
+composed in. The second half, the Find dialog being preferred over the main window, was not re-tested and
+stays open. The rest of this entry is the original record.
 
-**Consequence.** The obvious check after an add — call `get_project_info` and see the new member — silently
-answers "nothing happened" for a whole member kind. It reads as a failed feature rather than a blind tool.
-
-**Workaround.** Confirm through the Project Explorer instead: `take_snapshot` shows the node and its icon,
-and `dump_visual_tree` reports the node's `dataContextType`, which distinguishes a related document from a
-module.
-
-**Suggested fix.** Add a `relatedDocuments` array, and prefer a shape that will not need this edit again the
-next time a member kind is added — a single `members` array of `{name, kind, path}` would cover forms,
-modules, related documents and whatever follows.
-
-## A scrolled tool window can only be verified down to its first screenful
-
-**Symptom.** The Language Servers window (#259) lists every attached server, one card each, so its content
-is routinely taller than the pane. `take_snapshot` captures what is painted, and there is no way to scroll
-the content, so every server below the fold is unverifiable. Hiding a bottom-docked tool via
-`set_tool_window_visible` buys one more card and no more.
-
-**What was tried.** `press_key` with `End`/`PageDown` needs a `target` path, and the only addressable node
-in that region is the `TabItem` — pressing a key there does not reach the `ScrollViewer` inside the tab's
-content. `dump_visual_tree` returns the tab chrome (the `TabItem`, its close `Button`, its header `Text`)
-but not the realised card content beneath it, so the values could not be asserted structurally either.
-Two shapes of the same limit: the content of a document tab is neither drivable nor readable.
-
-**Consequence.** Verification stopped at "the first two groups render correctly, with real servers and the
-right fields". The case that most wanted checking — a server further down the list whose row shows
-`Running` with nothing advertised — was covered by a view-model test instead. That is a reasonable place
-for it, but it means the *rendering* of the most diagnostic row in the window is unverified, which is
-exactly the substitution the visual-verification rule exists to prevent.
-
-**Workaround used.** Assert the projection in `LanguageServersToolViewModelTests` and snapshot only what
-fits. Note this is weaker than it sounds: a binding typo renders an empty row and passes every view-model
-test.
-
-**Suggested fix, cheapest first.** A `scroll` action on `interact` (`value` = `up`/`down`/`home`/`end`,
-resolving to the nearest ancestor `ScrollViewer`) would close it for every scrolled surface at once, not
-just this one — the Object Browser, the Translation Editor and the Locals tree have the same shape. Failing
-that, `take_snapshot` could accept an optional element `path` and capture that element at its full desired
-size rather than clipped to the viewport, which would also make long content diffable.
-
----
-
-## take_snapshot of the IDE fails while a menu is open, and the default capture picks a modeless dialog
 
 **Symptom.** Two halves of one gap, both hit while verifying that Edit ▸ Find greys out on a document with
 nothing to search (hexide-io/HexIDE#363). With the Edit menu expanded, `take_snapshot(window: "ide")`
@@ -772,40 +701,6 @@ and were callable in the same session that added them. That matches the measured
 mid-session relaunch rather than the standing advice, which is written for the case where the server was
 not attached when the session began. Verified by using both tools to drive the export they were built for,
 including the cancellation branch.
-
----
-
-## `list_lsp_messages` described a vocabulary it does not use, and promised data that was not there
-
-**Symptom.** The tool's own description enumerates what a `kind` can be, because a caller who reads
-`Unconsumed` in a reply has no other way to learn what it means. `ConversationEntryKind` has **nine**
-members; the description named **seven** of them, and got one of those seven wrong:
-
-- **`StandardError` and `Note` were absent entirely.** A caller shown `"kind": "StandardError"` had been
-  told the set and it was not in the set, which reads as a bug in the tool rather than a gap in the
-  sentence.
-- **`Lifecycle` was described as "a process starting, stopping, its standard error and exit code".** It
-  covers none of standard error and, at the time the sentence was written, no exit code either — nothing
-  in the tree read one. So the description was the only place in the repository claiming the record held
-  data it did not hold, and a caller who trusted it would have concluded the *server* was silent.
-- **`direction` said "Sent, Received, or Local for the entries that are not messages at all"**, which
-  puts every non-message under `Local`. A standard error line is `Received`, and the vocabulary's own
-  definition says so.
-
-**Why it survived.** The two omissions were kinds the enum had and the wire never produced — `StandardError`
-because nothing raised it, `Note` because the only path to it was an undecodable frame that the recorder
-never saw. A description drifts exactly where the code is unreachable, so the sentence agreed with the
-observable behaviour and disagreed with the design. Nothing checks a `[Description]` string against the
-enum it enumerates; the coverage guard that would have caught it is the one this repository applies to
-`docs/lsp-client.md` and to the language packs, and tool descriptions have no equivalent.
-
-**Fixed** by rewriting both sentences to the full set of nine — four for wire traffic, five that are not
-messages — and to what each kind actually carries. The
-underlying data gaps were closed in the same change: standard error and the exit code now reach the record
-(`ILspTransport.Notice`), and an undecodable frame is recorded as a `Note` with its bytes rather than
-dropped. Filed as hexide-io/HexIDE#400 for the general problem — a tool description that enumerates
-a C# enum should be guarded against it, the way the LSP coverage table is guarded against the
-specification.
 
 ---
 
