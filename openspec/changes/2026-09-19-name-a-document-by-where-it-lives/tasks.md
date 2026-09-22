@@ -1022,6 +1022,11 @@
   #530). The rename prompt's own title and label are hard-coded English (#537).
 - [ ] 3.11 Find and Replace search outside read-only regions only.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
+  **On merging main:** #570 (hexide-io/HexIDE#569) now refuses `set_breakpoints` / `set_bookmarks` lines
+  outside the document, counting lines in the open editor's buffer, else the model's code. On main those
+  agree; on this branch the buffer carries the header and the code does not, so the valid range depends on
+  whether the editor is open. Reconcile it with 3.16's numbering, and fold "a read-only line" into the same
+  refusal, which is this task.
 - [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so
   this task is narrower than it reads**: the prompt is raised from `OnTextEntering` and `OnEditorKeyDown`
   only, never from a document event, so a header refresh does not reach it today. What DOES need this task
