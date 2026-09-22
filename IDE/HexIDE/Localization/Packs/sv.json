@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Justera mot rutnät",
     "Str.Designer.Context.Properties": "Egenskaper",
     "Str.CodeEditor.ReadOnly.Banner": "Skrivskyddad — HexIDE kan ännu inte återge det här formuläret exakt, så det skulle ändras om det sparades. Dess kod kan inte redigeras förrän detta är åtgärdat.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Namnbytet genomfördes inte eftersom det skulle ändra filens huvud eller en medlems Attribute-rader, som IDE:n underhåller.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Infoga fil",
     "Str.CodeEditor.Context.Cut": "Klipp _ut",
     "Str.CodeEditor.Context.Copy": "_Kopiera",
     "Str.CodeEditor.Context.Paste": "Klistra _in",

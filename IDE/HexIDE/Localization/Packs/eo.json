@@ -257,6 +257,8 @@
     "Str.Designer.Context.AlignToGrid": "Ĝisrandigi al Krado",
     "Str.Designer.Context.Properties": "Ecoj",
     "Str.CodeEditor.ReadOnly.Banner": "Nur legebla — HexIDE ankoraŭ ne povas fidele reprodukti ĉi tiun formularon, do konservi ĝin ŝanĝus ĝin. Ĝia kodo ne estas redaktebla ĝis tio estos riparita.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "La alinomo ne estis farita, ĉar ĝi ŝanĝus la kapon de ĉi tiu dosiero aŭ la Attribute-liniojn de membro, kiujn la IDE prizorgas.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Enmeti Dosieron",
     "Str.CodeEditor.Context.Cut": "El_tondi",
     "Str.CodeEditor.Context.Copy": "_Kopii",
     "Str.CodeEditor.Context.Paste": "_Alglui",

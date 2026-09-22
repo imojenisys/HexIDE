@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Juster etter rutenett",
     "Str.Designer.Context.Properties": "Egenskaper",
     "Str.CodeEditor.ReadOnly.Banner": "Skrivebeskyttet — HexIDE kan ennå ikke gjengi dette skjemaet nøyaktig, så det ville bli endret om det ble lagret. Skjemaets kode kan ikke redigeres før dette er rettet.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Navnet ble ikke endret, fordi det ville endre filens header eller et medlems Attribute-linjer, som IDE-et vedlikeholder.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Sett inn fil",
     "Str.CodeEditor.Context.Cut": "Klipp u_t",
     "Str.CodeEditor.Context.Copy": "_Kopier",
     "Str.CodeEditor.Context.Paste": "_Lim inn",

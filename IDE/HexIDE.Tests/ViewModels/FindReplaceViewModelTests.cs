@@ -267,6 +267,55 @@ public class FindReplaceViewModelTests
         editor.Document.Text.Should().Be("Hello HELLO Hi");
     }
 
+    /// <summary>A form whose control's name appears in its designer block and in its code.</summary>
+    private const string FormWithCommand1 =
+        "VERSION 5.00\r\n" +
+        "Begin VB.Form Form1 \r\n" +
+        "   Begin VB.CommandButton Command1 \r\n" +
+        "      Caption         =   \"Command1\"\r\n" +
+        "   End\r\n" +
+        "End\r\n" +
+        "Attribute VB_Name = \"Form1\"\r\n" +
+        "Private Sub Command1_Click()\r\n" +
+        "    Command1.Enabled = False\r\n" +
+        "End Sub\r\n";
+
+    [AvaloniaFact]
+    public void ReplaceAll_ReplacingTextThatAlsoAppearsInTheHeader()
+    {
+        // The code-editor delta's scenario (#273 task 3.9): the code is changed and the designer block is
+        // not. Replacing the control's name in the header would rename it behind the designer's back.
+        var editor = CreateMockEditor(FormWithCommand1);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = "Command1";
+        sut.ReplaceText = "cmdOK";
+
+        sut.ReplaceAllCommand.Execute(null);
+
+        var codeStart = FormWithCommand1.IndexOf("Private Sub", StringComparison.Ordinal);
+        editor.Document.Text.Should().Be(
+            FormWithCommand1[..codeStart] + FormWithCommand1[codeStart..].Replace("Command1", "cmdOK"));
+        _windowManager.Received(1).MessageBox("2 replacement(s) made.", "Replace",
+            MessageBoxButtons.Ok, MessageBoxIcon.Information);
+    }
+
+    [AvaloniaFact]
+    public void ReplaceOne_WithAMatchSelectedInTheHeader_LeavesItAlone()
+    {
+        var editor = CreateMockEditor(FormWithCommand1);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = "Command1";
+        sut.ReplaceText = "cmdOK";
+        editor.SelectionStart = FormWithCommand1.IndexOf("Command1", StringComparison.Ordinal);
+        editor.SelectionLength = "Command1".Length;
+
+        sut.ReplaceOneCommand.Execute(null);
+
+        editor.Document.Text.Should().Be(FormWithCommand1);
+    }
+
     // --- Pattern matching (regex) ---
 
     [AvaloniaFact]

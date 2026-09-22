@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Justér efter gitter",
     "Str.Designer.Context.Properties": "Egenskaber",
     "Str.CodeEditor.ReadOnly.Banner": "Skrivebeskyttet — HexIDE kan endnu ikke gengive denne formular nøjagtigt, så den ville blive ændret, hvis den blev gemt. Formularens kode kan ikke redigeres, før det er rettet.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Omdøbningen blev ikke udført, fordi den ville ændre filens header eller et medlems Attribute-linjer, som IDE'et vedligeholder.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Indsæt fil",
     "Str.CodeEditor.Context.Cut": "K_lip",
     "Str.CodeEditor.Context.Copy": "_Kopiér",
     "Str.CodeEditor.Context.Paste": "_Sæt ind",

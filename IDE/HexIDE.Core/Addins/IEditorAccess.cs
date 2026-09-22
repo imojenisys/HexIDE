@@ -33,10 +33,27 @@ public interface IEditorAccess
     bool NavigateTo(string fileName, int line, int column, string? project);
 
     /// <summary>Replaces a document's buffer.</summary>
-    /// <inheritdoc cref="NavigateTo(string, int, int, string?)" path="/param|/returns"/>
+    /// <remarks>
+    /// The document's header — a form's designer block, a class's header, and the <c>Attribute</c> lines that
+    /// open the code — is the IDE's to change. The content may be the code alone, or the whole file with its
+    /// header unchanged; either way the document keeps its own header.
+    /// </remarks>
+    /// <inheritdoc cref="NavigateTo(string, int, int, string?)" path="/param"/>
+    /// <returns>
+    /// False when no such document was found, when the name was ambiguous, or when the content would have
+    /// changed the document's header, in which case nothing was written.
+    /// </returns>
     Task<bool> SetContent(string fileName, string content, string? project);
 
     /// <summary>Applies a set of edits to a document's buffer.</summary>
-    /// <inheritdoc cref="NavigateTo(string, int, int, string?)" path="/param|/returns"/>
+    /// <remarks>
+    /// All or nothing: if any edit would change the document's header or a member's <c>Attribute</c> lines,
+    /// none is applied.
+    /// </remarks>
+    /// <inheritdoc cref="NavigateTo(string, int, int, string?)" path="/param"/>
+    /// <returns>
+    /// False when no such document was found, when the name was ambiguous, or when an edit would have changed
+    /// the header or a member's attribute lines, in which case nothing was written.
+    /// </returns>
     Task<bool> ApplyEdits(string fileName, IReadOnlyList<AddinTextEdit> edits, string? project);
 }

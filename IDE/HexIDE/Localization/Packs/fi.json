@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Kohdista ruudukkoon",
     "Str.Designer.Context.Properties": "Ominaisuudet",
     "Str.CodeEditor.ReadOnly.Banner": "Vain luku — HexIDE ei vielä pysty toistamaan tätä lomaketta uskollisesti, joten tallentaminen muuttaisi sitä. Sen koodia ei voi muokata ennen kuin tämä on korjattu.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Uudelleennimeämistä ei tehty, koska se muuttaisi tämän tiedoston otsaketta tai jäsenen Attribute-rivejä, joita IDE ylläpitää.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Lisää tiedosto",
     "Str.CodeEditor.Context.Cut": "_Leikkaa",
     "Str.CodeEditor.Context.Copy": "_Kopioi",
     "Str.CodeEditor.Context.Paste": "L_iitä",

@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Alinhar à Grelha",
     "Str.Designer.Context.Properties": "Propriedades",
     "Str.CodeEditor.ReadOnly.Banner": "Só de leitura — o HexIDE ainda não consegue reproduzir este formulário fielmente, pelo que guardá-lo iria alterá-lo. O código do formulário não pode ser editado enquanto isso não for corrigido.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "O nome não foi mudado, porque isso alteraria o cabeçalho deste ficheiro ou as linhas Attribute de um membro, que são geridos pelo IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Inserir Ficheiro",
     "Str.CodeEditor.Context.Cut": "Cor_tar",
     "Str.CodeEditor.Context.Copy": "_Copiar",
     "Str.CodeEditor.Context.Paste": "Co_lar",

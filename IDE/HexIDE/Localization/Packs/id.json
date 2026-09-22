@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Sejajarkan ke Kisi",
     "Str.Designer.Context.Properties": "Properti",
     "Str.CodeEditor.ReadOnly.Banner": "Hanya-baca — HexIDE belum dapat menghasilkan kembali formulir ini secara persis, sehingga menyimpannya akan mengubahnya. Kodenya tidak dapat diedit sampai hal itu diperbaiki.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Penggantian nama tidak dilakukan karena akan mengubah header berkas ini atau baris Attribute milik suatu anggota, yang dikelola oleh IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Sisipkan Berkas",
     "Str.CodeEditor.Context.Cut": "Po_tong",
     "Str.CodeEditor.Context.Copy": "_Salin",
     "Str.CodeEditor.Context.Paste": "_Tempel",

@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Στοίχιση στο πλέγμα",
     "Str.Designer.Context.Properties": "Ιδιότητες",
     "Str.CodeEditor.ReadOnly.Banner": "Μόνο για ανάγνωση — το HexIDE δεν μπορεί ακόμη να αναπαραγάγει πιστά αυτή τη φόρμα, οπότε η αποθήκευσή της θα την άλλαζε. Δεν είναι δυνατή η επεξεργασία του κώδικά της μέχρι να διορθωθεί αυτό.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Η μετονομασία δεν εφαρμόστηκε, επειδή θα άλλαζε την κεφαλίδα αυτού του αρχείου ή τις γραμμές Attribute ενός μέλους, τις οποίες διαχειρίζεται το IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Εισαγωγή αρχείου",
     "Str.CodeEditor.Context.Cut": "Αποκο&πή",
     "Str.CodeEditor.Context.Copy": "&Αντιγραφή",
     "Str.CodeEditor.Context.Paste": "&Επικόλληση",

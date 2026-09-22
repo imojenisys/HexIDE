@@ -257,6 +257,8 @@
     "Str.Designer.Context.AlignToGrid": "Align to Grid",
     "Str.Designer.Context.Properties": "Properties",
     "Str.CodeEditor.ReadOnly.Banner": "Read-only — HexIDE cannot yet reproduce this form faithfully, so saving it would change it. Its code cannot be edited until that is fixed.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "The rename was not made because it would change this file's header or a member's Attribute lines, which the IDE maintains.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Insert File",
     "Str.CodeEditor.Context.Cut": "Cu_t",
     "Str.CodeEditor.Context.Copy": "_Copy",
     "Str.CodeEditor.Context.Paste": "_Paste",

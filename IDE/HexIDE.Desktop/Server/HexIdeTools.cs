@@ -104,8 +104,21 @@ internal sealed class HexIdeTools(IdeContext ctx)
         });
     }
 
+    /// <summary>
+    /// <see cref="HexIDE.Runtime.Serialization.GuardedContent"/> for a document with no code window open:
+    /// the same rule, applied to the model's text, with the body written back to the model.
+    /// </summary>
+    private static HexIDE.Runtime.Serialization.ContentReplacement ReplaceModelContent(
+        string current, string prefix, string incoming, Action<string> updateCode)
+    {
+        var result = HexIDE.Runtime.Serialization.GuardedContent.Replace(current, prefix.Length, incoming);
+        if (result.NewText is { } text)
+            updateCode(text[prefix.Length..]);
+        return result;
+    }
+
     [McpServerTool(Name = "set_file_content")]
-    [Description("Replaces the VB6 source code of a named form or module and saves to disk. Use get_project_info to list available names. Pass the CODE SECTION, not a whole file: a .frm's VERSION/Begin designer block is refused (it describes controls, which this tool does not apply), and a .bas/.cls header is stripped. A form's leading 'Attribute VB_*' block is its identity; the editor shows it, but content composed rather than round-tripped rarely carries it -- if yours omits it the existing one is kept and the result says so, so a body that leaves it out can no longer destroy VB_Name.")]
+    [Description("Replaces the VB6 source code of a named form or module and saves to disk. Use get_project_info to list available names. Pass the CODE SECTION, not a whole file: a .frm's VERSION/Begin designer block is refused (it describes controls, which this tool does not apply). A .bas/.cls may be sent with its header only if the header is exactly the module's; a header that differs is refused, because the header is the IDE's to change. A form's leading 'Attribute VB_*' block is its identity; the editor shows it, but content composed rather than round-tripped rarely carries it -- if yours omits it the existing one is kept and the result says so, and if yours changes it the write is refused.")]
     public async Task<MutateResult> SetFileContentAsync(string name, string content, CancellationToken ct)
     {
         var restoredHeader = false;
@@ -130,35 +143,36 @@ internal sealed class HexIdeTools(IdeContext ctx)
                         + "Begin designer block. This tool replaces code only and would not apply the "
                         + "controls. Pass what get_file_content returns, or edit the .frm on disk.");
 
-                // The attribute block is restored when the incoming text omits it. VB_Name is the form's
-                // identity and it sits at the top of the code section. VB6 hides it; this IDE's editor does
-                // show it (measured 2026-09-20 -- it opens the code window), but a caller composing a
-                // body rather than round-tripping one omits it anyway, and that used to delete it with no
-                // warning, straight to disk. (gap 14)
-                var kept = HexIDE.Runtime.Serialization.FormCodeText.PreserveAttributes(content, form.Code);
-                restoredHeader = !ReferenceEquals(kept, content);
+                // Through the guarded path (#273 task 3.9). The attribute block is kept when the incoming text
+                // omits it -- VB_Name is the form's identity, and a caller composing a body rather than
+                // round-tripping one omits it anyway, which used to delete it with no warning, straight to
+                // disk (gap 14). And an attribute block that DIFFERS from the form's is refused, because that is
+                // the header, and the header changes only from the IDE's model.
+                restoredHeader = HexIDE.Runtime.Serialization.ReadOnlyRegions.HeaderEnd(content, 0) == 0
+                                 && HexIDE.Runtime.Serialization.FormCodeText.AttributeBlock(form.Code).Length > 0;
 
                 var editor = FindEditor(name);
-                if (editor is not null)
-                    editor.ReplaceBody(kept);
-                else
-                    form.UpdateCode(kept);
-                return (form, null, null);
+                var replaced = editor is not null
+                    ? editor.ReplaceContent(content)
+                    : ReplaceModelContent(HexIDE.Runtime.Serialization.FormCodeText.WholeFile(form),
+                        HexIDE.Runtime.Serialization.FormCodeText.Prefix(form), content, form.UpdateCode);
+                return replaced.Refusal is { } refusal ? (null, null, refusal) : (form, null, null);
             }
 
             var module = project.Modules.FirstOrDefault(m =>
                 string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
             if (module is not null)
             {
-                // .bas/.cls hold the BODY only; strip a VB6 header if a caller passed full file content
-                // (idempotent for a body that has none).
-                var body = HexIDE.Runtime.Serialization.ModuleFileFormat.StripHeader(content, module.Kind);
+                // Through the guarded path (#273 task 3.9): the body alone, or the file with its header exactly
+                // as the module has it. It used to strip ANY header silently, so a caller that sent a class
+                // with its Instancing changed was told the write succeeded while the change was discarded. A
+                // header that differs is now refused, and the caller is told why.
                 var editor = FindEditor(name);
-                if (editor is not null)
-                    editor.ReplaceBody(body);
-                else
-                    module.UpdateCode(body);
-                return (null, module, null);
+                var replaced = editor is not null
+                    ? editor.ReplaceContent(content)
+                    : ReplaceModelContent(HexIDE.Runtime.Serialization.FormCodeText.WholeFile(module),
+                        HexIDE.Runtime.Serialization.FormCodeText.Prefix(module), content, module.UpdateCode);
+                return replaced.Refusal is { } refusal ? (null, null, refusal) : (null, module, null);
             }
 
             return (null, null, $"No form or module named '{name}' found");
@@ -1341,7 +1355,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     }
 
     [McpServerTool(Name = "type_text")]
-    [Description("Types text into the control at 'target' (a path from dump_visual_tree) by inserting at the caret via the control's own API — works on the code editor (AvaloniaEdit), which has no value provider for 'interact set_value'. If 'target' isn't itself a text surface, the nearest descendant editor/textbox is used (the AvaloniaEdit editor is preferred over incidental textboxes). Multi-line text is inserted verbatim (include \\n for new lines); exact, reliable, and not altered by live auto-indent/IntelliSense. For a typing cadence, call this once per line. Use press_key for Enter/Tab/commands. 'window' picks the top-level window the path is resolved against — \"auto\" (default, the frontmost) or \"ide\"; pass \"ide\" to reach the IDE while a program is running or paused.")]
+    [Description("Types text into the control at 'target' (a path from dump_visual_tree) by inserting at the caret via the control's own API — works on the code editor (AvaloniaEdit), which has no value provider for 'interact set_value'. If 'target' isn't itself a text surface, the nearest descendant editor/textbox is used (the AvaloniaEdit editor is preferred over incidental textboxes). Multi-line text is inserted verbatim (include \\n for new lines); exact, reliable, and not altered by live auto-indent/IntelliSense. For a typing cadence, call this once per line. Use press_key for Enter/Tab/commands. In a code window, typing is refused while the caret is in the file's header or a member's Attribute lines, which only the IDE changes; the reply says where the editable code starts. 'window' picks the top-level window the path is resolved against — \"auto\" (default, the frontmost) or \"ide\"; pass \"ide\" to reach the IDE while a program is running or paused.")]
     public async Task<InteractOutcome> TypeTextAsync(
         string target, string text, string? window = null, CancellationToken ct = default)
     {
@@ -1477,7 +1491,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
             ? text.Trim()
             : null;
     [McpServerTool(Name = "press_key")]
-    [Description("Presses a key on the control at 'target' (a path from dump_visual_tree) by raising real KeyDown/KeyUp events — for navigation and commands that type_text doesn't cover: Enter, Tab, Back(space), Delete, Escape, arrow keys, etc., optionally with modifiers. 'key' is an Avalonia Key name (Enter, Tab, Back, Escape, Down, S, ...). 'modifiers' is an optional combo like 'Ctrl', 'Ctrl+Shift', 'Alt'. Resolves to the DEEPEST input surface under 'target' — for the code editor that is AvaloniaEdit's TextArea, where its key handling lives — because a routed event reaches only the element it is raised on and its ancestors, never anything below. Falls back to the first focusable descendant, and FAILS rather than reporting success when nothing under 'target' can take keyboard focus. The reply names the control that actually received the key when it is not the one addressed. 'window' picks the top-level window the path is resolved against — \"auto\" (default, the frontmost) or \"ide\"; pass \"ide\" to reach the IDE while a program is running or paused.")]
+    [Description("Presses a key on the control at 'target' (a path from dump_visual_tree) by raising real KeyDown/KeyUp events — for navigation and commands that type_text doesn't cover: Enter, Tab, Back(space), Delete, Escape, arrow keys, etc., optionally with modifiers. 'key' is an Avalonia Key name (Enter, Tab, Back, Escape, Down, S, ...). 'modifiers' is an optional combo like 'Ctrl', 'Ctrl+Shift', 'Alt'. Resolves to the DEEPEST input surface under 'target' — for the code editor that is AvaloniaEdit's TextArea, where its key handling lives — because a routed event reaches only the element it is raised on and its ancestors, never anything below. Falls back to the first focusable descendant, and FAILS rather than reporting success when nothing under 'target' can take keyboard focus. The reply names the control that actually received the key when it is not the one addressed. In a code window, a key that would change text (Enter, Tab, Back, Delete, Ctrl+V/X/D) is refused when what it changes is in the file's header or a member's Attribute lines, which only the IDE changes; the reply says where the editable code starts. Navigation keys are never refused. 'window' picks the top-level window the path is resolved against — \"auto\" (default, the frontmost) or \"ide\"; pass \"ide\" to reach the IDE while a program is running or paused.")]
     public async Task<InteractOutcome> PressKeyAsync(
         string target, string key, string? modifiers = null, string? window = null,
         CancellationToken ct = default)

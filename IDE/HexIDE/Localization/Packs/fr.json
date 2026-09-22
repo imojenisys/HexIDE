@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Aligner sur la grille",
     "Str.Designer.Context.Properties": "Propriétés",
     "Str.CodeEditor.ReadOnly.Banner": "Lecture seule — HexIDE ne sait pas encore reproduire cette feuille fidèlement ; l'enregistrer la modifierait. Son code ne peut pas être modifié tant que ce n'est pas corrigé.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Le renommage n'a pas été effectué, car il modifierait l'en-tête de ce fichier ou les lignes Attribute d'un membre, que gère l'IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Insérer un fichier",
     "Str.CodeEditor.Context.Cut": "Co_uper",
     "Str.CodeEditor.Context.Copy": "_Copier",
     "Str.CodeEditor.Context.Paste": "Co_ller",

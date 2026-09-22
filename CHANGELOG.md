@@ -23,6 +23,12 @@ there isn't one yet. Anything may change between 0.x releases.
   emptied it, because loading the text counted as an edit.
 - **Reloading a file changed outside the IDE discards that window's undo history**, as reloading it into
   the form designer already did. The history described a document that is no longer there.
+- **Only the IDE rewrites a file's header or a procedure's `Attribute` lines.** Now that the code window
+  shows them, the commands that write into it keep off them. Formatting leaves them as they are. Replace
+  All skips a match inside them, so replacing every `Command1` in a form's code does not rename the control
+  behind the designer's back. Insert File puts its text after them. A rename that would reach them is
+  refused with a message saying why - except for the renamed procedure's own `Attribute` line, which
+  follows it. Add-ins and automation clients are refused the same writes, and told so.
 
 ### Fixed
 

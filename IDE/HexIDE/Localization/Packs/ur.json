@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "گرڈ سے ہم آہنگ کریں",
     "Str.Designer.Context.Properties": "خصوصیات",
     "Str.CodeEditor.ReadOnly.Banner": "صرف پڑھنے کے لیے — HexIDE ابھی اس فارم کو ہو بہو دوبارہ تیار نہیں کر سکتا، اس لیے اسے محفوظ کرنے سے یہ بدل جائے گا۔ جب تک یہ ٹھیک نہیں ہو جاتا، اس کے کوڈ میں ترمیم نہیں کی جا سکتی۔",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "نام تبدیل نہیں کیا گیا، کیونکہ اس سے اس فائل کا ہیڈر یا کسی رکن کی Attribute لائنیں بدل جاتیں، جنہیں IDE سنبھالتا ہے۔",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "فائل داخل کریں",
     "Str.CodeEditor.Context.Cut": "کاٹیں",
     "Str.CodeEditor.Context.Copy": "کاپی کریں",
     "Str.CodeEditor.Context.Paste": "چسپاں کریں",

@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
+using Avalonia.Platform.Storage;
 using AvaloniaEdit.Document;
 using HexIDE.Bookmarks;
 using HexIDE.Controls;
@@ -944,20 +945,10 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
         if (reduction.Changes.Count > 0)
         {
-            // One update, so one undo step, and applied from the end so each change's offset still holds.
-            Document.BeginUpdate();
-            try
-            {
-                for (var i = reduction.Changes.Count - 1; i >= 0; i--)
-                {
-                    var change = reduction.Changes[i];
-                    Document.Replace(change.Offset, change.Length, change.Text);
-                }
-            }
-            finally
-            {
-                Document.EndUpdate();
-            }
+            // One undo step, applied from the end so each change's offset still holds.
+            var lastFirst = new List<TextChange>(reduction.Changes);
+            lastFirst.Reverse();
+            ApplyAsOneStep(lastFirst);
         }
 
         if (reduction.DroppedLines > 0)
@@ -976,24 +967,239 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// </remarks>
     private string Rewrite(string text, IReadOnlyList<TextEdit> edits)
     {
+        var builder = new StringBuilder(text);
+        foreach (var edit in Resolve(edits))
+            builder.Remove(edit.Offset, edit.Length).Insert(edit.Offset, edit.Text);
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// <paramref name="edits"/> as offsets into the live buffer, last first, so each can be applied without
+    /// moving the ones still to come.
+    /// </summary>
+    private List<TextChange> Resolve(IReadOnlyList<TextEdit> edits)
+    {
         int OffsetOf(Position position)
         {
             if (position.Line >= Document.LineCount)
-                return text.Length;
+                return Document.TextLength;
             var line = Document.GetLineByNumber(position.Line + 1);
             return Math.Min(line.Offset + position.Character, line.EndOffset);
         }
 
-        var resolved = new List<(int Start, int End, string Text)>(edits.Count);
+        var resolved = new List<TextChange>(edits.Count);
         foreach (var edit in edits)
-            resolved.Add((OffsetOf(edit.Range.Start), OffsetOf(edit.Range.End), edit.NewText));
-        resolved.Sort((a, b) => b.Start.CompareTo(a.Start));
-
-        var builder = new StringBuilder(text);
-        foreach (var (start, end, newText) in resolved)
-            builder.Remove(start, Math.Max(end - start, 0)).Insert(start, newText);
-        return builder.ToString();
+        {
+            var start = OffsetOf(edit.Range.Start);
+            resolved.Add(new TextChange(start, Math.Max(OffsetOf(edit.Range.End) - start, 0), edit.NewText));
+        }
+        resolved.Sort((a, b) => b.Offset.CompareTo(a.Offset));
+        return resolved;
     }
+
+    /// <summary>Applies changes that are already last first, as one undo step.</summary>
+    private void ApplyAsOneStep(IReadOnlyList<TextChange> lastFirst)
+    {
+        Document.BeginUpdate();
+        try
+        {
+            foreach (var change in lastFirst)
+                Document.Replace(change.Offset, change.Length, change.Text);
+        }
+        finally
+        {
+            Document.EndUpdate();
+        }
+    }
+
+    // ── The guarded write path (#273 task 3.9) ────────────────────────────────────────────────────────
+    //
+    // Every programmatic write into this buffer that is not the IDE's own goes through one of the members
+    // below. The read-only section provider task 3.7 installs covers TYPING only; formatting, rename,
+    // Replace, completion, Insert File, Enter, add-ins and automation all write the document directly and
+    // never meet it. The policy for each is the design record's writer table.
+
+    /// <summary>The read-only regions of this buffer as it stands: its header, and each member's attribute lines.</summary>
+    internal IReadOnlyList<TextRegion> ReadOnlyRegionsNow => ReadOnlyRegions.Of(Document.Text, bufferPrefix.Length);
+
+    /// <inheritdoc/>
+    public bool IsReadOnlyRegion(int offset, int length) =>
+        ReadOnlyRegions.Touches(ReadOnlyRegionsNow, offset, length);
+
+    /// <inheritdoc/>
+    public Func<int, int, bool> SnapshotReadOnlyRegions()
+    {
+        var regions = ReadOnlyRegionsNow;
+        return (offset, length) => ReadOnlyRegions.Touches(regions, offset, length);
+    }
+
+    /// <summary>
+    /// Where text meant for <paramref name="offset"/> goes instead, for a writer whose text "goes after the
+    /// region": the end of the read-only region the offset falls in, or the offset itself when it falls in
+    /// none.
+    /// </summary>
+    internal int PastReadOnlyRegion(int offset)
+    {
+        foreach (var region in ReadOnlyRegionsNow)
+        {
+            if (region.Touches(offset, 0))
+                return region.End;
+        }
+        return offset;
+    }
+
+    /// <summary>
+    /// Edit &gt; Insert File: asks for a file and puts its text in place of the selection, or after a read-only
+    /// region the selection touches.
+    /// </summary>
+    /// <remarks>
+    /// The picker is the window manager's, which is the one automation can answer
+    /// (<c>answer_next_file_dialog</c>). The view used to ask the storage provider itself — the only picker in
+    /// the IDE that did — so an automated run opened a real native dialog and waited for a person.
+    /// </remarks>
+    internal async Task InsertFileAsync(int selectionStart, int selectionLength)
+    {
+        var files = await windowManager.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = localization.GetString("Str.CodeEditor.Dialog.InsertFileTitle"),
+            AllowMultiple = false,
+        });
+        if (files is not { Count: > 0 })
+            return;
+
+        var content = await System.IO.File.ReadAllTextAsync(files[0]);
+        if (InsertPastReadOnlyRegion(selectionStart, selectionLength, content) is { } caret)
+        {
+            CaretOffset = caret;
+            return;
+        }
+        Document.Replace(selectionStart, selectionLength, content);
+        CaretOffset = selectionStart + content.Length;
+    }
+
+    /// <summary>
+    /// Insert File's text, when the selection it would replace touches a read-only region: written after the
+    /// region instead, on lines of its own, replacing nothing.
+    /// </summary>
+    /// <returns>
+    /// Where the caret goes after the inserted text; or null when the selection touches no region, and the
+    /// caller replaces it as usual — the selection is the developer's choice everywhere else.
+    /// </returns>
+    internal int? InsertPastReadOnlyRegion(int selectionStart, int selectionLength, string content)
+    {
+        if (!IsReadOnlyRegion(selectionStart, selectionLength))
+            return null;
+
+        var at = PastReadOnlyRegion(selectionStart);
+        if (at == selectionStart)
+            at = PastReadOnlyRegion(selectionStart + selectionLength);
+
+        var newline = Document.Text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        if (!content.EndsWith('\n'))
+            content += newline;
+        // A region that runs to the end of a file with no final line break ends mid-line.
+        if (at > 0 && Document.GetCharAt(at - 1) != '\n')
+            content = newline + content;
+
+        Document.Insert(at, content);
+        return at + content.Length;
+    }
+
+    /// <summary>
+    /// Applies a server's rename, or refuses it as a whole when it would change a read-only region.
+    /// </summary>
+    /// <param name="edits">The server's edits to this document.</param>
+    /// <param name="oldName">The name being renamed, which a member's own attribute lines are allowed to follow.</param>
+    /// <returns>Null when applied; otherwise the reason, in words for the developer.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Refused rather than clipped</b>, unlike formatting. A rename is one change to one name: applied in
+    /// part, it leaves the name meaning two things. And the refusal is not rare, because the bundled server's
+    /// rename is lexical and whole-word over the buffer — with a designer block in it, renaming a local
+    /// called <c>Caption</c>, <c>Top</c> or <c>Index</c>, or a control's name, would otherwise rewrite the
+    /// form's layout. A control is renamed in the Properties window, as in VB6.
+    /// </para>
+    /// <para>
+    /// <b>The one write into a region it allows</b> is the renamed member's own qualifier in its attribute
+    /// lines: <c>Attribute Total.VB_Description</c> follows <c>Total</c> becoming <c>GrandTotal</c>, and has
+    /// to, or the description would be left describing nothing.
+    /// </para>
+    /// </remarks>
+    internal string? ApplyRename(IReadOnlyList<TextEdit> edits, string oldName)
+    {
+        var text = Document.Text;
+        var regions = ReadOnlyRegionsNow;
+        var changes = Resolve(edits);
+
+        foreach (var change in changes)
+        {
+            if (ReadOnlyRegions.Touches(regions, change.Offset, change.Length)
+                && !IsOwnAttributeQualifier(text, change, oldName))
+            {
+                Log.Information("Refused a rename of {Name} in {Document}: an edit at offset {Offset} is in a read-only region",
+                    oldName, identity?.Display, change.Offset);
+                return localization.GetString("Str.CodeEditor.Msg.RenameTouchesReadOnly");
+            }
+        }
+
+        ApplyAsOneStep(changes);
+        return null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="change"/> rewrites exactly the <paramref name="oldName"/> in
+    /// <c>Attribute oldName.VB_…</c>, and nothing else of the line.
+    /// </summary>
+    private static bool IsOwnAttributeQualifier(string text, TextChange change, string oldName)
+    {
+        if (change.Length != oldName.Length
+            || !string.Equals(text.Substring(change.Offset, change.Length), oldName, StringComparison.OrdinalIgnoreCase)
+            || change.Offset + change.Length >= text.Length
+            || text[change.Offset + change.Length] != '.')
+            return false;
+
+        var lineStart = text.LastIndexOf('\n', Math.Max(change.Offset - 1, 0)) + 1;
+        if (change.Offset == 0)
+            lineStart = 0;
+        var before = text.AsSpan(lineStart, change.Offset - lineStart).Trim();
+        return before.Equals("Attribute", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Replaces this document's content, keeping its header: the rule add-in <c>SetContent</c> and automation
+    /// <c>set_file_content</c> share. Refused when the content would change the header.
+    /// </summary>
+    public ContentReplacement ReplaceContent(string incoming)
+    {
+        var result = GuardedContent.Replace(Document.Text, bufferPrefix.Length, incoming);
+        if (result.NewText is { } text)
+            ReplaceBody(text[bufferPrefix.Length..]);
+        return result;
+    }
+
+    /// <summary>
+    /// Applies edits an add-in computed against this buffer, or refuses them all when any would change a
+    /// read-only region.
+    /// </summary>
+    /// <returns>Null when applied; otherwise why not.</returns>
+    internal string? ApplyEdits(IReadOnlyList<TextChange> edits)
+    {
+        var regions = ReadOnlyRegionsNow;
+        foreach (var edit in edits)
+        {
+            if (ReadOnlyRegions.Touches(regions, edit.Offset, edit.Length))
+                return $"An edit at offset {edit.Offset} would change the document's header or a member's attribute lines, which only the IDE changes.";
+        }
+
+        var lastFirst = new List<TextChange>(edits);
+        lastFirst.Sort((a, b) => b.Offset.CompareTo(a.Offset));
+        ApplyAsOneStep(lastFirst);
+        return null;
+    }
+
+    /// <summary>Shows a refusal from one of the guarded writers to the developer.</summary>
+    internal Task ShowRefusalAsync(string message) =>
+        windowManager.MessageBox(message, icon: MessageBoxIcon.Information);
 
     public Task<HoverResult?> RequestHoverAsync(Position position, CancellationToken ct = default)
         => LiveDocumentUri is { } uri ? lspClient.RequestHoverAsync(uri, position, ct) : Task.FromResult<HoverResult?>(null);

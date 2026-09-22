@@ -126,26 +126,8 @@ public partial class CodeEditorView : UserControl
 
     public async Task InsertFile()
     {
-        // Get top level from the current control. Alternatively, you can use Window reference instead.
-        var topLevel = TopLevel.GetTopLevel(this);
-
-        if (topLevel == null)
-            return;
-        
-        // Start async operation to open the dialog.
-        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "Open Text File",
-            AllowMultiple = false
-        });
-
-        if (files.Count >= 1)
-        {
-            await using var stream = await files[0].OpenReadAsync();
-            using var streamReader = new StreamReader(stream);
-            var fileContent = await streamReader.ReadToEndAsync();
-            TextEditor.SelectedText = fileContent;
-        }
+        if (DataContext is CodeEditorViewModel vm)
+            await vm.InsertFileAsync(TextEditor.SelectionStart, TextEditor.SelectionLength);
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -816,6 +798,13 @@ public partial class CodeEditorView : UserControl
             var doc = TextEditor.Document;
             var caret = TextEditor.TextArea.Caret;
             var caretOffset = caret.Offset;
+
+            // Enter inside the header or a member's attribute lines writes nothing (#273 task 3.9). It is
+            // taken here, ahead of AvaloniaEdit's own Enter, so no read-only section provider would ever see
+            // it; and there is no "after the region" a line break could sensibly go to instead.
+            if (DataContext is CodeEditorViewModel guarded && guarded.IsReadOnlyRegion(caretOffset, 0))
+                return true;
+
             var currentLineNumber = doc.GetLineByOffset(caretOffset).LineNumber;
             var currentDocLine = doc.GetLineByNumber(currentLineNumber);
             var currentLineText = doc.GetText(currentDocLine.Offset, currentDocLine.Length);
@@ -874,6 +863,10 @@ public partial class CodeEditorView : UserControl
                 for (var lineNum = startLineNumber; lineNum <= currentLineNumber; lineNum++)
                 {
                     var dl = doc.GetLineByNumber(lineNum);
+                    // A committed line inside a region keeps its casing: re-casing it is a rewrite of text
+                    // only the IDE may change, and the insert rule does not cover rewriting a line.
+                    if (DataContext is CodeEditorViewModel owner && owner.IsReadOnlyRegion(dl.Offset, Math.Max(dl.TotalLength, 1)))
+                        continue;
                     var lineText = doc.GetText(dl.Offset, dl.Length);
                     var normalized = VbKeywordNormalizer.NormalizeLine(lineText);
                     if (normalized is not null)
@@ -983,7 +976,7 @@ public partial class CodeEditorView : UserControl
                 _completionWindow = new CompletionWindow(TextEditor.TextArea);
                 var data = _completionWindow.CompletionList.CompletionData;
                 foreach (var item in items)
-                    data.Add(new VbCompletionData(item));
+                    data.Add(new VbCompletionData(item, vm.IsReadOnlyRegion));
 
                 _completionWindow.Closed += (_, _) => _completionWindow = null;
                 _completionWindow.Show();
@@ -1249,31 +1242,9 @@ public partial class CodeEditorView : UserControl
                     .FirstOrDefault(c => HexIDE.Lsp.LspDocumentUri.AreSame(c.Key, docUri)).Value;
                 if (textEdits is null) return;
 
-                // Apply edits in reverse order to preserve offsets
-                var sorted = new List<TextEdit>(textEdits);
-                sorted.Sort((a, b) =>
-                {
-                    int cmp = b.Range.Start.Line.CompareTo(a.Range.Start.Line);
-                    return cmp != 0 ? cmp : b.Range.Start.Character.CompareTo(a.Range.Start.Character);
-                });
-
-                var doc = TextEditor.Document;
-                doc.BeginUpdate();
-                try
-                {
-                    foreach (var te in sorted)
-                    {
-                        var startLine = doc.GetLineByNumber(te.Range.Start.Line + 1);
-                        var endLine   = doc.GetLineByNumber(te.Range.End.Line + 1);
-                        int startOff  = Math.Min(startLine.Offset + te.Range.Start.Character, startLine.EndOffset);
-                        int endOff    = Math.Min(endLine.Offset + te.Range.End.Character, endLine.EndOffset);
-                        doc.Replace(startOff, endOff - startOff, te.NewText);
-                    }
-                }
-                finally
-                {
-                    doc.EndUpdate();
-                }
+                // Through the guarded path, which refuses a rename reaching the header as a whole (#273 3.9).
+                if (vm.ApplyRename(textEdits, oldName) is { } refusal)
+                    _ = vm.ShowRefusalAsync(refusal);
             });
         }
         catch (OperationCanceledException) { }
@@ -1313,7 +1284,12 @@ public partial class CodeEditorView : UserControl
 }
 
 /// <summary>Wraps an LSP <see cref="CompletionItem"/> as AvaloniaEdit <see cref="ICompletionData"/>.</summary>
-internal sealed class VbCompletionData(CompletionItem item) : ICompletionData
+/// <param name="item">The server's completion item.</param>
+/// <param name="isReadOnlyRegion">
+/// Whether a span of the buffer is one only the IDE may write. A completion commit writes the document
+/// directly, so the read-only section provider never sees it (#273 task 3.9).
+/// </param>
+internal sealed class VbCompletionData(CompletionItem item, Func<int, int, bool> isReadOnlyRegion) : ICompletionData
 {
     public string Text => item.Label;
     public object Content => item.Label;
@@ -1323,6 +1299,10 @@ internal sealed class VbCompletionData(CompletionItem item) : ICompletionData
 
     public void Complete(AvaloniaEdit.Editing.TextArea textArea, ISegment completionSegment, EventArgs e)
     {
+        // Nothing is written into a region. A completion belongs to the word at the caret, so there is no
+        // "after the region" to move it to that would still mean anything: it is simply not applied.
+        if (isReadOnlyRegion(completionSegment.Offset, completionSegment.Length))
+            return;
         textArea.Document.Replace(completionSegment, item.InsertText ?? item.Label);
     }
 }

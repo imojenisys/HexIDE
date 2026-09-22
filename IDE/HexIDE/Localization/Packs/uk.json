@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Вирівняти за сіткою",
     "Str.Designer.Context.Properties": "Властивості",
     "Str.CodeEditor.ReadOnly.Banner": "Лише для читання — HexIDE поки що не може точно відтворити цю форму, тому збереження змінило б її. Її код не можна редагувати, доки це не буде виправлено.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Перейменування не виконано, оскільки воно змінило б заголовок цього файлу або рядки Attribute одного з членів, якими керує IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Вставити файл",
     "Str.CodeEditor.Context.Cut": "Вирізати",
     "Str.CodeEditor.Context.Copy": "Копіювати",
     "Str.CodeEditor.Context.Paste": "Вставити",

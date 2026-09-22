@@ -282,7 +282,9 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
         if (editor.SelectionLength > 0)
         {
             var selectedText = editor.Document.GetText(editor.SelectionStart, editor.SelectionLength);
-            if (IsMatch(selectedText))
+            // Never inside the header or a member's attribute lines (#273 task 3.9): VB6 never searched the
+            // header, because it was not in the code window, and a match there is text only the IDE changes.
+            if (IsMatch(selectedText) && !editor.IsReadOnlyRegion(editor.SelectionStart, editor.SelectionLength))
             {
                 editor.Document.Replace(editor.SelectionStart, editor.SelectionLength, ReplaceText);
                 editor.CaretOffset = editor.SelectionStart + ReplaceText.Length;
@@ -306,9 +308,9 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
         // Scope means the same thing to Replace All as it does to Find. Honouring it in one and not the
         // other would leave the combo telling the truth in Find mode and lying in Replace mode, which is
         // the defect this change exists to end rather than to halve.
-        var count = ReplaceAllIn(editor.Document);
+        var count = ReplaceAllIn(editor);
         foreach (var other in OtherDocumentsInScope(editor))
-            count += ReplaceAllIn(other.Document);
+            count += ReplaceAllIn(other);
 
         _windowManager.MessageBox(
             count > 0
@@ -319,22 +321,29 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
             MessageBoxIcon.Information);
     }
 
-    private int ReplaceAllIn(TextDocument doc)
+    private int ReplaceAllIn(ISearchableDocument target)
     {
+        var doc = target.Document;
         var count = 0;
 
         doc.BeginUpdate();
         try
         {
-            // Search from end to start to preserve offsets
+            // Search from end to start to preserve offsets. A match inside the header or a member's attribute
+            // lines is stepped over, not replaced (#273 task 3.9): replacing every Command1 in a form's code
+            // must not rename the control in its designer block, which only the IDE changes.
+            var isReadOnly = target.SnapshotReadOnlyRegions();
             int pos = doc.TextLength;
             while (pos > 0)
             {
                 var result = FindPrevious(doc, pos);
                 if (result is null) break;
 
-                doc.Replace(result.Value.offset, result.Value.length, ReplaceText);
                 pos = result.Value.offset;
+                if (isReadOnly(result.Value.offset, result.Value.length))
+                    continue;
+
+                doc.Replace(result.Value.offset, result.Value.length, ReplaceText);
                 count++;
             }
         }

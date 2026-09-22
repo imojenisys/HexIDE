@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Izgaraya Hizala",
     "Str.Designer.Context.Properties": "Özellikler",
     "Str.CodeEditor.ReadOnly.Banner": "Salt okunur — HexIDE bu formu henüz aslına sadık biçimde yeniden üretemiyor, dolayısıyla kaydedilmesi onu değiştirirdi. Bu sorun giderilene kadar formun kodu düzenlenemez.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Yeniden adlandırma uygulanmadı; bu dosyanın üst bilgisini veya bir üyenin Attribute satırlarını değiştirirdi ve bunları IDE yönetir.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Dosya Ekle",
     "Str.CodeEditor.Context.Cut": "K_es",
     "Str.CodeEditor.Context.Copy": "_Kopyala",
     "Str.CodeEditor.Context.Paste": "_Yapıştır",

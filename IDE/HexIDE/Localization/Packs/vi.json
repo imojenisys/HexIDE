@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Căn theo lưới",
     "Str.Designer.Context.Properties": "Thuộc tính",
     "Str.CodeEditor.ReadOnly.Banner": "Chỉ đọc — HexIDE chưa thể tái tạo biểu mẫu này một cách trung thực, nên việc lưu sẽ làm thay đổi nó. Không thể chỉnh sửa mã của biểu mẫu cho đến khi điều đó được khắc phục.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Không đổi tên vì thao tác này sẽ thay đổi phần đầu tệp này hoặc các dòng Attribute của một thành viên, vốn do IDE quản lý.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Chèn tệp",
     "Str.CodeEditor.Context.Cut": "Cắ_t",
     "Str.CodeEditor.Context.Copy": "_Sao chép",
     "Str.CodeEditor.Context.Paste": "_Dán",

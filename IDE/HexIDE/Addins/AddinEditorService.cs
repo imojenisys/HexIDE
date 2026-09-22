@@ -2,6 +2,8 @@ using Avalonia.Threading;
 using AvaloniaEdit.Document;
 using HexIDE.Forms.ViewModels;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
+using Serilog;
 
 namespace HexIDE.Addins;
 
@@ -61,10 +63,16 @@ public sealed class AddinEditorService(
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (Open(document) is not { } editor) return false;
-            // ReplaceBody, not Document.Text: a bare body assigned over the composed buffer would
-            // destroy the header, and the next flush splits at the prefix's length and would take
-            // the first lines of the body with it (#273 task 3.2).
-            editor.ReplaceBody(content);
+            // Through the guarded path (#273 task 3.9): the code alone, or the whole file with its header
+            // unchanged, and the document's own header in front either way. A content that would change the
+            // header is refused. Telling the add-in why needs a contract change, which is task 3.19; until then
+            // the refusal is false and the reason is logged.
+            var result = editor.ReplaceContent(content);
+            if (result.Refusal is { } refusal)
+            {
+                Log.Warning("Add-in SetContent on {Document} refused: {Reason}", editor.Identity.Display, refusal);
+                return false;
+            }
             return true;
         });
     }
@@ -81,14 +89,24 @@ public sealed class AddinEditorService(
             if (Open(document) is not { } editor) return false;
 
             var doc = editor.Document;
-            // Apply in reverse order so earlier offsets stay valid
-            foreach (var edit in edits.OrderByDescending(e => (e.StartLine, e.StartColumn)))
+            var changes = new List<TextChange>(edits.Count);
+            foreach (var edit in edits)
             {
                 var startLine = doc.GetLineByNumber(edit.StartLine);
                 var startOffset = Math.Min(startLine.Offset + edit.StartColumn - 1, startLine.EndOffset);
                 var endLine = doc.GetLineByNumber(edit.EndLine);
                 var endOffset = Math.Min(endLine.Offset + edit.EndColumn - 1, endLine.EndOffset);
-                doc.Replace(startOffset, endOffset - startOffset, edit.NewText);
+                changes.Add(new TextChange(startOffset, endOffset - startOffset, edit.NewText));
+            }
+
+            // All or nothing, through the guarded path (#273 task 3.9): an edit touching the header or a
+            // member's attribute lines refuses the whole set, because applying the rest would leave the
+            // add-in's change half made. The reason goes to the log until task 3.19 gives the contract a way
+            // to carry it.
+            if (editor.ApplyEdits(changes) is { } refusal)
+            {
+                Log.Warning("Add-in ApplyEdits on {Document} refused: {Reason}", editor.Identity.Display, refusal);
+                return false;
             }
             return true;
         });

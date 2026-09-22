@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Wyrównaj do siatki",
     "Str.Designer.Context.Properties": "Właściwości",
     "Str.CodeEditor.ReadOnly.Banner": "Tylko do odczytu — HexIDE nie potrafi jeszcze wiernie odtworzyć tego formularza, więc zapisanie go wprowadziłoby w nim zmiany. Jego kodu nie można edytować, dopóki nie zostanie to naprawione.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Nie zmieniono nazwy, ponieważ zmieniłoby to nagłówek tego pliku lub wiersze Attribute jednej ze składowych, którymi zarządza IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Wstaw plik",
     "Str.CodeEditor.Context.Cut": "Wy_tnij",
     "Str.CodeEditor.Context.Copy": "_Kopiuj",
     "Str.CodeEditor.Context.Paste": "Wk_lej",

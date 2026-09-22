@@ -857,7 +857,7 @@
   `publishDiagnostics` — which the replace's own debounced `didChange` brings within a few hundred
   milliseconds. Transient and self-healing; anchoring them properly is hexide-io/HexIDE#512. The caret, the
   selection and the folds ARE preserved, which is what was measured.
-- [ ] 3.9 One guarded write path, with the policy in the design record for each of the twenty programmatic
+- [x] 3.9 One guarded write path, with the policy in the design record for each of the twenty programmatic
   writers: formatting reduced to changed lines and clipped; server rename refused if it touches the header;
   Replace, Replace All, completion, Insert File, Enter auto-close, event stubs, add-in `SetContent` and
   `ApplyEdits`, automation `set_file_content`, `type_text` and `press_key`; reload and the Edit-and-Continue
@@ -869,8 +869,7 @@
   **true**, so this is every save from a form's code window with the bundled server running.
   — **The mechanism, read off the wire** (protocol inspector, `--capture-lsp`): the bundled server answers
   `textDocument/formatting` with ONE edit from `(0,0)` to the end of the document, whose text re-indents
-  every designer line to column zero and uses `
-` throughout. `ApplyFormattingToDocumentAsync` applies it
+  every designer line to column zero and uses `\n` throughout. `ApplyFormattingToDocumentAsync` applies it
   unfiltered. The header in the buffer is then hundreds of characters shorter than `bufferPrefix`, and the
   flush splits by that length — so the body loses exactly what the header lost. The save writes the model's
   own designer block, which is why the damage is all in the code; the header the buffer then shows is
@@ -904,10 +903,53 @@
   does not describe, so it skips lines inside a region; (3) *paste* is provider-checked, so inside a region
   the library refuses it silently rather than putting the text after the region as the insert row says, and
   that refusal is accepted rather than replaced with a custom paste; (4) *member attributes following a
-  rename* has no writer anywhere, and belongs to phase 4, which is where member attributes are built.
+  rename* has no writer of the IDE's own, and belongs to phase 4, which is where member attributes are
+  built. **Corrected while implementing it:** a server's rename does carry that edit. The bundled server's
+  rename is whole-word, and `Total` in `Total.VB_Description` is a whole word, so the rename path lets
+  exactly that edit through (`IsOwnAttributeQualifier`) and the delta's "Renaming a procedure that has a
+  description" scenario holds today. What phase 4 adds is the IDE's own rename following it.
   — **Two things the inventory found that belong to other tasks:** the Edit-and-Continue revert is a raw
   whole-buffer assignment, not an owner write (3.13, already recorded there); and redo re-asserts nothing
   after replaying a header write (#513, where the Ctrl+Y decision is pending).
+  — **Done, 2026-09-22.** Every writer in the inventory either goes through a guarded member of
+  `CodeEditorViewModel` (`ApplyFormatting`, `ApplyRename`, `ReplaceContent`, `ApplyEdits`,
+  `InsertFileAsync`/`InsertPastReadOnlyRegion`) or asks it first (`IsReadOnlyRegion` for completion, Enter
+  and Replace; `SnapshotReadOnlyRegions` for Replace All; the automation driver for `type_text` and
+  `press_key`). The whole-file rule for `SetContent` and `set_file_content` is one function,
+  `GuardedContent.Replace`, used by both and by the no-window branch of the tool. The design record's
+  writer table now gives each writer its own row. The completion row changed from "text goes after the
+  region": a completion completes the word at the caret, so nothing moved after the region would mean the
+  same thing, and it is simply not applied.
+  — **Each guard was removed in turn and a test failed every time**: thirteen mutations, thirteen caught
+  (`GuardedWritersTests`, `AddinEditorGuardTests`, the two new `FindReplaceViewModelTests`,
+  `GuardedEditorInputTests`).
+  — **Two defects in the harness and one in the product, found on the way.** (1) The integration test app
+  never loaded AvaloniaEdit's control theme, so every `TextEditor` in that suite had no template and its
+  `TextArea` was never parented or given a DataContext. The automation refusal reads the view model the
+  text area inherits, so in that suite every refusal passed as "not a code window", while the live IDE
+  refused correctly. The theme is now loaded as `App.axaml` loads it, and the rest of the suite is
+  unchanged. (2) Replace All asked for
+  the regions afresh at every match, which is quadratic in a large module. It now takes one snapshot,
+  which stays valid because Replace All works backwards. (3) **Insert File was unreachable by
+  automation:** it called the storage provider directly, the only picker in the IDE that did, so
+  `answer_next_file_dialog` never answered it and an automated run left a native dialog waiting. Moved to
+  the view model and routed through the window manager (recorded in the closed-gaps archive). Its
+  hard-coded "Open Text File" title is now a key, translated in every pack from that pack's own Insert
+  File menu item.
+  — **Verified live**, on a copy of `demo/bill-of-fare`. `set_file_content` with a changed attribute block
+  was refused with the reason. The code alone was accepted, and the saved designer block was
+  byte-identical. `type_text` and `press_key` Enter in the header were refused with the offset where the
+  code starts, while `press_key` Down still moved the caret. Replace All `lblChosen` → `lblPicked` made two
+  replacements and left the designer's `Begin VB.Label lblChosen` alone. Insert File with the caret in the
+  header put the file on its own line after the header. **Renaming a local `Caption` was refused**, and
+  the captured answer shows why that matters: 21 edits, 19 of them in the designer block (every menu
+  caption in the form).
+  — **Found and filed, not this task's:** Enter inserts a bare `\n` into a CRLF document and the save
+  writes it, and `set_file_content`/`SetContent` keep a caller's line endings (#530). The
+  `get_file_content` flag that reads `true` whenever a window is open was already #481. #465's route
+  through `set_file_content` is gone on this branch, because the tool no longer calls
+  `FormCodeText.PreserveAttributes`. `AttributeBlock`'s arithmetic is still wrong and still reachable on
+  `main`, so the issue stands as filed.
 - [ ] 3.10 The bundled server keeps to its own new requirement: no diagnostic inside a header, the formatter
   leaves it untouched, and rename and highlight skip it and member attribute runs, through one shared helper
   so the three cannot drift apart. The client clipping stays as the guard against servers that do not.

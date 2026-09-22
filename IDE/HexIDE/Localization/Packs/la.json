@@ -257,6 +257,8 @@
     "Str.Designer.Context.AlignToGrid": "Ordina ad Reticulum",
     "Str.Designer.Context.Properties": "Proprietates",
     "Str.CodeEditor.ReadOnly.Banner": "Tantum legendum — HexIDE hanc formam nondum fideliter exprimere potest, itaque, si servaretur, mutaretur. Codex eius recenseri non potest donec id correctum erit.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Nomen non mutatum est, quia caput huius fasciculi aut versus Attribute alicuius membri mutaret, quos IDE curat.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Insere Plicam",
     "Str.CodeEditor.Context.Cut": "E_xscinde",
     "Str.CodeEditor.Context.Copy": "_Describe",
     "Str.CodeEditor.Context.Paste": "_Agglutina",

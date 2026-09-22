@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "محاذاة إلى الشبكة",
     "Str.Designer.Context.Properties": "الخصائص",
     "Str.CodeEditor.ReadOnly.Banner": "للقراءة فقط — لا يستطيع HexIDE حتى الآن إعادة إنتاج هذا النموذج بأمانة، لذا فإن حفظه سيغيّره. لا يمكن تحرير التعليمات البرمجية الخاصة به حتى يتم إصلاح ذلك.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "لم تُطبَّق إعادة التسمية لأنها ستغيّر رأس هذا الملف أو أسطر Attribute الخاصة بأحد الأعضاء، وهي أسطر تتولّاها بيئة التطوير.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "إدراج ملف",
     "Str.CodeEditor.Context.Cut": "قص",
     "Str.CodeEditor.Context.Copy": "نسخ",
     "Str.CodeEditor.Context.Paste": "لصق",

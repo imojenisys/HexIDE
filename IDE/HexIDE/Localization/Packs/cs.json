@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Zarovnat k mřížce",
     "Str.Designer.Context.Properties": "Vlastnosti",
     "Str.CodeEditor.ReadOnly.Banner": "Jen pro čtení — HexIDE zatím nedokáže tento formulář věrně reprodukovat, takže uložení by jej změnilo. Jeho kód nelze upravovat, dokud to nebude opraveno.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Přejmenování nebylo provedeno, protože by změnilo záhlaví tohoto souboru nebo řádky Attribute některého člena, které spravuje IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Vložit soubor",
     "Str.CodeEditor.Context.Cut": "_Vyjmout",
     "Str.CodeEditor.Context.Copy": "_Kopírovat",
     "Str.CodeEditor.Context.Paste": "V_ložit",

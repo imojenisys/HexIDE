@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "對齊格線",
     "Str.Designer.Context.Properties": "屬性",
     "Str.CodeEditor.ReadOnly.Banner": "唯讀 — HexIDE 目前尚無法忠實地重現此表單，儲存將會改變它。在此問題修正之前，無法編輯其程式碼。",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "未執行重新命名，因為這會變更此檔案的標頭或某個成員的 Attribute 行，而這些內容由 IDE 維護。",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "插入檔案",
     "Str.CodeEditor.Context.Cut": "剪下",
     "Str.CodeEditor.Context.Copy": "複製",
     "Str.CodeEditor.Context.Paste": "貼上",

@@ -296,6 +296,8 @@
     "Str.Designer.Context.AlignToGrid": "Выровнять по сетке",
     "Str.Designer.Context.Properties": "Свойства",
     "Str.CodeEditor.ReadOnly.Banner": "Только для чтения — HexIDE пока не может воспроизвести эту форму в точности, поэтому сохранение изменило бы её. Её код нельзя редактировать, пока это не будет исправлено.",
+    "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Переименование не выполнено, так как оно изменило бы заголовок этого файла или строки Attribute одного из членов, которыми управляет IDE.",
+    "Str.CodeEditor.Dialog.InsertFileTitle": "Вставить файл",
     "Str.CodeEditor.Context.Cut": "Вырезать",
     "Str.CodeEditor.Context.Copy": "Копировать",
     "Str.CodeEditor.Context.Paste": "Вставить",
