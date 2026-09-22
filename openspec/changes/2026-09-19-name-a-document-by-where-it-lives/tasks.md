@@ -1022,7 +1022,8 @@
   #530). The rename prompt's own title and label are hard-coded English (#537).
 - [ ] 3.11 Find and Replace search outside read-only regions only.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
-  **On merging main:** #570 (hexide-io/HexIDE#569) now refuses `set_breakpoints` / `set_bookmarks` lines
+  **On merging main:** #570 (hexide-io/HexIDE#569) now refuses `set_breakpoints` / `set_bookmarks` lines,
+  and #592 (#591) `run_to_cursor` / `set_next_statement` lines, through the same `OutsideDocument`,
   outside the document, counting lines in the open editor's buffer, else the model's code. On main those
   agree; on this branch the buffer carries the header and the code does not, so the valid range depends on
   whether the editor is open. Reconcile it with 3.16's numbering, and fold "a read-only line" into the same
