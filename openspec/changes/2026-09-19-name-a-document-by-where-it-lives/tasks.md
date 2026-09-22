@@ -1024,6 +1024,8 @@
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
   **On merging main:** #570 (hexide-io/HexIDE#569) now refuses `set_breakpoints` / `set_bookmarks` lines,
   and #592 (#591) `run_to_cursor` / `set_next_statement` lines, through the same `OutsideDocument`,
+  and #620 (#574) drops sidecar marks outside the document at load (`UserSidecarService.WithinDocument`, counting
+  the model's code),
   outside the document, counting lines in the open editor's buffer, else the model's code. On main those
   agree; on this branch the buffer carries the header and the code does not, so the valid range depends on
   whether the editor is open. Reconcile it with 3.16's numbering, and fold "a read-only line" into the same
