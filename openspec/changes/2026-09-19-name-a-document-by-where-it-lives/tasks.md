@@ -881,6 +881,33 @@
   path on the commonest keystroke there is, opened by an earlier task of this phase. The design record's
   policy for formatting (reduce the edit to the lines it changes; drop changes inside a read-only region)
   is the fix; nothing new has to be decided.
+  — **The inventory, rebuilt, because the design record's "twenty paths were inventoried" was never written
+  down.** Four independent sweeps (by editor API, by external surface, by editor feature, by server edit) and
+  a reconciling pass that opened every site, 2026-09-22. What needs THIS task's guarded path, because it
+  writes the document directly and so bypasses the read-only section provider 3.7 installs:
+  - **Formatting**, twice: Format on Save (`CodeEditorViewModel`) and Format Document (`CodeEditorView`,
+    Shift+Alt+F), which were verbatim copies of one unfiltered loop.
+  - **Server rename** (`CodeEditorView.RenameSymbolAsync`), applied unfiltered from `WorkspaceEdit.changes`.
+  - **Replace** and **Replace All** (`FindReplaceViewModel`), the latter into every open window in scope.
+  - **Completion commit** (`VbCompletionData.Complete`), **Insert File** (`CodeEditorView.InsertFile`), and
+    **Enter** (`HandleEnterAutoClose`, `InsertNewlineWithIndent`, taken by a tunnel handler before
+    AvaloniaEdit's own provider-checked Enter).
+  - **Add-in `SetContent` and `ApplyEdits`** (`AddinEditorService`), and **automation `set_file_content`,
+    `type_text` and `press_key`** (`HexIdeTools`, `UiAutomationDriver`).
+  Already safe by construction: event stubs and Add Procedure append at the end of the document. Owner
+  writes, already routed: the header refresh, a save's header, `VB_Name`, reload, and the undo loop's
+  re-assertion. **Not this task, because AvaloniaEdit checks the section provider on these routes itself**
+  (read from the 12.0.0 assembly): paste, cut, delete and backspace, Ctrl+D, and text drag-and-drop. 3.7
+  covers them.
+  — **Four gaps in the design record's table, found by the inventory:** (1) *initial load* is an owner write
+  and is now named as one; (2) *Enter's keyword re-casing* rewrites existing lines, which the insert row
+  does not describe, so it skips lines inside a region; (3) *paste* is provider-checked, so inside a region
+  the library refuses it silently rather than putting the text after the region as the insert row says, and
+  that refusal is accepted rather than replaced with a custom paste; (4) *member attributes following a
+  rename* has no writer anywhere, and belongs to phase 4, which is where member attributes are built.
+  — **Two things the inventory found that belong to other tasks:** the Edit-and-Continue revert is a raw
+  whole-buffer assignment, not an owner write (3.13, already recorded there); and redo re-asserts nothing
+  after replaying a header write (#513, where the Ctrl+Y decision is pending).
 - [ ] 3.10 The bundled server keeps to its own new requirement: no diagnostic inside a header, the formatter
   leaves it untouched, and rename and highlight skip it and member attribute runs, through one shared helper
   so the three cannot drift apart. The client clipping stays as the guard against servers that do not.
