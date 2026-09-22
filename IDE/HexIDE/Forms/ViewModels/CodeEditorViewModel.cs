@@ -909,39 +909,90 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             var edits = await RequestFormattingAsync();
             if (edits.Length == 0) return;
 
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                // Sort edits in reverse order to preserve offsets
-                var sorted = new List<TextEdit>(edits);
-                sorted.Sort((a, b) =>
-                {
-                    int cmp = b.Range.Start.Line.CompareTo(a.Range.Start.Line);
-                    return cmp != 0 ? cmp : b.Range.Start.Character.CompareTo(a.Range.Start.Character);
-                });
-
-                var doc = Document;
-                doc.BeginUpdate();
-                try
-                {
-                    foreach (var te in sorted)
-                    {
-                        var startLine = doc.GetLineByNumber(te.Range.Start.Line + 1);
-                        var endLine   = doc.GetLineByNumber(te.Range.End.Line + 1);
-                        int startOff  = Math.Min(startLine.Offset + te.Range.Start.Character, startLine.EndOffset);
-                        int endOff    = Math.Min(endLine.Offset + te.Range.End.Character, endLine.EndOffset);
-                        doc.Replace(startOff, endOff - startOff, te.NewText);
-                    }
-                }
-                finally
-                {
-                    doc.EndUpdate();
-                }
-            });
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => ApplyFormatting(edits));
         }
         catch (Exception ex)
         {
             Log.Debug("[save-format] {ErrorMessage}", ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Applies a server's formatting answer: the lines it changes, less any in a read-only region, as one
+    /// undo step. Format on Save and Format Document both come through here.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Never applied as sent</b> (#273 phase 3, the formatting row of the writer policy). The bundled
+    /// server answers with one edit replacing the whole document and re-indenting every designer line to
+    /// column zero. Applied as sent, that rewrote the header. The body is split off by the header's LENGTH, so
+    /// a shorter header also cut into the code: measured on a VB6-authored form, Format on Save lost the
+    /// whole attribute block and sixteen lines below it. So the answer is applied to a copy, reduced to the
+    /// lines it actually changes, and anything touching the header or a member's attribute run is dropped.
+    /// </para>
+    /// <para>
+    /// Lines are compared without their terminators, so a server answering in <c>\n</c> for a
+    /// <c>\r\n</c> buffer does not rewrite every line. The lines that are written keep the buffer's own
+    /// terminator.
+    /// </para>
+    /// </remarks>
+    /// <returns>What was applied and what was left out, for the callers that want to say so.</returns>
+    internal Reduction ApplyFormatting(IReadOnlyList<TextEdit> edits)
+    {
+        var before = Document.Text;
+        var reduction = LineEdits.Reduce(before, Rewrite(before, edits), ReadOnlyRegions.Of(before, bufferPrefix.Length));
+
+        if (reduction.Changes.Count > 0)
+        {
+            // One update, so one undo step, and applied from the end so each change's offset still holds.
+            Document.BeginUpdate();
+            try
+            {
+                for (var i = reduction.Changes.Count - 1; i >= 0; i--)
+                {
+                    var change = reduction.Changes[i];
+                    Document.Replace(change.Offset, change.Length, change.Text);
+                }
+            }
+            finally
+            {
+                Document.EndUpdate();
+            }
+        }
+
+        if (reduction.DroppedLines > 0)
+            Log.Information("Formatting left {Lines} line(s) of {Document} alone: they are in its header or a member's attribute lines",
+                reduction.DroppedLines, identity?.Display);
+        return reduction;
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> — which is this buffer's text — as <paramref name="edits"/> would leave it.
+    /// </summary>
+    /// <remarks>
+    /// Positions are resolved against the live document's own line map, which is the one the server was
+    /// sent. A position past the last line, which a whole-document edit often uses for its end, means the end
+    /// of the text rather than an error.
+    /// </remarks>
+    private string Rewrite(string text, IReadOnlyList<TextEdit> edits)
+    {
+        int OffsetOf(Position position)
+        {
+            if (position.Line >= Document.LineCount)
+                return text.Length;
+            var line = Document.GetLineByNumber(position.Line + 1);
+            return Math.Min(line.Offset + position.Character, line.EndOffset);
+        }
+
+        var resolved = new List<(int Start, int End, string Text)>(edits.Count);
+        foreach (var edit in edits)
+            resolved.Add((OffsetOf(edit.Range.Start), OffsetOf(edit.Range.End), edit.NewText));
+        resolved.Sort((a, b) => b.Start.CompareTo(a.Start));
+
+        var builder = new StringBuilder(text);
+        foreach (var (start, end, newText) in resolved)
+            builder.Remove(start, Math.Max(end - start, 0)).Insert(start, newText);
+        return builder.ToString();
     }
 
     public Task<HoverResult?> RequestHoverAsync(Position position, CancellationToken ct = default)

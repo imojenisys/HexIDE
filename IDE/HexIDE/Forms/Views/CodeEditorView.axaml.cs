@@ -1300,34 +1300,9 @@ public partial class CodeEditorView : UserControl
 
             if (edits.Length == 0) return;
 
-            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                // Apply edits in reverse order to preserve offsets
-                var sorted = new List<TextEdit>(edits);
-                sorted.Sort((a, b) =>
-                {
-                    int cmp = b.Range.Start.Line.CompareTo(a.Range.Start.Line);
-                    return cmp != 0 ? cmp : b.Range.Start.Character.CompareTo(a.Range.Start.Character);
-                });
-
-                var doc = TextEditor.Document;
-                doc.BeginUpdate();
-                try
-                {
-                    foreach (var te in sorted)
-                    {
-                        var startLine = doc.GetLineByNumber(te.Range.Start.Line + 1);
-                        var endLine   = doc.GetLineByNumber(te.Range.End.Line + 1);
-                        int startOff  = Math.Min(startLine.Offset + te.Range.Start.Character, startLine.EndOffset);
-                        int endOff    = Math.Min(endLine.Offset + te.Range.End.Character, endLine.EndOffset);
-                        doc.Replace(startOff, endOff - startOff, te.NewText);
-                    }
-                }
-                finally
-                {
-                    doc.EndUpdate();
-                }
-            });
+            // Through the view model's guarded path, which Format on Save shares, never onto the document as
+            // sent: a whole-document answer would otherwise rewrite the header (#273 phase 3).
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => vm.ApplyFormatting(edits));
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
