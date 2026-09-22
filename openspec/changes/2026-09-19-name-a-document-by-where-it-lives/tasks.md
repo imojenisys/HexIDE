@@ -950,9 +950,76 @@
   through `set_file_content` is gone on this branch, because the tool no longer calls
   `FormCodeText.PreserveAttributes`. `AttributeBlock`'s arithmetic is still wrong and still reachable on
   `main`, so the issue stands as filed.
-- [ ] 3.10 The bundled server keeps to its own new requirement: no diagnostic inside a header, the formatter
+- [x] 3.10 The bundled server keeps to its own new requirement: no diagnostic inside a header, the formatter
   leaves it untouched, and rename and highlight skip it and member attribute runs, through one shared helper
   so the three cannot drift apart. The client clipping stays as the guard against servers that do not.
+  — **Done, 2026-09-22.** One helper, `VbProtectedRegions`, read by diagnostics, formatting, rename and
+  highlight. It is the text-only branch of the IDE's `ReadOnlyRegions`, ported rather than shared because the
+  two halves do not reference each other; `BundledServerRespectsTheIdesRegionsTests` (in `HexIDE.Tests`) is
+  what keeps the copies in step.
+  — **Diagnostics**: left out at the ANTLR listener when they start on a protected line. The two
+  paused-analysis notices at (0,0), for a file too large or nested too deep, are about the file and are kept.
+  **Leaving the header's errors out turned out not to be enough, found by a test rather than predicted.**
+  Damage one designer line (`ClientHeight = = 3000`) and put a syntax error in the code below: unfiltered,
+  the parse reports three errors, all in the header, and **nothing for the code**. ANTLR's recovery from the
+  designer block consumed the rest of the file, so the procedure also fell out of the outline. With the
+  header's errors left out, that form published no diagnostics at all and gave no reason. So when an error
+  lands on a protected line the file is parsed again with the protected lines emptied, line breaks kept so
+  every position holds, and that parse answers: measured, the code's error at 20:14 comes back and nothing
+  in the header does. A header the grammar can read stays in the tree, and no file in the corpus pays for
+  the second parse. The delta now says so, with a scenario.
+  — **Formatting**: one edit per run of changed lines, instead of one spanning the document, which pointed
+  inside the header even when its text left the header alone. Protected lines are copied through and not
+  classified, so a property's attribute lines neither get indented nor stop the body after them being
+  indented. **Each line now keeps its own terminator.** The formatter joined its output with `\n`, so a
+  CRLF file was never already formatted: every save produced an edit covering the file, and the edit's
+  text was LF. Measured live on a copy of `demo/bill-of-fare`: Ctrl+S on the untouched form now gets `[]`
+  from the server, where it used to get one edit from (0,0), and the saved file is byte-identical to the
+  original. A lowercase `dim y as string` typed into `Report` got one edit on that line alone.
+  — **Rename and highlight**: occurrences on protected lines are left out, and a caret on one answers null.
+  **Two decisions, both now in the delta.** (1) Rename keeps the renamed member's own qualifier in
+  `Attribute Total.VB_…`. The language-server delta as first written forbade any rename edit inside those
+  lines, while the code-editor delta requires a member's attribute lines to follow its rename "whether the
+  IDE or a language server makes it". Resolved for the code-editor rule, which is the design record's, and
+  the language-server requirement now carries the exception. Highlight has none. (2) **A name the designer
+  block declares is not renamed at all**: the form's, a control's, a menu's. Found while preparing the live
+  check, and a regression this task would otherwise have introduced. Before it, renaming `lblChosen` from
+  the code was refused, because the server's answer reached the `Begin VB.Label lblChosen` line. With the
+  server keeping off the header, the same answer carries the code's references alone, the code window
+  applies it, and the code names a control that no longer exists. A lexical rename cannot tell a reference
+  to the control from a local that shares its name, so the server declines both, and the code window
+  refuses before the name prompt. Both read one rule, the names on the header's `Begin` lines
+  (`VbProtectedRegions.Declares`, `ReadOnlyRegions.DeclaredNames`). A property name the layout sets is a
+  different thing and still renames: a local `Caption`, or the `Index` parameter of a control array's event
+  handler.
+  — **The client**: Rename from a read-only line, or on a declared name, is refused before the name prompt
+  (`CodeEditorViewModel.RenameRefusalAt`), with the existing message. A server keeping to the rule answers
+  both with null, and a null rename showed nothing at all, which a developer cannot tell from a rename that
+  found no occurrences. Verified live: from the top of the header, and on `lblChosen` in the code, Rename
+  showed the message and sent no request; on the parameter `Chosen` it prompted, the server answered two
+  edits, both in the code, and they applied.
+  — **The user-visible change**: renaming a local `Caption` in a form, refused under 3.9 because 19 of the
+  server's 21 edits were in the designer block, is now applied to the code.
+  — **The parity test drives the built server with the real client** over `demo/`, `corpus/designer`,
+  `HEXIDE_ROUNDTRIP_CORPUS` when set (here it added the VB6 templates, including a `.DSR`), and two inline
+  files carrying members' attribute lines, which no corpus file has. Formatting is the exact check, in both
+  directions: every line is given two trailing spaces, so the lines the answer changes must be exactly the
+  non-empty lines outside the IDE's regions. It also judges every diagnostic, a rename and a highlight from
+  every read-only line, and a rename of every word the layout and the code share, by the code window's own
+  qualifier rule (`IsOwnAttributeQualifier`, made internal for it).
+  — **Mutation, each guard removed in turn.** Server: 8 of 9 caught. The survivor filters scope-analysis
+  diagnostics, which cannot run while `EnableUndeclaredVariableCheck` is a `const false`; it is kept so that
+  switching the check on does not reopen the header. Parity test, by making the server disagree with the
+  IDE: 7 of 7 caught — a header a line short (failed on `neon-aurora\Form1.frm` line 11) or a line long
+  (the inline form's first line of code), members' attribute lines unprotected, a designer walk that
+  ignored `BeginProperty` (failed on the VB6 templates' `Mover ListBox.frm` and `DATARPT.DSR`), no second
+  parse, rename keeping region occurrences, highlight answering from a region. The declared-name rule, on
+  each side: removing the server's refusal fails the server suite and the parity test, and removing the
+  code window's fails `GuardedWritersTests`.
+  — **Not this task's, recorded where they belong:** automation's `get_file_content` returns the module's
+  code, not the buffer, so its line numbers still start after the header (3.16); `type_text` inserts a
+  bare `\n` into a CRLF buffer verbatim, which the formatter now rightly leaves alone (the Enter-key case is
+  #530). The rename prompt's own title and label are hard-coded English (#537).
 - [ ] 3.11 Find and Replace search outside read-only regions only.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
 - [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so

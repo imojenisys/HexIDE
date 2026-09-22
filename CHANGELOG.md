@@ -29,9 +29,20 @@ there isn't one yet. Anything may change between 0.x releases.
   behind the designer's back. Insert File puts its text after them. A rename that would reach them is
   refused with a message saying why - except for the renamed procedure's own `Attribute` line, which
   follows it. Add-ins and automation clients are refused the same writes, and told so.
+- **The bundled language server keeps to the same rule itself**, rather than leaving the code window to
+  discard what it should not have sent. It reports nothing inside a header or a procedure's `Attribute`
+  lines, its formatting touches only the lines that change, and rename and highlight leave those lines
+  alone. So renaming a local that shares its name with a property the layout sets - a `Caption`, a `Text`,
+  an `Index` - renames it in the code instead of being refused because the layout uses the same word. A
+  control's or the form's own name is still not renamed from the code, and the code window now says so
+  before asking for a new name: rename it in the Properties window. Another language server still gets the
+  code window's protection.
 
 ### Fixed
 
+- **Formatting no longer changes a file's line endings.** The bundled language server joined its formatted
+  text with bare line feeds, so a file VB6 wrote, with CRLF endings, was never already formatted: every
+  save sent an edit covering the whole file, and applying it put LF endings into the code window.
 - **Renaming a form now renames it in its file's `Attribute VB_Name` line as well as its `Begin` line.**
   Previously a renamed form was saved naming two different forms, one in each. The code window follows
   the rename as it happens, and Ctrl+Z there does not undo it.

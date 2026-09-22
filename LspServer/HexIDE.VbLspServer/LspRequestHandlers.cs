@@ -222,7 +222,14 @@ internal static class LspRequestHandlers
         var word = VbTextHelpers.GetWordAtPosition(source, line, ch);
         if (string.IsNullOrEmpty(word)) return LspJson.Null();
 
-        var occurrences = VbTextHelpers.FindAllOccurrences(source, word);
+        // Nothing in the header or a member's attribute lines is highlighted, and nothing is highlighted FROM
+        // them: a caret on a designer property's name is not asking about the code's uses of that word.
+        var regions = VbProtectedRegions.Of(source);
+        if (regions.IsProtected(line)) return LspJson.Null();
+
+        var occurrences = VbTextHelpers.FindAllOccurrences(source, word)
+            .Where(r => !regions.Touches(r))
+            .ToList();
         if (occurrences.Count == 0) return LspJson.Null();
 
         return LspJson.Doc(w =>
@@ -255,7 +262,26 @@ internal static class LspRequestHandlers
         // Don't allow renaming reserved keywords.
         if (VbKeywords.ReservedWords.Contains(word)) return LspJson.Null();
 
-        var occurrences = VbTextHelpers.FindAllOccurrences(source, word);
+        // The header and members' attribute lines are the IDE's to change (hexide-io/HexIDE#273 task 3.10).
+        // A rename is not started from inside them, and matches inside them are left alone: with a form's
+        // designer block in view, renaming a local called Caption, Top or Text would otherwise rewrite the
+        // layout. The one exception is the renamed member's own name in `Attribute Name.VB_...`, which has to
+        // follow the rename or the attribute is left describing nothing.
+        var regions = VbProtectedRegions.Of(source);
+        if (regions.IsProtected(line)) return LspJson.Null();
+
+        // Nor is a name the designer block declares -- the form's, a control's, a menu's. Its declaration is a
+        // Begin line in the header, which the rename must keep off, so renaming it from the code would leave
+        // the code naming a control that does not exist. A local that happens to share a control's name looks
+        // exactly the same to a lexical rename, and is declined with it: refusing that rare case is the price
+        // of never breaking the common one. A control is renamed in the Properties window, as in VB6.
+        if (regions.Declares(word)) return LspJson.Null();
+
+        var lines = source.Split('\n');
+        var occurrences = VbTextHelpers.FindAllOccurrences(source, word)
+            .Where(r => !regions.Touches(r)
+                        || VbProtectedRegions.IsOwnQualifier(lines[r.Start.Line].TrimEnd('\r'), r, word))
+            .ToList();
         if (occurrences.Count == 0) return LspJson.Null();
 
         return LspJson.Doc(w =>
@@ -278,27 +304,27 @@ internal static class LspRequestHandlers
         });
     }
 
-    // ── textDocument/formatting → single whole-document TextEdit (empty array if no change) ──────
+    // ── textDocument/formatting → one TextEdit per run of changed lines (empty array if no change) ──
+    // Never a whole-document edit: the header and members' attribute lines are left out of every range, not
+    // merely left unchanged inside one (VbFormatter.Edits; hexide-io/HexIDE#273 task 3.10).
     public static JsonDocument Formatting(DocumentStore store, JsonElement p)
     {
         if (!TryUri(p, out var uri) || !store.Source.TryGetValue(uri, out var source))
             return LspJson.EmptyArray();
 
-        var formatted = VbFormatter.Format(source);
-        if (formatted is null) return LspJson.EmptyArray();
-
-        var lines = source.Split('\n');
-        int lastLine = Math.Max(0, lines.Length - 1);
-        int lastChar = lines[lastLine].TrimEnd('\r').Length;
-        var range = new LspRange(new LspPosition(0, 0), new LspPosition(lastLine, lastChar));
+        var edits = VbFormatter.Edits(source);
+        if (edits.Count == 0) return LspJson.EmptyArray();
 
         return LspJson.Doc(w =>
         {
             w.WriteStartArray();
-            w.WriteStartObject();
-            LspJson.WriteRange(w, "range", range);
-            w.WriteString("newText", formatted);
-            w.WriteEndObject();
+            foreach (var edit in edits)
+            {
+                w.WriteStartObject();
+                LspJson.WriteRange(w, "range", edit.Range);
+                w.WriteString("newText", edit.NewText);
+                w.WriteEndObject();
+            }
             w.WriteEndArray();
         });
     }

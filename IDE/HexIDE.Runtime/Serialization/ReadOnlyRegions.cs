@@ -102,6 +102,37 @@ public static class ReadOnlyRegions
     }
 
     /// <summary>
+    /// The names the header's designer block declares: the name on each <c>Begin</c> line, which is the form's
+    /// own, a control's or a menu's. Compared ignoring case, as VB6 compares names. Empty when there is none.
+    /// </summary>
+    /// <remarks>
+    /// For rename (hexide-io/HexIDE#273 task 3.10). Such a name's declaration is in the header, so a rename
+    /// that keeps off the header would leave the code naming a control that no longer has that name; the code
+    /// window refuses it, and the bundled server declines it by the same rule (<c>VbProtectedRegions</c>).
+    /// </remarks>
+    public static IReadOnlySet<string> DeclaredNames(string text, int prefixLength)
+    {
+        var lines = LinesOf(text);
+        var headerLines = HeaderLineCount(text, lines, prefixLength);
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < headerLines; i++)
+        {
+            var line = Trimmed(text, lines[i]);
+            if (!StartsWithKeyword(line, "Begin"))
+                continue;
+            var rest = line["Begin".Length..].TrimStart();
+            var afterType = rest.IndexOfAny(' ', '\t');
+            if (afterType < 0)
+                continue;
+            var name = rest[afterType..].Trim();
+            if (!name.IsEmpty)
+                names.Add(name.ToString());
+        }
+        return names;
+    }
+
+    /// <summary>
     /// True when replacing <paramref name="length"/> characters at <paramref name="offset"/> would change any
     /// of <paramref name="regions"/>.
     /// </summary>

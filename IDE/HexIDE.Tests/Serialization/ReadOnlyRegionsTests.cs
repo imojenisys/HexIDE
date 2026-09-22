@@ -198,6 +198,17 @@ public class ReadOnlyRegionsTests
     }
 
     [Fact]
+    public void TheNamesADesignerBlockDeclaresAreTheFormsAndItsControls()
+    {
+        var names = ReadOnlyRegions.DeclaredNames(Designer + FormAttributes + "Option Explicit\r\n", 0);
+
+        names.Should().BeEquivalentTo("Form1", "Command1");
+        names.Should().Contain("COMMAND1", "VB6 compares names ignoring case");
+        ReadOnlyRegions.DeclaredNames(ClassHeader + "Option Explicit\r\n", 0)
+            .Should().BeEmpty("a class's BEGIN block declares nothing");
+    }
+
+    [Fact]
     public void AnInsertionAtTheEndOfAnOpenEndedRegionJoinsItsLastLine()
     {
         new TextRegion(10, 20, OpenEnded: true).Touches(20, 0).Should().BeTrue();

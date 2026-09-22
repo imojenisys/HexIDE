@@ -105,7 +105,7 @@ public class WholeFileGrammarTests
             var whole = File.ReadAllText(path);
             var prefixLines = PrefixLineCount(path, whole);
 
-            var (wholeDiagnostics, wholeTree) = VbDiagnosticsProvider.GetDiagnosticsAndTree(whole);
+            var (wholeDiagnostics, wholeTree) = VbDiagnosticsProvider.GetDiagnosticsAndTreeIncludingProtectedLines(whole);
             wholeTree.Should().NotBeNull("a null tree would make an empty diagnostic list meaningless: " + path);
 
             if (wholeDiagnostics.Count == 0)
@@ -115,7 +115,7 @@ public class WholeFileGrammarTests
             }
 
             var body = string.Join("\r\n", SplitLines(whole).Skip(prefixLines));
-            var (bodyDiagnostics, _) = VbDiagnosticsProvider.GetDiagnosticsAndTree(body);
+            var (bodyDiagnostics, _) = VbDiagnosticsProvider.GetDiagnosticsAndTreeIncludingProtectedLines(body);
             if (bodyDiagnostics.Count > 0)
             {
                 var note = "body line " + (bodyDiagnostics[0].Range.Start.Line + 1) + ": " + bodyDiagnostics[0].Message;

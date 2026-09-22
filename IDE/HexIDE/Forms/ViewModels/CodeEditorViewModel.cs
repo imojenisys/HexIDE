@@ -1147,10 +1147,40 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     }
 
     /// <summary>
+    /// Why <paramref name="word"/> cannot be renamed from <paramref name="offset"/>, or null when it can.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A name in the header or in a member's attribute lines is not the developer's to rename there: a control
+    /// is renamed in the Properties window, and a member from its declaration, which its attribute lines then
+    /// follow.
+    /// </para>
+    /// <para>
+    /// Nor is a name the designer block declares, wherever the caret is. Its declaration is in the header, so
+    /// a rename that keeps off the header renames the code's references and not the control, and the code no
+    /// longer compiles. Before a server kept off the header this was refused anyway, because its answer
+    /// reached the header; now it has to be refused on purpose.
+    /// </para>
+    /// <para>
+    /// Asked before the name prompt rather than left to the server's answer, because a server keeping to the
+    /// language-server rule answers both with nothing at all (hexide-io/HexIDE#273 task 3.10), and nothing is
+    /// indistinguishable from a rename that found no occurrences.
+    /// </para>
+    /// </remarks>
+    internal string? RenameRefusalAt(int offset, string word) =>
+        IsReadOnlyRegion(offset, 0) || ReadOnlyRegions.DeclaredNames(Document.Text, bufferPrefix.Length).Contains(word)
+            ? localization.GetString("Str.CodeEditor.Msg.RenameTouchesReadOnly")
+            : null;
+
+    /// <summary>
     /// True when <paramref name="change"/> rewrites exactly the <paramref name="oldName"/> in
     /// <c>Attribute oldName.VB_…</c>, and nothing else of the line.
     /// </summary>
-    private static bool IsOwnAttributeQualifier(string text, TextChange change, string oldName)
+    /// <remarks>
+    /// Internal so that <c>BundledServerRespectsTheIdesRegionsTests</c> judges the bundled server's rename
+    /// by this rule rather than by a copy of it.
+    /// </remarks>
+    internal static bool IsOwnAttributeQualifier(string text, TextChange change, string oldName)
     {
         if (change.Length != oldName.Length
             || !string.Equals(text.Substring(change.Offset, change.Length), oldName, StringComparison.OrdinalIgnoreCase)

@@ -56,7 +56,10 @@ The server parses VB6 source with the full ANTLR4 grammar on every change. Synta
 wavy underlines with a hover tooltip.
 
 **What works:** precise error spans on the offending token; ANTLR messages prettified into VB6-style text
-by `VbErrorMessages.Prettify()`; squiggles cleared on close.
+by `VbErrorMessages.Prettify()`; squiggles cleared on close. A whole VB6 file is accepted, and nothing is
+reported inside its header or a member's `Attribute` lines. A header the grammar cannot read is set aside
+and the file parsed again without it, because the parser's recovery from a damaged designer block can
+swallow the code after it, errors and procedures alike.
 
 **`Option Explicit` undeclared-variable checking does not run.**
 `VbDiagnosticsProvider.EnableUndeclaredVariableCheck` is a `const bool = false`, so the check is compiled
@@ -176,7 +179,8 @@ keywords.
 **`textDocument/documentHighlight`**
 
 Resting the caret on an identifier for 500 ms highlights matching occurrences via a background renderer,
-using case-insensitive whole-word matching.
+using case-insensitive whole-word matching. Nothing inside a file's header or a member's `Attribute` lines is
+highlighted, and resting the caret there highlights nothing.
 
 - ■ Lexical, not semantic: it highlights every textual match, not references to the same symbol. Telling
   those apart is binding.
@@ -191,7 +195,11 @@ using case-insensitive whole-word matching.
 **`textDocument/rename`**
 
 `F2` prompts for a new name and applies all replacements as one atomic edit — a single undo restores the
-whole rename.
+whole rename. No edit lands in a file's header or a member's `Attribute` lines, with one exception: the
+member's own name in `Attribute Name.VB_Description`, which has to follow the member or describe nothing.
+With the caret in either, there is no rename, and the IDE says so rather than asking for a name. Nor is a
+name the designer block declares renamed from the code — a form's, a control's or a menu's — because its
+declaration is in the header: rename it in the Properties window.
 
 - ■ Lexical, single-file. It will rename unrelated symbols that share a name, and cross-file rename needs a
   workspace model. **Semantic rename is explicitly outside the limit**, so this will not grow into it.
@@ -210,7 +218,10 @@ correction on every save. If the server is not running the save proceeds unforma
 
 **What works:** 123 keywords normalised to PascalCase; 4-space block indentation across every VB6 block
 construct; `Else`/`ElseIf`/`Case` dedent then re-indent; string literals and comments never touched; an
-empty edit array when already correct; a single whole-document edit, so one `Ctrl+Z` undoes it.
+empty edit array when already correct; one edit per run of changed lines, which the IDE applies as one
+step, so one `Ctrl+Z` undoes it. No edit reaches into a file's header or a member's `Attribute` lines, and
+each line keeps the line ending it had (the formatter used to join its output with `\n`, so no file VB6
+wrote was ever already formatted).
 
 - ◐ No range formatting, indent size hardcoded to 4, line continuations get block-level indent only, and
   statement-level spacing (`x=1` → `x = 1`) is not normalised. All ordinary work.

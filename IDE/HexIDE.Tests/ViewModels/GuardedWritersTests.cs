@@ -178,6 +178,44 @@ public class GuardedWritersTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void ARenameFromAReadOnlyLineIsRefusedBeforeANameIsAskedFor()
+    {
+        // The bundled server answers a rename from inside the header with nothing (#273 task 3.10), which the
+        // code window would otherwise show as nothing: no message, and no rename.
+        var form = OpenForm();
+        var text = form.Document.Text;
+
+        form.RenameRefusalAt(text.IndexOf("Caption", StringComparison.Ordinal) + 2, "Caption").Should().Be("rename refused");
+        form.RenameRefusalAt(text.IndexOf("Dim Caption", StringComparison.Ordinal) + 6, "Caption")
+            .Should().BeNull("the layout's Caption lines set a property; they do not declare this local");
+        form.RenameRefusalAt(text.IndexOf("Option Explicit", StringComparison.Ordinal), "Option")
+            .Should().BeNull("the first line of code starts where the header ends, and is the developer's");
+
+        var cls = OpenClass();
+        var attribute = cls.Document.Text.IndexOf("Attribute Total.", StringComparison.Ordinal);
+        cls.RenameRefusalAt(attribute + "Attribute ".Length + 1, "Total")
+            .Should().Be("rename refused", "a member is renamed from its declaration, and the qualifier follows");
+        cls.RenameRefusalAt(cls.Document.Text.IndexOf("Function Total", StringComparison.Ordinal) + "Function ".Length, "Total")
+            .Should().BeNull();
+    }
+
+    [AvaloniaFact]
+    public void RenamingAControlFromItsCodeIsRefused()
+    {
+        // The designer block declares Command1, so a rename that keeps off the header would rename every
+        // reference in the code and not the control. Before the server kept off the header this was refused
+        // because the answer reached the header; now it is refused because of what the name is.
+        var form = OpenForm();
+        var text = form.Document.Text;
+        var reference = text.IndexOf("Command1.Enabled", StringComparison.Ordinal);
+
+        form.RenameRefusalAt(reference + 2, "Command1").Should().Be("rename refused");
+        form.RenameRefusalAt(reference + 2, "command1").Should().Be("rename refused", "VB6 compares names ignoring case");
+        form.RenameRefusalAt(text.IndexOf("Command1.Enabled", StringComparison.Ordinal) + "Command1.".Length + 2, "Enabled")
+            .Should().BeNull();
+    }
+
+    [AvaloniaFact]
     public void ARenameEditToAnAttributeLineThatIsNotTheQualifierIsRefused()
     {
         var vm = OpenClass();

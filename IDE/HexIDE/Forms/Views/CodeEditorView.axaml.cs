@@ -1194,6 +1194,12 @@ public partial class CodeEditorView : UserControl
         var oldName = GetWordUnderCaret();
         if (string.IsNullOrEmpty(oldName)) return;
 
+        if (vm.RenameRefusalAt(TextEditor.CaretOffset, oldName) is { } refusal)
+        {
+            _ = vm.ShowRefusalAsync(refusal);
+            return;
+        }
+
         _ = RenameSymbolAsync(vm, lspPos, oldName);
     }
 
