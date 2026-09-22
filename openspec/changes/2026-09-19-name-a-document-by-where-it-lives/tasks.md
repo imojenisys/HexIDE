@@ -1020,6 +1020,9 @@
   code, not the buffer, so its line numbers still start after the header (3.16); `type_text` inserts a
   bare `\n` into a CRLF buffer verbatim, which the formatter now rightly leaves alone (the Enter-key case is
   #530). The rename prompt's own title and label are hard-coded English (#537).
+  **From main (#651, hexide-io/HexIDE#649):** `type_text` now asks the installed `ReadOnlySectionProvider.CanInsert`
+  before inserting and refuses otherwise, so once this provider is installed the automation route honours it
+  with no further change; a live check of 3.7 can use `type_text` into the header and expect a refusal.
 - [ ] 3.11 Find and Replace search outside read-only regions only.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
   **On merging main:** #570 (hexide-io/HexIDE#569) now refuses `set_breakpoints` / `set_bookmarks` lines,
