@@ -861,7 +861,18 @@ public class UiAutomationDriverTests
 
             var (resolved, error) = UiAutomationDriver.Resolve(window, path);
             resolved.Should().NotBeNull(error);
-            resolved.Should().BeOfType<TextEditor>().Which.TextArea.Should().BeSameAs(got,
+            // Either the editor or its own text area is a correct answer, and WHICH one depends on whether an
+            // AvaloniaEdit theme is loaded: untemplated, the TextArea is not in the tree to be named. This
+            // suite loads the theme (see TestApp), so it is the templated case — the same one the running IDE
+            // is in. What must hold in both is that the path picks out the receiver rather than the other
+            // editor, which is the whole of #611; the leaf's class is not what disambiguates, the path is.
+            var resolvedArea = resolved switch
+            {
+                TextEditor editor => editor.TextArea,
+                AvaloniaEdit.Editing.TextArea area => area,
+                _ => null,
+            };
+            resolvedArea.Should().BeSameAs(got,
                 "the path names the editor whose TextArea received the key, not the other one");
 
             var receiver = got;

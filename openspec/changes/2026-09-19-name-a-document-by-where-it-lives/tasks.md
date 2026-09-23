@@ -1062,6 +1062,14 @@
   after a failed read.
 - [ ] 3.18 Automation: `get_file_content` returns the whole file open or not; `set_file_content` accepts it
   back, or a body alone with the header kept. Tool descriptions say lines count from the top of the file.
+  **Standing hazard until this lands, found while merging main on 2026-09-23.** On this branch
+  `editor.Document.Text` is the whole file, so any tool that means *the code section* must read `BufferBody`.
+  Main's `get_file_content` read `Document.Text`, which on main is the code section and here would have
+  returned the designer block from a tool whose contract excludes it — wrong in the direction that costs a
+  caller a form, and silent. The merge changed both its form and module arms to `BufferBody`, and the
+  comparisons behind `hasUnsavedChanges` are against the model's `Code`, so both sides of each are the code
+  section. Anything written against main between now and this task carries the same trap; the general rule
+  is that on this branch `Document.Text` answers "the file" and never "the code".
 - [ ] 3.19 Add-ins: content is the whole file; positions from the top of the file; `SetContent` refused if the
   header changes. The AI Chat add-in's prompt and apply paths updated.
 - [ ] 3.20 New strings (fold labels, refusal reasons, the reworded read-only banner) added to `en` and every

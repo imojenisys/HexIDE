@@ -248,7 +248,11 @@ public class CodeEditorViewModelTests : IDisposable
         vm.Document.UndoStack.Undo();
         if (vm.Document.UndoStack.CanUndo) vm.Document.UndoStack.Undo();
 
-        vm.Document.Text.Should().Be(SomeCode);
+        // BufferBody, not Document.Text: since #273 task 3.2 the buffer holds the whole file, so a module's
+        // own `Attribute VB_Name` header sits above the code. What this test is about is that the code
+        // survived, and the code is the body.
+        vm.BufferBody.Should().Be(SomeCode);
+        vm.Document.TextLength.Should().BeGreaterThan(0, "undoing past the load must not empty the window");
     }
 
     [AvaloniaFact]
