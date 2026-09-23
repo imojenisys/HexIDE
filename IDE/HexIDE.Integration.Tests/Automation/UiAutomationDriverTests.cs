@@ -639,6 +639,54 @@ public class UiAutomationDriverTests
         finally { window.Close(); }
     }
 
+    // #649: the insert is a document edit, so it went straight through a read-only editor and said "keyboard".
+
+    [AvaloniaFact]
+    public void TypeText_IntoAReadOnlyCodeEditor_IsRefusedAndChangesNothing()
+    {
+        var editor = new TextEditor { Text = "Sub Main()\nEnd Sub", IsReadOnly = true };
+        var window = Show(editor);
+        try
+        {
+            var outcome = UiAutomationDriver.TypeText(editor, "XXX_SHOULD_NOT_APPEAR");
+
+            outcome.Success.Should().BeFalse();
+            outcome.Mechanism.Should().Be(UiAutomationDriver.TypedMechanism);
+            outcome.Error.Should().Be("TextEditor is read-only, so a person could not type there either; nothing was inserted");
+            editor.Document.Text.Should().Be("Sub Main()\nEnd Sub");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void TypeText_IntoAReadOnlyOrDisabledTextBox_IsRefused()
+    {
+        var readOnly = new TextBox { Text = "kept", IsReadOnly = true };
+        var disabled = new TextBox { Text = "kept", IsEnabled = false };
+        var window = Show(new StackPanel { Children = { readOnly, disabled } });
+        try
+        {
+            UiAutomationDriver.TypeText(readOnly, "x").Error.Should().StartWith("TextBox is read-only");
+            UiAutomationDriver.TypeText(disabled, "x").Error.Should().StartWith("TextBox is disabled");
+            readOnly.Text.Should().Be("kept");
+            disabled.Text.Should().Be("kept");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void TypeText_ReportsItsMechanismAsADocumentEdit_NotAsKeyboardInput()
+    {
+        var box = new TextBox { Text = "" };
+        var window = Show(box);
+        try
+        {
+            UiAutomationDriver.TypeText(box, "hello").Mechanism.Should().Be("document",
+                "the text goes in through the control's API; 'keyboard' is reserved for press_key's real key events");
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public void TypeText_FindsNestedTextSurface()
     {
@@ -778,6 +826,52 @@ public class UiAutomationDriverTests
         finally { window.Close(); }
     }
 
+    [AvaloniaFact]
+    public void PressKey_OnAContainer_NamesWhichOfTwoEditorsReceivedTheKey_AsAPathThatResolvesBack()
+    {
+        // Two editors, as the IDE has an Immediate window and a code window. "pressed F12 on TextArea" was true
+        // of either, so it identified neither (#611). The reply's path must pick out the one that got the key,
+        // and resolving that path must lead press_key back to the same TextArea.
+        var first = new TextEditor { Name = "First" };
+        var second = new TextEditor { Name = "Second" };
+        // Addressable, as the IDE's editors are (its dumps show TextEditor[Editor]). Headless, with no editor
+        // theme applied, an untagged TextEditor has no template and would be folded away as a bare wrapper.
+        AutomationProperties.SetAutomationId(first, "First");
+        AutomationProperties.SetAutomationId(second, "Second");
+        var host = new StackPanel();
+        host.Children.Add(first);
+        host.Children.Add(second);
+        var window = Show(host);
+        try
+        {
+            AvaloniaEdit.Editing.TextArea? got = null;
+            foreach (var editor in new[] { first, second })
+            {
+                var area = editor.TextArea;
+                area.AddHandler(InputElement.KeyDownEvent, (object? _, KeyEventArgs e) => got = area,
+                    RoutingStrategies.Tunnel);
+            }
+
+            var outcome = UiAutomationDriver.PressKey(window, "F12", null, "Window");
+
+            outcome.Success.Should().BeTrue(outcome.Error);
+            got.Should().NotBeNull();
+            var path = outcome.Detail!.Split(", at ").Last();
+            path.Should().StartWith("Window/", "the reply must carry a path, not only a class name");
+
+            var (resolved, error) = UiAutomationDriver.Resolve(window, path);
+            resolved.Should().NotBeNull(error);
+            resolved.Should().BeOfType<TextEditor>().Which.TextArea.Should().BeSameAs(got,
+                "the path names the editor whose TextArea received the key, not the other one");
+
+            var receiver = got;
+            got = null;
+            UiAutomationDriver.PressKey(resolved!, "F12", null, path).Success.Should().BeTrue();
+            got.Should().BeSameAs(receiver, "pressing at the reported path reaches the same TextArea again");
+        }
+        finally { window.Close(); }
+    }
+
     // ── hover ──────────────────────────────────────────────────────────────────────────────────────
     // A hover is a POSITION, not just an event: the code editor reads e.GetPosition(TextView) and turns it
     // into a text location, so an event carrying no usable point produces no tip however well it is routed.
@@ -861,6 +955,79 @@ public class UiAutomationDriverTests
 
         outcome.Success.Should().BeFalse();
         outcome.Error.Should().Contain("not attached");
+    }
+
+    // The declared tip belongs to the point hovered, not to whichever descendant of the target comes first:
+    // a hover on the window that landed in a code editor once answered with the toolbar's "Add Project" (#610).
+
+    [AvaloniaFact]
+    public void Hover_OnAContainer_GivesThePathOfTheEditorThePointerWentTo()
+    {
+        // A hover on the window lands in the first editor under it. "hovered (0, 25.6) on TextEditor[Editor]"
+        // did not say which editor (#610); the path does, and resolves back to it.
+        var first = new TextEditor { Name = "First" };
+        var second = new TextEditor { Name = "Second" };
+        AutomationProperties.SetAutomationId(first, "First");
+        AutomationProperties.SetAutomationId(second, "Second");
+        var host = new StackPanel();
+        host.Children.Add(first);
+        host.Children.Add(second);
+        var window = Show(host);
+        try
+        {
+            var outcome = UiAutomationDriver.Hover(window, null, null, "Window", out var landing);
+
+            outcome.Success.Should().BeTrue(outcome.Error);
+            var path = outcome.Detail!.Split(", at ").Last();
+            path.Should().StartWith("Window/", "the reply must carry a path, not only a class name");
+            var (resolved, error) = UiAutomationDriver.Resolve(window, path);
+            resolved.Should().NotBeNull(error);
+            resolved.Should().BeSameAs(landing!.Value.Receiver).And.BeSameAs(first);
+        }
+        finally { window.Close(); }
+    }
+
+    private static (Window Window, Button Button) ToolbarBesideAPane()
+    {
+        var button = new Button
+        {
+            Content = "+", Width = 120, Height = 40,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+        };
+        ToolTip.SetTip(button, "Add Project");
+        var pane = new Border { Height = 200, Background = Avalonia.Media.Brushes.White };
+        return (Show(new StackPanel { Children = { button, pane } }), button);
+    }
+
+    [AvaloniaFact]
+    public void Hover_DeclaredTip_IsNotBorrowedFromAnUnrelatedDescendant()
+    {
+        var (window, _) = ToolbarBesideAPane();
+        try
+        {
+            // Window centre: in the pane, well below the button.
+            UiAutomationDriver.Hover(window, null, null, null, out var landing).Success.Should().BeTrue();
+
+            UiAutomationDriver.DeclaredToolTipAt(landing!.Value.Receiver, landing.Value.Point)
+                .Should().BeNull("nothing under the hovered point declares a tip, and the button is elsewhere");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Hover_DeclaredTip_IsTheOneUnderThePoint_EvenWhenTheTargetIsItsContainer()
+    {
+        var (window, button) = ToolbarBesideAPane();
+        try
+        {
+            button.IsEnabled = false; // a disabled toolbar button still declares its tip
+
+            UiAutomationDriver.Hover(window, 10, 10, null, out var landing).Success.Should().BeTrue();
+
+            UiAutomationDriver.DeclaredToolTipAt(landing!.Value.Receiver, landing.Value.Point)
+                .Should().Be("Add Project");
+        }
+        finally { window.Close(); }
     }
 
     // ── Saying when a node is not on screen (gap 15) ─────────────────────────────────

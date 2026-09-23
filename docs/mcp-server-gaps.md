@@ -21,23 +21,13 @@ maxDepth: 14)`, not "`dump_visual_tree` returns only the tab chrome".
 
 ---
 
-## 2. `set_control_property` only handles string / number / bool
-
-**Symptom.** Setting an **enum** property fails — `set_control_property(Label0, "BackStyle", "1")` →
-*"Property 'BackStyle' has type 'BackStyles' which is not supported by set_control_property"*. **Colour**
-(`VBColor`) properties (`BackColor`/`ForeColor`) are likewise unsettable.
-
-**How it bit.** I couldn't make a label opaque, nor set a control's colour, via the designer tool — so the
-Phase-2 colour verification had to be done by *running code* (`Me.BackColor = &HC0FFC0` in `Form_Load`) and
-snapshotting the result, rather than a designer property set.
-
-**Fix.** Accept enum values (by member name or ordinal) and `VBColor` values (a hex `OLE_COLOR` string like
-`"&H00FF0000&"`, or an `R,G,B` triple). Better: route the incoming string through the **same property-editor
-coercion the designer's property grid uses**, so every editable property type is settable through one path.
-
----
-
 ## 3. MCP tools drop on IDE shutdown and don't re-attach mid-session
+
+> **The MCP client's behaviour, not a HexIDE defect** (#645). Tool discovery belongs to the client: it keeps
+> a cached schema for a tool name it already knows, and does not attach at all when a session began with no
+> server answering. Measured 2026-09-22 over about a dozen relaunches in one session that began attached:
+> existing tools stayed callable every time, and a changed description was not picked up until a `/mcp`
+> reconnect. Nothing observed points at the server. Kept here for the measurements.
 
 **Symptom.** MCP tools are discovered at session start. Shutting the IDE down — which is **required** to run
 the `vb6.exe` oracle and for any rebuild that holds file locks on the runtime DLLs — disconnects the `hexide`
@@ -89,45 +79,6 @@ one wrong retirement.
 **Fix consideration.** Auto-reconnect the MCP client when a known server reappears on its port, or a
 lightweight "reconnect MCP" affordance — so the shutdown→build→relaunch→verify loop keeps the tools live
 without a full resume.
-
----
-
-## 5. A designer control is reported under its view-model's type name, not its own (narrowed 2026-09-22)
-
-**Was:** *Can't select / delete / reorder a designer control via MCP.* Measured again for #362, and most of
-it no longer holds. With default arguments, `dump_visual_tree(root: ".../Pane[#0]")` lists each canvas
-control as a `ListItem` (`ControlItem`) with `selectionItem`. `interact select` on it selected it,
-`press_key(key: "Delete")` on it deleted it (`get_form_controls` confirmed `Command0` gone; the Edit menu
-then offered *Undo Delete: Command0*), and `invoke_designer_undo` / `invoke_designer_redo` both exist. The
-`FormEditor.BringToFront` / `SendToBack` toolbar buttons are addressable by `automationId`; reordering was
-not driven in this pass.
-
-**What remains.** The node's name is `HexIDE.VisualDesigner.ComponentInstanceViewModel`, the view model's
-`ToString()`, so the path is `ListItem[HexIDE.VisualDesigner.ComponentInstanceViewModel]` for every
-control. With more than one control on a form, a caller cannot tell from the tree which node is
-`Command1`; it has to fall back on position or index. Filed as #526. The rest of this entry is the original record.
-
-
-**Symptom.** A control placed with `add_control` is created and auto-selected, but there is no way to (a) select a
-*different, existing* control, (b) delete a control, or (c) exercise undo/redo of a designer edit through MCP. The
-controls drawn on the designer canvas are **not individual nodes in `dump_visual_tree`** (the canvas paints them; the
-tree shows only the Properties-pane `ObjectSelector` combo and dock chrome), so `interact`/`press_key` have no path
-to target a specific control, and there is no `select_control` / `delete_control` tool.
-
-**How it bit (bug-hunt batch-2 designer fixes).** Verifying the four `FormEditViewModel` fixes — duplicate-name
-avoidance (needs *delete then re-add*), multi-select **Delete** (needs a multi-selection), and undo **z-order**
-restore (needs cut + undo) — was not drivable. Only the no-collision naming path was confirmed live (`add_control`
-twice → `Command0`, `Command1`). The rest were verified by build + code review against the already-proven
-`CutSelectedControls` path and the standard ascending-index restore invariant.
-
-**Root cause.** The designer canvas is a custom-drawn surface; component VMs aren't surfaced as automation nodes, and
-the designer's selection/delete/undo aren't exposed as `ICommand`s reachable via `interact invoke_command`.
-
-**Fix consideration.** Small, high-leverage additions: `select_control(formName, controlName)` (drive the designer's
-`SelectedComponent`/`SetSelectedComponents`), `delete_selected_controls`, and `designer_redo` to pair with the
-existing `invoke_designer_undo` — plus surfacing each canvas control as a `dump_visual_tree` node with its name, so
-`interact` can click/rubber-band it. That would make the whole designer edit loop (add → select → move → delete →
-undo/redo) MCP-verifiable.
 
 ---
 
@@ -260,27 +211,13 @@ the kind this document exists to prevent.
 
 ---
 
-## 8. `type_text` bypasses a read-only editor, and reports `mechanism: "keyboard"` while doing it
+## 10. A crashed IDE is indistinguishable from a slow tool call (narrowed 2026-09-22)
 
-**Symptom.** Verifying the read-only editing gate (#22) against the running IDE, `type_text` successfully
-inserted `XXX_SHOULD_NOT_APPEAR` into a code editor whose `TextEditor.IsReadOnly` was bound true. The result
-reported `"mechanism":"keyboard"`, which reads as "a real key event went in" — so the first conclusion was
-that the gate was broken. It was not.
-
-**Cause.** The tool's own description says it inserts "at the caret **via the control's own API**", which is
-a document mutation, not input. `IsReadOnly` on AvaloniaEdit guards the *editing UI*, so a direct
-`Document.Insert` legitimately sidesteps it. The `mechanism: "keyboard"` label is the misleading part.
-
-**Workaround.** Do not use `type_text` to test whether input is blocked. `press_key` raises real
-`KeyDown`/`KeyUp`, but note gap #9 below before trusting a negative result from it either. The reliable
-check is behavioural at a level the user cares about — here, invoking Save and confirming the file on disk
-is byte-identical afterwards.
-
-**Suggested fix.** Report `mechanism: "api"` (or `"document"`) when inserting programmatically, and reserve
-`"keyboard"` for genuine key events. Optionally have `type_text` refuse, or warn, when the target editor is
-read-only — silently mutating a read-only document is a surprising default for an automation tool.
-
-## 10. A crashed IDE is indistinguishable from a slow tool call
+> **Narrowed by #643.** An exception nothing caught is now written to the IDE log with its stack, and the log
+> is flushed before the process ends, so the post-mortem no longer needs the Windows event log. Checked live
+> with `HEXIDE_DEBUG_CRASH=thread` and `=ui` in a Debug build. **What remains** is the caller's side: once the
+> process is dead it cannot answer, so the client still says `Unable to connect`, and the reader must know to
+> look in the log. An exception inside a `DispatcherTimer` callback is not caught at all; see #652.
 
 **Symptom.** Driving the designer to compose a screenshot, `add_control` returned success, then the next
 call hung for the full 120 s timeout and every subsequent call failed with `Unable to connect. Is the
@@ -316,6 +253,12 @@ handler that flushes Serilog on `AppDomain.UnhandledException` would also make t
   limitation. It's listed here only because gap #1 made it hard to *see* the resulting error.
 
 ## MCP tools do not re-attach to a resumed session while the IDE keeps running
+
+> **The MCP client's behaviour, not a HexIDE defect** (#645). Tool discovery belongs to the client: it keeps
+> a cached schema for a tool name it already knows, and does not attach at all when a session began with no
+> server answering. Measured 2026-09-22 over about a dozen relaunches in one session that began attached:
+> existing tools stayed callable every time, and a changed description was not picked up until a `/mcp`
+> reconnect. Nothing observed points at the server. Kept here for the measurements.
 
 **Symptom.** HexIDE was running throughout (`HexIDE.Desktop` PID alive, port 5123 `LISTENING`), the session
 was restarted twice specifically to pick the tools up, and `mcp__hexide__*` was still absent from the tool
@@ -373,26 +316,6 @@ calls, so expand again immediately before `select`.
 `itemsRealized: false` alongside it would be enough. A partial list that looks complete is worse than no
 list, because it supports a confident wrong conclusion; an empty array with a flag supports none.
 
-## take_snapshot renders DIPs while Win32 coordinates are physical pixels
-
-**Symptom.** Driving a synthetic mouse click from a `boundingRect` needs a scale conversion that nothing in
-the tool output mentions. On the machine this was hit on, `GetClientRect` reported 987 × 560 physical pixels
-while `take_snapshot` returned a 1481 × 840 image and `inspect_element` reported bounds in that same 1481-wide
-space — a factor of 0.666. Clicking at the raw `boundingRect` coordinates lands roughly 50% off, far enough
-to hit a different control and look like "the click did nothing".
-
-**Consequence.** Any fallback that leaves the MCP surface for real input — the only route left when a
-control has no usable provider — silently targets the wrong place, and the resulting no-op is easy to
-misread as the feature being broken.
-
-**Workaround.** Derive the factor before clicking: `GetClientRect` width ÷ snapshot image width, then
-multiply the DIP coordinate by it and pass through `ClientToScreen`. Do not assume 1.0, and do not assume
-the usual Windows 1.25/1.5 either — measure it.
-
-**Suggested fix.** Report the scale explicitly. `take_snapshot` returning the render scale alongside the
-path (and `inspect_element` naming the space its `boundingRect` is in) would remove the guesswork; the
-values are already known to the server.
-
 ## take_snapshot's default capture picks a modeless dialog (narrowed 2026-09-22)
 
 **Was:** *take_snapshot of the IDE fails while a menu is open, and the default capture picks a modeless
@@ -421,6 +344,11 @@ of the disabled state (does it actually look greyed?) is unverified.
 overlay selector. Failing that, return a real error message saying the surface cannot be captured while a
 popup is open, rather than a bare "an error occurred".
 
+**Since #603.** A tool that throws now answers with the tool name, the exception type and its message instead
+of the bare line, and says it is a defect to report. Re-measured 2026-09-22: with the Edit menu expanded,
+`take_snapshot {"window":"ide"}` no longer throws at all and returns a path, which agrees with the narrowing
+note above. The half still open, the Find dialog being preferred, was not re-tested.
+
 ## shutdown_ide can kill the MCP server and leave the IDE running
 
 **Symptom.** `shutdown_ide` replied `Unable to connect. Is the computer able to access the url?`. The
@@ -437,90 +365,6 @@ fallback for an MCP disconnect, but reached here *because of* the shutdown rathe
 **Suggested fix.** Send the reply before tearing the host down (or stop the host last), so the caller gets
 the confirmation the tool promises. Either way, do not leave a window up with no server behind it: if the
 shutdown cannot complete, keep the server alive so the next call can say why.
-
----
-
-## Every parameter of a capture tool was required, including the ones that mean "no filter"
-
-**Symptom.** The first call to `list_lsp_messages` had to pass five arguments to ask the simplest possible
-question. `connectionId`, `method`, `failuresOnly`, `afterSequence` and `limit` were all in the schema's
-`required` array, so "list everything" could not be expressed as an empty call.
-
-**Cause, and it is a C# detail with a schema consequence.** A nullable parameter with no default value is
-still a *required* parameter to the MCP schema generator. `string? connectionId` is optional-looking in C#
-and mandatory on the wire. `dump_visual_tree` got this right by accident of having defaults
-(`string? root = null, int maxDepth = 20`), and the new tools did not.
-
-**Workaround used.** Pass `null` explicitly for each. It works, and it is five arguments of noise on every
-call, which is exactly the friction that makes an agent reach for a different tool.
-
-**Fixed** by giving every optional parameter a C# default. Worth knowing for the next tool: check the
-generated schema's `required` array, not the C# signature — they disagree, and only one of them is what an
-agent sees.
-
-## The capture state went blank after a clear, which is the one thing it existed to prevent
-
-**Symptom.** `clear_lsp_capture` replied:
-
-```
-{"envelopesDiscarded":13,"state":{"armsEveryConnection":true,"connections":[]}}
-```
-
-The connection was alive and armed. `arm_lsp_capture` a moment earlier had listed it correctly.
-
-**Cause.** Both mutating tools returned a state whose connection list was derived from the envelopes
-present in the record — the same answer as the real list right up until somebody empties the record.
-
-**Consequence, and why it is worse than a cosmetic wrong field.** The state is returned by those two tools
-specifically so that arming is not invisible: a tool answering only "done" would leave an agent unable to
-tell an armed connection from one whose id it had misspelled. After a clear it answered exactly that.
-An agent clearing `hexide.vb6` and one clearing `hexide.vb` got identical replies.
-
-**Fixed** by having the log name its own connections (`ConversationLog.ConnectionIds`) rather than
-inferring them from traffic, which also makes a connection armed before it has started visible — the case
-the launch flag depends on. Two tests pin it.
-
-**Found on the first real use of the tools**, by driving them rather than by reading them. Both defects had
-passing unit tests around them; neither could have been caught by one, because both are about what the
-*schema* and the *reply* look like to a caller.
-
-## There is no way to ask what is being recorded without changing it
-
-**Symptom.** To find out which connections existed and which were armed, the only tools were
-`arm_lsp_capture` and `clear_lsp_capture` — both of which mutate. Reading the state meant arming something
-first.
-
-**Workaround used.** Call `arm_lsp_capture` with the state it already had, and read the reply.
-
-**Fixed** by adding `get_lsp_capture_state`, which is the same reply with nothing changed.
-
-## An export cannot be reached from automation
-
-**Symptom.** `get_lsp_message` returns a body raw, deliberately — it is the developer's own machine and
-the live view is not redacted either. But there is no tool that produces the redacted, shareable form, so
-an agent asked to attach a conversation to an issue has no safe path: it can read bodies it must not paste,
-and cannot produce the form it should paste instead.
-
-**Workaround used.** None needed yet; noted before it is.
-
-**Suggested fix.** A tool over `ConversationExporter`, which already produces the JSON-lines form plus a
-manifest and takes a redactor. It is listed as phase-four work in #369 (task 4.5, export and copy), so this
-is a note that the automation half of it matters as much as the button — an agent is the likeliest thing to
-be asked for an export, and it is currently the only consumer that cannot make one.
-
-**Filed as [#395](https://github.com/hexide-io/HexIDE/issues/395) and closed by
-`export_lsp_conversation`.** An entry here is a note to self; the surface ships either way, so an
-ergonomics defect gets an issue exactly as a human-facing one does.
-
-**The tool always pseudonymises, and the opt-out is deliberately NOT a parameter on it.** The design
-records that a non-pseudonymising mode should exist and that its surface is an open question needing a
-prominent warning wherever it lands. A boolean here would have settled that question quietly, in the one
-place with nowhere to put a warning. The raw form stays reachable through `get_lsp_message`, so nothing is
-inaccessible — only unshareable, which is the distinction the redaction boundary is made of.
-
-Its first real run found a leak no test had: a workspace folder's `name` survives while its `uri` is
-redacted, because body redaction is textual by design and a `"name"` beside a URI cannot be recognised
-that way — [#397](https://github.com/hexide-io/HexIDE/issues/397).
 
 ---
 
@@ -595,193 +439,17 @@ reply — a field that is always populated stops being read.
   unexplained gap reads as data loss.
 - A reply that mutates reports the new state, and reports it even when the answer is empty.
 
-**None of this is tested, and the descriptions are the largest part of the surface.** A description that
-misleads a caller produces a wrong call and a green build, and the author is the one person who cannot
-evaluate it — the empty-reply defect above was caught by *being* the caller, not by re-reading prose that
-had just been written. Filed as [#396](https://github.com/hexide-io/HexIDE/issues/396).
+**The mechanical half of this is now tested; whether the prose helps is not.** A description that misleads
+a caller produces a wrong call and a green build. `ToolDescriptionParameterTests` and
+`FirstContactTranscriptTests` (#535, closing #396) catch a parameter or reply field named in a spelling the
+wire does not use, and a worked transcript that has drifted from the tools it shows.
+`ToolDescriptionEnumTests` (#529) catches a vocabulary missing a member. #549 made all of them fail when
+they meet source they cannot parse. None of them can say whether a description *helps*, and the author is
+the one person who cannot judge that — the empty-reply defect above was caught by *being* the caller, not
+by re-reading prose that had just been written. That half is the first-contact exercise with a fresh model,
+[#534](https://github.com/hexide-io/HexIDE/issues/534), and it is still open.
 
 ---
-
-## get_document_tabs reported three fewer tabs than the user could see
-
-**Symptom.** A newly built Protocol Inspector tab was visibly open in the tab strip, and:
-
-```
-get_document_tabs      -> only the form designer
-activate_document_tab  -> "No document tab with title 'Protocol Inspector'"
-```
-
-The Object Browser and the language-server connection list were missing too. Three real tabs, in the same
-strip, invisible to automation.
-
-**Cause.** Both tools read `IDocumentDockService.OpenDocuments`, which is typed
-`IReadOnlyList<BaseEditorWindowViewModel>` and tracks only the editors the service was asked to open. The
-Object Browser, the connection list and the inspector are documents the shell adds straight to the dock, so
-they were never in that list. Nothing was wrong with the tools' logic; they were answering a narrower
-question than the one asked, and the difference was invisible from outside.
-
-**How it bit.** It blocked verification of the very feature being built. Worse, the failure was
-*affirmative*: not "I cannot see that kind of tab" but "no document tab with title X", which reads as the
-tab not existing. I had to take a screenshot to establish that the thing I had just built was on screen.
-
-**Fixed.** `IDocumentDockService` gained `AllTabs`, `ActiveTab`, `TryActivateAny` and `TryCloseAny`, reading
-the dock's own `VisibleDockables`. The three tools now answer about the strip the user sees, `type` gained
-a third value `tool` for documents that are not editors, and the description enumerates all three.
-
-**And the error now names what IS open.** A bare "no tab called X" cannot be told from a typo, and cost a
-second call to find out. The tabs were already in hand:
-
-```
-No document tab with title 'Protocl Inspector'. Open tabs: Object Browser,
-Language & Debug Servers, Project1 - Form1 (Form), Protocol Inspector.
-```
-
----
-
-## A DataGrid row could be read but not selected, which makes a master-detail window undrivable
-
-**Symptom.** With the protocol inspector's grid on screen and its rows enumerated by
-`dump_visual_tree`:
-
-```
-interact(".../DataGrid/DataItem[#2]", "select")
--> {"success": false, "mechanism": "peer", "error": "element does not support 'select'"}
-```
-
-`inspect_element` on the same row reported `"providers": []` and `"selectionItems": []`.
-
-**Cause.** A `DataGridRow`'s automation peer exposes no `ISelectionItemProvider`, and `DoSelect` refused
-when there was no provider. There was no second route either: the reflection actions set a view-model
-property by name and coerce the value from a string, and the property that holds a selection is a row
-object no string can name. So the grid was fully readable and completely inert.
-
-**How it bit.** Selecting a row is not a detail of this window, it is the window: click a row, read the
-body that crossed the wire. Every master-detail surface in the IDE has the same shape, so the gap was one
-control wide and the whole pattern deep. It surfaced while verifying the detail pane, which could not be
-verified at all until it was fixed.
-
-**Fixed.** `UiAutomationDriver.DoSelect` falls back to selecting through the grid that owns the row —
-found by walking up the visual tree, because `DataGridRow.OwningGrid` is internal — and reads
-`SelectedItem` back rather than assuming the grid accepted it. `DescribeProviders` now advertises
-`selectionItem` on a row, so the verb is discoverable instead of being a thing a caller has to try.
-Covered headlessly in `UiAutomationDriverTests`.
-
----
-
-## A native file dialog cannot be driven, so every flow that ends in one needed a person
-
-**Symptom.** The protocol inspector's new *Export conversation…* button opens a save picker.
-`dump_visual_tree` sees nothing of it — a native Win32 dialog is not in Avalonia's control tree at all —
-and while a modal one is up the server does not answer. So the button could be found, enabled and invoked,
-and what happened next could not be observed or completed.
-
-**How far it reaches.** Not one button. Save As, Open Project, Add File, Make EXE, Make Project Group,
-every export: each of them ends in `IStorageProvider`, and each has been verified up to the dialog and by
-hand after it. This was already noted in passing inside a *closed* entry about carried files, which is
-where a general gap goes to be forgotten.
-
-**Fixed, and deliberately not by faking the dialog.** `answer_next_file_dialog(path?)` arms the answer the
-picker would have returned; `clear_file_dialog_answers` discards what is armed. `WindowManager` consults
-the armed answer before reaching for the storage provider, so everything below the picker — the writing,
-the naming, the refusals — is the same code a real click reaches. Only the part a person performs is
-skipped.
-
-Three properties are load-bearing:
-
-- **Single-shot.** A standing override would silently redirect the next unrelated save, and that damage
-  shows up somewhere other than where it was caused.
-- **Cancellation is expressible.** An empty path answers as cancelled, which is a distinct branch through
-  most of these flows and the one least likely to have been exercised by hand.
-- **DEBUG only.** The queue and both call sites compile out with the server, so a shipped build has no
-  bypass rather than an unreachable one.
-
-**It did NOT need a session restart, and that is worth recording because the expectation was wrong.** Two
-brand-new tool schemas appeared to the already-attached client as soon as the IDE relaunched carrying them,
-and were callable in the same session that added them. That matches the measured entry above about
-mid-session relaunch rather than the standing advice, which is written for the case where the server was
-not attached when the session began. Verified by using both tools to drive the export they were built for,
-including the cancellation branch.
-
----
-
-## `get_lsp_message` could not return a single response, and nothing said so
-
-**Symptom.** Pointing HexIDE at a foreign server and trying to read what it advertised. `list_lsp_messages`
-showed the `initialize` request answered in 41 ms; `get_lsp_message` on that sequence returned the
-**request**. There was no sequence that returned the reply, no field naming one, and no explanation — the
-tool had exactly one address per exchange and it was the half already known.
-
-**How it bit.** The whole investigation was about an `InitializeResult`: which capabilities the server
-declared, and therefore which later messages were legal. Getting it meant writing a client outside the IDE
-and driving the server over its own transport by hand — reintroducing, inside the tool built to destroy
-the ambiguity, the exact work that tool exists to remove. Two other things went with it: an unarmed
-connection could say a request was answered and not how large the answer was, and
-`export_lsp_conversation` — a format whose claim is that it replays into a client — contained not one
-reply, so the requests in it would hang.
-
-**Why it survived.** `ConversationLog.TryComplete` pairs a response with its request, stamps the outcome
-and the latency onto that request's envelope, and returned. Its comment explains half the decision
-correctly and stops one step short: *"The response is not itself an entry. It is the second half of one,
-and a timeline that showed both would double every request."* True about the **entry**, and taken as
-license to drop the **body**. Everything downstream then read as working: the timeline was right, the
-latencies were right, and the one thing missing was missing uniformly, so it looked like a design rather
-than a hole. A caller who has never seen the record cannot tell "responses are not kept" from "this
-response was not kept" from "I have asked the wrong question", which is the three-way ambiguity this
-surface exists to destroy.
-
-**Fixed** (hexide-io/HexIDE#429). A response keeps the sequence it was already allocated — responses have
-always consumed one, which is why a listing has always had gaps and why this tool's description has always
-had to explain that those gaps are not dropped frames. The request's row now names it, so the apology
-becomes an address: `answerSequence` when a body was kept, and `answerSizeBytes` always, since a size is
-metadata and belongs to the tier that runs unarmed. Passing an answer sequence to `get_lsp_message` returns
-`isAnswer`, `answerTo`, and the request's method, because a response carries none on the wire. Both tool
-descriptions say all of this, including which state a row with an outcome and no `answerSequence` is in.
-
-**The general lesson is the one this file keeps re-learning.** The author knew responses completed their
-requests; a first-time caller sees a sequence number that answers with the wrong half. Judge the tool by
-what a model that has never seen it would do on first contact — and a reply that is structurally
-unreachable must at minimum say so, rather than returning something plausible and adjacent.
-
-## A mark tool answered about the startup project, keyed on the caller's spelling, and said nothing back
-
-**Symptom.** `set_breakpoints("form1", [5])` on a project holding `Form1` replied `{"success":true}`. The
-gutter showed nothing, the run broke nowhere, and `get_breakpoints("Form1")` answered with an empty array.
-Two tools, two confident replies, no breakpoint. With a project group open, the four mark tools could not
-reach the second project's documents at all — a name they did not recognise was `No form or module named
-'X' found`, whether or not the IDE had one open in front of the caller.
-
-**How it bit.** `ResolveDocumentUri` matched a name case-insensitively against the **startup** project and
-then built the store key by interpolating the **caller's** spelling into `vb6://form/{name}`
-(hexide-io/HexIDE#467). Both mark stores were ordinal dictionaries, so `vb6://form/form1` was a second
-entry beside `vb6://form/Form1` — one the gutter, the runner and the sidecar all read past. The reply then
-echoed that key back in its `uri` field, which reads as confirmation rather than as the symptom it was.
-
-**Why it survived.** Three separate things each looked correct. The match was case-insensitive, which is
-what VB6 does. The key was minted the same way the editor mints it, which is what consistency looks like.
-And the reply named what had been written, which is what a mutating tool should do. What nobody wrote down
-is that the two had to be the *same* string, and nothing in the surface could show they were not: a caller
-who has never seen the IDE cannot tell "set, and shown" from "set under a name nothing reads" when both
-answer `success`.
-
-**Fixed** (#273 phase 1). A name resolves to a *document* before anything is keyed, and the stores are
-keyed by that document rather than by any spelling of its name. Every tool that names a document searches
-**every loaded project**, takes an optional `project` to disambiguate, and refuses an ambiguous bare name
-with the candidates listed rather than picking one. Replies carry `project` and `document` — the IDE's own
-spelling, not the caller's — beside the wire `uri`, and a mutating reply now reports what the document
-holds afterwards, including when that is nothing: `Form1 now has no breakpoints.` rather than a bare
-success.
-
-**Two descriptions were corrected rather than fixed.** `clear_all_breakpoints` said "Removes every
-breakpoint in the project"; it removes every breakpoint in *every loaded project*, and has always done so.
-Whether VB6 agrees is unmeasured and is filed as #492. And `set_bookmarks(name, [])` promised to clear a
-document's bookmarks: it emptied the store and raised no change event, so the gutter kept its dots and the
-sidecar was never rewritten — the cleared bookmarks came back on the next load. That one was a real defect
-and is fixed with the rest.
-
-**The lesson this adds.** A reply that echoes an argument back is not evidence the argument was understood.
-Where a tool normalises what it was given — a name matched without regard to case is exactly that — the
-reply must carry the **normalised** form, because the difference between the two is the whole of what the
-caller cannot otherwise see.
 
 ## A relaunch picks up a NEW tool but not a CHANGED one (measured 2026-09-20)
 
@@ -804,24 +472,23 @@ new argument was mandatory on the wire and every existing caller broke, cached s
 this file and CLAUDE.md both say so, and it still cost a cycle. And when a *signature* changes rather than a
 tool being added, expect the first call to fail against a stale schema and do not diagnose the server.
 
-## `set_control_property` cannot set `Name` on anything
+**Since #603.** A throw inside a tool is now reported with its exception type and message rather than the bare
+line. Not re-measured for this case: a call that does not match the tool's parameters may fail in the SDK's
+own argument binding, which can report through `McpException`, and #603 leaves that as the SDK reports it.
 
-**Symptom.** `set_control_property(formName: "Form1", controlName: "Command1", property: "Name", value:
-"Command0")` answers `Property 'Name' not found on VB.CommandButton`. The same call against the form's own
-root answers `Property 'Name' not found on VB.Form`. `Name` is the first row of the Properties window and
-the one property every VB6 developer sets on every control they draw.
+## The bookmark tools count lines from 0; every other line-taking tool, and the gutter, count from 1
 
-**Measured, not inferred** (2026-09-20), while checking whether a newly added validation refusal could
-escape this tool's narrow catch (`HexIdeTools.cs` catches only `FormatException` and `OverflowException`
-inside its dispatcher lambda). It cannot, because the property is refused before anything is set — so the
-escape is unreachable through this tool, and the guard rail nobody can reach is worth recording as such.
+**Symptom.** `set_bookmarks {"name":"Module1","lines":[1]}` (`project` left at null) answers `Carried/Module1
+now has bookmarks on 1.`, and the bookmark is drawn on gutter line **2**. `get_breakpoints`,
+`set_breakpoints`, `run_to_cursor`, `set_next_statement`, `get_debug_state` and `get_call_stack` all number
+lines from 1, and so does the gutter. Both bookmark descriptions do say "0-based". A caller who has just used
+any other line tool, or read a line number off a snapshot, is still one line out.
 
-**Consequence.** Renaming a control or a document is not automatable through the property tool at all. The
-working route is the Properties window itself: `interact` with `set_property` on the `(Name)` row's
-`PropertyViewModel.Value`, which is the reflection fallback rather than a provider action, and which does
-commit through the same validation the user gets. `set_value` on that row's `Edit` writes the text and does
-**not** commit — the binding updates on focus loss and Enter does not stand in for it — so a caller who uses
-the obvious verb sees success and no rename.
+**Workaround.** Subtract one before calling `set_bookmarks`, and add one to what `get_bookmarks` returns.
+
+**Suggested fix.** Undecided, and filed as needs-decision:
+[#571](https://github.com/hexide-io/HexIDE/issues/571). Either convert at the tool boundary, which changes
+the contract, or keep 0-based and have the descriptions say the gutter shows N+1.
 
 ## Every automation route to a new document saves it, so the pathless state cannot be reached
 
@@ -849,3 +516,44 @@ leaves the document in, and gain a way to ask for the other — a caller cannot 
 way the user's own menu does". (2) A launch flag that creates a project without saving it, so the dev loop
 can reach the state the product will normally be in once #500 lands. Until then, any verification of
 `untitled:` naming through this surface is verifying something the surface itself prevents.
+
+## Three tools accept a negative control size and report success
+
+**Symptom.** On a `--newproject` form in the designer:
+
+```
+add_control {"formName":"Form1","type":"commandbutton","x":-50,"y":5000,"width":-10,"height":0}
+→ {"success":true,"controlName":"Command2"}
+set_control_property {"formName":"Form1","controlName":"Command1","property":"Width","value":"-10"}
+→ {"success":true}
+move_control {"formName":"Form1","controlName":"Command1","left":null,"top":null,"width":-20,"height":null}
+→ {"success":true}
+```
+
+`add_control` and `set_control_property` save the form, so the negative size reaches the `.frm` on disk,
+and the project then cannot start. The start is refused with the reason, which was
+#590 (closed, see the archive). A drag in the designer cannot produce a negative size;
+nothing in the property model refuses one.
+
+**Workaround.** Do not pass a negative `width` or `height`; read `get_form_controls` back after a size change.
+
+**Suggested fix.** One rule in the shared property validation, so the Properties window and all three tools
+refuse the same values with the same message. What that rule is (refuse, clamp, and whether `0` is allowed)
+needs measuring against `vb6.exe` first:
+[#589](https://github.com/hexide-io/HexIDE/issues/589). A negative `Left` or `Top` is ordinary VB6 and not
+part of it.
+
+## A newly added module reads as having unsaved changes although its file matches
+
+**Symptom.** On a saved project, `add_file {"name":"Helpers","type":"Module"}` succeeds and writes
+`Helpers.bas`. Then `get_file_content {"name":"Helpers"}` (`project` left at null) answers
+`{"content":"","hasUnsavedChanges":true}`, although saving would write the same bytes. The IDE's own
+`invoke_menu_item {"path":"Project/Add Module"}` does the same for `Module3`. An untouched module loaded from
+disk reads `false`.
+
+**Workaround.** Read `hasUnsavedChanges` on a document added in this session as "new", not as "edited".
+
+**Suggested fix.** Undecided, and filed as needs-decision:
+[#597](https://github.com/hexide-io/HexIDE/issues/597). Either record the render baseline when a new
+document is written, or keep new documents unsaved on purpose and say so in `get_file_content`'s
+description.

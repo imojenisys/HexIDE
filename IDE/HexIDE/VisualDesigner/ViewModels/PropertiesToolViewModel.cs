@@ -203,6 +203,13 @@ public partial class PropertiesToolViewModel : Tool
             windowManager.MessageBox("Invalid property value", icon: MessageBoxIcon.Error).ListenErrors();
         }
 
+        // A refused value goes back to what the object holds. The row kept showing it, so after the refusal the
+        // grid displayed a value the control did not have, and a caller reading the row back saw the change it
+        // had just been refused (#625). POSTED, and measured to need it: this runs inside the row's binding
+        // writing to its source, and a change raised during that write is not carried back to the text box.
+        if (!committed && Properties.FirstOrDefault(p => p.PropertyClass == propertyClass) is { } row)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => row.UpdateValueNoRaise(before));
+
         if (committed && !Equals(before, after))
             currentDocument.UndoStack.Push(new SetPropertyCommand(instance, propertyClass, before, after));
     }
@@ -210,6 +217,12 @@ public partial class PropertiesToolViewModel : Tool
 
 public abstract partial class BasePropertyViewModel : ObservableObject
 {
+    /// <summary>
+    /// What a row is called to anything that cannot see it: a screen reader, or automation addressing the row by
+    /// name. Without it each row was named after its view model's type, every row alike. (#526)
+    /// </summary>
+    public abstract string AccessibleName { get; }
+
     [Notify] private bool isVisible = true;
 }
 
@@ -236,6 +249,8 @@ public partial class PropertyCategoryViewModel : BasePropertyViewModel
     }
 
     public string Header { get; }
+
+    public override string AccessibleName => Header;
 }
 
 public partial class PropertyViewModel : BasePropertyViewModel
@@ -260,6 +275,8 @@ public partial class PropertyViewModel : BasePropertyViewModel
     }
 
     public string Name { get; }
+
+    public override string AccessibleName => Name;
     [Notify] private object? value;
     public string Description { get; }
     public PropertyClass PropertyClass { get; }

@@ -189,6 +189,9 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// </summary>
     private LspDocumentSession? session;
 
+    /// <summary>Whether this editor's text has diagnostics yet; see <see cref="LspDocumentSession.AwaitingDiagnostics"/>.</summary>
+    public bool AwaitingDiagnostics => session?.AwaitingDiagnostics ?? false;
+
     public CodeEditorViewModel(IWindowManager windowManager,
         IEditorService editorService,
         IProjectService projectService,
@@ -750,8 +753,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
         // The history is discarded, because what it describes is gone: every entry holds an absolute offset
         // into a document that has just been replaced wholesale from disk, and undoing back across the
-        // reload would put content the file no longer has back into the buffer. The designer half of the
-        // same reload already does exactly this (FormEditViewModel.ReloadFromModel clears its own stack),
+        // reload would put content the file no longer has back into the buffer (#673). The designer half of
+        // the same reload already does exactly this (FormEditViewModel.ReloadFromModel clears its own stack),
         // so the two halves of a reloaded document now agree rather than one of them keeping a history the
         // other threw away.
         Document.UndoStack.ClearAll();

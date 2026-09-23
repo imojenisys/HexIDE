@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace HexIDE.Tests.Infrastructure;
@@ -16,77 +15,76 @@ namespace HexIDE.Tests.Infrastructure;
 /// takes the enums from the assemblies it does reference.
 /// </para>
 /// <para>
-/// It checks that no member is missing. It does not check that the prose names nothing that is not a member:
-/// in running English that cannot be told apart from an ordinary capitalised word. A renamed member is
-/// still caught, because its new name is missing.
+/// Opting in is checked where it can be: a reply record with a field typed as a HexIDE enum must have its tool
+/// opted in to that enum. It cannot be checked where a reply renders an enum into a <c>string</c> field, and
+/// as of hexide-io/HexIDE#549 every reply does: no reply record has an enum-typed field, so the tools opted in
+/// today were opted in by hand, nothing notices one that is not, and the check exists for the first reply
+/// that carries an enum as itself.
+/// </para>
+/// <para>
+/// Two directions go unchecked, and both for the same reason, that in running English a member name cannot be
+/// told apart from an ordinary word. The prose may name something that is not a member. And a member is found
+/// anywhere in the description, so a member that is also an everyday word elsewhere in it, say <c>Local</c>
+/// in a sentence about local files, still passes after the sentence listing the vocabulary has dropped it. A
+/// renamed member is caught all the same, because its new name is missing (hexide-io/HexIDE#549).
 /// </para>
 /// </remarks>
 public class ToolDescriptionEnumTests
 {
-    private sealed record Tool(string Name, string Description, IReadOnlyList<(string Enum, string[] NotRendered)> Enums);
-
-    private static readonly Regex ToolStart = new(@"\[McpServerTool\(Name = ""(?<name>[a-z_]+)""\)\]");
-    private static readonly Regex Literal = new(@"""(?<text>(?:[^""\\]|\\.)*)""");
-    private static readonly Regex Describes = new(@"\[DescribesEnum\(typeof\((?:[\w.]+\.)?(?<type>\w+)\)(?<rest>[^\]]*)\)\]");
-
-    private static IReadOnlyList<Tool> Tools()
-    {
-        var source = File.ReadAllText(Path.Combine(RepoTree.Root(), "IDE", "HexIDE.Desktop", "Server", "HexIdeTools.cs"));
-        var starts = ToolStart.Matches(source).ToList();
-        var tools = new List<Tool>();
-        for (var i = 0; i < starts.Count; i++)
-        {
-            var end = i + 1 < starts.Count ? starts[i + 1].Index : source.Length;
-            var block = source[starts[i].Index..end];
-            var header = block[..block.IndexOf("\n    public ", StringComparison.Ordinal)];
-            var enums = Describes.Matches(header)
-                .Select(m => (m.Groups["type"].Value,
-                    Literal.Matches(m.Groups["rest"].Value).Select(l => l.Groups["text"].Value).ToArray()))
-                .ToList();
-            tools.Add(new Tool(starts[i].Groups["name"].Value, DescriptionOf(header), enums));
-        }
-        return tools;
-    }
-
-    /// <summary>The description's text: every literal in the attribute, joined as the compiler joins a `+` chain.</summary>
-    private static string DescriptionOf(string header)
-    {
-        var at = header.IndexOf("[Description(", StringComparison.Ordinal);
-        if (at < 0) return "";
-        var text = new StringBuilder();
-        var position = at;
-        while (Literal.Match(header, position) is { Success: true } literal)
-        {
-            text.Append(Regex.Unescape(literal.Groups["text"].Value));
-            position = literal.Index + literal.Length;
-            var next = header[position..].TrimStart();
-            if (!next.StartsWith('+')) break;
-        }
-        return text.ToString();
-    }
+    private static readonly Lazy<IReadOnlyDictionary<string, List<Type>>> Enums = new(() =>
+        new[] { "HexIDE", "HexIDE.Core", "HexIDE.Runtime" }
+            .Select(Assembly.Load)
+            .SelectMany(a => a.GetTypes())
+            .Where(t => t.IsEnum)
+            .GroupBy(t => t.Name)
+            .ToDictionary(g => g.Key, g => g.ToList()));
 
     private static Type EnumNamed(string name)
     {
-        var candidates = new[] { "HexIDE", "HexIDE.Core", "HexIDE.Runtime" }
-            .Select(Assembly.Load)
-            .SelectMany(a => a.GetTypes())
-            .Where(t => t.IsEnum && t.Name == name)
-            .ToList();
+        var candidates = Enums.Value.GetValueOrDefault(name) ?? [];
         candidates.Should().ContainSingle($"[DescribesEnum(typeof({name}))] must name exactly one HexIDE enum");
         return candidates[0];
     }
 
     [Fact]
-    public void Tools_that_render_an_enum_are_opted_in()
+    public void At_least_one_tool_is_opted_in()
     {
-        Tools().Should().Contain(t => t.Enums.Count > 0, "a guard with nothing opted in guards nothing");
+        ToolSource.Tools.Should().Contain(t => t.Enums.Count > 0, "a guard with nothing opted in guards nothing");
+    }
+
+    [Fact]
+    public void Every_enum_a_reply_record_carries_is_one_its_tool_describes()
+    {
+        var missing = new List<string>();
+        foreach (var tool in ToolSource.Tools)
+        {
+            var seen = new HashSet<string>();
+            var pending = new Queue<string>([tool.ReplyType]);
+            while (pending.TryDequeue(out var record))
+            {
+                if (!seen.Add(record) || ToolSource.FieldsOf(record) is not { } fields)
+                    continue;
+                foreach (var field in fields)
+                {
+                    foreach (var name in Regex.Matches(field.Type, @"\w+").Select(m => m.Value))
+                        if (Enums.Value.ContainsKey(name) && tool.Enums.All(e => e.Enum != name))
+                            missing.Add($"{tool.Name}: {record}.{field.Name} is a {name}");
+                    foreach (var nested in ToolSource.RecordsIn(field.Type))
+                        pending.Enqueue(nested);
+                }
+            }
+        }
+
+        string.Join(Environment.NewLine, missing.Distinct()).Should().BeEmpty(
+            "a reply that renders an enum needs [DescribesEnum] on its tool, or the check that every member is " +
+            "named never runs for it");
     }
 
     [Fact]
     public void Every_opted_in_description_names_every_member_it_renders()
     {
         var missing = new List<string>();
-        foreach (var tool in Tools())
+        foreach (var tool in ToolSource.Tools)
             foreach (var (enumName, notRendered) in tool.Enums)
                 foreach (var member in Enum.GetNames(EnumNamed(enumName)).Except(notRendered))
                     if (!Regex.IsMatch(tool.Description, $@"\b{member}\b"))
@@ -100,7 +98,7 @@ public class ToolDescriptionEnumTests
     [Fact]
     public void Every_listed_exception_is_a_real_member()
     {
-        foreach (var tool in Tools())
+        foreach (var tool in ToolSource.Tools)
             foreach (var (enumName, notRendered) in tool.Enums.Where(e => e.NotRendered.Length > 0))
                 Enum.GetNames(EnumNamed(enumName)).Should().Contain(notRendered,
                     $"{tool.Name} excuses members of {enumName} that do not exist");

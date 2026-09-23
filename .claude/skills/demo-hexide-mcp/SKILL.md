@@ -86,7 +86,7 @@ Teleport an organic AI-Chat line at each turn.
    (`invoke_command ProjectPropertiesCommand` on `MainView`), set the **Project Name** field (the enabled
    `Edit` on the General tab — its VM member is `ProjectName`) to a fresh, random, jaunty name each run
    (e.g. *Wild Ecstasy* → identifier `WildEcstasy`; names must be valid VB6 identifiers — no spaces), then
-   `invoke` `Window/Custom/Button[_OK]`. A unique project name = a unique build, so a stale exe from a prior
+   `invoke` `Window/Custom/Button[OK]`. A unique project name = a unique build, so a stale exe from a prior
    run can't lock or impersonate this one. Then `view_designer("Form1")`; `add_control` a `Timer` (use the
    name it returns, e.g. `Timer0`); teleport a short opener.
 2. **Slow build.** `open_file("Form1")`, clear the pre-seeded `Form_Load` stub (`press_key` Ctrl+A → Delete),
@@ -111,7 +111,8 @@ Teleport an organic AI-Chat line at each turn.
 
 - HexIDE running with the MCP server + a project (`get_project_info` works).
 - **Exactly one instance, and you're driving the right one.** A second launch on an already-bound
-  `--server-port` starts a silent, MCP-less window — you'd then unknowingly drive the *stale* instance. After
+  `--server-port` says the port is in use and exits with code 3 — so a relaunch that did not take leaves you
+  unknowingly driving the *stale* instance, which is still answering. After
   any (re)launch: kill **all** `HexIDE.Desktop` and **wait for the port to free** before launching one; then
   confirm `get_project_info` is blank (no leftover forms/modules) and the control names start fresh
   (`Timer0`, `Class1`) — proof you're on the new instance, not a previous run's.

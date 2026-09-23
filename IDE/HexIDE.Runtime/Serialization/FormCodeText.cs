@@ -61,11 +61,14 @@ public static class FormCodeText
         var pos = 0;
         foreach (var raw in Lines(code))
         {
-            var lineLength = raw.Length + 1;   // the split ate one '\n'
+            // Advance against the original string so CRLF endings are not
+            // under-counted (Lines() normalises to LF; slicing uses `code`).
+            var nl = code.IndexOf('\n', pos);
+            var next = nl < 0 ? code.Length : nl + 1;
             var line = raw.Trim();
-            if (line.Length == 0) { pos += lineLength; continue; }
+            if (line.Length == 0) { pos = next; continue; }
             if (!line.StartsWith("Attribute ", StringComparison.OrdinalIgnoreCase)) break;
-            pos += lineLength;
+            pos = next;
             end = pos;
         }
         return end == 0 ? "" : code[..Math.Min(end, code.Length)];
@@ -98,8 +101,8 @@ public static class FormCodeText
     /// is CRLF or LF depending on where it came from — the <c>.frm</c> reader rebuilds it with the host's
     /// line ending, and an editor buffer carries whatever was typed into it — and the span is handed straight
     /// to a document replace. Counting one character per terminator after splitting on <c>'\n'</c> would come
-    /// up one short per CRLF line above it and cut into the text, which is exactly what
-    /// hexide-io/HexIDE#465 records <see cref="AttributeBlock"/> doing.
+    /// up one short per CRLF line above it and cut into the text, which is what
+    /// hexide-io/HexIDE#465 recorded <see cref="AttributeBlock"/> doing before it was fixed the same way.
     /// </para>
     /// <para>
     /// Only the LEADING run counts, for the same reason as <see cref="AttributeBlock"/>: an

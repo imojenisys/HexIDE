@@ -1020,26 +1020,24 @@
   code, not the buffer, so its line numbers still start after the header (3.16); `type_text` inserts a
   bare `\n` into a CRLF buffer verbatim, which the formatter now rightly leaves alone (the Enter-key case is
   #530). The rename prompt's own title and label are hard-coded English (#537).
-  **From main (#651, hexide-io/HexIDE#649):** `type_text` now asks the installed `ReadOnlySectionProvider.CanInsert`
-  before inserting and refuses otherwise, so once this provider is installed the automation route honours it
-  with no further change; a live check of 3.7 can use `type_text` into the header and expect a refusal.
+  **From main (#651, hexide-io/HexIDE#649), merged 2026-09-23:** `type_text` asks the installed
+  `ReadOnlySectionProvider.CanInsert` before inserting and refuses otherwise, so once this provider is
+  installed the automation route honours it with no further change; a live check of 3.7 can use `type_text`
+  into the header and expect a refusal. The merge kept both guards rather than choosing: this branch's
+  `RefusedInReadOnlyRegion` runs first, because it names the header and gives the offset where editable code
+  starts, and main's `WhyNotTypable` follows as the general case (disabled, read-only `TextBox`, a wholly
+  read-only editor). `RefusedInReadOnlyRegion` gained a `mechanism` parameter so `type_text` reports
+  `"document"` while `press_key` keeps `"keyboard"`, which is #649's point.
 - [ ] 3.11 Find and Replace search outside read-only regions only.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
-  **On merging main:** #570 (hexide-io/HexIDE#569) now refuses `set_breakpoints` / `set_bookmarks` lines,
-  and #592 (#591) `run_to_cursor` / `set_next_statement` lines, through the same `OutsideDocument`,
-  and #620 (#574) drops sidecar marks outside the document at load (`UserSidecarService.WithinDocument`, counting
-  the model's code),
-  outside the document, counting lines in the open editor's buffer, else the model's code. On main those
-  agree; on this branch the buffer carries the header and the code does not, so the valid range depends on
-  whether the editor is open. Reconcile it with 3.16's numbering, and fold "a read-only line" into the same
-  refusal, which is this task.
-  **Also on merging main:** #494's fix wraps `set_control_property`'s set (HexIdeTools, about l.374-391) in a
-  `ComponentNaming.RefusalFor` check and a `catch (DataValidationException)`; this branch adds
-  `NotifyRootPropertiesChanged` and the `FormLayoutChangedEvent` publish after the set. Keep both: the check
-  and try around the set, the notification after it, and a refused rename returning before the notification.
-  **And:** #666 (hexide-io/HexIDE#664) adds an edit counter to `LspDocumentSession` (`edits`,
-  `editsWhenLastPublished`, `AwaitingDiagnostics`) and `CodeEditorViewModel.AwaitingDiagnostics`; additive, keep
-  both sides where this branch's session hunks sit beside it.
+  **Still open after merging main (2026-09-23):** #570 (hexide-io/HexIDE#569) refuses `set_breakpoints` /
+  `set_bookmarks` lines outside the document, #592 (#591) does the same for `run_to_cursor` /
+  `set_next_statement` through the same `OutsideDocument`, and #620 (#574) drops sidecar marks outside the
+  document at load (`UserSidecarService.WithinDocument`, counting the model's code). Each counts lines in
+  the open editor's buffer, else the model's code. On main those agree; on this branch the buffer carries
+  the header and the code does not, so the valid range still depends on whether the editor is open.
+  Reconcile it with 3.16's numbering, and fold "a read-only line" into the same refusal, which is this task.
+  The merge itself changed none of them — this is work, not a conflict.
 - [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so
   this task is narrower than it reads**: the prompt is raised from `OnTextEntering` and `OnEditorKeyDown`
   only, never from a document event, so a header refresh does not reach it today. What DOES need this task

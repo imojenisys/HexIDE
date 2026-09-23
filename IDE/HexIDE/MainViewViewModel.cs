@@ -787,10 +787,27 @@ public partial class MainViewViewModel : ObservableObject
             // Recorded BEFORE the dialog, and deliberately not tied to its lifetime: stop_project and
             // shutdown_ide both close open dialogs, so anything that only exists while the modal is up is
             // gone by the time a caller looks. (docs/mcp-server-gaps.md)
-            RuntimeErrors.Record(message);
-            var vm = new RuntimeErrorViewModel(message);
-            windowManager.ShowDialog(vm);
+            ReportRuntimeError(message);
         };
+
+        // A startup form that cannot be built is reported the way a runtime error is, so the person sees it and
+        // get_last_runtime_error returns it. It used to reach only the log, while F5 appeared to do nothing (#590).
+        projectRunnerService.StartFailed += ReportRuntimeError;
+
+        void ReportRuntimeError(string message)
+        {
+            RuntimeErrors.Record(message);
+            EndIfAsked(new RuntimeErrorViewModel(message)).ListenErrors();
+        }
+
+        // End on this dialog ends the run, as VB6's does. It used to close the dialog and leave the program
+        // running (#600). The dialog answers true only for End. A start that failed has nothing to end, so
+        // the runner is asked first.
+        async Task EndIfAsked(RuntimeErrorViewModel vm)
+        {
+            if (await windowManager.ShowDialog(vm) && projectRunnerService.CanEndProject)
+                projectRunnerService.EndProject();
+        }
 
         VBWindowContext.CompileError += (form, e) =>
         {
@@ -1574,19 +1591,51 @@ public partial class MainViewViewModel : ObservableObject
         return result;
     }
 
+    /// <summary>The built-in tool windows, by the names get_tool_windows reports and set_tool_window_visible takes.</summary>
+    internal static readonly string[] ToolWindowNames =
+        ["Toolbox", "Properties", "ProjectGroup", "FormLayout", "Immediate", "Locals", "Watches", "CallStack"];
+
+    /// <summary>
+    /// A built-in tool window's name from however a caller spells it: the name in <see cref="ToolWindowNames"/>,
+    /// or the View menu's ("Immediate Window", "Watch Window", "Project Explorer", "Call Stack..."), without
+    /// regard to case or spaces. Null when it names none of them.
+    /// </summary>
+    /// <remarks>
+    /// The menu's names were refused for six of the eight panels, so a caller who read the name off the menu,
+    /// or off a snapshot of it, was told the panel did not exist (#586).
+    /// </remarks>
+    internal static string? CanonicalToolWindowName(string name)
+    {
+        var key = name.Trim().TrimEnd('.').Trim().ToLowerInvariant();
+        if (key.EndsWith(" window", StringComparison.Ordinal))
+            key = key[..^" window".Length];
+        return key.Replace(" ", "") switch
+        {
+            "toolbox"                                         => "Toolbox",
+            "properties"                                      => "Properties",
+            "projectgroup" or "project" or "projectexplorer"  => "ProjectGroup",
+            "formlayout"                                      => "FormLayout",
+            "immediate"                                       => "Immediate",
+            "locals"                                          => "Locals",
+            "watches" or "watch"                              => "Watches",
+            "callstack"                                       => "CallStack",
+            _                                                 => null,
+        };
+    }
+
     public string? SetToolWindowVisible(string name, bool visible)
     {
-        var (tool, right) = name.ToLowerInvariant() switch
+        var (tool, right) = CanonicalToolWindowName(name) switch
         {
-            "toolbox"                     => ((Tool?)ToolBox,        true),
-            "properties"                  => (Properties,             true),
-            "projectgroup" or "project"   => (ProjectExplorer,        true),
-            "formlayout" or "form layout" => (FormLayout,             true),
-            "immediate"                   => (Immediate,              false),
-            "locals"                      => (Locals,                 false),
-            "watches"                     => (Watches,                false),
-            "callstack" or "call stack"   => (CallStack,              false),
-            _                             => (null,                   false)
+            "Toolbox"      => ((Tool?)ToolBox,        true),
+            "Properties"   => (Properties,             true),
+            "ProjectGroup" => (ProjectExplorer,        true),
+            "FormLayout"   => (FormLayout,             true),
+            "Immediate"    => (Immediate,              false),
+            "Locals"       => (Locals,                 false),
+            "Watches"      => (Watches,                false),
+            "CallStack"    => (CallStack,              false),
+            _              => (null,                   false)
         };
 
         if (tool is null)
@@ -1598,7 +1647,12 @@ public partial class MainViewViewModel : ObservableObject
         }
 
         if (tool is null)
-            return $"Unknown tool window '{name}'";
+        {
+            var addins = _addinToolWindowService.Tools.Select(t => t.Title).ToList();
+            return $"Unknown tool window '{name}'. Built in: {string.Join(", ", ToolWindowNames)}"
+                   + (addins.Count > 0 ? $". From add-ins: {string.Join(", ", addins)}" : "")
+                   + ". The View menu's names, such as 'Immediate Window' or 'Project Explorer', work too.";
+        }
 
         var inLayout = IsToolInLayout(tool);
 

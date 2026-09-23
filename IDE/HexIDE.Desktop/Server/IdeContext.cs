@@ -26,6 +26,9 @@ internal sealed class IdeContext : IDisposable
     public AddinProjectTemplateService AddinProjectTemplateService { get; }
     public ILanguageSwitchService LanguageSwitch { get; }
 
+    /// <summary>The IDE's strings, for a refusal a tool shares with the UI.</summary>
+    public HexIDE.Localization.ILocalizationService Localization { get; }
+
     /// <summary>The recorded language-server conversations, for the capture tools.</summary>
     public HexIDE.Conversations.ConversationLog Capture { get; }
 
@@ -49,7 +52,8 @@ internal sealed class IdeContext : IDisposable
         AddinProjectTemplateService addinProjectTemplateService,
         ILanguageSwitchService languageSwitch,
         HexIDE.Conversations.ConversationLog capture,
-        HexIDE.Redaction.Pseudonymiser pseudonyms)
+        HexIDE.Redaction.Pseudonymiser pseudonyms,
+        HexIDE.Localization.ILocalizationService localization)
     {
         ProjectManager = projectManager;
         DocumentDockService = documentDockService;
@@ -69,6 +73,7 @@ internal sealed class IdeContext : IDisposable
         LanguageSwitch = languageSwitch;
         Capture = capture;
         Pseudonyms = pseudonyms;
+        Localization = localization;
     }
 
     public void Dispose() => Diagnostics.Dispose();
