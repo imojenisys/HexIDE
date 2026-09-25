@@ -806,9 +806,14 @@
   needed no notification. The banner did. A rendered-tree test drives the real `FileReloader` both ways.
   — Tests: `ReadOnlySectionProviderTests` (15) and three in `ReadOnlyBannerIntegrationTests`. Mutating the
   widening, the terminator span and the reload notification each turns tests red.
-  — **Not yet verified in the running IDE.** The `hexide` MCP server was not attached to the session that
-  built this. The check owed, with `type_text`: refused at offset 0 and at the start of a member's
-  attribute line, accepted in a faithful form's code, refused in an unfaithful form's code.
+  — **Verified in the running IDE** with `type_text`. In a class module: refused at offset 0 and at the
+  start of a member's `Attribute` line (the reply put the run's end exactly past that one line), and
+  accepted in ordinary code. Both refusals come from the automation tool's own region guard (3.9), which
+  asks before the provider does; the provider's region rules are covered by the unit tests. In a form
+  citing a `.frx` blob with no companion: the banner showed, typing in its code was refused by the
+  provider itself ("TextEditor is read-only"), and a breakpoint was still set on a code line, so the
+  whole-document gate did not become a region. A frame nesting a button no longer triggers the verdict,
+  since #84 hosts real containers, so a missing companion was the trigger that remained.
 - [x] 3.8 **Ahead of 3.5 — there is an open data-loss path until this lands; see the hazard under 3.3b.**
   Undo, by the mechanism 0.5 settled: record the refresh in a marked group so every offset stays
   valid; when the developer undoes and the stack reports that group as the most recent, revert it, undo the
