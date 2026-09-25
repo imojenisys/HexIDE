@@ -100,6 +100,13 @@ public partial class CodeEditorView : UserControl
         InitializeComponent();
         InstallReadOnlySections();
 
+        // One Find surface, the region-aware dialog (#273 task 3.11). AvaloniaEdit installs its own search
+        // panel on every editor when the template is applied, and its Replace All writes straight to the
+        // document, header included. MainView claims Ctrl+F and Ctrl+H first while a searchable document is
+        // active, but not when that command cannot run or when MainView is not in the route, so the panel
+        // is removed rather than left to a gesture race. The event follows OnApplyTemplate, where it is made.
+        TextEditor.TemplateApplied += (_, _) => TextEditor.SearchPanel?.Uninstall();
+
         TextEditor.TextChanged += TextChanged;
         TextEditor.TextChanged += OnTextChangedForFolding;
 

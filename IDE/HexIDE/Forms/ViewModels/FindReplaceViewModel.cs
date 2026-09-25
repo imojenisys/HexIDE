@@ -455,32 +455,25 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
 
         if (Direction == FindDirection.Down)
         {
-            // Walked, not taken: the first match may be one Accepts refuses, and the one the developer
-            // wants can still be further on. Taking only the first used to report "not found" whenever it
-            // failed Whole Word, and would now do so whenever it sat in the header.
-            var match = regex.Match(text, searchFrom);
-            while (match.Success && !Accepts(doc, match.Index, match.Length, isReadOnly))
-                match = match.NextMatch();
+            var match = FirstAccepted(regex, text, searchFrom, doc, isReadOnly, before: text.Length + 1);
             if (match.Success)
                 return (match.Index, match.Length);
 
             // Wrap
             if (allowWrap && searchFrom > 0)
             {
-                match = regex.Match(text, 0);
-                while (match.Success && match.Index < searchFrom && !Accepts(doc, match.Index, match.Length, isReadOnly))
-                    match = match.NextMatch();
-                if (match.Success && match.Index < searchFrom)
+                match = FirstAccepted(regex, text, 0, doc, isReadOnly, before: searchFrom);
+                if (match.Success)
                     return (match.Index, match.Length);
             }
         }
         else
         {
-            // For reverse, collect all matches and find the one before startOffset
-            var matches = regex.Matches(text);
+            // For reverse, collect every match Accepts takes and find the one before startOffset
+            var matches = AcceptedMatches(regex, text, doc, isReadOnly);
             for (int i = matches.Count - 1; i >= 0; i--)
             {
-                if (matches[i].Index < startOffset && Accepts(doc, matches[i].Index, matches[i].Length, isReadOnly))
+                if (matches[i].Index < startOffset)
                     return (matches[i].Index, matches[i].Length);
             }
             // Wrap
@@ -488,7 +481,7 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
             {
                 for (int i = matches.Count - 1; i >= 0; i--)
                 {
-                    if (matches[i].Index >= startOffset && Accepts(doc, matches[i].Index, matches[i].Length, isReadOnly))
+                    if (matches[i].Index >= startOffset)
                         return (matches[i].Index, matches[i].Length);
                 }
             }
@@ -496,6 +489,60 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
 
         return null;
     }
+
+    /// <summary>
+    /// The first match at or after <paramref name="from"/> that <see cref="Accepts"/> takes and that starts
+    /// before <paramref name="before"/>, or an unsuccessful match.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Walked, not taken.</b> The first match may be one Accepts refuses, and the one the developer wants
+    /// can still be further on. Taking only the first used to report "not found" whenever it failed Whole
+    /// Word, and would do so whenever it sat in the header.
+    /// </para>
+    /// <para>
+    /// <b>A refused match is stepped past by one character, not by its length.</b> <c>NextMatch</c> resumes
+    /// at the end of the match it was given, so a refused match hides any match overlapping it. A pattern
+    /// such as <c>\s*Private Sub</c> first matches from the header's last line break, which is refused, and
+    /// <c>NextMatch</c> then resumed after <c>Private Sub</c> and never saw it. The plain scan has always
+    /// stepped by one, and this is the same stepping.
+    /// </para>
+    /// </remarks>
+    private Match FirstAccepted(Regex regex, string text, int from, TextDocument doc, Func<int, int, bool> isReadOnly,
+        int before)
+    {
+        var match = regex.Match(text, from);
+        while (match.Success && match.Index < before && !Accepts(doc, match.Index, match.Length, isReadOnly))
+            match = StepPast(regex, text, match);
+        return match.Success && match.Index < before ? match : Match.Empty;
+    }
+
+    /// <summary>
+    /// Every match <see cref="Accepts"/> takes, in order: a taken match is followed by the next that does not
+    /// overlap it, and a refused one by any that starts after its first character.
+    /// </summary>
+    /// <remarks>See <see cref="FirstAccepted"/> for why a refused match is stepped past by one character.</remarks>
+    private List<Match> AcceptedMatches(Regex regex, string text, TextDocument doc, Func<int, int, bool> isReadOnly)
+    {
+        var accepted = new List<Match>();
+        var match = regex.Match(text, 0);
+        while (match.Success)
+        {
+            if (Accepts(doc, match.Index, match.Length, isReadOnly))
+            {
+                accepted.Add(match);
+                match = match.NextMatch();
+            }
+            else
+            {
+                match = StepPast(regex, text, match);
+            }
+        }
+        return accepted;
+    }
+
+    private static Match StepPast(Regex regex, string text, Match refused) =>
+        refused.Index < text.Length ? regex.Match(text, refused.Index + 1) : Match.Empty;
 
     private (int offset, int length)? FindPrevious(TextDocument doc, int beforeOffset, Func<int, int, bool> isReadOnly)
     {
@@ -507,10 +554,10 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
             try
             {
                 var regex = new Regex(SearchText, options);
-                var matches = regex.Matches(doc.Text);
+                var matches = AcceptedMatches(regex, doc.Text, doc, isReadOnly);
                 for (int i = matches.Count - 1; i >= 0; i--)
                 {
-                    if (matches[i].Index < beforeOffset && Accepts(doc, matches[i].Index, matches[i].Length, isReadOnly))
+                    if (matches[i].Index < beforeOffset)
                         return (matches[i].Index, matches[i].Length);
                 }
             }

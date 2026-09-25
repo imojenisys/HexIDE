@@ -515,6 +515,76 @@ public class FindReplaceViewModelTests
             FormWithCommand1[..CodeStart] + FormWithCommand1[CodeStart..].Replace("Command1", "cmdOK"));
     }
 
+    [AvaloniaTheory]
+    [InlineData(FindDirection.Down, 0)]
+    [InlineData(FindDirection.Up, -1)]
+    public void APatternMatchStraddlingTheHeadersEnd_DoesNotHideTheMatchInsideTheCode(FindDirection direction, int caret)
+    {
+        // \s* first matches from the header's last line break, which overlaps the header and is refused.
+        // Resuming after that match, as NextMatch and Matches do, would skip "Private Sub" inside it.
+        var sut = SearchingTheFormFor(@"\s*Private Sub", caret < 0 ? FormWithCommand1.Length : caret, direction,
+            pattern: true);
+
+        sut.FindNextCommand.Execute(null);
+
+        ActiveEditor.SelectionStart.Should().Be(CodeStart);
+        ActiveEditor.SelectionLength.Should().Be("Private Sub".Length);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void SearchingUp_FromEitherEndOfTheFile_FindsTheLastMatchInTheCode(int caret)
+    {
+        // Up from offset 0 scans from the bottom of the file, like Up from the end of it.
+        var sut = SearchingTheFormFor("Command1", caret < 0 ? FormWithCommand1.Length : caret, FindDirection.Up);
+
+        sut.FindNextCommand.Execute(null);
+
+        ActiveEditor.SelectionStart.Should().Be(LastCodeMatch);
+    }
+
+    [AvaloniaFact]
+    public void ReplaceAll_WithAPatternStraddlingAnAttributeRunsEnd_ReplacesTheMatchAfterIt()
+    {
+        const string cls =
+            "Attribute VB_Name = \"Order\"\r\n" +
+            "Public Function Total() As Currency\r\n" +
+            "Attribute Total.VB_Description = \"The order total\"\r\n" +
+            "    Total = 0\r\n" +
+            "End Function\r\n";
+        var editor = CreateMockEditor(cls);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = @"\s+Total = 0";
+        sut.ReplaceText = "    Total = 1";
+        sut.UsePatternMatching = true;
+
+        sut.ReplaceAllCommand.Execute(null);
+
+        editor.Document.Text.Should().Be(cls.Replace("    Total = 0", "    Total = 1"),
+            "the first match begins on the attribute line's terminator and is refused; the one a character "
+            + "later begins on the code line");
+    }
+
+    [AvaloniaFact]
+    public void FindNext_WithPatternMatchingAndWholeWord_FindsAWholeWordInsideARefusedMatch()
+    {
+        // "Total.*" first matches "total = Total + 1" inside "Subtotal", which is not a whole word. The
+        // whole-word match overlaps it and starts later.
+        var editor = CreateMockEditor("Subtotal = Total + 1");
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = "Total.*";
+        sut.UsePatternMatching = true;
+        sut.WholeWordOnly = true;
+
+        sut.FindNextCommand.Execute(null);
+
+        editor.SelectionStart.Should().Be("Subtotal = ".Length);
+        editor.SelectionLength.Should().Be("Total + 1".Length);
+    }
+
     [AvaloniaFact]
     public void FindNext_WithPatternMatchingAndWholeWord_WalksPastAMatchThatIsNotAWholeWord()
     {

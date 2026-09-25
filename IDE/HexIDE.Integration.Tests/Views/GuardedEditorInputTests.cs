@@ -231,4 +231,26 @@ public class GuardedEditorInputTests : IDisposable
         UiAutomationDriver.PressKey(editor, "Down", null).Success.Should().BeTrue();
         UiAutomationDriver.PressKey(editor, "C", "Ctrl").Success.Should().BeTrue();
     }
+
+    /// <summary>
+    /// AvaloniaEdit's own search panel is not a second Find surface (#273 task 3.11). Its Replace All writes
+    /// straight to the document, header included, and it opens on Ctrl+F wherever MainView does not claim
+    /// the key first, which is this harness: a code window in a plain window.
+    /// </summary>
+    [AvaloniaFact]
+    public void CtrlFInACodeWindowDoesNotOpenAvaloniaEditsOwnSearchPanel()
+    {
+        var vm = OpenForm();
+        var (_, editor) = Show(vm);
+
+        editor.TextArea.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent, Key = Key.F, KeyModifiers = KeyModifiers.Control,
+        });
+        Dispatcher.UIThread.RunJobs();
+
+        (editor.SearchPanel?.IsOpened ?? false).Should().BeFalse();
+        editor.TextArea.DefaultInputHandler.NestedInputHandlers
+            .Should().NotContain(h => h.GetType().Name == "SearchInputHandler");
+    }
 }
