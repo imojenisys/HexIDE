@@ -127,6 +127,17 @@ public class ReadOnlySectionProviderTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void AFormsHeader_StraddlesThePrefixAndIsProtectedToItsLastAttribute()
+    {
+        // A form's prefix ends at the designer block's End; its header runs on through the attribute lines,
+        // which are the first lines of the code.
+        var vm = NewEditor().Initialize(AForm());
+        vm.ReadOnlySections.CanInsert(At(vm, "Attribute VB_Name")).Should().BeFalse();
+        vm.ReadOnlySections.CanInsert(At(vm, "Attribute VB_PredeclaredId")).Should().BeFalse();
+        vm.ReadOnlySections.CanInsert(At(vm, "Option Explicit")).Should().BeTrue();
+    }
+
+    [AvaloniaFact]
     public void Insertion_AtTheStartOfAnAttributeRun_IsRefused()
     {
         var vm = OpenClass();

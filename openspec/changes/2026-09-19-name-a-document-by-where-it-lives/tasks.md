@@ -804,8 +804,11 @@
   — **#475 fixed with it.** `ReloadFrom` raises `IsReadOnly` and `ReadOnlyReason` before its early return,
   because the verdict can flip on a byte-identical code body (an edit to the `.frx` alone). The provider
   needed no notification. The banner did. A rendered-tree test drives the real `FileReloader` both ways.
-  — Tests: `ReadOnlySectionProviderTests` (14) and three in `ReadOnlyBannerIntegrationTests`. Mutating the
+  — Tests: `ReadOnlySectionProviderTests` (15) and three in `ReadOnlyBannerIntegrationTests`. Mutating the
   widening, the terminator span and the reload notification each turns tests red.
+  — **Not yet verified in the running IDE.** The `hexide` MCP server was not attached to the session that
+  built this. The check owed, with `type_text`: refused at offset 0 and at the start of a member's
+  attribute line, accepted in a faithful form's code, refused in an unfaithful form's code.
 - [x] 3.8 **Ahead of 3.5 — there is an open data-loss path until this lands; see the hazard under 3.3b.**
   Undo, by the mechanism 0.5 settled: record the refresh in a marked group so every offset stays
   valid; when the developer undoes and the stack reports that group as the most recent, revert it, undo the
