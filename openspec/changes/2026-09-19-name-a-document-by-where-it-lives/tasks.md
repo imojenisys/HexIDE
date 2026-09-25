@@ -799,6 +799,10 @@
   line 9, through `VBLoader.RunForm`; a form run given its file byte for byte; and each module a run loads
   given its whole file, including a created class, which gets the canonical header the code window shows.
   All four fail with the old inputs restored.
+  — **Verified in the running IDE** on a scratch copy of `demo/bill-of-fare` (VB6-authored, 85-line designer
+  block, five attributes): `set_breakpoints` on line 98, `Form_Load`'s first statement counted from the top
+  of the file, then `run_project` paused at `frmBillOfFare` line 98. `get_call_stack` reported `Form_Load`
+  at 98, and a snapshot shows the current-statement bar on line 98 beside the breakpoint dot.
 - [x] 3.7 Protection: one section provider subclassing the stock one over the header and member-attribute
   regions, overriding both of its virtual methods — refusing insertion at a region's edges, which it allows,
   and widening a deletion over a member's attribute run so deleting the line it describes takes the run with
