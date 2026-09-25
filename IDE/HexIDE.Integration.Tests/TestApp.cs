@@ -12,19 +12,20 @@ namespace HexIDE.Integration.Tests;
 // A themed test Application: loads SimpleTheme (the IDE's base theme) so templated controls (PathIcon,
 // etc.) get a control theme and render in capture tests — a bare Application leaves them template-less.
 // The DataGrid control theme is added separately (as in the real App.axaml) so grid-bearing views render.
-// So is AvaloniaEdit's: without it a TextEditor has no template, and its TextArea is never parented — no
-// visual ancestors, no inherited DataContext — which a test of anything that walks up from the text area
-// cannot tell from a real defect.
 public class TestApp : Application
 {
     public override void Initialize()
     {
         RequestedThemeVariant = ThemeVariant.Light;
         Styles.Add(new SimpleTheme());
+        Styles.Add(new Dock.Avalonia.Themes.Simple.DockSimpleTheme());
         Styles.Add(new StyleInclude(new Uri("avares://HexIDE.Integration.Tests/"))
         {
             Source = new Uri("avares://Avalonia.Controls.DataGrid/Themes/Simple.xaml"),
         });
+        // As App.axaml does. Without it a TextEditor has no template, so its TextArea is not in the tree at
+        // all: a test that walks or resolves a path through an editor was walking a shape the running IDE
+        // never has, and one assertion passed only because of it (#611's test named TextEditor as the leaf).
         Styles.Add(new StyleInclude(new Uri("avares://HexIDE.Integration.Tests/"))
         {
             Source = new Uri("avares://AvaloniaEdit/Themes/Simple/AvaloniaEdit.xaml"),

@@ -861,15 +861,15 @@ public class UiAutomationDriverTests
 
             var (resolved, error) = UiAutomationDriver.Resolve(window, path);
             resolved.Should().NotBeNull(error);
-            // Either the editor or its own text area is a correct answer, and WHICH one depends on whether an
-            // AvaloniaEdit theme is loaded: untemplated, the TextArea is not in the tree to be named. This
-            // suite loads the theme (see TestApp), so it is the templated case — the same one the running IDE
-            // is in. What must hold in both is that the path picks out the receiver rather than the other
-            // editor, which is the whole of #611; the leaf's class is not what disambiguates, the path is.
+            // WHICH editor, not which class. The leaf depends on whether the editor has a template: with
+            // AvaloniaEdit's theme loaded, as the running IDE and now this harness load it, the path ends at
+            // the TextArea; without it the TextEditor is the leaf. This asserted TextEditor and so passed only
+            // while the harness differed from the app. What #611 is about is that the path picks out one of two
+            // editors, and that holds either way.
             var resolvedArea = resolved switch
             {
                 TextEditor editor => editor.TextArea,
-                AvaloniaEdit.Editing.TextArea area => area,
+                AvaloniaEdit.Editing.TextArea textArea => textArea,
                 _ => null,
             };
             resolvedArea.Should().BeSameAs(got,
