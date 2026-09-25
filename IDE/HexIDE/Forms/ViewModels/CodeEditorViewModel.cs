@@ -745,6 +745,14 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     {
         var whole = newPrefix + newBody;
         bufferPrefix = newPrefix;
+
+        // The reload has already adopted the file's fidelity verdict into the same FormDefinition, so nothing
+        // the framework watches changed. Raised before the early return below: an external fix to a form's
+        // designer block can flip the verdict while leaving the code byte-identical. The section provider
+        // reads the verdict live; this is for the banner (#475).
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
+
         if (string.Equals(Document.Text, whole, StringComparison.Ordinal))
             return;
         var caret = CaretOffset;
@@ -1023,7 +1031,38 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     // never meet it. The policy for each is the design record's writer table.
 
     /// <summary>The read-only regions of this buffer as it stands: its header, and each member's attribute lines.</summary>
-    internal IReadOnlyList<TextRegion> ReadOnlyRegionsNow => ReadOnlyRegions.Of(Document.Text, bufferPrefix.Length);
+    /// <remarks>
+    /// Cached against the document's version and the prefix it was composed with. The section provider asks
+    /// on every keystroke, and the scan reads the whole buffer.
+    /// </remarks>
+    internal IReadOnlyList<TextRegion> ReadOnlyRegionsNow
+    {
+        get
+        {
+            var version = Document.Version;
+            if (regionsCache is null || !ReferenceEquals(regionsCacheVersion, version)
+                || regionsCachePrefixLength != bufferPrefix.Length)
+            {
+                regionsCache = ReadOnlyRegions.Of(Document.Text, bufferPrefix.Length);
+                regionsCacheVersion = version;
+                regionsCachePrefixLength = bufferPrefix.Length;
+            }
+            return regionsCache;
+        }
+    }
+
+    private IReadOnlyList<TextRegion>? regionsCache;
+    private ITextSourceVersion? regionsCacheVersion;
+    private int regionsCachePrefixLength;
+
+    /// <summary>
+    /// The section provider the view installs on its text area (task 3.7): the regions above plus the
+    /// whole-document verdict, both read live, so it never needs replacing.
+    /// </summary>
+    internal CodeWindowReadOnlySections ReadOnlySections =>
+        readOnlySections ??= new CodeWindowReadOnlySections(Document, () => IsReadOnly, () => ReadOnlyRegionsNow);
+
+    private CodeWindowReadOnlySections? readOnlySections;
 
     /// <inheritdoc/>
     public bool IsReadOnlyRegion(int offset, int length) =>

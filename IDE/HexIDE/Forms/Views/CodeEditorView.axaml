@@ -108,7 +108,6 @@
                                  IsVisible="{CompiledBinding Settings.IsMinimapVisible}" />
         <ClassicBorderDecorator BorderStyle="Sunken" BorderThickness="2">
             <avaloniaEdit:TextEditor Name="TextEditor"
-                                     IsReadOnly="{CompiledBinding IsReadOnly}"
                                      FontFamily="Courier New,Monospace"
                                      FontSize="13"
                                      ShowLineNumbers="True"

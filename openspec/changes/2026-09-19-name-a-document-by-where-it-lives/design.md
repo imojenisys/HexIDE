@@ -311,8 +311,8 @@ inventoried) goes straight to the document and ignores them. The existing whole-
 unfaithful forms has the same hole today. So protection is two things:
 
 1. A read-only section provider over the header and member-attribute regions, combined with the
-   whole-document gate, and re-evaluated after a reload that changes the fidelity verdict. That verdict goes
-   stale today (#475). Inserting at the very top of the file is refused, because the
+   whole-document gate, and re-evaluated after a reload that changes the fidelity verdict. That verdict went
+   stale until 3.7 (#475). Inserting at the very top of the file is refused, because the
    stock provider allows insertion at a region's edge.
 2. One guarded write path that every programmatic writer goes through, with a stated policy for each.
 
@@ -586,7 +586,9 @@ Three consequences for this change, none of which move task 2.1:
 - **What happens to a member's attribute lines when the member goes.** Deleting a procedure through the
   editor leaves its attribute run behind, because read-only text is carved out of a deletion, and cutting
   one moves the procedure without its description. The rule proposed is that a run belongs to the line it
-  describes and goes with it, which the read-only provider can express by widening the deletable span. An
+  describes and goes with it. The read-only provider can express that only partly: it may decline to carve
+  a run out of a deletion that already spans the run and its line, but it cannot widen one, because
+  AvaloniaEdit throws when a provider returns a segment outside the span it was asked about (3.7). An
   orphaned run, however it arises, is inert text the next save preserves. Neither VB6's behaviour here nor
   the paste side is measured.
 - **Line endings — measured while building 3.1, and the diagnosis here was incomplete.** This said the

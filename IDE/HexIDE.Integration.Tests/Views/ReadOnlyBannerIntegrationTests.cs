@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -21,7 +22,8 @@ namespace HexIDE.Integration.Tests.Views;
 /// Verifies the read-only gate as it actually renders (issues #21/#22).
 ///
 /// The gate is enforced in the view layer, not the view-model: the designer disables its whole design
-/// surface rather than guarding twenty-five mutation methods, and the code editor sets TextEditor.IsReadOnly.
+/// surface rather than guarding twenty-five mutation methods, and the code editor installs a read-only section
+/// provider that carries the whole-document verdict (#273 task 3.7).
 /// Neither is observable from a view-model test, so it is checked here against a real (headless) visual tree.
 /// </summary>
 public class ReadOnlyBannerIntegrationTests
@@ -77,7 +79,7 @@ public class ReadOnlyBannerIntegrationTests
     /// someone typing a procedure into a form whose save is refused. FormEditViewModel needs seven
     /// injected services (one of them a concrete Tool with its own graph) to reach Initialize, so the
     /// designer's identical one-line IsReadOnly is covered by CodeEditorViewModelTests instead, and what
-    /// is verified here is the binding actually taking effect in a rendered tree.
+    /// is verified here is the provider actually installed on a rendered editor.
     /// </summary>
     [AvaloniaFact]
     public void CodeEditor_ForAnUnfaithfulForm_IsReadOnlyAndShowsTheBanner()
@@ -91,8 +93,11 @@ public class ReadOnlyBannerIntegrationTests
 
         // Named lookup rather than a visual walk: the editor sits inside a templated decorator that a
         // headless measure/arrange pass does not fully realise.
-        view.FindControl<TextEditor>("TextEditor")!.IsReadOnly
-            .Should().BeTrue("typing must be blocked, not merely discouraged");
+        var area = view.FindControl<TextEditor>("TextEditor")!.TextArea;
+        area.ReadOnlySectionProvider.Should().BeSameAs(vm.ReadOnlySections,
+            "binding TextEditor.IsReadOnly would replace the provider and lose the region rules");
+        area.ReadOnlySectionProvider.CanInsert(vm.Document.TextLength)
+            .Should().BeFalse("typing must be blocked, not merely discouraged");
 
         // Silent read-only would be worse than either alternative — the reason must be on screen, and it
         // must be resolved text rather than a raw Str.* key.
@@ -111,7 +116,50 @@ public class ReadOnlyBannerIntegrationTests
         var view = Render(new CodeEditorView { DataContext = vm });
 
         vm.IsReadOnly.Should().BeFalse("the gate must be narrow");
-        view.FindControl<TextEditor>("TextEditor")!.IsReadOnly.Should().BeFalse();
+        var area = view.FindControl<TextEditor>("TextEditor")!.TextArea;
+        area.ReadOnlySectionProvider.Should().BeSameAs(vm.ReadOnlySections);
+        vm.Document.Insert(vm.Document.TextLength, "\r\nPrivate Sub Form_Load()\r\nEnd Sub\r\n");
+        area.ReadOnlySectionProvider.CanInsert(vm.Document.Text.IndexOf("End Sub", StringComparison.Ordinal))
+            .Should().BeTrue("a faithful form's code takes typing");
         view.FindControl<Border>("ReadOnlyBanner")!.IsVisible.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// A reload that flips the verdict takes effect in an open code window without reopening it (#475), in
+    /// both directions. The reload goes through the real <see cref="FileReloader"/>, over a project service
+    /// that does what the real one does to the model. The code is unchanged, which is the case that slipped
+    /// past a notification placed after <c>ReloadFrom</c>'s early return: an edit to the <c>.frx</c> alone.
+    /// </summary>
+    [AvaloniaTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async System.Threading.Tasks.Task CodeEditor_WhenAReloadFlipsTheVerdict_FollowsIt(bool startFaithful)
+    {
+        var form = MakeForm(startFaithful);
+        var vm = MakeCodeEditorViewModel();
+        vm.Initialize(form);
+        vm.Document.Insert(vm.Document.TextLength, "\r\nPrivate Sub Form_Load()\r\nEnd Sub\r\n");
+        var view = Render(new CodeEditorView { DataContext = vm });
+        var banner = view.FindControl<Border>("ReadOnlyBanner")!;
+        var area = view.FindControl<TextEditor>("TextEditor")!.TextArea;
+        banner.IsVisible.Should().Be(!startFaithful);
+
+        var projectService = Substitute.For<IProjectService>();
+        projectService.ReloadFormFromDisk(form).Returns(_ =>
+        {
+            form.AdoptFidelityState(MakeForm(!startFaithful));
+            return System.Threading.Tasks.Task.FromResult(true);
+        });
+        var reloader = new FileReloader(projectService, Substitute.For<IEventBus>(),
+            Substitute.For<IStatusBarService>(), Substitute.For<ILocalizationService>(),
+            Substitute.For<IHeaderRefresher>());
+        form.UpdateCode(vm.BufferBody);
+
+        await reloader.ReloadAsync(new WatchedFileTarget("Form1.frm", form, null, vm, null));
+
+        vm.IsReadOnly.Should().Be(startFaithful);
+        banner.IsVisible.Should().Be(startFaithful, "the banner must describe the file as it now is");
+        area.ReadOnlySectionProvider.CanInsert(vm.Document.Text.IndexOf("End Sub", StringComparison.Ordinal))
+            .Should().Be(!startFaithful, "and typing must follow the verdict, not the one the tab opened with");
     }
 }

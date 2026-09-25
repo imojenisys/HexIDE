@@ -28,7 +28,10 @@ there isn't one yet. Anything may change between 0.x releases.
   All skips a match inside them, so replacing every `Command1` in a form's code does not rename the control
   behind the designer's back. Insert File puts its text after them. A rename that would reach them is
   refused with a message saying why - except for the renamed procedure's own `Attribute` line, which
-  follows it. Add-ins and automation clients are refused the same writes, and told so.
+  follows it. Add-ins and automation clients are refused the same writes, and told so. Typing keeps off
+  them too, and cannot split a procedure from its `Attribute` lines: nothing can be typed at the start of
+  one, and Delete at the end of a declaration cannot join the line below onto it. Deleting or cutting a
+  whole procedure takes its `Attribute` lines with it.
 - **The bundled language server keeps to the same rule itself**, rather than leaving the code window to
   discard what it should not have sent. It reports nothing inside a header or a procedure's `Attribute`
   lines, its formatting touches only the lines that change, and rename and highlight leave those lines
@@ -46,7 +49,11 @@ there isn't one yet. Anything may change between 0.x releases.
 - **Renaming a form now renames it in its file's `Attribute VB_Name` line as well as its `Begin` line.**
   Previously a renamed form was saved naming two different forms, one in each. The code window follows
   the rename as it happens, and Ctrl+Z there does not undo it.
-
+- **An open code window now follows a reload that changes whether its form can be saved.** Previously,
+  when a form's file changed on disk so that HexIDE could now reproduce it, or could no longer reproduce
+  it, the code window kept its old answer until it was closed and reopened. It stayed locked with the
+  warning showing, or stayed typable with no warning. The designer already followed the reload.
+  ([#475](https://github.com/hexide-io/HexIDE/issues/475))
 ## [0.2.0] — 2026-09-24
 
 Most of this release is about not losing work. A save now gives back the file it read, and a form HexIDE

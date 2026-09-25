@@ -98,6 +98,7 @@ public partial class CodeEditorView : UserControl
         }, () => true);
 
         InitializeComponent();
+        InstallReadOnlySections();
 
         TextEditor.TextChanged += TextChanged;
         TextEditor.TextChanged += OnTextChangedForFolding;
@@ -128,6 +129,24 @@ public partial class CodeEditorView : UserControl
     {
         if (DataContext is CodeEditorViewModel vm)
             await vm.InsertFileAsync(TextEditor.SelectionStart, TextEditor.SelectionLength);
+    }
+
+    protected override void OnDataContextChanged(EventArgs e)
+    {
+        base.OnDataContextChanged(e);
+        InstallReadOnlySections();
+    }
+
+    /// <summary>
+    /// Both read-only gates in one provider (#273 task 3.7), installed with the view model rather than on
+    /// attach, so a view is never typable before it is shown. Never bind <c>TextEditor.IsReadOnly</c>:
+    /// setting it replaces this provider outright, and the region rules go with it.
+    /// </summary>
+    private void InstallReadOnlySections()
+    {
+        // DataContext can arrive by inheritance before InitializeComponent; the constructor installs it then.
+        if (TextEditor is not null && DataContext is CodeEditorViewModel vm)
+            TextEditor.TextArea.ReadOnlySectionProvider = vm.ReadOnlySections;
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)

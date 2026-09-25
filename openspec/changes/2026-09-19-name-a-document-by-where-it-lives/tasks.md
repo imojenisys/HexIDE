@@ -779,7 +779,7 @@
   recorded under 3.9, and not caused by this task. Found on the way: the Properties window applies a value
   only on leaving the box, never on Enter (#518).
 - [ ] 3.6 The interpreter and the pre-run syntax check parse the whole text (after 0.2).
-- [ ] 3.7 Protection: one section provider subclassing the stock one over the header and member-attribute
+- [x] 3.7 Protection: one section provider subclassing the stock one over the header and member-attribute
   regions, overriding both of its virtual methods — refusing insertion at a region's edges, which it allows,
   and widening a deletion over a member's attribute run so deleting the line it describes takes the run with
   it. It also carries the whole-document verdict, because binding the editor's read-only property would
@@ -787,6 +787,25 @@
   *region* is the header or a member's attribute run and nothing else: a form held read-only as a whole must
   still take breakpoints and answer Find, so the mark, Find and attribute rules test the region, never the
   whole-document gate.
+  — **`CodeWindowReadOnlySections`**, owned by the view model and installed by the view whenever its data
+  context changes. The `IsReadOnly` binding on the editor is gone. Both verdicts are read live on every
+  call, so a reload that flips either one needs nothing reinstalled. The regions are cached against the
+  document's version and the prefix length, because the provider is asked on every keystroke.
+  — **A deletion can be narrowed, never widened, and the task's wording assumed otherwise.**
+  `TextArea.GetDeletableSegments` (decompiled from 12.0.0) throws `InvalidOperationException` if a provider
+  returns a segment outside the span it was given. So "takes the run with it" is done by *not carving the
+  run out* when the deletion already covers the run and the whole line above it: a selected procedure,
+  deleted or cut, goes with its attributes. Deleting the declaration line alone cannot reach the run below
+  it through this seam. That case stays with 4.5a and the guarded write path. `design.md` is corrected.
+  — **One protection the task did not name.** A member's protected span starts at the terminator of the
+  line it describes, not at the run. Delete at the end of a declaration, or Backspace at the start of its
+  first attribute line, would otherwise join the attribute onto the declaration. It is the deletion twin of
+  refusing insertion at the run's first character.
+  — **#475 fixed with it.** `ReloadFrom` raises `IsReadOnly` and `ReadOnlyReason` before its early return,
+  because the verdict can flip on a byte-identical code body (an edit to the `.frx` alone). The provider
+  needed no notification. The banner did. A rendered-tree test drives the real `FileReloader` both ways.
+  — Tests: `ReadOnlySectionProviderTests` (14) and three in `ReadOnlyBannerIntegrationTests`. Mutating the
+  widening, the terminator span and the reload notification each turns tests red.
 - [x] 3.8 **Ahead of 3.5 — there is an open data-loss path until this lands; see the hazard under 3.3b.**
   Undo, by the mechanism 0.5 settled: record the refresh in a marked group so every offset stays
   valid; when the developer undoes and the stack reports that group as the most recent, revert it, undo the
@@ -1097,9 +1116,10 @@
   permitted; its edits to the header are not.
 - [ ] 4.5 Enter at the end of a described line inserts after the attribute run, not between the line and its
   attributes.
-- [ ] 4.5a A run follows the line it describes: deleting that line deletes the run with it (the provider's
-  deletable span widens over the run), and a cut takes it along. An orphaned run, however it arises, is
-  preserved as inert text.
+- [ ] 4.5a A run follows the line it describes: deleting that line deletes the run with it, and a cut takes
+  it along. An orphaned run, however it arises, is preserved as inert text. 3.7 already covers a selection
+  spanning the line and its run. What is left is the line on its own, which the provider cannot widen to
+  (AvaloniaEdit refuses segments outside the requested span), so it needs a guarded write.
 - [ ] 4.6 Corpus lane: files carrying member-level attributes round-trip, which no lane covers today.
 - [ ] 4.7 Tests, one per scenario in this phase's delta, plus a deletion case for a described procedure.
 - [ ] 4.8 Verify in the running IDE, through the automation tools: a procedure's attributes folded into its
