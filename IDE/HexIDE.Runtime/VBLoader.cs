@@ -13,6 +13,7 @@ using Avalonia.Interactivity;
 using Avalonia.Controls.Primitives;
 using Avalonia.Styling;
 using Avalonia.VisualTree;
+using HexIDE.Runtime.Serialization;
 using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Components;
 using HexIDE.Runtime.Interpreter;
@@ -381,6 +382,12 @@ public class VBLoader
     /// Loading one here as a free-standing module would run its declarations a second time, in the wrong
     /// scope.
     /// </para>
+    ///
+    /// <para>
+    /// <b>Each module is its whole file, header included</b> (hexide-io/HexIDE#273 task 3.6), so the line
+    /// a statement is on in the interpreter is the line the code window shows it on. The grammar parses the
+    /// header and the walk executes none of it.
+    /// </para>
     /// </summary>
     public static (IReadOnlyList<(string Name, string Code)> Standard,
                    IReadOnlyList<(string Name, string Code)> Classes)
@@ -390,7 +397,7 @@ public class VBLoader
             return ([], []);
 
         static IReadOnlyList<(string, string)> Of(ProjectDefinition p, ModuleKind kind) =>
-            p.Modules.Where(m => m.Kind == kind).Select(m => (m.Name, m.Code)).ToList();
+            p.Modules.Where(m => m.Kind == kind).Select(m => (m.Name, FormCodeText.WholeFile(m))).ToList();
 
         return (Of(project, ModuleKind.StandardModule), Of(project, ModuleKind.ClassModule));
     }
@@ -414,7 +421,7 @@ public class VBLoader
         // The form's own code runs as the primary module named after the form, so the debug gate reports — and
         // breakpoints are keyed by — the form's real name (matching the editor's vb6://form/{name} document).
         var (standardModules, classModules) = InterpreterModules(element.Owner);
-        window.Context.SetCode(code: element.Code, moduleName: formName ?? "Module1", debugController: debugController,
+        window.Context.SetCode(code: FormCodeText.WholeFile(element), moduleName: formName ?? "Module1", debugController: debugController,
             appInfo: Interpreter.AppInfo.FromProject(element.Owner),
             additionalModules: standardModules, classModules: classModules);
         window.Show();

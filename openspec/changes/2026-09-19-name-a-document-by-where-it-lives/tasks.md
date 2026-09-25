@@ -778,7 +778,27 @@
   save had to be taken with Format on Save off, because the default save destroys the top of the code —
   recorded under 3.9, and not caused by this task. Found on the way: the Properties window applies a value
   only on leaving the box, never on Enter (#518).
-- [ ] 3.6 The interpreter and the pre-run syntax check parse the whole text (after 0.2).
+- [x] 3.6 The interpreter and the pre-run syntax check parse the whole text (after 0.2).
+  — **Four call sites, all now `FormCodeText.WholeFile`:** `VBLoader.InterpreterModules`, which every run
+  path shares for its standard and class modules; `VBLoader.RunForm`, which the standalone runner uses too;
+  the IDE's own form run (`ProjectRunnerService.RunFormInBrowser`); and the pre-run syntax check on the
+  startup form. The Sub Main path's syntax check already ran over `InterpreterModules`, so it follows. No
+  UserControl or PropertyPage code is executed anywhere, so there was no fifth.
+  — **Between 3.2 and this task the debugger was out by the header**, and nothing recorded it. Breakpoints
+  have been counted from the top of the file since the buffer became the whole file, while the interpreter
+  still numbered from the top of the code section. So a breakpoint on a form's first statement never fired,
+  and a syntax error was reported by its code-section line. No code converted between the two, so the fix
+  is only the input: nothing downstream (breakpoint push, current-statement bar, Run To Cursor, Set Next
+  Statement, Call Stack) needed to change.
+  — **Measured before wiring:** a whole `.bas`, `.frm` and `.cls` parse and run with their headers, and the
+  walk executes none of the header. A member-level `Attribute` line still raises `NotImplementedException`
+  when the walk reaches it, which is the pre-existing gap the proposal puts out of scope. It is not new
+  here, because those lines were already in `Code`.
+  — `DebuggerLinesAreFileLinesTests` (4): a syntax error in the startup form reported on its file line,
+  through the real `ProjectRunnerService`; a breakpoint on `Form_Load`'s first statement stopping on file
+  line 9, through `VBLoader.RunForm`; a form run given its file byte for byte; and each module a run loads
+  given its whole file, including a created class, which gets the canonical header the code window shows.
+  All four fail with the old inputs restored.
 - [x] 3.7 Protection: one section provider subclassing the stock one over the header and member-attribute
   regions, overriding both of its virtual methods — refusing insertion at a region's edges, which it allows,
   and widening a deletion over a member's attribute run so deleting the line it describes takes the run with

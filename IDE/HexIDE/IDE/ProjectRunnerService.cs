@@ -17,6 +17,7 @@ using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Components;
 using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 using HexIDE.Utils;
 using HexIDE.VisualDesigner;
 using PropertyChanged.SourceGenerator;
@@ -164,7 +165,7 @@ public partial class ProjectRunnerService : IProjectRunnerService
                 var syntaxChecker = new SyntaxChecker();
                 try
                 {
-                    syntaxChecker.Run(form.Code);
+                    syntaxChecker.Run(FormCodeText.WholeFile(form));
                 }
                 catch (VBCompileErrorException error)
                 {
@@ -487,7 +488,7 @@ public partial class ProjectRunnerService : IProjectRunnerService
         window.Content = VBLoader.SpawnComponents(element, window.Context.ExecutionContext, window.Context.RootEnv);
 
         var (standardModules, classModules) = VBLoader.InterpreterModules(element.Owner);
-        window.Context.SetCode(code: element.Code, moduleName: formName ?? "Module1", debugController: debugController,
+        window.Context.SetCode(code: FormCodeText.WholeFile(element), moduleName: formName ?? "Module1", debugController: debugController,
             appInfo: HexIDE.Runtime.Interpreter.AppInfo.FromProject(element.Owner),
             additionalModules: standardModules, classModules: classModules);
         token.Register((state, _) =>
