@@ -24,9 +24,11 @@ there isn't one yet. Anything may change between 0.x releases.
 - **Reloading a file changed outside the IDE discards that window's undo history**, as reloading it into
   the form designer already did. The history described a document that is no longer there.
 - **Only the IDE rewrites a file's header or a procedure's `Attribute` lines.** Now that the code window
-  shows them, the commands that write into it keep off them. Formatting leaves them as they are. Replace
-  All skips a match inside them, so replacing every `Command1` in a form's code does not rename the control
-  behind the designer's back. Insert File puts its text after them. A rename that would reach them is
+  shows them, the commands that write into it keep off them. Formatting leaves them as they are. Find and
+  Replace do not search them, as VB6's Find never searched the header it hid: searching a form's code for
+  `Command1` finds it in the code rather than on the control's line in the designer block, and replacing
+  every `Command1` does not rename the control behind the designer's back. Insert File puts its text after
+  them. A rename that would reach them is
   refused with a message saying why - except for the renamed procedure's own `Attribute` line, which
   follows it. Add-ins and automation clients are refused the same writes, and told so. Typing keeps off
   them too, and cannot split a procedure from its `Attribute` lines: nothing can be typed at the start of
@@ -49,6 +51,8 @@ there isn't one yet. Anything may change between 0.x releases.
 - **Renaming a form now renames it in its file's `Attribute VB_Name` line as well as its `Begin` line.**
   Previously a renamed form was saved naming two different forms, one in each. The code window follows
   the rename as it happens, and Ctrl+Z there does not undo it.
+- **Find with Use Pattern Matching and Find Whole Word Only no longer gives up at the first match that is
+  not a whole word.** It reported the text as not found, however many whole-word matches came after it.
 - **An open code window now follows a reload that changes whether its form can be saved.** Previously,
   when a form's file changed on disk so that HexIDE could now reproduce it, or could no longer reproduce
   it, the code window kept its old answer until it was closed and reopened. It stayed locked with the

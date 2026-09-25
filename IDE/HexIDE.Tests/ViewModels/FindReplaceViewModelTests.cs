@@ -398,6 +398,53 @@ public class FindReplaceViewModelTests
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
+    public void SearchingUp_WrapsPastAnAttributeLineAtTheBottomOfTheFile(bool pattern)
+    {
+        // The Up wrap scans from the bottom of the file, so what it meets first is whatever read-only region
+        // lies below the caret: here, the last procedure's attribute line. A header is always above the
+        // caret, so the test above cannot reach this scan's own filter.
+        const string module =
+            "Attribute VB_Name = \"Module1\"\r\n" +
+            "Private Sub Other()\r\n" +
+            "    x = Total\r\n" +
+            "End Sub\r\n" +
+            "Public Function Total() As Currency\r\n" +
+            "Attribute Total.VB_Description = \"x\"\r\n" +
+            "End Function\r\n";
+        var editor = CreateMockEditor(module);
+        editor.CaretOffset = module.IndexOf("Total", StringComparison.Ordinal);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = "Total";
+        sut.Direction = FindDirection.Up;
+        sut.UsePatternMatching = pattern;
+
+        sut.FindNextCommand.Execute(null);
+
+        editor.SelectionStart.Should().Be(module.IndexOf("Function Total", StringComparison.Ordinal) + "Function ".Length,
+            "the attribute line's Total is the last in the file and is passed over");
+    }
+
+    [AvaloniaFact]
+    public void AllOpenDocuments_TheFinalWrapIntoTheActiveDocumentPassesOverItsHeader()
+    {
+        // Nothing below the caret and nothing in the other document, so the search comes back round to the
+        // top of the active one, where the designer block's matches come first.
+        var form = CreateMockEditor(FormWithCommand1);
+        form.CaretOffset = LastCodeMatch + "Command1".Length;
+        SetOpenDocuments(form, CreateCarriedFileEditor("nothing to see here"));
+        var sut = CreateSut();
+        sut.SearchText = "Command1";
+        sut.Scope = FindScope.AllOpenDocuments;
+
+        sut.FindNextCommand.Execute(null);
+
+        form.SelectionStart.Should().Be(FirstCodeMatch);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void SearchingForTextOnlyTheHeaderHolds_IsNotFound(bool pattern)
     {
         var sut = SearchingTheFormFor("VB_Name", caret: 0, FindDirection.Down, pattern);
