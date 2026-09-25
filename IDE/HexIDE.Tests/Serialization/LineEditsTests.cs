@@ -126,6 +126,27 @@ public class LineEditsTests
     }
 
     [Fact]
+    public void AHunkThatRewritesADescribedDeclarationAndKeepsItsLineBreakIsKept()
+    {
+        // One hunk: a line added above the declaration and the declaration itself rewritten. The hunk ends
+        // where the run starts, and its replacement ends with a line break, so the run still hangs from the
+        // declaration. Refusing it would lose formatting for nothing.
+        const string header = "Attribute VB_Name = \"Tide\"\r\n";
+        var before = header +
+                     "Option Explicit\r\n" +
+                     "public property get Value() as long\r\n" +
+                     "Attribute Value.VB_UserMemId = 0\r\n" +
+                     "End Property\r\n";
+        var after = before.Replace("public property get Value() as long\r\n",
+            "' Value\r\nPublic Property Get Value() As Long\r\n");
+
+        var reduction = LineEdits.Reduce(before, after, ReadOnlyRegions.Of(before, header.Length));
+
+        LineEdits.Apply(before, reduction.Changes).Should().Be(after);
+        reduction.DroppedLines.Should().Be(0);
+    }
+
+    [Fact]
     public void ALineInsertedAfterAnAttributeRunIsKept()
     {
         const string header = "Attribute VB_Name = \"Tide\"\r\n";

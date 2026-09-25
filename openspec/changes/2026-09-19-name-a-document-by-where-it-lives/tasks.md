@@ -1098,7 +1098,11 @@
   `IsReadOnlyRegion` and its snapshot, rename, add-in `ApplyEdits`, a formatting hunk, and the provider's
   protected span. `Touches` stays as membership for formatting's per-line rewrite and Enter's re-casing,
   which put the line break back. Enter's re-casing now asks about the line's text alone, so a described
-  declaration is still re-cased.
+  declaration is still re-cased. A formatting hunk asks `Changes` only when its replacement ends without
+  a line break (a deletion); one that ends with one keeps the break where the hunk ends, so membership
+  decides, and adding a line above a described declaration while re-indenting it is not dropped for
+  nothing. A side effect worth knowing: automation's `press_key` Backspace at a run's first character is
+  now refused with a reason, as the provider already refused it silently.
   — **AvaloniaEdit's own search panel is uninstalled** from every code window, on `TemplateApplied`,
   which Avalonia raises after `TextEditor.OnApplyTemplate` installs it. Its Replace All writes anywhere.
   MainView claims Ctrl+F and Ctrl+H first only while a searchable document is active and MainView is in
@@ -1123,6 +1127,10 @@
   `VB_PredeclaredId` was reported not found. Pattern `\s*Private Sub` found the code. In a class added to
   the project, a pattern Replace All of `Currency\s+` left the function's `Attribute` line attached.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
+  **A mark is membership, not an edit (left by 3.11).** Since 3.11, `IsReadOnlyRegion` answers the *edit*
+  question (`TextRegion.Changes`), which also refuses the line break a member's attribute run hangs from.
+  Ask it about a line with its terminator (`dl.TotalLength`) and every described declaration refuses a
+  breakpoint. Test a mark with `ReadOnlyRegions.Touches`, or with `IsReadOnlyRegion(dl.Offset, dl.Length)`.
   **Still open after merging main (2026-09-23):** #570 (hexide-io/HexIDE#569) refuses `set_breakpoints` /
   `set_bookmarks` lines outside the document, #592 (#591) does the same for `run_to_cursor` /
   `set_next_statement` through the same `OutsideDocument`, and #620 (#574) drops sidecar marks outside the

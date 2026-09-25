@@ -60,7 +60,13 @@ public static class LineEdits
         foreach (var (a, b, c, d) in Hunks(old, @new))
         {
             var change = ToChange(before, old, @new, a, b, c, d, newline);
-            if (!ReadOnlyRegions.Changes(regions, change.Offset, change.Length))
+            // A hunk is whole lines. One whose replacement ends with a line break leaves a line break where
+            // the hunk ends, so a member run starting there still hangs from a line: only membership decides.
+            // One that ends without one, which is what deleting lines is, removes the break a run hangs from.
+            var keepsItsLineBreak = change.Text.EndsWith('\n');
+            if (keepsItsLineBreak
+                    ? !ReadOnlyRegions.Touches(regions, change.Offset, change.Length)
+                    : !ReadOnlyRegions.Changes(regions, change.Offset, change.Length))
             {
                 kept.Add(change);
                 continue;
