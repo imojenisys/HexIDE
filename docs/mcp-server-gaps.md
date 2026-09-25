@@ -576,7 +576,7 @@ code view reports `CaretOffset` and `BufferBody`, which is still the code sectio
 
 **Suggested fix.** #273 task 3.18 makes `get_file_content` return the whole file, which closes the
 mismatch. A way to put the caret at a line and column, or at a text match, would still save every caller
-the offset arithmetic.
+the offset arithmetic. Filed as [#700](https://github.com/hexide-io/HexIDE/issues/700).
 
 ## A whole-window `dump_visual_tree` overflows the caller's output limit
 
@@ -589,4 +589,5 @@ know any path to scope it with.
 **Workaround.** Dump once to a file and extract paths with a script. After that, always pass `root`.
 
 **Suggested fix.** A filter on class name, view-model type or name, returning matching nodes with their
-paths and no subtrees. This is the question a first call usually asks: where is the code editor?
+paths and no subtrees. This is the question a first call usually asks: where is the code editor? Filed as
+[#699](https://github.com/hexide-io/HexIDE/issues/699).

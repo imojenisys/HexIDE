@@ -792,7 +792,7 @@
   Statement, Call Stack) needed to change.
   — **Measured before wiring:** a whole `.bas`, `.frm` and `.cls` parse and run with their headers, and the
   walk executes none of the header. A member-level `Attribute` line still raises `NotImplementedException`
-  when the walk reaches it, which is the pre-existing gap the proposal puts out of scope. It is not new
+  when the walk reaches it, which is the pre-existing gap the proposal puts out of scope (#174 step 1). It is not new
   here, because those lines were already in `Code`.
   — `DebuggerLinesAreFileLinesTests` (4): a syntax error in the startup form reported on its file line,
   through the real `ProjectRunnerService`; a breakpoint on `Form_Load`'s first statement stopping on file
