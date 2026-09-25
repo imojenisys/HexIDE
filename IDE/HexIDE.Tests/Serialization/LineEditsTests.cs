@@ -107,6 +107,25 @@ public class LineEditsTests
     }
 
     [Fact]
+    public void ARewriteThatDeletesTheLineARunDescribesIsDropped()
+    {
+        // The hunk ends where the run starts, so it does not touch the run; but it removes the line break
+        // the run hangs from, and the run would then describe whatever line was above (#273 task 3.11).
+        const string header = "Attribute VB_Name = \"Tide\"\r\n";
+        var before = header +
+                     "Option Explicit\r\n" +
+                     "Public Property Get Value() As Long\r\n" +
+                     "Attribute Value.VB_UserMemId = 0\r\n" +
+                     "End Property\r\n";
+        var after = before.Replace("Public Property Get Value() As Long\r\n", "");
+
+        var reduction = LineEdits.Reduce(before, after, ReadOnlyRegions.Of(before, header.Length));
+
+        LineEdits.Apply(before, reduction.Changes).Should().Be(before);
+        reduction.DroppedLines.Should().Be(1);
+    }
+
+    [Fact]
     public void ALineInsertedAfterAnAttributeRunIsKept()
     {
         const string header = "Attribute VB_Name = \"Tide\"\r\n";

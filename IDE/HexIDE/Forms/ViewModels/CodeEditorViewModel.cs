@@ -1066,13 +1066,13 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
     /// <inheritdoc/>
     public bool IsReadOnlyRegion(int offset, int length) =>
-        ReadOnlyRegions.Touches(ReadOnlyRegionsNow, offset, length);
+        ReadOnlyRegions.Changes(ReadOnlyRegionsNow, offset, length);
 
     /// <inheritdoc/>
     public Func<int, int, bool> SnapshotReadOnlyRegions()
     {
         var regions = ReadOnlyRegionsNow;
-        return (offset, length) => ReadOnlyRegions.Touches(regions, offset, length);
+        return (offset, length) => ReadOnlyRegions.Changes(regions, offset, length);
     }
 
     /// <summary>
@@ -1175,7 +1175,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
         foreach (var change in changes)
         {
-            if (ReadOnlyRegions.Touches(regions, change.Offset, change.Length)
+            if (ReadOnlyRegions.Changes(regions, change.Offset, change.Length)
                 && !IsOwnAttributeQualifier(text, change, oldName))
             {
                 Log.Information("Refused a rename of {Name} in {Document}: an edit at offset {Offset} is in a read-only region",
@@ -1259,7 +1259,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         var regions = ReadOnlyRegionsNow;
         foreach (var edit in edits)
         {
-            if (ReadOnlyRegions.Touches(regions, edit.Offset, edit.Length))
+            if (ReadOnlyRegions.Changes(regions, edit.Offset, edit.Length))
                 return $"An edit at offset {edit.Offset} would change the document's header or a member's attribute lines, which only the IDE changes.";
         }
 

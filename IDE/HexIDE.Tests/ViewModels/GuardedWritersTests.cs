@@ -266,6 +266,36 @@ public class GuardedWritersTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void AnEditRemovingTheLineBreakAnAttributeRunHangsFromIsRefused()
+    {
+        // Outside the run, but it would join the attribute line onto the declaration (#273 task 3.11).
+        var vm = OpenClass();
+        var before = vm.Document.Text;
+        var terminator = before.IndexOf("\r\nAttribute Total", StringComparison.Ordinal);
+
+        vm.ApplyEdits([new TextChange(terminator, 2, " ")]).Should().NotBeNull();
+
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public void ARenameEditRemovingTheLineBreakAnAttributeRunHangsFromIsRefused()
+    {
+        var vm = OpenClass();
+        var before = vm.Document.Text;
+        var declaration = vm.Document.GetLineByOffset(before.IndexOf("Public Function Total", StringComparison.Ordinal));
+
+        var refusal = vm.ApplyRename(
+            [new TextEdit(new HexIDE.Lsp.Messages.Range(
+                new Position(declaration.LineNumber - 1, declaration.Length), new Position(declaration.LineNumber, 0)),
+                " ")],
+            "Currency");
+
+        refusal.Should().NotBeNull();
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
     public void AnEditInsideAMembersAttributeLineIsRefused()
     {
         var vm = OpenClass();

@@ -136,7 +136,8 @@ public class ReadOnlyRegionsTests
         var end = text.IndexOf("    Value = 1", StringComparison.Ordinal);
 
         ReadOnlyRegions.Of(text, ClassHeader.Length)
-            .Should().Equal(new TextRegion(0, ClassHeader.Length), new TextRegion(start, end));
+            .Should().Equal(new TextRegion(0, ClassHeader.Length),
+                new TextRegion(start, end, Anchor: start - 2));
     }
 
     [Fact]
@@ -145,7 +146,8 @@ public class ReadOnlyRegionsTests
         var text = ClassHeader + "Public Handle As Long\r\nAttribute Handle.VB_VarUserMemId = 0\r\n";
         var start = text.IndexOf("Attribute Handle", StringComparison.Ordinal);
 
-        ReadOnlyRegions.Of(text, ClassHeader.Length)[1].Should().Be(new TextRegion(start, text.Length));
+        ReadOnlyRegions.Of(text, ClassHeader.Length)[1]
+            .Should().Be(new TextRegion(start, text.Length, Anchor: start - 2));
     }
 
     [Theory]
@@ -167,7 +169,7 @@ public class ReadOnlyRegionsTests
         var start = text.IndexOf("Attribute Handle", StringComparison.Ordinal);
 
         ReadOnlyRegions.Of(text, ClassHeader.Length)[1]
-            .Should().Be(new TextRegion(start, text.Length, OpenEnded: true));
+            .Should().Be(new TextRegion(start, text.Length, OpenEnded: true, Anchor: start - 2));
     }
 
     // -- What counts as touching one -------------------------------------------------------------------
@@ -212,5 +214,54 @@ public class ReadOnlyRegionsTests
     public void AnInsertionAtTheEndOfAnOpenEndedRegionJoinsItsLastLine()
     {
         new TextRegion(10, 20, OpenEnded: true).Touches(20, 0).Should().BeTrue();
+    }
+
+    // -- What counts as changing one (#273 task 3.11) --------------------------------------------------
+
+    private const string DescribedMember =
+        "Public Function Total() As Currency\r\n" +
+        "Attribute Total.VB_Description = \"The order total\"\r\n" +
+        "    Total = 0\r\n" +
+        "End Function\r\n";
+
+    private static (TextRegion Run, int DeclarationEnd) TheRun()
+    {
+        var text = ClassHeader + DescribedMember;
+        return (ReadOnlyRegions.Of(text, ClassHeader.Length)[1], text.IndexOf("\r\nAttribute Total", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RemovingTheLineBreakARunHangsFromChangesTheRunThoughItDoesNotTouchIt()
+    {
+        // Joining the attribute line onto the declaration destroys the run: the line no longer starts with
+        // Attribute. The line break is outside the run, so Touches says no; Changes is what a writer asks.
+        var (run, declarationEnd) = TheRun();
+
+        run.Anchor.Should().Be(declarationEnd);
+        run.Touches(declarationEnd, 2).Should().BeFalse();
+        run.Changes(declarationEnd, 2).Should().BeTrue();
+        run.Changes(declarationEnd - "Currency".Length, "Currency\r\n".Length).Should().BeTrue();
+        ReadOnlyRegions.Changes([run], declarationEnd, 1).Should().BeTrue("even half a CRLF");
+    }
+
+    [Fact]
+    public void RewritingADeclarationsTextOrTypingAtItsEndDoesNotChangeItsRun()
+    {
+        var (run, declarationEnd) = TheRun();
+        var declarationStart = declarationEnd - "Public Function Total() As Currency".Length;
+
+        run.Changes(declarationStart, declarationEnd - declarationStart).Should().BeFalse(
+            "re-casing or re-indenting a declaration leaves its line break alone");
+        run.Changes(declarationEnd, 0).Should().BeFalse("text typed at the end of the line lands before its break");
+        run.Changes(run.Start, 0).Should().BeTrue("text between the declaration and its run separates them");
+    }
+
+    [Fact]
+    public void TheHeaderHasNoAnchor()
+    {
+        var header = ReadOnlyRegions.Of(ClassHeader + DescribedMember, ClassHeader.Length)[0];
+
+        header.Anchor.Should().BeNull();
+        header.EditStart.Should().Be(header.Start);
     }
 }

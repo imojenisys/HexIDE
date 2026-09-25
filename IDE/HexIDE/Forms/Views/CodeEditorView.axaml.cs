@@ -891,7 +891,7 @@ public partial class CodeEditorView : UserControl
                     var dl = doc.GetLineByNumber(lineNum);
                     // A committed line inside a region keeps its casing: re-casing it is a rewrite of text
                     // only the IDE may change, and the insert rule does not cover rewriting a line.
-                    if (DataContext is CodeEditorViewModel owner && owner.IsReadOnlyRegion(dl.Offset, Math.Max(dl.TotalLength, 1)))
+                    if (DataContext is CodeEditorViewModel owner && owner.IsReadOnlyRegion(dl.Offset, dl.Length))
                         continue;
                     var lineText = doc.GetText(dl.Offset, dl.Length);
                     var normalized = VbKeywordNormalizer.NormalizeLine(lineText);

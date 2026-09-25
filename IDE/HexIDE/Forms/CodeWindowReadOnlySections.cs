@@ -63,7 +63,9 @@ internal sealed class CodeWindowReadOnlySections : TextSegmentReadOnlySectionPro
     /// </summary>
     /// <remarks>
     /// A member's protected span starts at the terminator of the line it describes, not at the run itself:
-    /// deleting that terminator would join the first attribute line onto the declaration. The span is
+    /// deleting that terminator would join the first attribute line onto the declaration. That start is the
+    /// region's <see cref="TextRegion.EditStart"/>, which every other writer tests through
+    /// <see cref="TextRegion.Changes"/>, so typing and the write path cannot drift apart again. The span is
     /// dropped altogether when the deletion covers the whole run and the whole line above it.
     /// </remarks>
     public override IEnumerable<ISegment> GetDeletableSegments(ISegment segment)
@@ -91,7 +93,9 @@ internal sealed class CodeWindowReadOnlySections : TextSegmentReadOnlySectionPro
     {
         foreach (var region in regions())
         {
-            var described = region.Start > 0 ? document.GetLineByOffset(region.Start).PreviousLine : null;
+            var described = region.Anchor is not null && region.Start > 0
+                ? document.GetLineByOffset(region.Start).PreviousLine
+                : null;
             if (described is null)
             {
                 // The header, or a run with no line above it to describe.
@@ -100,7 +104,7 @@ internal sealed class CodeWindowReadOnlySections : TextSegmentReadOnlySectionPro
             }
             if (segment.Offset <= described.Offset && segment.EndOffset >= region.End)
                 continue;
-            yield return (described.EndOffset, region.End);
+            yield return (region.EditStart, region.End);
         }
     }
 }

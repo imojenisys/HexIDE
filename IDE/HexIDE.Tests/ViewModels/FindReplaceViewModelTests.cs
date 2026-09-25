@@ -567,6 +567,47 @@ public class FindReplaceViewModelTests
             + "later begins on the code line");
     }
 
+    /// <summary>A procedure with a description: the attribute run hangs from the declaration's line break.</summary>
+    private const string DescribedFunction =
+        "Attribute VB_Name = \"Order\"\r\n" +
+        "Public Function Total() As Currency\r\n" +
+        "Attribute Total.VB_Description = \"The order total\"\r\n" +
+        "    Total = 0\r\n" +
+        "End Function\r\n";
+
+    [AvaloniaFact]
+    public void ReplaceOne_NeverJoinsAMembersAttributeLineOntoItsDeclaration()
+    {
+        // Found by review. The match ends on the declaration's line break, which is outside the attribute
+        // run, and replacing it would join the attribute line onto the declaration. Typing was already
+        // refused that deletion (task 3.7); Find and Replace now ask the same question.
+        var editor = CreateMockEditor(DescribedFunction);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = "Currency\r\n";
+        sut.ReplaceText = "Currency";
+
+        sut.FindNextCommand.Execute(null);
+        sut.ReplaceOneCommand.Execute(null);
+
+        editor.Document.Text.Should().Be(DescribedFunction);
+    }
+
+    [AvaloniaFact]
+    public void ReplaceAll_NeverJoinsAMembersAttributeLineOntoItsDeclaration()
+    {
+        var editor = CreateMockEditor(DescribedFunction);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = @"Currency\s+";
+        sut.ReplaceText = "Long ";
+        sut.UsePatternMatching = true;
+
+        sut.ReplaceAllCommand.Execute(null);
+
+        editor.Document.Text.Should().Be(DescribedFunction);
+    }
+
     [AvaloniaFact]
     public void FindNext_WithPatternMatchingAndWholeWord_FindsAWholeWordInsideARefusedMatch()
     {

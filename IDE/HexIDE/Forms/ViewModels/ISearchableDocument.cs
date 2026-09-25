@@ -33,9 +33,9 @@ public interface ISearchableDocument
 
     /// <summary>
     /// True when replacing <paramref name="length"/> characters at <paramref name="offset"/> would change a
-    /// region only the IDE may write: a code window's header, or a member's attribute lines
-    /// (hexide-io/HexIDE#273 phase 3). False for a document that has no such regions, which is every one
-    /// except a code window.
+    /// region only the IDE may write: a code window's header, or a member's attribute lines, including by
+    /// removing the line break those lines hang from (hexide-io/HexIDE#273 phase 3). False for a document
+    /// that has no such regions, which is every one except a code window.
     /// </summary>
     bool IsReadOnlyRegion(int offset, int length) => false;
 

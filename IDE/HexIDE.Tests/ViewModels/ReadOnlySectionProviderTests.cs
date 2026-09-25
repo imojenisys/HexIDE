@@ -200,6 +200,21 @@ public class ReadOnlySectionProviderTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void TypingAndEveryOtherWriterAgreeAboutTheLineBreakARunHangsFrom()
+    {
+        // The provider guards typing and IsReadOnlyRegion guards every other writer (#273 tasks 3.9 and
+        // 3.11). They disagreed once: typing could not delete this line break and Replace could.
+        var vm = OpenClass();
+        var terminator = LineEnd(vm, "Public Function Total");
+
+        Deletable(vm, terminator, terminator + 2).Should().BeEmpty();
+        vm.IsReadOnlyRegion(terminator, 2).Should().BeTrue();
+
+        vm.ReadOnlySections.CanInsert(terminator).Should().BeTrue();
+        vm.IsReadOnlyRegion(terminator, 0).Should().BeFalse();
+    }
+
+    [AvaloniaFact]
     public void Deletion_OfTheWholeBuffer_KeepsTheHeader()
     {
         var vm = OpenClass();

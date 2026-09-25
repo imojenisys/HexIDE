@@ -147,6 +147,24 @@ public class GuardedEditorInputTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void EnterStillRecasesADeclarationThatAnAttributeRunDescribes()
+    {
+        // Re-casing rewrites the committed line's text and never its line break, so it is asked about the
+        // text alone (#273 task 3.11). Asked about the line with its break, it would count as changing the
+        // attribute run hanging from that break, and every described declaration would keep its casing.
+        var vm = OpenForm();
+        var (_, editor) = Show(vm);
+        vm.Document.Insert(vm.Document.TextLength,
+            "public function total() as currency\r\nAttribute total.VB_Description = \"x\"\r\nend function\r\n");
+        var declaration = vm.Document.GetLineByOffset(vm.Document.Text.IndexOf("public function", StringComparison.Ordinal));
+        editor.TextArea.Caret.Offset = declaration.EndOffset;
+
+        PressEnter(editor);
+
+        vm.Document.Text.Should().Contain("Public Function total() As Currency");
+    }
+
+    [AvaloniaFact]
     public void EnterInTheCodeStillBreaksTheLine()
     {
         // The control: the same key, delivered the same way, does reach the handler.

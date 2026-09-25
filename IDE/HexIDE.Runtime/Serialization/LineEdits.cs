@@ -60,7 +60,7 @@ public static class LineEdits
         foreach (var (a, b, c, d) in Hunks(old, @new))
         {
             var change = ToChange(before, old, @new, a, b, c, d, newline);
-            if (!ReadOnlyRegions.Touches(regions, change.Offset, change.Length))
+            if (!ReadOnlyRegions.Changes(regions, change.Offset, change.Length))
             {
                 kept.Add(change);
                 continue;
@@ -75,6 +75,8 @@ public static class LineEdits
                 {
                     var line = old[a + i];
                     var replacement = @new[c + i];
+                    // Membership, not Changes: the line is rewritten with its own terminator put back, so a
+                    // declaration line above an attribute run is re-indented without joining the run to it.
                     if (ReadOnlyRegions.Touches(regions, line.Start, line.Next - line.Start))
                     {
                         dropped++;
