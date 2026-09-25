@@ -1079,7 +1079,49 @@
   starts, and main's `WhyNotTypable` follows as the general case (disabled, read-only `TextBox`, a wholly
   read-only editor). `RefusedInReadOnlyRegion` gained a `mechanism` parameter so `type_text` reports
   `"document"` while `press_key` keeps `"keyboard"`, which is #649's point.
-- [ ] 3.11 Find and Replace search outside read-only regions only.
+- [x] 3.11 Find and Replace search outside read-only regions only.
+  — **One acceptance test at every place a scan yields a match.** `Accepts` combines Whole Word with the
+  document's own region predicate. It is called at the plain scan's forward, backward and both wrap
+  loops, in the pattern scan's two helpers, and in Replace All's backward walk, which no longer needs its
+  own post-hoc check. Each open document is searched against its own regions under All Open Documents. A
+  carried file has none. A form held read-only as a whole is not a region, so Find still searches all of it.
+  — **The pattern scan walks, and steps past a refused match by one character.** It used to take the
+  first match and stop, and `NextMatch`/`Matches` resume at a match's end, so a refused match hid any
+  match overlapping it (`\s*Private Sub` refused at the header's last line break hid the `Private Sub`
+  inside it). The same stepping makes Whole Word in pattern mode true: a first match that was not a whole
+  word used to mean "not found".
+  — **Changing a region is more than touching it**, found by review and now in the design record. A
+  Replace of `Currency\r\n` removed the line break a procedure's attribute run hangs from, joining the
+  attribute onto the declaration, because that break is outside the run. 3.7's provider already refused
+  typing the same deletion. The rule now lives once: a member run carries an **anchor** (its
+  declaration's line end), `TextRegion.Changes` protects from there, and every writer asks it:
+  `IsReadOnlyRegion` and its snapshot, rename, add-in `ApplyEdits`, a formatting hunk, and the provider's
+  protected span. `Touches` stays as membership for formatting's per-line rewrite and Enter's re-casing,
+  which put the line break back. Enter's re-casing now asks about the line's text alone, so a described
+  declaration is still re-cased.
+  — **AvaloniaEdit's own search panel is uninstalled** from every code window, on `TemplateApplied`,
+  which Avalonia raises after `TextEditor.OnApplyTemplate` installs it. Its Replace All writes anywhere.
+  MainView claims Ctrl+F and Ctrl+H first only while a searchable document is active and MainView is in
+  the route, so without this a floated code window, or a moment when the command cannot run, reached it.
+  — **Reviewed adversarially** by a workflow: one finder per scan (plain Down, plain Up, pattern Down,
+  pattern Up, Replace, scope and conformance), each required to give a concrete input and a test that
+  fails if the finding is real, then a critic re-tracing every finding. Fifteen findings came to two
+  root causes in scope (the straddle and the anchor, with four duplicates), the search panel, and five
+  outside the task, each filed rather than folded in: the whole-document gate is honoured by typing only
+  (#701); the event-stub lookup searches the header (#702); Up from offset 0 ignores "no wrap" (#703);
+  Down skips an adjacent match (#704). Every reviewer test that held was run here, not taken on trust.
+  — **Mutation: every guard reddens a test.** Fifteen sites in the first pass left three survivors, all
+  wraps a header can never reach (the plain and pattern Up wraps, and the final wrap into the active
+  document), each now pinned by a test that puts a region match inside that scan. The pattern helpers'
+  region checks and both one-character steps, the search-panel hook, and nine sites of the anchor rule
+  were then mutated in turn, and each was caught.
+  — **Noticed and left to the spec's wording:** text that exists only in the header is reported "not
+  found" while it is visible on screen, and Replace All does not say it left header matches alone. Filed
+  as #705, which needs a spec scenario and two translated strings.
+  — **Verified in the running IDE**, on a copy of `demo/bill-of-fare`: Find `lblChosen` from the top
+  selected line 98, not the designer block's line 17. Two more Find Nexts went to 139 and wrapped to 98.
+  `VB_PredeclaredId` was reported not found. Pattern `\s*Private Sub` found the code. In a class added to
+  the project, a pattern Replace All of `Currency\s+` left the function's `Attribute` line attached.
 - [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
   **Still open after merging main (2026-09-23):** #570 (hexide-io/HexIDE#569) refuses `set_breakpoints` /
   `set_bookmarks` lines outside the document, #592 (#591) does the same for `run_to_cursor` /

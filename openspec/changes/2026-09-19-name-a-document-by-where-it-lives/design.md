@@ -322,13 +322,22 @@ otherwise a developer could not set a breakpoint anywhere in such a form, and Fi
 The two are separate gates, and the rules below that turn on a region (marks, Find, member attributes) test
 the region, never the whole-document gate.
 
+**Changing a region is more than touching it.** A member's attribute run is whole lines, so the line break at
+the end of the declaration it describes lies outside it. Removing that break still destroys the run: the
+first attribute line joins the declaration, stops starting with `Attribute`, and the file stops compiling. So
+a writer asks whether an edit *changes* a region (`TextRegion.Changes`), which protects a member run from its
+**anchor**, the declaration's line end, and the typing provider starts its protected span at the same place.
+Whether a line is *in* a region (`Touches`) stays the narrower question, for the callers that rewrite a whole
+line and put its break back. Found by the review of task 3.11, where a Replace of `Currency\r\n` made the
+join.
+
 | Writer | Policy |
 |---|---|
 | Designer or model header refresh; a save's rendered header; a rename's `VB_Name` | Owner. Writes the region, not undoable from the code window (see **Undo** below, which supersedes the "off the undo history" this row used to say), and shifts marks by the change in line count. `VB_Name` is in the header for a `.bas`/`.cls` and in the first lines of the code section for a `.frm`/`.ctl`/`.pag`, so for those it is a write below the prefix; it is marked as the IDE's own all the same, and one commit's writes are one undo entry. It follows the **document's** name, which for a UserControl or PropertyPage is its module's (the root control's name is not connected to it; #493). |
 | A member's own `Attribute <Member>.…` qualifiers, on that member's rename | Owner. Follows the rename, whether the IDE or a server makes it. A server's rename carries this edit itself — the bundled server's is whole-word, and `Total` in `Total.VB_Description` is a whole word — which is why the rename row lets exactly that edit through. The IDE renames no member of its own yet; phase 4 is where member attributes are built. |
 | Formatting (server answer, any server) | The whole-document edit is reduced to the lines it changes, and changes inside a read-only region are dropped. The bundled formatter also leaves the header alone. |
 | Server rename | Refused as a whole if any edit lands in a read-only region, and the developer is told why in a message. Edits to the renamed member's own attribute qualifiers are allowed. Refusing is not rare: the bundled server's rename is lexical and whole-word over the buffer, so with the designer block in it, renaming a local called `Text`, `Top`, `Caption` or `Index` would otherwise reach the header. The bundled server therefore skips those regions itself, using the same rule, so the refusal is reserved for a server that does not. |
-| Replace, Replace All, Find | Match only outside read-only regions. VB6 never searched the hidden header. |
+| Replace, Replace All, Find | Match only outside read-only regions, and never a match whose replacement would remove the line break a member run hangs from. VB6 never searched the hidden header. A pattern match refused this way is stepped past by one character, so it cannot hide a match inside it. AvaloniaEdit's own search panel, whose Replace All writes anywhere, is uninstalled from every code window, so the dialog is the only Find surface. |
 | Insert File | Never into a read-only region: when the selection touches one, the file's text goes after the region, on lines of its own, and replaces nothing. Elsewhere the selection is the developer's choice and is replaced as always. |
 | Completion commit | Not applied inside a read-only region. A completion completes the word at the caret, so there is no "after the region" that would still mean the same thing. |
 | Enter (auto-close, auto-indent) | Writes nothing with the caret inside a read-only region: there is no "after" a line break could sensibly go to. Its keyword re-casing of the lines just committed skips any line inside one, because re-casing rewrites a line and no insert rule covers that. |
