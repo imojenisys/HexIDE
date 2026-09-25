@@ -32,8 +32,9 @@ there isn't one yet. Anything may change between 0.x releases.
   refused with a message saying why - except for the renamed procedure's own `Attribute` line, which
   follows it. Add-ins and automation clients are refused the same writes, and told so. Typing keeps off
   them too, and cannot split a procedure from its `Attribute` lines: nothing can be typed at the start of
-  one, and Delete at the end of a declaration cannot join the line below onto it. Deleting or cutting a
-  whole procedure takes its `Attribute` lines with it.
+  one, and Delete at the end of a declaration cannot join the line below onto it. Nor can Replace, a
+  rename, formatting or an add-in. Deleting or cutting a whole procedure takes its `Attribute` lines with
+  it.
 - **The bundled language server keeps to the same rule itself**, rather than leaving the code window to
   discard what it should not have sent. It reports nothing inside a header or a procedure's `Attribute`
   lines, its formatting touches only the lines that change, and rename and highlight leave those lines
