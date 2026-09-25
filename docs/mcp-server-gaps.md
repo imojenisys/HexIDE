@@ -251,6 +251,9 @@ handler that flushes Serilog on `AppDomain.UnhandledException` would also make t
 - **`Debug.Print` didn't reach the Immediate window** — that was an *interpreter* bug (the `Debug` object was
   seeded only in the test fixture, not the live F5 run), fixed this session (`VBDebugConsole`), not an MCP
   limitation. It's listed here only because gap #1 made it hard to *see* the resulting error.
+- **`hexide` missing from `/mcp` entirely, even after resumes and reconnects**: the project-local
+  `.claude/settings.local.json` had `"disabledMcpjsonServers": ["hexide"]`, so the client skipped the
+  `.mcp.json` entry altogether (2026-09-25). Check that list before diagnosing the server.
 
 ## MCP tools do not re-attach to a resumed session while the IDE keeps running
 
@@ -557,3 +560,33 @@ disk reads `false`.
 [#597](https://github.com/hexide-io/HexIDE/issues/597). Either record the render baseline when a new
 document is written, or keep new documents unsaved on purpose and say so in `get_file_content`'s
 description.
+
+## Placing the caret needs a buffer offset that no read tool returns
+
+**Symptom (2026-09-25, during #273 task 3.7's live check).** With a class module open,
+`type_text {"target":"…/Custom[Root]/None[TextEditor]","text":"X"}` after `press_key {"key":"Home","modifiers":"Ctrl"}`
+was refused with a good reply: the offset is in the header, and *"put the caret there with interact
+set_property CaretOffset=371"*. That offset is into the editor buffer, which holds the whole file. But
+`get_file_content {"name":"Order"}` answers with the code section only, header stripped, so no read tool
+returns the text those offsets count into. To reach a given line the caller has to navigate with keys:
+`press_key` Ctrl+End, then Up three times, then Home, to land on a member's `Attribute` line.
+
+**Workaround.** Take offsets from a refusal's reply, or navigate with `press_key`. `inspect_element` on the
+code view reports `CaretOffset` and `BufferBody`, which is still the code section too.
+
+**Suggested fix.** #273 task 3.18 makes `get_file_content` return the whole file, which closes the
+mismatch. A way to put the caret at a line and column, or at a text match, would still save every caller
+the offset arithmetic.
+
+## A whole-window `dump_visual_tree` overflows the caller's output limit
+
+**Symptom (2026-09-25).** `dump_visual_tree {"maxDepth":12}` with an IDE showing three document tabs and
+the usual tool windows returned 58,264 characters. That is over the client's limit, so it was written to a
+file instead of being returned. The only way to find the code editor's path was to parse that file outside
+the tool. The description does say to scope a large dump with `root`, but a first-time caller does not yet
+know any path to scope it with.
+
+**Workaround.** Dump once to a file and extract paths with a script. After that, always pass `root`.
+
+**Suggested fix.** A filter on class name, view-model type or name, returning matching nodes with their
+paths and no subtrees. This is the question a first call usually asks: where is the code editor?
