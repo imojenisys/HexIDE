@@ -414,6 +414,45 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// <summary>Replaces the code, leaving the header the buffer shows in front of it untouched.</summary>
     public void ReplaceBody(string body) => Document.Text = bufferPrefix + body;
 
+    /// <summary>
+    /// Puts the code back to <paramref name="body"/>, under whatever header the buffer carries now: what
+    /// answering No to Edit-and-Continue's reset prompt does (hexide-io/HexIDE#273 task 3.13).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The code, never the whole buffer.</b> The revert used to restore a snapshot of the whole buffer taken
+    /// when the prompt opened. A designer commit or a save landing while the prompt was open had by then
+    /// replaced the header, and <see cref="bufferPrefix"/> with it, so the snapshot put the old header back
+    /// under the new prefix. The split is by the prefix's length, so the next flush took the code from the
+    /// wrong offset — the header/prefix split task 3.8 closed on every other path. Restoring only the code
+    /// keeps the header the IDE wrote, and the prefix that describes it.
+    /// </para>
+    /// <para>
+    /// <b>Only the span that differs is replaced</b>, so the caret, the selection and the folds outside the
+    /// developer's edit stay where they were rather than collapsing as a whole-text assignment collapses them.
+    /// The revert is an ordinary undo entry, as the snapshot assignment was before it.
+    /// </para>
+    /// </remarks>
+    internal void RevertBodyTo(string body)
+    {
+        var current = BufferBody;
+        if (string.Equals(current, body, StringComparison.Ordinal))
+            return;
+
+        var head = 0;
+        var shorter = Math.Min(current.Length, body.Length);
+        while (head < shorter && current[head] == body[head])
+            head++;
+        var tail = 0;
+        while (tail < shorter - head && current[^(tail + 1)] == body[^(tail + 1)])
+            tail++;
+
+        Document.Replace(bufferPrefix.Length + head, current.Length - head - tail, body[head..^tail]);
+    }
+
+    /// <summary>Where the code starts in the buffer: the length of the header it was composed with.</summary>
+    internal int BufferPrefixLength => bufferPrefix.Length;
+
     /// <summary>The buffer as every line number for this window counts it: from the top of the file.</summary>
     public CodeWindowText CodeWindowText => new(Document.Text, bufferPrefix.Length);
 

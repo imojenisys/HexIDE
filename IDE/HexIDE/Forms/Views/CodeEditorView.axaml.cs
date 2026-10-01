@@ -51,7 +51,9 @@ public partial class CodeEditorView : UserControl
     private Action? _onDebugContinued;
     private System.ComponentModel.PropertyChangedEventHandler? _vmSelectionSync;
     private bool _resetPromptOpen;
-    private string? _preEditSnapshot;   // document text captured before the first edit while running (for No→revert)
+    private string? _preEditBody;       // the code as it stood before the first edit while running (for No→revert)
+    private bool _resetPromptArmed;     // developer input is being handled; the next change it makes asks to reset
+    private TextDocument? _resetPromptDocument;
     private int _preEditCaret;
     private Action? _onPaletteChanged;
 
@@ -84,9 +86,24 @@ public partial class CodeEditorView : UserControl
         Redo = new DelegateCommand(() => TextEditor.Redo(), () =>
             TextEditor?.CanRedo ?? false);
         Copy = new DelegateCommand(() => TextEditor.Copy(), () => true);
-        Cut = new DelegateCommand(() => TextEditor.Cut(), () => true);
-        Delete = new DelegateCommand(() => TextEditor.Delete(), () => true);
-        Paste = new DelegateCommand(() => TextEditor.Paste(), () => true);
+        // Cut, Delete and Paste are where their keys arrive, not OnEditorKeyDown: each key is bound to its command,
+        // which takes it before the text area sees it. So each command asks about resetting a run itself, for the
+        // key, the Edit menu, the context menu and the toolbar alike (#273 task 3.13).
+        Cut = new DelegateCommand(() =>
+        {
+            AskBeforeClipboardEdit(paste: false);
+            TextEditor.Cut();
+        }, () => true);
+        Delete = new DelegateCommand(() =>
+        {
+            ArmResetPrompt();
+            TextEditor.Delete();
+        }, () => true);
+        Paste = new DelegateCommand(() =>
+        {
+            AskBeforeClipboardEdit(paste: true);
+            TextEditor.Paste();
+        }, () => true);
         SelectAll = new DelegateCommand(() => TextEditor.SelectAll(), () => true);
         Find = new DelegateCommand(() =>
         {
@@ -120,11 +137,13 @@ public partial class CodeEditorView : UserControl
 
     public void Indent()
     {
+        ArmResetPrompt();
         EditingCommands.TabForward.Execute(null, TextEditor.TextArea);
     }
 
     public void Outdent()
     {
+        ArmResetPrompt();
         EditingCommands.TabBackward.Execute(null, TextEditor.TextArea);
     }
 
@@ -189,6 +208,12 @@ public partial class CodeEditorView : UserControl
             vm.PropertyChanged += _vmSelectionSync;
 
             vm.FocusWindowRequest += VmOnFocusWindowRequest;
+
+            // Edit-and-Continue's prompt opens on the document's own Changing event, armed by input (see
+            // ArmResetPrompt). Kept so detach removes it from the same document: the view model, and with it the
+            // document, outlives a dock move that re-materialises this view.
+            _resetPromptDocument = vm.Document;
+            _resetPromptDocument.Changing += OnDocumentChangingForResetPrompt;
 
             // Attach LSP text marker service (squiggles) and diagnostics colorizer (red text)
             _markerService = new LspTextMarkerService(TextEditor);
@@ -343,6 +368,11 @@ public partial class CodeEditorView : UserControl
         {
             vm.FocusWindowRequest -= VmOnFocusWindowRequest;
             vm.MarkersChanged -= OnMarkersChanged;
+            if (_resetPromptDocument is not null)
+            {
+                _resetPromptDocument.Changing -= OnDocumentChangingForResetPrompt;
+                _resetPromptDocument = null;
+            }
             vm.LanguageServerStateChanged -= OnLanguageServerStateChanged;
             if (_vmSelectionSync is not null)
             {
@@ -708,8 +738,9 @@ public partial class CodeEditorView : UserControl
     {
         // Editing while the project is running/paused can't be hot-patched. Let the edit land (VB6 shows it), and
         // pop VB6's reset prompt — Yes keeps the edit + resets the project, No reverts it (see ShowResetPromptAsync).
+        // Armed, not raised: whether the text lands is decided after this, by the read-only section provider.
         if (e.Text is { Length: > 0 })
-            MaybeStartResetPrompt();
+            ArmResetPrompt();
         // If a completion window is open and the user types a character that can't
         // be part of an identifier, close the window (AvaloniaEdit will then insert the char).
         if (_completionWindow is null || e.Text is not { Length: > 0 }) return;
@@ -720,16 +751,79 @@ public partial class CodeEditorView : UserControl
 
     // VB6-faithful Edit-and-Continue affordance: the interpreter can't apply an edit to a running program, so a code
     // edit while running/paused pops VB6's "This action will reset your project" prompt. The edit is NOT cancelled
-    // (VB6 lets it appear); the pre-edit document is snapshotted here (this fires before the edit is applied) so a
-    // "No" answer can revert every edit made while the prompt was open. Fired once, guarded against keystroke stacking.
-    private void MaybeStartResetPrompt()
+    // (VB6 lets it appear), and a "No" answer reverts every edit made while the prompt was open.
+    //
+    // Two steps, because the input handlers run BEFORE anything decides whether the key writes (#273 task 3.13).
+    // The read-only section provider refuses typing in the header after TextEntering, and the Enter handler refuses
+    // a line break there after this view's KeyDown; asking from the input handlers asked the developer to reset a
+    // run for a keystroke that wrote nothing. So input only ARMS the prompt, for as long as that input is being
+    // handled, and the prompt opens on the document's own Changing event, which fires only when an edit lands, and
+    // before it is applied, which is when the code is captured. A change nobody armed for is the IDE's own: a
+    // header refresh, a reload. It never asks, which the code-editor capability requires of a designer change.
+    private void ArmResetPrompt()
+    {
+        if (_resetPromptOpen || DataContext is not CodeEditorViewModel vm || !vm.IsProjectRunning)
+            return;
+        _resetPromptArmed = true;
+        // Disarmed once this input has been handled. The edit it makes, if it makes one, is applied before then:
+        // AvaloniaEdit writes typed text and edit keys synchronously inside the event that delivered them.
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => _resetPromptArmed = false);
+    }
+
+    private void OnDocumentChangingForResetPrompt(object? sender, DocumentChangeEventArgs e)
+    {
+        if (!_resetPromptArmed)
+            return;
+        _resetPromptArmed = false;
+        StartResetPrompt();
+    }
+
+    /// <summary>
+    /// Opens the prompt now, capturing the code as it stands, which must be before the edit it asks about lands.
+    /// </summary>
+    private void StartResetPrompt()
     {
         if (_resetPromptOpen || DataContext is not CodeEditorViewModel vm || !vm.IsProjectRunning)
             return;
         _resetPromptOpen = true;
-        _preEditSnapshot = TextEditor.Document.Text;
-        _preEditCaret = TextEditor.CaretOffset;
+        _preEditBody = vm.BufferBody;
+        // Kept relative to the code, like the code itself: the header can change length before the answer comes.
+        _preEditCaret = TextEditor.CaretOffset - vm.BufferPrefixLength;
         _ = ShowResetPromptAsync(vm);
+    }
+
+    /// <summary>
+    /// Opens the prompt before a paste or a cut, when it would write anything.
+    /// </summary>
+    /// <remarks>
+    /// These two cannot be armed like the other edits: they read or write the clipboard, which is asynchronous,
+    /// so the edit lands after the command that asked for it has returned and the arm is gone. So whether they
+    /// will write is decided before they run, by the same section provider AvaloniaEdit will consult. Measured
+    /// before this existed: a paste into code while a run was paused landed with no prompt at all, by every
+    /// route, because the command binding took the key before the handler that asked.
+    /// </remarks>
+    private void AskBeforeClipboardEdit(bool paste)
+    {
+        if (ClipboardEditWouldWrite(paste))
+            StartResetPrompt();
+    }
+
+    /// <summary>
+    /// Whether a paste or a cut about to run would write anything, judged by the section provider that will
+    /// judge it. A cut with nothing selected takes the caret's whole line.
+    /// </summary>
+    private bool ClipboardEditWouldWrite(bool paste)
+    {
+        var area = TextEditor.TextArea;
+        var provider = area.ReadOnlySectionProvider;
+        var selection = area.Selection.SurroundingSegment;
+        if (paste && selection is not { Length: > 0 })
+            return provider.CanInsert(area.Caret.Offset);
+
+        ISegment span = selection is { Length: > 0 }
+            ? selection
+            : area.Document.GetLineByOffset(area.Caret.Offset);
+        return provider.GetDeletableSegments(span).Any();
     }
 
     private async Task ShowResetPromptAsync(CodeEditorViewModel vm)
@@ -737,18 +831,20 @@ public partial class CodeEditorView : UserControl
         try
         {
             var reset = await vm.ConfirmResetWhileRunningAsync();
-            // No → undo every edit made since the prompt opened, back to the pre-edit state. Yes → keep the edit
-            // (the run reset was already requested), matching VB6.
-            if (!reset && _preEditSnapshot is { } snapshot)
+            // No → undo every edit made since the prompt opened, back to the pre-edit code. Yes → keep the edit
+            // (the run reset was already requested), matching VB6. The code alone goes back, never the whole
+            // buffer: the header may have been rewritten while the prompt was open (see RevertBodyTo).
+            if (!reset && _preEditBody is { } body)
             {
-                TextEditor.Document.Text = snapshot;
-                TextEditor.CaretOffset = System.Math.Min(_preEditCaret, snapshot.Length);
+                vm.RevertBodyTo(body);
+                TextEditor.CaretOffset = System.Math.Clamp(
+                    vm.BufferPrefixLength + _preEditCaret, 0, TextEditor.Document.TextLength);
             }
         }
         finally
         {
             _resetPromptOpen = false;
-            _preEditSnapshot = null;
+            _preEditBody = null;
         }
     }
 
@@ -779,11 +875,16 @@ public partial class CodeEditorView : UserControl
 
     private void OnEditorKeyDown(object? sender, KeyEventArgs e)
     {
-        // Editing while the project is running/paused → VB6 reset prompt (see MaybeStartResetPrompt). Covers the
-        // non-printable edit keys (Backspace/Delete/Enter/Tab/Ctrl+V/Ctrl+X); printable chars go via OnTextEntering.
+        // Editing while the project is running/paused → VB6 reset prompt (see ArmResetPrompt). Covers the
+        // non-printable edit keys that reach the text area (Backspace, Enter, Tab); printable chars go via
+        // OnTextEntering, and Delete, Ctrl+V and Ctrl+X via the commands their keys are bound to.
         // The edit is allowed to proceed (VB6 lets it land); No reverts it, Yes keeps it + resets the project.
-        if (IsDocumentEditKey(e))
-            MaybeStartResetPrompt();
+        // Ctrl+V and Ctrl+X normally never get here, because the code window's command bindings take them; this
+        // is for a keymap that binds those commands elsewhere and leaves AvaloniaEdit's own paste on the key.
+        if (e.Key is Key.V or Key.X && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+            AskBeforeClipboardEdit(paste: e.Key == Key.V);
+        else if (IsDocumentEditKey(e))
+            ArmResetPrompt();
         // Enter = auto-close block + auto-indent
         if (e.Key == Key.Return && e.KeyModifiers == KeyModifiers.None)
         {

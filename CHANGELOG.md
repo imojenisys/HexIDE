@@ -43,6 +43,13 @@ there isn't one yet. Anything may change between 0.x releases.
   control's or the form's own name is still not renamed from the code, and the code window now says so
   before asking for a new name: rename it in the Properties window. Another language server still gets the
   code window's protection.
+- **No breakpoint or bookmark can be set on a file's header or a procedure's `Attribute` lines**, by F9,
+  Ctrl+F2, a click in either margin or an automation client; the status bar says why. Those lines never run.
+  One already there can still be removed.
+- **Editing code while a program is paused asks about resetting it only when the edit actually lands.** A
+  keystroke in the header writes nothing and no longer asks, and nor does a change made in the form designer.
+  Paste, cut and deleting a selection now do ask: until now they slipped past the prompt by every route, the
+  keys, the menus and the toolbar alike.
 
 ### Fixed
 

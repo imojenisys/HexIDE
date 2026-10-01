@@ -574,6 +574,11 @@ returns the text those offsets count into. To reach a given line the caller has 
 **Workaround.** Take offsets from a refusal's reply, or navigate with `press_key`. `inspect_element` on the
 code view reports `CaretOffset` and `BufferBody`, which is still the code section too.
 
+**Do not compute offsets from the file on disk.** Tried on 2026-10-02 (#273 task 3.13): offsets taken from
+`BillOfFare.frm`'s bytes landed four characters early in the editor, because the file is UTF-8 and its two
+em dashes above that line are three bytes each and one character each in the buffer. A copy and a paste
+then took different text from what was intended, which read like corruption until it was traced.
+
 **Suggested fix.** #273 task 3.18 makes `get_file_content` return the whole file, which closes the
 mismatch. A way to put the caret at a line and column, or at a text match, would still save every caller
 the offset arithmetic. Filed as [#700](https://github.com/hexide-io/HexIDE/issues/700).

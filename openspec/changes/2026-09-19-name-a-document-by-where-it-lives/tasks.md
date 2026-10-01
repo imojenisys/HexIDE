@@ -1179,7 +1179,7 @@
   the header and the code does not, so the valid range still depends on whether the editor is open.
   Reconcile it with 3.16's numbering, and fold "a read-only line" into the same refusal, which is this task.
   The merge itself changed none of them — this is work, not a conflict.
-- [ ] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so
+- [x] 3.13 Edits the IDE makes itself do not raise Edit-and-Continue's reset prompt. **Already measured, so
   this task is narrower than it reads**: the prompt is raised from `OnTextEntering` and `OnEditorKeyDown`
   only, never from a document event, so a header refresh does not reach it today. What DOES need this task
   is the prompt's own "No" arm: it reverts by restoring a whole-buffer snapshot taken when the prompt opened
@@ -1189,6 +1189,45 @@
   anything decides whether the edit will land. `OnEditorKeyDown` calls `MaybeStartResetPrompt` ahead of the
   Enter guard, and `OnTextEntering` ahead of the read-only section provider 3.7 installs. So while a project
   runs, a key in the header that writes nothing still asks the developer to reset the project for it.
+  — **Both measured first, as failing tests, then fixed.** `ResetPromptTests` (19, against a rendered editor
+  with the answer held open as a modal would hold it) went red on five: three refused keystrokes in the
+  header that prompted, and No after a header refresh in each direction, grown and shrunk, which left the
+  old header under the new prefix.
+  — **No restores the code, never the whole buffer.** `CodeEditorViewModel.RevertBodyTo` puts the code back
+  as it stood when the prompt opened, under the header the buffer carries now, replacing only the span that
+  differs so anchors outside the edit stay put. The caret is kept relative to the code for the same reason;
+  restoring its absolute offset put it on the line above once a header had grown (seen live, then pinned).
+  The design record's writer table had this row as "replaces the whole buffer", which was the defect, and
+  now says what it does.
+  — **Input arms the prompt; the document's `Changing` event opens it.** The input handlers run before
+  anything decides whether a key writes, so asking from them asked about keystrokes that wrote nothing.
+  Now they only arm, for as long as that input is being handled, and the prompt opens on `Changing`, which
+  fires only when an edit lands, and before it is applied, which is when the code is captured. A change
+  nobody armed for is the IDE's own and never asks, which is the code-editor delta's "changing a form's
+  layout while paused" scenario.
+  — **Paste, cut and Delete never reached the old handler at all, found by writing the control tests.** Each
+  key is bound to a code-window command (`PasteCommand`, `CutCommand`, `DeleteCommand`) that takes it first,
+  so a paste while paused landed with no prompt by every route, the key, both menus and the toolbar. The
+  commands now ask. Paste and cut cannot use the arm, because the clipboard is asynchronous and their edit
+  lands after the arm has gone (measured: the arm-only version let a paste in silently), so they ask the
+  same section provider up front. Recorded as a behaviour change in `CHANGELOG.md` and in D2.
+  — **Two older defects found on the way, confirmed live and filed rather than fixed here:** Delete with
+  nothing selected deletes nothing, because the bound command calls `TextEditor.Delete()`, which only deletes
+  a selection (#708); and Indent/Outdent do nothing by any route, while Ctrl+Tab opens the Dock framework's
+  document switcher instead (#709). Indent and Outdent arm the prompt all the same, so a fix to either keeps
+  it, but that arm cannot be tested until an indent can land: the one mutation that survived.
+  — **Mutation: twelve, ten caught by the first run, one more after re-running it with a non-constant
+  condition** (removing the arm check left the field unread, which warnings-as-errors refuses). The
+  survivor besides Indent was a length test on the cut's deletable segments that the provider makes
+  equivalent, so it was removed rather than kept untestable.
+  — **Verified in the running IDE** on a scratch copy of `demo/bill-of-fare`, paused at a breakpoint in
+  `Form_Load`: Edit ▸ Paste with the caret in the header wrote nothing and asked nothing; Edit ▸ Paste in
+  code opened the reset prompt; while it was open, `set_control_property` gave the form a longer caption,
+  which rewrote the header and saved; answering No left the window showing the new caption above the code
+  exactly as it was before the paste, with `BufferBody` starting at `Attribute VB_Name` and
+  `hasUnsavedChanges` true, because the save had written the pasted text before the answer came. A
+  keystroke in the header cannot be driven live: `type_text` and `press_key` refuse it before raising it,
+  by design, so that case rests on the headless tests.
 - [ ] 3.14 Folds: the header fold is merged into every fold application, including an empty or absent server
   answer, with the merged list sorted by start offset (the manager throws otherwise) and zero-length folds
   discarded (it skips them silently). It sets its own folded state rather than relying on the library's

@@ -347,7 +347,8 @@ join.
 | Add-in `ApplyEdits` | All or nothing: if any edit touches a read-only region, none is applied, because the rest alone would leave the add-in's change half made. A refusal returns false, as `SetContent`'s does. |
 | Automation `set_file_content` | Accepts the whole file (header unchanged) or the body alone (header kept). That settles #338's asymmetry. |
 | Automation `type_text`, `press_key` | Refused inside a read-only region, and the reply says so and gives the offset where editing can resume. `press_key` judges only a key that would change text — Enter, Tab, Backspace, Delete, Ctrl+V, Ctrl+X, Ctrl+D — against what that key would change; a navigation key is never refused. |
-| Initial load; reload after an external change; Edit-and-Continue revert | Owner. Replaces the whole buffer. |
+| Initial load; reload after an external change | Owner. Replaces the whole buffer. |
+| Edit-and-Continue revert (answering No) | Restores the code as it stood when the prompt opened, under the header the buffer carries **now**, replacing only the span that differs. Not the whole buffer: a designer commit or a save landing while the prompt is open replaces the header and the prefix with it, and restoring a whole-buffer snapshot put the old header back under the new prefix, so the next flush took the code from the wrong offset (measured in both directions, task 3.13). |
 
 **Undo: read out of the library, not guessed.** A designer change must not be undoable from the code window,
 which the form-designer undo capability requires, and it must not stop the code window undoing an earlier
@@ -395,6 +396,17 @@ IDE cannot reproduce is not a read-only region, so its code lines still take mar
 
 **Edits by the IDE itself never prompt a reset.** Edit-and-Continue's prompt fires on keystrokes today. A
 header refresh or reload is not the developer editing.
+
+**And a keystroke that writes nothing does not prompt either** (task 3.13). The prompt used to be raised from
+the input handlers, which run before anything decides whether the key writes: the read-only section
+provider refuses typing in the header after `TextEntering`, and the Enter handler a line break there after
+the view's `KeyDown`. So input now only *arms* the prompt, for as long as that input is being handled, and
+the prompt opens on the document's own `Changing` event, which fires only when an edit lands. A change
+nobody armed for is the IDE's own and never asks. Paste and cut are the exception, because the clipboard is
+asynchronous and their edit lands after the arm has gone: they ask the same section provider up front.
+Delete, paste and cut never reached the old handler at all, because each key is bound to a code-window
+command that takes it first; their commands now ask, which also covers the Edit menu, the context menu and
+the toolbar.
 
 ## Folds and greying
 

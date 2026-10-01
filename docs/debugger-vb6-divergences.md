@@ -38,6 +38,12 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
 - **Status:** **shipped** (commit 1e52d8f, 2026-08-09), live-verified. A genuine live-apply subset (edits to
   procedures NOT on the current call stack) is a possible later refinement — constrained today because a live run
   loads only the startup form's code.
+- **Since #273 task 3.13 (2026-10-02):** the prompt asks only about an edit that lands. A keystroke in the
+  file's header or a member's `Attribute` lines writes nothing, and no longer asks to reset the run for it; nor
+  does a designer change, a save or a reload. Paste, cut and Delete with a selection now ask: their keys are
+  bound to code-window commands that took them before the old handler saw them, so until then a paste while
+  paused landed with no prompt at all, by the key, the menus and the toolbar alike. Answering No restores the
+  code only, under whatever header the window shows by then.
 
 ### D3. E&C prompt fires per-keystroke, not on line-leave
 - **VB6:** evaluates an edit when you **leave the line** (or on Run/Continue), so you can finish typing a line /
