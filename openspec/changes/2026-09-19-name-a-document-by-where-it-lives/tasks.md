@@ -1068,7 +1068,7 @@
   each side: removing the server's refusal fails the server suite and the parity test, and removing the
   code window's fails `GuardedWritersTests`.
   — **Not this task's, recorded where they belong:** automation's `get_file_content` returns the module's
-  code, not the buffer, so its line numbers still start after the header (3.16); `type_text` inserts a
+  code, not the buffer, so its line numbers still start after the header (3.18); `type_text` inserts a
   bare `\n` into a CRLF buffer verbatim, which the formatter now rightly leaves alone (the Enter-key case is
   #530). The rename prompt's own title and label are hard-coded English (#537).
   **From main (#651, hexide-io/HexIDE#649), merged 2026-09-23:** `type_text` asks the installed
@@ -1164,7 +1164,8 @@
   line 2 and `invoke_menu_item Debug/Toggle Breakpoint` set nothing and the status bar gave the reason;
   `Edit/Bookmarks/Toggle Bookmark` on line 89 (an attribute line in the form's code section, so the
   straddle) set nothing, and on line 98 set bookmark 97. A snapshot shows both marks on 98. `run_to_cursor`
-  on line 50 was refused. **Not driven live: the gutter click itself.** No automation tool can reach a
+  on line 50 was refused (its wording was then changed to "execution can never stop there", which is
+  unit-tested rather than seen live). **Not driven live: the gutter click itself.** No automation tool can reach a
   gutter (#707, recorded in `mcp-server-gaps.md`), so it rests on the headless test.
   **A mark is membership, not an edit (left by 3.11).** Since 3.11, `IsReadOnlyRegion` answers the *edit*
   question (`TextRegion.Changes`), which also refuses the line break a member's attribute run hangs from.
