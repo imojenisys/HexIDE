@@ -10,6 +10,7 @@ using HexIDE.Bookmarks;
 using HexIDE.Debugging;
 using HexIDE.IDE;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 using Serilog;
 
 namespace HexIDE.Sidecar;
@@ -103,21 +104,29 @@ public class UserSidecarService : IUserSidecarService
     /// A mark on a line the document does not have is drawn nowhere and never hit, yet it came back on every load
     /// (#574). It could be there from before set_breakpoints and set_bookmarks refused such lines (#570), from a
     /// file shortened outside HexIDE, or from a hand-edited sidecar. Dropped here, it is gone from the next save.
-    /// Lines are counted as those tools count them, in the code the editor numbers, which has no Attribute header;
-    /// bookmarks from 0, breakpoints from 1.
+    /// <para>
+    /// Lines are counted as those tools count them, from the top of the file with the header included, which is
+    /// how the stores hold them; bookmarks from 0, breakpoints from 1. Counting the code section, as this did
+    /// until #273 task 3.12, dropped every mark on a form's last lines of code: the code window shows a form's
+    /// designer block above its code, so its last line is that many lines further down than the code's.
+    /// </para>
+    /// <para>
+    /// A mark on a read-only line is <b>kept</b> here, though nothing may set one, because a sidecar written
+    /// before the code window held the whole file counts from the first line of code. Testing its lines against
+    /// the header in file lines would drop a form's breakpoint on its fifth line of code because the designer
+    /// block has a fifth line. The sidecar migration (#273 task 3.17) moves such lines first; see
+    /// <see cref="MarkLineRules.Within"/>.
+    /// </para>
     /// </remarks>
     private static IEnumerable<int> WithinDocument(
         DocumentIdentity document, IReadOnlyCollection<int> lines, int first, string what, string path)
     {
-        var lineCount = (document.Module?.Code ?? document.Form?.Code ?? "").Split('\n').Length;
-        var last = first + lineCount - 1;
-        var outside = lines.Where(l => l < first || l > last).Distinct().ToList();
-        if (outside.Count == 0)
-            return lines;
-
-        Log.Warning("Dropped {What}s on {Lines} from {Path}: {Document} has {Count} line(s), numbered {First}..{Last}",
-            what, outside, path, document.Display, lineCount, first, last);
-        return lines.Where(l => l >= first && l <= last).ToList();
+        var text = CodeWindowText.Of(document);
+        var (kept, dropped) = MarkLineRules.Within(text, lines, first);
+        if (dropped.Count > 0)
+            Log.Warning("Dropped {What}s on {Lines} from {Path}: {Document} has {Count} line(s), numbered {First}..{Last}",
+                what, dropped.Distinct(), path, document.Display, text.LineCount, first, first + text.LineCount - 1);
+        return kept;
     }
 
     /// <summary>

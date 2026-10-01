@@ -1126,7 +1126,46 @@
   selected line 98, not the designer block's line 17. Two more Find Nexts went to 139 and wrapped to 98.
   `VB_PredeclaredId` was reported not found. Pattern `\s*Private Sub` found the code. In a class added to
   the project, a pattern Replace All of `Currency\s+` left the function's `Attribute` line attached.
-- [ ] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
+- [x] 3.12 Marks refused on read-only lines, including a gutter click on a folded header.
+  — **Done together with 3.16, because the range checks below could only be fixed in its numbering.**
+  — **One toggle per kind, and every UI route goes through it.** `CodeEditorViewModel.ToggleBreakpoint` and
+  `ToggleBookmark` refuse a NEW mark on a line in a read-only region and put the reason in the status bar
+  (`Str.CodeEditor.Msg.NoMarkOnReadOnlyLine`, in `en` and all 29 packs). F9 and Debug ▸ Toggle Breakpoint
+  (`MainViewViewModel`), Ctrl+F2 (the view) and both gutters (handed the toggle instead of the store) all
+  call them. A mark already on such a line can still be removed: only an older sidecar can have put one
+  there, and nothing else in the window could clear it. The bookmark toggle takes a 1-based line like
+  everything else the window gives out, converting to the store's 0-based numbering in one place.
+  — **Membership, as the note above says.** `ReadOnlyRegions.IsReadOnlyLine` asks `Touches` about a line
+  without its terminator. A described declaration takes a breakpoint and its attribute line does not, and
+  the mutation that asks the edit question with the terminator turns two tests red.
+  — **The folded header needs no case of its own.** A click maps to the folded row's first document line,
+  which is the header's. Tested headlessly with a real fold and a press raised on each gutter. The control
+  case, a click beside code, is in the same class, because `window.MouseDown` at the same point set nothing
+  even beside code, which would have let a refusal test pass while refusing nothing.
+  — **The range checks now count the code window's text.** `CodeWindowText` (Runtime) is a document's text as
+  the window numbers it: the open buffer, or `FormCodeText.WholeFile` with no window. `MarkLineRules`
+  (HexIDE, so a test reaches it) is the refusal the four automation tools relay: a line the file does not
+  have, or a new mark on a read-only line, with the reply naming the header's range and where the code
+  starts. A held read-only line is let through, so a get-then-set round trip is never refused.
+  — **The sidecar's load was dropping real marks.** `WithinDocument` counted the model's code section, so on
+  this branch every mark on a form's last lines of code (as many lines as the designer block is long) was
+  dropped at load and gone from the next save. It now counts the whole file. It does **not** refuse
+  read-only lines: a sidecar written by `main` counts from the first line of code, so a header test in file
+  lines would drop a form's breakpoint on its fifth line of code. That filter belongs after 3.17's migration.
+  — **Run To Cursor from the Debug menu is not refused on a header line**: it runs as from any line that
+  never executes. Only the automation tool refuses it. Recorded as D22 in `debugger-vb6-divergences.md`.
+  — **Mutation: fifteen guards, all caught** — both toggles' refusals and their held-mark exemptions, the
+  status message, each gutter and Ctrl+F2 reverted to the store, the edit question asked of a line, the
+  automation refusal, its held exemption and its range, the sidecar's range, the model text, and a
+  read-only filter added to the sidecar.
+  — **Verified in the running IDE** on a scratch copy of `demo/bill-of-fare` (header 1..90): with the code
+  window CLOSED, `set_breakpoints [3, 98]` was refused naming the header and "code starts at 91", and
+  `[98, 139]` was accepted, which the old code-section count would have refused. With it open, caret on
+  line 2 and `invoke_menu_item Debug/Toggle Breakpoint` set nothing and the status bar gave the reason;
+  `Edit/Bookmarks/Toggle Bookmark` on line 89 (an attribute line in the form's code section, so the
+  straddle) set nothing, and on line 98 set bookmark 97. A snapshot shows both marks on 98. `run_to_cursor`
+  on line 50 was refused. **Not driven live: the gutter click itself.** No automation tool can reach a
+  gutter (#707, recorded in `mcp-server-gaps.md`), so it rests on the headless test.
   **A mark is membership, not an edit (left by 3.11).** Since 3.11, `IsReadOnlyRegion` answers the *edit*
   question (`TextRegion.Changes`), which also refuses the line break a member's attribute run hangs from.
   Ask it about a line with its terminator (`dl.TotalLength`) and every described declaration refuses a
@@ -1156,8 +1195,29 @@
   expanded in this window. Overlapping server folds dropped.
 - [ ] 3.15 Greying: a named palette colour for each theme, meeting the dark palette's recorded contrast bar,
   applied after syntax colouring. Theme packs carry the key.
-- [ ] 3.16 Line numbers from the top of the file in the margin, status bar, Call Stack, automation and add-in
+- [x] 3.16 Line numbers from the top of the file in the margin, status bar, Call Stack, automation and add-in
   surfaces. Record the divergence from VB6's code-window numbering.
+  — **Most of it was already true, and this task pins it.** The margin numbers the document and the status bar
+  reads the caret's document line, and since 3.2 the document is the file. The Call Stack and current
+  statement are the interpreter's lines, which have been file lines since 3.6. `LineNumbersFromTheTopOfTheFileTests`
+  pins the code-editor delta's class scenario (the status bar on a class's first line of code is the
+  header's length plus one, asserted against the header rather than a constant) and that the margin
+  numbers the whole file. `DebuggerLinesAreFileLinesTests` (3.6) already covers the debugger.
+  — **What was not true was the range the automation tools and the sidecar counted in**, fixed under 3.12.
+  — **The automation descriptions now say how lines are counted**: `get_`/`set_breakpoints`,
+  `get_`/`set_bookmarks`, `run_to_cursor`, `set_next_statement`, `get_debug_state`, `get_call_stack` and
+  `get_diagnostics`, which also says a VB6 compiler error arrives converted. A caller who counts from the
+  first line of code is told where the code starts when refused.
+  — **Add-in positions were already file lines** (`GetSelection`, `NavigateTo`, `ApplyEdits`, diagnostics) and
+  their documentation now says so. **`AddinDocument.Content` is still the code section**, so a line an add-in
+  finds by reading it is out by the header; its documentation says that too, and 3.19 changes it.
+  — **Recorded as D21 in `debugger-vb6-divergences.md`**, with VB6's own status-bar numbering left
+  unmeasured as the design record has it, rather than guessed.
+  — **Verified in the running IDE**: on `frmBillOfFare` the margin runs from `VERSION 5.00` as line 1, and the
+  status bar read `Ln 98` with the caret on `Form_Load`'s first statement; on a class added through the IDE
+  the header is 1..13, the status bar read `Ln 14` on the first line of code, F9 there set breakpoint 14,
+  `set_breakpoints [13]` was refused with "code starts at 14", and `set_bookmarks [13]` (0-based) was
+  accepted.
 - [ ] 3.17 Sidecar migration to the next format (#466 first, so an older build keeps what it cannot read): read the recorded format, re-key, move lines by each header's
   length, carry unmeasurable entries unchanged, keep unrecognised content, rewrite only on change and never
   after a failed read.

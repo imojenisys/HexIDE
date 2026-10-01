@@ -414,6 +414,62 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// <summary>Replaces the code, leaving the header the buffer shows in front of it untouched.</summary>
     public void ReplaceBody(string body) => Document.Text = bufferPrefix + body;
 
+    /// <summary>The buffer as every line number for this window counts it: from the top of the file.</summary>
+    public CodeWindowText CodeWindowText => new(Document.Text, bufferPrefix.Length);
+
+    /// <summary>
+    /// Toggles a breakpoint on the 1-based <paramref name="line"/>, unless it would set one on a read-only line.
+    /// </summary>
+    /// <returns>False when nothing changed because the line is read-only; the status bar then says why.</returns>
+    /// <remarks>
+    /// The one way the code window toggles a breakpoint: F9, Debug ▸ Toggle Breakpoint and a gutter click all
+    /// come here (#273 task 3.12). A breakpoint already on such a line, which only an older sidecar can have
+    /// left there, can still be removed.
+    /// </remarks>
+    public bool ToggleBreakpoint(int line)
+    {
+        if (!breakpointService.IsBreakpoint(Identity, line) && RefuseMarkOn(line))
+            return false;
+        breakpointService.Toggle(Identity, line);
+        return true;
+    }
+
+    /// <summary>
+    /// Toggles a bookmark on the 1-based <paramref name="line"/>, unless it would set one on a read-only line.
+    /// </summary>
+    /// <returns>False when nothing changed because the line is read-only; the status bar then says why.</returns>
+    /// <remarks>
+    /// Ctrl+F2 and a click in the bookmark gutter both come here. Taken 1-based like every other line number the
+    /// window gives out; the store's own 0-based numbering is converted here and nowhere else.
+    /// </remarks>
+    public bool ToggleBookmark(int line)
+    {
+        if (!bookmarkService.IsBookmarked(Identity, line - 1) && RefuseMarkOn(line))
+            return false;
+        bookmarkService.Toggle(Identity, line - 1);
+        return true;
+    }
+
+    /// <summary>
+    /// True, after telling the developer why, when the 1-based <paramref name="line"/> may not take a new mark.
+    /// </summary>
+    /// <remarks>
+    /// A read-only line never executes, so a breakpoint there is never hit; and a folded header is one visible
+    /// line standing for many, so a click on it would mark whichever of them it happened to map to, out of
+    /// sight. The click maps to the fold's first line, which is the header's, so the fold needs no case of its
+    /// own. The test is membership, not <see cref="IsReadOnlyRegion"/>: that one also refuses the line break
+    /// a member's attribute run hangs from, which would put every described declaration out of reach.
+    /// </remarks>
+    private bool RefuseMarkOn(int line)
+    {
+        if (!CodeWindowText.IsReadOnlyLine(line))
+            return false;
+        statusBarService.SetTemporaryMessage(
+            string.Format(localization.GetString("Str.CodeEditor.Msg.NoMarkOnReadOnlyLine"), line),
+            TimeSpan.FromSeconds(6));
+        return true;
+    }
+
     /// <summary>
     /// Replaces the header the buffer shows in front of the code with a freshly-rendered one, leaving the
     /// code untouched. Does nothing when the two are the same string.

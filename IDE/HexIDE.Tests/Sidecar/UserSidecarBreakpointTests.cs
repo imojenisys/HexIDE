@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.Json;
 using HexIDE.Bookmarks;
 using HexIDE.Debugging;
+using HexIDE.Runtime.Serialization;
 using HexIDE.Sidecar;
 
 namespace HexIDE.Tests.Sidecar;
@@ -202,12 +203,14 @@ public sealed class UserSidecarBreakpointTests : IDisposable
         var project = MakeSavedProject();
         var sidecarPath = Path.Combine(_dir, "P.user.hexproj");
 
+        // Form1 was created by HexIDE and has no designer block yet, so its file is its twelve lines of code.
+        // Module1's file is those twelve under the Attribute VB_Name line the code window shows: thirteen.
         await File.WriteAllTextAsync(sidecarPath,
             """
             {
               "version": 1,
               "bookmarks": { "Form1": [-1, 0, 11, 12, 99] },
-              "breakpoints": { "Module1": [-1, 0, 1, 12, 13, 99] }
+              "breakpoints": { "Module1": [-1, 0, 1, 13, 14, 99] }
             }
             """, TestContext.Current.CancellationToken);
 
@@ -217,13 +220,70 @@ public sealed class UserSidecarBreakpointTests : IDisposable
         await sidecar.LoadAsync(project);
 
         bookmarks.GetBookmarks(Form1(project)).Should().Equal([0, 11], "bookmarks count from 0");
-        breakpoints.GetBreakpoints(Module1(project)).Should().Equal([1, 12], "breakpoints count from 1");
+        breakpoints.GetBreakpoints(Module1(project)).Should().Equal([1, 13], "breakpoints count from 1, header included");
 
         await sidecar.SaveAsync(project);
         var json = JsonDocument.Parse(await File.ReadAllTextAsync(sidecarPath, TestContext.Current.CancellationToken));
         json.RootElement.GetProperty("bookmarks").GetProperty("Form1").EnumerateArray()
             .Select(e => e.GetInt32()).Should().Equal(0, 11);
         json.RootElement.GetProperty("breakpoints").GetProperty("Module1").EnumerateArray()
-            .Select(e => e.GetInt32()).Should().Equal(1, 12);
+            .Select(e => e.GetInt32()).Should().Equal(1, 13);
+    }
+
+    private sealed class NullSink : IDeserializeErrorSink
+    {
+        public static readonly NullSink Instance = new();
+        public void LogError(string _) { }
+    }
+
+    /// <summary>
+    /// A form's last lines of code are as far below the top of the file as its designer block is long, and a
+    /// mark on one is kept at load (hexide-io/HexIDE#273 task 3.12).
+    /// </summary>
+    /// <remarks>
+    /// The range used to be counted in the form's code section, which is shorter than the file by the designer
+    /// block, so these marks were dropped as "not a line" and gone from the next save. And a mark on a header
+    /// line is kept too: a sidecar written before the code window held the whole file counts from the first
+    /// line of code, so its line 3 is code, and dropping it is the migration's call to make, not the load's.
+    /// </remarks>
+    [Fact]
+    public async Task AMarkOnAFormsLastLineOfCodeIsKeptAtLoad()
+    {
+        const string frm =
+            "VERSION 5.00\r\n" +
+            "Begin VB.Form Form2 \r\n" +
+            "   Caption         =   \"Orders\"\r\n" +
+            "   Begin VB.CommandButton Command1 \r\n" +
+            "      Caption         =   \"OK\"\r\n" +
+            "   End\r\n" +
+            "End\r\n" +
+            "Attribute VB_Name = \"Form2\"\r\n" +
+            "Option Explicit\r\n" +
+            "Private Sub Command1_Click()\r\n" +
+            "    Command1.Enabled = False\r\n" +
+            "End Sub\r\n";
+        var projectManager = Substitute.For<IProjectManager>();
+        projectManager.LoadedProjects.Returns(new List<ProjectDefinition>());
+        var project = MakeSavedProject();
+        var form = new FormDeserializer().Deserialize(project, frm, NullSink.Instance)!;
+        project.AddForm(form);
+        var lastOfCode = frm.Split("\r\n").Length - 1;
+        lastOfCode.Should().BeGreaterThan(form.Code.Split("\r\n").Length, "the fixture must reach past the code section's count");
+
+        await File.WriteAllTextAsync(Path.Combine(_dir, "P.user.hexproj"),
+            $$"""
+            {
+              "version": 1,
+              "bookmarks": { "Form2": [{{lastOfCode - 1}}] },
+              "breakpoints": { "Form2": [3, {{lastOfCode}}] }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var bookmarks = new BookmarkService();
+        var breakpoints = new BreakpointService();
+        await new UserSidecarService(bookmarks, breakpoints, projectManager).LoadAsync(project);
+
+        breakpoints.GetBreakpoints(DocumentIdentity.For(form)).Should().Equal(3, lastOfCode);
+        bookmarks.GetBookmarks(DocumentIdentity.For(form)).Should().Equal(lastOfCode - 1);
     }
 }

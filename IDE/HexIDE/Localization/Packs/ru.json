@@ -313,6 +313,7 @@
     "Str.Designer.Context.Properties": "Свойства",
     "Str.CodeEditor.ReadOnly.Banner": "Только для чтения — HexIDE пока не может воспроизвести эту форму в точности, поэтому сохранение изменило бы её. Её код нельзя редактировать, пока это не будет исправлено.",
     "Str.CodeEditor.Msg.RenameTouchesReadOnly": "Переименование не выполнено, так как оно изменило бы заголовок этого файла или строки Attribute одного из членов, которыми управляет IDE.",
+    "Str.CodeEditor.Msg.NoMarkOnReadOnlyLine": "Строка {0} относится к заголовку этого файла или к строкам Attribute одного из членов, которые никогда не выполняются, поэтому на ней нельзя поставить точку останова или закладку.",
     "Str.CodeEditor.Dialog.InsertFileTitle": "Вставить файл",
     "Str.CodeEditor.Context.Cut": "Вырезать",
     "Str.CodeEditor.Context.Copy": "Копировать",

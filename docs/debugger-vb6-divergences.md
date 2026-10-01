@@ -297,6 +297,42 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
 
 ---
 
+## Line numbering
+
+### D21. Line numbers count from the top of the file, header included
+- **VB6:** the code window never showed a file's header — a form's designer block, a class's `VERSION`/`BEGIN`
+  block, and every `Attribute` line — so nothing the developer saw was numbered from it. VB6's code window had
+  no line-number margin; whether its status bar's line position counted the hidden header is **unmeasured**,
+  because `/make` cannot answer it, and is recorded as such rather than guessed.
+- **HexIDE:** the code window holds the whole file, header read-only and greyed, and every line number it
+  shows or reports counts from the file's first line: the line-number margin, the status bar, breakpoints,
+  bookmarks, the current-statement bar, the Call Stack, Run To Cursor, Set Next Statement, and the automation
+  and add-in surfaces. In a class with the standard header the first line of code is line 14.
+- **Why:** one numbering is the point of holding the whole file. A second, code-relative numbering anywhere
+  would put back exactly the translation the change removed, and two places disagreeing by the header's length
+  is the bug class that motivated it (hexide-io/HexIDE#273). VB6's compiler is the one exception: `/make`
+  reports a line in its own code view, every `Attribute` line excluded, and that number is converted where the
+  log is parsed and nowhere else ([the measurement](vb6-fidelity-oracle.md)).
+- **Status:** **by design** (#273 tasks 3.6 and 3.16). A sidecar written before the change counts from the
+  first line of code; carrying it forward is task 3.17.
+
+### D22. No breakpoint or bookmark on a header line or a member's `Attribute` line
+- **VB6:** the case could not arise: those lines were not in the code window.
+- **HexIDE:** F9, Debug ▸ Toggle Breakpoint, Ctrl+F2 and a click in either gutter set no mark on such a line,
+  and the status bar says why. A click on a folded header lands on the fold's first line, which is the
+  header's, and is refused the same way. `set_breakpoints`, `set_bookmarks`, `run_to_cursor` and
+  `set_next_statement` refuse those lines and reply with where the code starts. A mark already on one, which
+  only an older sidecar can have left there, can still be removed. A form held read-only as a whole is not a
+  read-only region, and takes breakpoints in its code as before. Run To Cursor from the Debug menu is **not**
+  refused there: it behaves as from any other line that never executes, running until something else stops it.
+  Set Next Statement from the menu already refuses any line that is not a statement.
+- **Why:** those lines never execute, so a breakpoint there is never hit and Run To Cursor would run to the end;
+  and folded, the header is one visible line standing for many, so a mark set there would land on a line the
+  developer cannot see.
+- **Status:** **by design** (#273 task 3.12).
+
+---
+
 ## Deferred debugger surfaces (not divergences yet — just not built)
 
 Immediate USER-CALL execution (calling a user Sub/Function from the Immediate window — the deadlock-prone part, D15;

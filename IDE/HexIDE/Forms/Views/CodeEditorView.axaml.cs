@@ -215,11 +215,11 @@ public partial class CodeEditorView : UserControl
             _ = RequestFoldingsAsync(vm, CancellationToken.None);
 
             // Bookmark gutter margin
-            _bookmarkMargin = new BookmarkMargin(vm.BookmarkService, vm.Identity);
+            _bookmarkMargin = new BookmarkMargin(vm.BookmarkService, vm.Identity, vm.ToggleBookmark);
             TextEditor.TextArea.LeftMargins.Insert(0, _bookmarkMargin);
 
             // Debugger: breakpoint gutter (red dots, click-to-toggle) + the amber current-statement bar.
-            _breakpointMargin = new HexIDE.Debugging.BreakpointMargin(vm.BreakpointService, vm.Identity);
+            _breakpointMargin = new HexIDE.Debugging.BreakpointMargin(vm.BreakpointService, vm.Identity, vm.ToggleBreakpoint);
             TextEditor.TextArea.LeftMargins.Insert(0, _breakpointMargin);
             _currentLineRenderer = new HexIDE.Debugging.CurrentLineRenderer(TextEditor);
             TextEditor.TextArea.TextView.BackgroundRenderers.Insert(0, _currentLineRenderer);
@@ -621,8 +621,7 @@ public partial class CodeEditorView : UserControl
     public void ToggleBookmark()
     {
         if (DataContext is not CodeEditorViewModel vm) return;
-        int line = TextEditor.TextArea.Caret.Line - 1; // 0-based
-        vm.BookmarkService.Toggle(vm.Identity, line);
+        vm.ToggleBookmark(TextEditor.TextArea.Caret.Line);
     }
 
     public void NextBookmark()

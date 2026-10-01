@@ -139,6 +139,31 @@ public static class ReadOnlyRegions
         return headerLines == 0 ? 0 : lines[headerLines - 1].Next;
     }
 
+    /// <summary>The number of lines the header occupies: 0 when there is none.</summary>
+    public static int HeaderLineCount(string text, int prefixLength) =>
+        HeaderLineCount(text, LinesOf(text), prefixLength);
+
+    /// <summary>
+    /// True when the 1-based <paramref name="line"/> of <paramref name="text"/> is a line of one of
+    /// <paramref name="regions"/>. False for a line the text does not have.
+    /// </summary>
+    /// <remarks>
+    /// Membership, and deliberately not <see cref="Changes"/>: that one also answers for the line break a
+    /// member's attribute run hangs from, which ends the declaration it describes. Asked about a line, it would
+    /// put every described declaration out of reach of a breakpoint (#273 task 3.12). The line is asked about
+    /// without its terminator for the same reason.
+    /// </remarks>
+    public static bool IsReadOnlyLine(string text, IReadOnlyList<TextRegion> regions, int line)
+    {
+        var lines = LinesOf(text);
+        // LinesOf yields no entry for the empty line after a final terminator, which is still a line of the
+        // buffer: the last line of a file that ends with a line break. It follows every region, so it is in none.
+        if (line < 1 || line > lines.Count)
+            return false;
+        var at = lines[line - 1];
+        return Touches(regions, at.Start, at.ContentEnd - at.Start);
+    }
+
     /// <summary>
     /// The names the header's designer block declares: the name on each <c>Begin</c> line, which is the form's
     /// own, a control's or a menu's. Compared ignoring case, as VB6 compares names. Empty when there is none.

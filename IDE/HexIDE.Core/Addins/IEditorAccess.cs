@@ -23,7 +23,9 @@ public interface IEditorAccess
     /// Puts the caret on a document, opening its editor if it is not already open.
     /// </summary>
     /// <param name="fileName">The document's VB6 name, in any case.</param>
-    /// <param name="line">1-based.</param>
+    /// <param name="line">
+    /// 1-based, counted from the top of the file with its header included, as the code window numbers it.
+    /// </param>
     /// <param name="column">1-based.</param>
     /// <param name="project">
     /// The project to look in, by name, or null to search every loaded one. A bare name that answers to

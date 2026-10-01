@@ -591,3 +591,23 @@ know any path to scope it with.
 **Suggested fix.** A filter on class name, view-model type or name, returning matching nodes with their
 paths and no subtrees. This is the question a first call usually asks: where is the code editor? Filed as
 [#699](https://github.com/hexide-io/HexIDE/issues/699).
+
+## The code window's gutters are not in the control tree, so a gutter click cannot be driven
+
+**Symptom (2026-10-01, during #273 task 3.12's live check).**
+`dump_visual_tree {"root":"…/Custom[Root]/None[TextEditor]/Pane[PART_ScrollViewer]/None","interactiveOnly":false,"maxDepth":4}`
+returns the `TextArea` with two children: an empty `ItemsControl` and the hidden `PART_Watermark`. The
+breakpoint gutter, the bookmark gutter and the line-number margin are all absent, because AvaloniaEdit's
+`AbstractMargin` has no automation peer, so `interact` has nothing to click. The task's own named case, a
+click on a folded header, could only be tested headlessly (`MarkGutterOnReadOnlyLineTests`, which raises
+the press on the gutter itself).
+
+**Workaround.** Place the caret with `interact set_property CaretOffset=N` on the code view, then
+`invoke_menu_item Debug/Toggle Breakpoint` or `Edit/Bookmarks/Toggle Bookmark`. That reaches the same
+toggle a gutter click calls, but not the gutter's own mapping from a point to a visual line, which is
+what decides what a click on a folded row marks.
+
+**Suggested fix.** Undecided: a peer on the gutters that `interact` can drive with a line, a `click` action
+on `interact` at a point relative to its target (which would cover other drawn surfaces too), or a
+dedicated tool if the authoring policy justifies one. Filed as
+[#707](https://github.com/hexide-io/HexIDE/issues/707).

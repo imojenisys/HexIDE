@@ -101,6 +101,8 @@ internal sealed class HexIdeTools(IdeContext ctx)
                + "compiler, merged. Each carries 'source' (which of them reported it) and, where the "
                + "server sent one, 'code' (the rule that fired) and 'href' (where that rule is documented). 'severity' is Error, Warning, "
                + "Information or Hint, as the server reported it, or Unknown when the server sent none. "
+               + "'line' and 'column' are 1-based, and the line is counted from the top of the file with its header "
+               + "included, as the code window numbers it; a VB6 compiler error is converted to that numbering. "
                + "Only OPEN documents are analysed, by a server that starts on the first one of its language. "
                + "'analysed' lists the documents whose diagnostics are in, clean ones included, and 'note' says "
                + "why the list is empty or what has not been analysed yet: no server started, or a document "
@@ -1247,7 +1249,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     }
 
     [McpServerTool(Name = "get_bookmarks")]
-    [Description("Returns the bookmarked line numbers (0-based) for a form or module, named by its own VB6 name in any loaded project (case does not matter). Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. Empty array if none.")]
+    [Description("Returns the bookmarked line numbers for a form or module, named by its own VB6 name in any loaded project (case does not matter). Lines are 0-based and counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. Empty array if none.")]
     public async Task<BookmarksResult> GetBookmarksAsync(string name, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1262,7 +1264,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     }
 
     [McpServerTool(Name = "set_bookmarks")]
-    [Description("Replaces all bookmarks for a form or module with the supplied 0-based line numbers. Named by its own VB6 name in any loaded project (case does not matter); pass `project` to say which when a group holds two of one name. Pass an empty array to clear them. A line the document does not have is refused, and then nothing is changed. The note reports what the document holds afterwards.")]
+    [Description("Replaces all bookmarks for a form or module with the supplied 0-based line numbers, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Named by its own VB6 name in any loaded project (case does not matter); pass `project` to say which when a group holds two of one name. Pass an empty array to clear them. A line the document does not have is refused, and so is a new bookmark on a line of the header or of a member's Attribute lines, which never run; then nothing is changed, and the reply says where the code starts. The note reports what the document holds afterwards.")]
     public async Task<MutateResult> SetBookmarksAsync(string name, int[] lines, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1271,7 +1273,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
             if (lookup.Document is not { } document)
                 return new MutateResult(false, lookup.Error);
 
-            if (OutsideDocument(document, lines, first: 0, "bookmark") is { } outside)
+            if (OutsideDocument(document, lines, first: 0, "bookmark", ctx.BookmarkService.GetBookmarks(document)) is { } outside)
                 return new MutateResult(false, outside);
 
             ctx.BookmarkService.SetBookmarks(document, lines);
@@ -1282,7 +1284,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     // ---- Debugger ----
 
     [McpServerTool(Name = "get_breakpoints")]
-    [Description("Returns the breakpoint line numbers (1-based) for a form or module, named by its own VB6 name in any loaded project (case does not matter). Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. Empty array if none.")]
+    [Description("Returns the breakpoint line numbers for a form or module, named by its own VB6 name in any loaded project (case does not matter). Lines are 1-based and counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. Empty array if none.")]
     public async Task<BreakpointsResult> GetBreakpointsAsync(string name, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1297,7 +1299,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     }
 
     [McpServerTool(Name = "set_breakpoints")]
-    [Description("Replaces all breakpoints for a form or module with the supplied 1-based line numbers. Named by its own VB6 name in any loaded project (case does not matter); pass `project` to say which when a group holds two of one name. Pass an empty array to clear them. A line the document does not have is refused, and then nothing is changed. Takes effect immediately if that project is the one running. The note reports what the document holds afterwards.")]
+    [Description("Replaces all breakpoints for a form or module with the supplied 1-based line numbers, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Named by its own VB6 name in any loaded project (case does not matter); pass `project` to say which when a group holds two of one name. Pass an empty array to clear them. A line the document does not have is refused, and so is a new breakpoint on a line of the header or of a member's Attribute lines, which never run; then nothing is changed, and the reply says where the code starts. Takes effect immediately if that project is the one running. The note reports what the document holds afterwards.")]
     public async Task<MutateResult> SetBreakpointsAsync(string name, int[] lines, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1306,7 +1308,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
             if (lookup.Document is not { } document)
                 return new MutateResult(false, lookup.Error);
 
-            if (OutsideDocument(document, lines, first: 1, "breakpoint") is { } outside)
+            if (OutsideDocument(document, lines, first: 1, "breakpoint", ctx.BreakpointService.GetBreakpoints(document)) is { } outside)
                 return new MutateResult(false, outside);
 
             ctx.BreakpointService.SetDocument(document, lines);
@@ -1474,7 +1476,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
         StepAndReportAsync(() => ctx.ProjectRunnerService.CanStepOutProject, () => ctx.ProjectRunnerService.StepOutProject(), ct);
 
     [McpServerTool(Name = "run_to_cursor")]
-    [Description("Run To Cursor (Ctrl+F8): run until (module, 1-based line) then break — a one-shot temporary breakpoint. While paused it continues to the target; while running it arms the target; from idle it starts the project and runs to the target (a real breakpoint hit first stays paused there; continue proceeds toward the target). The reply's 'note' says where it paused or, within 2 s, that it has not got there yet. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them.")]
+    [Description("Run To Cursor (Ctrl+F8): run until (module, 1-based line, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them) then break — a one-shot temporary breakpoint. While paused it continues to the target; while running it arms the target; from idle it starts the project and runs to the target (a real breakpoint hit first stays paused there; continue proceeds toward the target). The reply's 'note' says where it paused or, within 2 s, that it has not got there yet. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them.")]
     public async Task<MutateResult> RunToCursorAsync(string module, int line, string? project = null, CancellationToken ct = default)
     {
         string? target = null;
@@ -1507,7 +1509,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     }
 
     [McpServerTool(Name = "set_next_statement")]
-    [Description("Set Next Statement (Ctrl+F9): move the execution point to (module, 1-based line) WITHOUT running the statements in between — the next step_into/continue executes from there. Only while paused, and only to a TOP-LEVEL statement of the currently paused procedure (a target nested inside an If/For/Do/Select block, or a move while paused inside such a block, is refused — a tree-walker limit, not VB6's). Returns an error result if refused. The reply's 'note' names the new next statement. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them.")]
+    [Description("Set Next Statement (Ctrl+F9): move the execution point to (module, 1-based line, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them) WITHOUT running the statements in between — the next step_into/continue executes from there. Only while paused, and only to a TOP-LEVEL statement of the currently paused procedure (a target nested inside an If/For/Do/Select block, or a move while paused inside such a block, is refused — a tree-walker limit, not VB6's). Returns an error result if refused. The reply's 'note' names the new next statement. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them.")]
     public async Task<MutateResult> SetNextStatementAsync(string module, int line, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1536,7 +1538,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     [McpServerTool(Name = "get_debug_state")]
     [DescribesEnum(typeof(DebugState))]
     [DescribesEnum(typeof(StopReason))]
-    [Description("Returns the interpreter debug state: whether a project is running, the controller state (Running/Paused/Stopped), and — when paused — the break location (module, 1-based line) and reason. 'stopReason' is Breakpoint (a breakpoint, or the line Run To Cursor was aiming for; a breakpoint wins even mid-step), Watch (a Break When True or Break When Changed watch fired), Step (a step completed), StopStatement (a VB6 Stop statement ran) or Pause (a break was requested, as by break_program); it is null unless Paused.")]
+    [Description("Returns the interpreter debug state: whether a project is running, the controller state (Running/Paused/Stopped), and — when paused — the break location (module, 1-based line counted from the top of the file, header included, as the code window and set_breakpoints number it) and reason. 'stopReason' is Breakpoint (a breakpoint, or the line Run To Cursor was aiming for; a breakpoint wins even mid-step), Watch (a Break When True or Break When Changed watch fired), Step (a step completed), StopStatement (a VB6 Stop statement ran) or Pause (a break was requested, as by break_program); it is null unless Paused.")]
     public async Task<DebugStateResult> GetDebugStateAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1596,7 +1598,7 @@ internal sealed class HexIdeTools(IdeContext ctx)
     }
 
     [McpServerTool(Name = "get_call_stack")]
-    [Description("Returns the call stack at the current break — the chain of running procedure activations, current/deepest frame first, each with proc, module, and 1-based line. Valid only while paused (get_debug_state.state == Paused) — otherwise Success is false with an empty list.")]
+    [Description("Returns the call stack at the current break — the chain of running procedure activations, current/deepest frame first, each with proc, module, and 1-based line counted from the top of the file, header included, as the code window and set_breakpoints number it. Valid only while paused (get_debug_state.state == Paused) — otherwise Success is false with an empty list.")]
     public async Task<CallStackResult> GetCallStackAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -2444,30 +2446,18 @@ internal sealed class HexIdeTools(IdeContext ctx)
         ctx.DocumentDockService.OpenDocuments.OfType<CodeEditorViewModel>().FirstOrDefault(e => e.Identity == document);
 
     /// <summary>
-    /// Why some of <paramref name="lines"/> cannot be marked in <paramref name="document"/>, or null when all can.
+    /// Why some of <paramref name="lines"/> cannot be marked in <paramref name="document"/>, or null when all can:
+    /// a line it does not have, or a new mark on a read-only line. See <see cref="HexIDE.IDE.MarkLineRules.Refusal"/>.
     /// </summary>
     /// <remarks>
-    /// A line the document does not have was stored, read back as held, and then shown nowhere and hit never:
-    /// set_breakpoints("Module1", [-1, 0, 99]) on a two-line module answered that it now had breakpoints on
-    /// -1, 0 and 99. The whole call is refused, rather than the good lines kept, because a caller who got one
-    /// line wrong has probably got the numbering wrong, and half a set of marks is harder to notice than none.
-    /// Lines are counted in the text the editor numbers: the open editor's buffer, else the model's code,
-    /// neither of which carries the Attribute header.
+    /// Lines are counted as the code window counts them, from the top of the file with the header included: in
+    /// the open window's buffer, else in the model's whole file. Counting the model's code section, as this did
+    /// until #273 task 3.12, gave a different range depending on whether the window happened to be open.
     /// </remarks>
-    private string? OutsideDocument(DocumentIdentity document, int[] lines, int first, string what)
+    private string? OutsideDocument(DocumentIdentity document, int[] lines, int first, string what, IReadOnlyCollection<int>? held = null)
     {
-        var editor = ctx.DocumentDockService.OpenDocuments.OfType<CodeEditorViewModel>()
-            .FirstOrDefault(e => e.Identity == document);
-        var text = editor?.Document.Text ?? document.Module?.Code ?? document.Form?.Code ?? "";
-        var lineCount = text.Split('\n').Length;
-        var last = first + lineCount - 1;
-
-        var outside = lines.Where(l => l < first || l > last).Distinct().ToList();
-        if (outside.Count == 0)
-            return null;
-        return $"{string.Join(", ", outside)} {(outside.Count == 1 ? "is" : "are")} not a line of {document.Display}, " +
-               $"which has {lineCount} line{(lineCount == 1 ? "" : "s")}: {what}s are numbered {first}..{last}" +
-               $"{(first == 0 ? ", counting from 0" : "")}. Nothing was changed.";
+        var text = CodeEditorOf(document)?.CodeWindowText ?? HexIDE.Runtime.Serialization.CodeWindowText.Of(document);
+        return HexIDE.IDE.MarkLineRules.Refusal(text, document.Display, lines, held ?? [], first, what);
     }
 
     private CodeEditorViewModel? FindEditor(string name) =>

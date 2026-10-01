@@ -274,6 +274,7 @@
     "Str.Designer.Context.Properties": "Ecoj",
     "Str.CodeEditor.ReadOnly.Banner": "Nur legebla — HexIDE ankoraŭ ne povas fidele reprodukti ĉi tiun formularon, do konservi ĝin ŝanĝus ĝin. Ĝia kodo ne estas redaktebla ĝis tio estos riparita.",
     "Str.CodeEditor.Msg.RenameTouchesReadOnly": "La alinomo ne estis farita, ĉar ĝi ŝanĝus la kapon de ĉi tiu dosiero aŭ la Attribute-liniojn de membro, kiujn la IDE prizorgas.",
+    "Str.CodeEditor.Msg.NoMarkOnReadOnlyLine": "Linio {0} apartenas al la kapo de ĉi tiu dosiero aŭ al la Attribute-linioj de membro, kiuj neniam ruliĝas, do oni ne povas meti tie rompopunkton aŭ legosignon.",
     "Str.CodeEditor.Dialog.InsertFileTitle": "Enmeti Dosieron",
     "Str.CodeEditor.Context.Cut": "El_tondi",
     "Str.CodeEditor.Context.Copy": "_Kopii",
