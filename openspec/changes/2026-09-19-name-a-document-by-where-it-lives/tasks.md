@@ -1185,7 +1185,7 @@
   is the prompt's own "No" arm: it reverts by restoring a whole-buffer snapshot taken when the prompt opened
   (`CodeEditorView.axaml.cs`), without touching `bufferPrefix` — so a designer commit or a save landing while
   the prompt is open makes answering No reproduce exactly the header/prefix split 3.8 closed everywhere else.
-  — **One more, found by reading 3.9's guards (not yet measured):** both call sites raise the prompt before
+  — **One more, found by reading 3.9's guards (measured below):** both call sites raise the prompt before
   anything decides whether the edit will land. `OnEditorKeyDown` calls `MaybeStartResetPrompt` ahead of the
   Enter guard, and `OnTextEntering` ahead of the read-only section provider 3.7 installs. So while a project
   runs, a key in the header that writes nothing still asks the developer to reset the project for it.

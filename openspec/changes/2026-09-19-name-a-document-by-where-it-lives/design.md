@@ -394,7 +394,7 @@ AvaloniaEdit 12.0.0 assembly the repo ships, by reflection and by probe.
 visual line, so a click on it would otherwise set a mark on whichever line it happened to map to. A form the
 IDE cannot reproduce is not a read-only region, so its code lines still take marks.
 
-**Edits by the IDE itself never prompt a reset.** Edit-and-Continue's prompt fires on keystrokes today. A
+**Edits by the IDE itself never prompt a reset.** Edit-and-Continue's prompt used to fire from keystrokes. A
 header refresh or reload is not the developer editing.
 
 **And a keystroke that writes nothing does not prompt either** (task 3.13). The prompt used to be raised from

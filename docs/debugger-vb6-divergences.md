@@ -44,6 +44,10 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
   bound to code-window commands that took them before the old handler saw them, so until then a paste while
   paused landed with no prompt at all, by the key, the menus and the toolbar alike. Answering No restores the
   code only, under whatever header the window shows by then.
+- **"Every edit" is unmeasured for the routes that are not keystrokes.** Replace All, formatting, Insert File,
+  rename, an add-in's `ApplyEdits`/`SetContent` and automation's `set_file_content` while paused have not been
+  checked against the prompt. Paste, cut and Delete were assumed covered until they were tested, and were not.
+  Tracked as [#710](https://github.com/hexide-io/HexIDE/issues/710).
 
 ### D3. E&C prompt fires per-keystroke, not on line-leave
 - **VB6:** evaluates an edit when you **leave the line** (or on Run/Continue), so you can finish typing a line /
