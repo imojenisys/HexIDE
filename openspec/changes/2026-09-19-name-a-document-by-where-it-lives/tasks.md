@@ -1294,8 +1294,68 @@
   was done by moving the caret into the header.
   — Seen on the way and added to #512: a document highlight stays at its old offsets across a header write,
   exactly as the diagnostic markers do.
-- [ ] 3.15 Greying: a named palette colour for each theme, meeting the dark palette's recorded contrast bar,
+- [x] 3.15 Greying: a named palette colour for each theme, meeting the dark palette's recorded contrast bar,
   applied after syntax colouring. Theme packs carry the key.
+  — **The key is `ReadOnlyText`** (`ReadOnlyTextBrush` in Classic.axaml), with a value in each shipped pack:
+  `#707070` on Classic (4.95:1 on `#FFFFFF`), `#929292` on Dark (4.92:1 on `#252526`), `#7C7C7C` on Abyss
+  (4.72:1 on `#000C18`). Each stands at least 1.5:1 from its pack's own text. `GrayText` was measured first and
+  misses 4.5:1 in all three. Every read-only region is greyed, the members' attribute runs included, by one
+  line transformer between the syntax colouring and the diagnostics colouring, so an error inside the header
+  still shows red. The fold labels take the same colour through AvaloniaEdit's one process-wide label brush,
+  which every editor that folds now sets from the key. design.md has the reasoning for each.
+  — **Tests:** `ShippedThemePackTests` (12) holds every shipped pack to the bar against the background and
+  text colours its own file declares, and checks the reference pack matches Classic.axaml.
+  `ReadOnlyGreyingTests` (11) runs against a rendered editor with the real `ThemeService` and Classic.axaml
+  merged where the IDE merges them. It covers both delta scenarios, the attribute runs, an error inside the
+  header, no key resolving, a switch to Dark, a switch between Dark and Abyss (which changes no theme
+  variant), a change of the read-only colour alone, a carried file, the Protocol Inspector, and an address
+  inside a region.
+  — **Adversarial review (four lenses, two skeptics per finding): six findings, five confirmed, all fixed.**
+  - *The Protocol Inspector folds and did not follow the key*, so with the inspector the only editor showing, a
+    theme switch left its labels in the previous theme's grey, about 3.1:1, worse than the old default.
+    It now follows while on screen, as the other two editors do.
+  - *An address inside a region was still drawn as a link*, in AvaloniaEdit's blue, which the link takes
+    after every line transformer has run: 1.78:1 on Dark. A generator ahead of the link generators now
+    claims it as plain text, and the grey reaches it. A link in the code is unchanged.
+  - *Three test weaknesses.* The label brush is process-wide and no test reset it, so the one assertion
+    that an opening editor sets it could pass on an earlier test's value; each test now starts from a
+    colour nothing uses. Every label assertion was written `(brush as ISolidColorBrush)?.Color.Should()`,
+    which asserts nothing when the cast fails. The no-key test excluded only Classic's grey, and now
+    compares the header with the same lines built without the greying.
+  - Rejected 2–0: that design.md's opening paragraph contradicts the settled bullets.
+  — **Found while fixing the no-key test:** it claimed `Begin` was drawn in the keyword colour, and `Begin`
+  is drawn in no colour at all. AvaloniaEdit honours `ignoreCase` only on a `<RuleSet>`, so the definition's
+  `BEGIN`/`END` never match: #716, which also makes #713 visible once fixed. The same file is MPL-2.0 in a
+  tree that promises MIT throughout, and nothing checks file notices: #715. A link in the code is
+  AvaloniaEdit's blue in every theme, 1.78:1 on Dark: #717. The ratios measured for this task showed that
+  the dark packs lack `WarningBanner*` and `ValidationError`, and that ValidationError is 2.60:1 on Dark:
+  #712. The light syntax palette has no bar at all: #713.
+  — **Mutation: 19, all caught.** Thirteen were run against the first version and six more against the review's
+  fixes, the review's own suggested mutations among them: a literal grey in the colorizer or in the follower,
+  and a carried file that repaints without setting the labels. Two of the six needed a second run. The
+  inspector's did not compile as first written. Claiming every address survived, because the generator
+  checked membership twice and a region is whole lines, so the line check alone decides it. The second check
+  was removed.
+  — **Verified in the running IDE** on a scratch copy of `demo/bill-of-fare`:
+  - *Classic*: the expanded 90-line header is grey and `Option Explicit` on line 91 keeps its colours.
+  - *Launched on Dark*: the folded label and its box are grey.
+  - *Dark to Abyss, live*: the header samples `#7C7C7C` on `#000C18`.
+  - *Classic to Dark, live, three times*: the editor went dark each time, with lines 87–90 grey and line
+    91 coloured.
+  - *Addresses*: a URL and a mail address were put into a label's `Caption` and a URL into a comment in
+    `Form_Load`. On Classic and on Dark the header's were grey and plain, while the comment's stayed a blue,
+    underlined link.
+  - *The Protocol Inspector*: it showed a pretty-printed `initialize` body with its fold markers. Switching to
+    Dark, with it as the only editor showing, repainted it dark. Its fold labels could not be checked live,
+    because automation cannot close a fold (#707); `TheProtocolInspectorFollowsTheReadOnlyColourToo` covers
+    them.
+  — **Seen once and not again.** On the first live run, a Classic to Dark switch left the code window and its
+  minimap white with light syntax colours while the chrome went dark. It did not recur in three further
+  runs of this build, one of them repeating the first run's launch flags, caret and scrolling exactly, and
+  the pre-3.15 build switched correctly. Nothing in this change touches the editor's background, so it is
+  recorded here rather than explained.
+  — **Driving the Options dialog found #714**: `interact select` on a page-tree item reports success and
+  selects nothing, so the theme page was reached by keyboard.
 - [x] 3.16 Line numbers from the top of the file in the margin, status bar, Call Stack, automation and add-in
   surfaces. Record the divergence from VB6's code-window numbering.
   — **Most of it was already true, and this task pins it.** The margin numbers the document and the status bar
@@ -1352,6 +1412,8 @@
 - [ ] 4.1 Detect procedure-level and declaration-level `Attribute` runs, and anchor each to the line it
   describes.
 - [ ] 4.2 Read-only and greyed, through the same provider and colour as the header.
+  — **Both halves exist already:** the runs have been read-only since 3.7, and 3.15 greys every read-only
+  region, these included. What is left is checking both once 4.3 folds the runs.
 - [ ] 4.3 Folds from the end of the described line, built with character offsets and nested inside a server's
   procedure fold.
 - [ ] 4.4 A member's rename rewrites its own attribute qualifiers — a procedure, property or module-level

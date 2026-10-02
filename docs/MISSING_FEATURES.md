@@ -222,7 +222,7 @@
 
 | Feature | Status | Notes |
 |---|---|---|
-| Syntax highlighting | Done | Provided by LSP server |
+| Syntax highlighting | Done | In the editor itself, from `VB6.xshd.xml`, with a dark palette swapped in for a dark theme (`SyntaxHighlightingTheme`); not from the language server, as this row used to say. The header and member `Attribute` lines are drawn in the theme's read-only grey instead (#273) |
 | Error/warning squiggles | Done | Full LSP diagnostic pipeline; inline markers |
 | Object/Procedure dropboxes | Done | Two combos at top; navigate to handler on select |
 | Auto-complete (IntelliSense) | Partial | LSP completion: 88 keywords, 42 built-ins, and every name declared in the current file. **No position awareness** — the same list comes back wherever the caret is — and no member access (`obj.`) or cross-file symbols. Position awareness is ordinary work; the other two need name binding, which belongs to a real language engine over the replaceable LSP seam, not to HexIDE's own server (see the CST-not-AST limit in CLAUDE.md and [`lsp-server-features.md`](lsp-server-features.md)) |

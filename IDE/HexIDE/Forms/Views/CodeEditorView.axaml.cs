@@ -33,6 +33,9 @@ public partial class CodeEditorView : UserControl
     private IDisposable? sub;
     private LspTextMarkerService? _markerService;
     private LspDiagnosticsColorizer? _colorizer;
+    private ReadOnlyRegionColorizer? _readOnlyColorizer;
+    private ReadOnlyRegionLinks? _readOnlyLinks;
+    private IDisposable? _readOnlyTextSub;
     private CancellationTokenSource? _hoverCts;
     private BookmarkMargin? _bookmarkMargin;
     private Point _lastHoverPoint;
@@ -220,6 +223,18 @@ public partial class CodeEditorView : UserControl
             // Attach LSP text marker service (squiggles) and diagnostics colorizer (red text)
             _markerService = new LspTextMarkerService(TextEditor);
             TextEditor.TextArea.TextView.BackgroundRenderers.Add(_markerService);
+
+            // The header and each member's Attribute lines in the theme's read-only colour (#273 task 3.15).
+            // Added before the diagnostics colorizer, so an error inside one still shows red; AvaloniaEdit
+            // keeps its own syntax colorizer ahead of both, so the grey replaces the syntax colours there.
+            _readOnlyColorizer = new ReadOnlyRegionColorizer(() => vm.ReadOnlyRegionsNow);
+            TextEditor.TextArea.TextView.LineTransformers.Add(_readOnlyColorizer);
+            _readOnlyTextSub = ReadOnlyText.Follow(this, OnReadOnlyTextChanged);
+            // An address inside a region would be drawn as a link, over the grey; ahead of the link generators,
+            // this claims it as plain text. The folding generator goes ahead of it when installed below.
+            _readOnlyLinks = new ReadOnlyRegionLinks(() => vm.ReadOnlyRegionsNow, TextEditor.TextArea.TextView);
+            TextEditor.TextArea.TextView.ElementGenerators.Insert(0, _readOnlyLinks);
+
             _colorizer = new LspDiagnosticsColorizer(TextEditor.TextArea.TextView);
             TextEditor.TextArea.TextView.LineTransformers.Add(_colorizer);
             vm.MarkersChanged += OnMarkersChanged;
@@ -402,6 +417,19 @@ public partial class CodeEditorView : UserControl
             _colorizer = null;
         }
 
+        _readOnlyTextSub?.Dispose();
+        _readOnlyTextSub = null;
+        if (_readOnlyColorizer is not null)
+        {
+            TextEditor.TextArea.TextView.LineTransformers.Remove(_readOnlyColorizer);
+            _readOnlyColorizer = null;
+        }
+        if (_readOnlyLinks is not null)
+        {
+            TextEditor.TextArea.TextView.ElementGenerators.Remove(_readOnlyLinks);
+            _readOnlyLinks = null;
+        }
+
         if (_foldingManager is not null)
         {
             // The view model outlives this view across a dock move, and the fold comes back the way it is now.
@@ -494,6 +522,17 @@ public partial class CodeEditorView : UserControl
         if (!HeaderFoldIsCurrent(vm))
             ApplyFolds(vm, null);
         ScheduleFolding(vm);
+    }
+
+    /// <summary>
+    /// Greys the read-only regions, and labels folds, in the theme's colour as it stands: on attach and on every
+    /// change of theme, including one between two dark packs that no variant change announces.
+    /// </summary>
+    private void OnReadOnlyTextChanged(IBrush? brush)
+    {
+        if (_readOnlyColorizer is null) return;
+        _readOnlyColorizer.Brush = brush;
+        TextEditor.TextArea.TextView.Redraw();
     }
 
     /// <summary>Marks the folding section that is the header's, among the ones a server's answer creates.</summary>

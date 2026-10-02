@@ -442,8 +442,8 @@ it is honoured only on a fold manager's first update, and whole-document replace
   server's folds already shown are kept through that re-make, with their state.
 - **Moving the caret into the folded header expands it**, because the editor unfolds any fold the caret moves
   inside, **and the window counts that as the developer expanding it.** A developer who navigates to a header
-  line wants to see it, and folding it again under them on the next server answer would be worse. So nothing
-  the IDE does on its own may put the caret there. The one writer that did, found by review and then seen live,
+  line wants to see it, and folding it again under them on the next server answer would be worse (confirmed
+  by the maintainer, 2026-10-02). So nothing the IDE does on its own may put the caret there. The one writer that did, found by review and then seen live,
   was a reload: it put the caret back at its old offset, which a longer header had moved into the header, and
   the header opened and stayed open. It now moves the caret with the header's change in length, as the
   reload already moves the marks.
@@ -463,6 +463,39 @@ The fold adapter's line-start folds cannot express this, so these folds are buil
 palette already records. It is applied after syntax colouring. Diagnostics inside a read-only region are
 still shown, because they are a server's claim about the file. The bundled server is proved to raise none on
 real headers (task 0.2).
+
+**Settled while building 3.15:**
+
+- **The colour is a theme key, `ReadOnlyText`**, declared in Classic.axaml as `ReadOnlyTextBrush` and carried
+  by every shipped pack: `#707070` on Classic's white editor (4.95:1), `#929292` on Dark's `#252526` (4.92:1),
+  `#7C7C7C` on Abyss's `#000C18` (4.72:1). Not `GrayText`, which is Win32's disabled-text colour and misses
+  4.5:1 in all three packs. A pack nobody ships may omit the key, as the theme-packs capability allows, and
+  then inherits Classic's grey, which is chosen for a white editor. `ShippedThemePackTests` holds each shipped
+  pack to the background and text colours its own file declares, and to a floor of 1.5:1 from its text: the
+  project's own figure for "reads as different", since no standard sets one.
+- **Every read-only region is greyed, the members' attribute runs included.** They have been read-only
+  since 3.7, and read-only lines in syntax colours would be the inconsistency. Task 4.2's greying half has
+  therefore landed; what remains of it is verifying the runs once phase 4 folds them.
+- **One line transformer, after the syntax colouring and before the diagnostics colouring.** AvaloniaEdit
+  keeps its highlighting colorizer first, so the grey replaces the syntax colours, and an error's red text
+  is drawn over the grey. The squiggles are drawn on another layer and are unaffected either way.
+- **The fold labels take the same colour, all of them.** AvaloniaEdit draws every folded section's label with
+  one process-wide brush, which defaulted to `#808080`: 3.95:1 on white and 3.88:1 on Dark. Every editor that
+  folds sets it from the key while it is on screen (the code window, a carried file, and the Protocol
+  Inspector's message body), so the procedure folds and a carried file's folds are now legible too. The
+  inspector was missed at first, and review caught it: with the inspector the only editor showing, a theme
+  switch left its labels in the previous theme's grey, worse than the old default.
+- **An address inside a region is text, not a link.** AvaloniaEdit gives a link the text view's link colour
+  while it formats the line, after every line transformer, so the grey alone left a URL in a `Caption` or a
+  `VB_Description` blue and underlined, at 1.78:1 on Dark. A generator ahead of the link generators claims
+  what they would have matched inside a region as plain text, which the grey then reaches. The address is no
+  longer clickable there; VB6 showed none of this text at all. Outside a region a link is unchanged, and its
+  colour is unthemed everywhere, which is #717 rather than this task.
+- **The key itself is followed, not the theme variant.** A switch between Dark and Abyss changes no variant,
+  so nothing the syntax palette listens to fires. Each editor watches the resource and repaints when it
+  changes. Where the key does not resolve, nothing is greyed: no literal colour stands in for a theme.
+- **The minimap is not greyed.** It colours text with its own highlighter rather than the editor's line
+  transformers, and nothing requires it to.
 
 **New strings** (fold labels, refusal reasons, the distinction between "the header is read-only" and "this
 file is read-only") are localization keys, translated into every shipped pack in the same change. The

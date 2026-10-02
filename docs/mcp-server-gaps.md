@@ -625,3 +625,26 @@ shows no expand state, and the provider is advertised because the editor owns a 
 `expand` opens. **Workaround:** placing the caret inside a folded section with `interact set_property
 CaretOffset=N` on the code view expands it, because the editor unfolds any fold the caret moves into. Nothing
 folds one again. A `click` action on `interact` would cover this margin as well as the gutters.
+
+## `select` on an Options tree item reports success and selects nothing
+
+**Symptom (2026-10-02, during #273 task 3.15's live check).** In Tools → Options, the page tree's items each
+advertise `selectionItem`. `interact {"target":"Window/Custom/Tree/Pane/TreeItem[#0]/TreeItem[#1]","action":"select"}`
+(the Theme item) replies `{"success":true,"mechanism":"peer","detail":"selected 'TreeItem'"}`, and nothing has
+changed: `inspect_element {"target":"Window"}` still has the same `SelectedNode`, and the page beside the tree
+is still `EnvironmentGeneralPageView`. Seen on three launches. Selecting by text fails differently:
+`interact {"target":"Window/Custom/Tree","action":"select","value":"Theme"}` replies `'Tree' has no selectable
+items realized`, although `dump_visual_tree {"root":"Window/Custom/Tree/Pane/TreeItem[#0]","interactiveOnly":false,"maxDepth":4}`
+shows every item realized, with its text in a child `Text[Theme]`. The items have no automation name of their
+own, which is also why the success reply calls the item `'TreeItem'`.
+
+**Workaround.** Keyboard: `press_key {"target":"Window/Custom/Tree/Pane/TreeItem[#0]/TreeItem[#0]","key":"Down"}`
+moves from General to Theme and the page follows. A theme is then switched by `interact expand` on
+`Window/Custom/Custom/ComboBox`, `interact select` with the theme's name as `value`, and `interact invoke` on
+`Window/Custom/Button[OK]`.
+
+**Suggested fix.** `DoSelect` takes the item peer's `Select()` as done. It should read the selection back, from
+the item and from its owning tree, fall back to `TrySelectThroughOwningTree` when it did not take, and say so
+when neither did, rather than reporting a selection it never checked. Naming a tree item after its header text
+would let `select` with a `value` find it, and would let the reply name what it selected. Filed as
+[#714](https://github.com/hexide-io/HexIDE/issues/714).

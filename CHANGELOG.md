@@ -17,6 +17,11 @@ there isn't one yet. Anything may change between 0.x releases.
   it did. Expand it and it stays expanded in that window, through formatting, a change in the form designer
   and a reload, until you fold it again. It needs no language server. A module whose header is a single line
   has nothing to fold.
+- **The header and a procedure's `Attribute` lines are drawn in grey**, so the lines only the IDE writes look
+  it. Each theme sets its own grey, and each stays legible on that theme's editor. A folded section's label
+  takes the same colour, which makes those labels legible on a white or Dark editor, where the old grey was
+  not. A web or mail address in those lines is greyed with them and is no longer a link. A theme pack sets
+  the colour as `ReadOnlyText`.
 - **Undo in the code window never undoes a designer change.** A change committed in the form designer
   reaches the code window as a rewrite of the header at the top of it, and Ctrl+Z there undoes the last
   thing typed in that window, exactly as before. **One consequence is worth knowing:** undoing a code edit
