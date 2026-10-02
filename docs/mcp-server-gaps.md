@@ -616,3 +616,12 @@ what decides what a click on a folded row marks.
 on `interact` at a point relative to its target (which would cover other drawn surfaces too), or a
 dedicated tool if the authoring policy justifies one. Filed as
 [#707](https://github.com/hexide-io/HexIDE/issues/707).
+
+**The fold margin is the same (2026-10-02, during #273 task 3.14's live check).**
+`dump_visual_tree {"interactiveOnly":false,"maxDepth":40}` over the whole window has no node whose class is
+`FoldingMargin` or `FoldingMarginMarker`, so a fold cannot be expanded or folded by its marker. The
+`TextEditor` node does report `expandCollapse`, which reads as the answer and is not: `inspect_element` on it
+shows no expand state, and the provider is advertised because the editor owns a context menu, which is what
+`expand` opens. **Workaround:** placing the caret inside a folded section with `interact set_property
+CaretOffset=N` on the code view expands it, because the editor unfolds any fold the caret moves into. Nothing
+folds one again. A `click` action on `interact` would cover this margin as well as the gutters.

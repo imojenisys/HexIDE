@@ -13,6 +13,10 @@ there isn't one yet. Anything may change between 0.x releases.
 - **The code window shows the whole file, header included, and one line number now means the same thing
   everywhere** - to the editor, to a language server, to the interpreter and to the debugger. A form's
   designer block and a module's `Attribute` header are no longer hidden from the code window.
+- **That header opens folded**, into one line at the top of the window, so a form's code still starts where
+  it did. Expand it and it stays expanded in that window, through formatting, a change in the form designer
+  and a reload, until you fold it again. It needs no language server. A module whose header is a single line
+  has nothing to fold.
 - **Undo in the code window never undoes a designer change.** A change committed in the form designer
   reaches the code window as a rewrite of the header at the top of it, and Ctrl+Z there undoes the last
   thing typed in that window, exactly as before. **One consequence is worth knowing:** undoing a code edit

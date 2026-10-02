@@ -527,6 +527,40 @@ public class CodeEditorViewModelTests : IDisposable
         vm.BufferBody.Should().Be("Option Explicit\r\n");
     }
 
+    [AvaloniaFact]
+    public void AReloadThatGrowsTheHeaderKeepsTheCaretInTheCode()
+    {
+        // Measured live before the fix: a form whose designer block gained a longer caption on disk was
+        // reloaded with the caret at the start of its first line of code, and the caret came back two lines up,
+        // inside the header. The marks are moved by the header's change in length; so is the caret.
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+        vm.CaretOffset = vm.BufferPrefixLength + "Option".Length;
+
+        module.RecordOriginalHeader(
+            "Attribute VB_Name = \"Module1\"\r\nAttribute VB_Description = \"Rewritten elsewhere\"\r\n");
+        vm.ReloadFrom(FormCodeText.Prefix(module), module.Code);
+
+        vm.CaretOffset.Should().Be(vm.BufferPrefixLength + "Option".Length, "the caret is where it was in the code");
+    }
+
+    [AvaloniaFact]
+    public void AReloadThatShrinksTheHeaderKeepsTheCaretInTheCode()
+    {
+        var module = TestHelpers.CreateModule(name: "Module1");
+        module.RecordOriginalHeader(
+            "Attribute VB_Name = \"Module1\"\r\nAttribute VB_Description = \"Long before\"\r\n");
+        module.UpdateCode("Option Explicit\r\n");
+        var vm = CreateSut().Initialize(module);
+        vm.CaretOffset = vm.BufferPrefixLength + "Option".Length;
+
+        module.RecordOriginalHeader("Attribute VB_Name = \"Module1\"\r\n");
+        vm.ReloadFrom(FormCodeText.Prefix(module), module.Code);
+
+        vm.CaretOffset.Should().Be(vm.BufferPrefixLength + "Option".Length);
+    }
+
     // ── LSP delegation ───────────────────────────────────────────────
 
     [AvaloniaFact]

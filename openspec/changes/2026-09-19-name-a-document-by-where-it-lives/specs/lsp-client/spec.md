@@ -24,7 +24,7 @@ is, and a fold that disappeared with the server would expose the text it exists 
 - **THEN** no editor or view-model code changes
 
 #### Scenario: No server is attached
-- **WHEN** a form or module is opened with no language server running
+- **WHEN** a form or class is opened with no language server running
 - **THEN** its header is still folded, and the fold does not depend on any server's answer
 
 ### Requirement: A document SHALL be routed by extension, and each server told the identifier it declared

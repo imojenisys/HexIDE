@@ -53,7 +53,7 @@ public partial class CodeEditorView : UserControl
     private bool _resetPromptOpen;
     private string? _preEditBody;       // the code as it stood before the first edit while running (for No→revert)
     private bool _resetPromptArmed;     // developer input is being handled; the next change it makes asks to reset
-    private TextDocument? _resetPromptDocument;
+    private TextDocument? _watchedDocument;
     private int _preEditCaret;
     private Action? _onPaletteChanged;
 
@@ -210,10 +210,12 @@ public partial class CodeEditorView : UserControl
             vm.FocusWindowRequest += VmOnFocusWindowRequest;
 
             // Edit-and-Continue's prompt opens on the document's own Changing event, armed by input (see
-            // ArmResetPrompt). Kept so detach removes it from the same document: the view model, and with it the
-            // document, outlives a dock move that re-materialises this view.
-            _resetPromptDocument = vm.Document;
-            _resetPromptDocument.Changing += OnDocumentChangingForResetPrompt;
+            // ArmResetPrompt), and the header fold's state is read there before a change can remove the fold.
+            // Kept so detach removes both from the same document: the view model, and with it the document,
+            // outlives a dock move that re-materialises this view.
+            _watchedDocument = vm.Document;
+            _watchedDocument.Changing += OnDocumentChangingForResetPrompt;
+            _watchedDocument.Changing += OnDocumentChangingForFolding;
 
             // Attach LSP text marker service (squiggles) and diagnostics colorizer (red text)
             _markerService = new LspTextMarkerService(TextEditor);
@@ -235,8 +237,10 @@ public partial class CodeEditorView : UserControl
             TextEditor.TextArea.TextView.BackgroundRenderers.Insert(0, _highlightRenderer);
             TextEditor.TextArea.Caret.PositionChanged += OnCaretMovedForHighlight;
 
-            // Code folding
+            // Code folding. The header's fold is the window's own and is in place before anything is drawn; a
+            // server's folds join it when the server answers, if one ever does.
             _foldingManager = FoldingManager.Install(TextEditor.TextArea);
+            ApplyFolds(vm, []);
             _ = RequestFoldingsAsync(vm, CancellationToken.None);
 
             // Bookmark gutter margin
@@ -368,10 +372,11 @@ public partial class CodeEditorView : UserControl
         {
             vm.FocusWindowRequest -= VmOnFocusWindowRequest;
             vm.MarkersChanged -= OnMarkersChanged;
-            if (_resetPromptDocument is not null)
+            if (_watchedDocument is not null)
             {
-                _resetPromptDocument.Changing -= OnDocumentChangingForResetPrompt;
-                _resetPromptDocument = null;
+                _watchedDocument.Changing -= OnDocumentChangingForResetPrompt;
+                _watchedDocument.Changing -= OnDocumentChangingForFolding;
+                _watchedDocument = null;
             }
             vm.LanguageServerStateChanged -= OnLanguageServerStateChanged;
             if (_vmSelectionSync is not null)
@@ -399,6 +404,9 @@ public partial class CodeEditorView : UserControl
 
         if (_foldingManager is not null)
         {
+            // The view model outlives this view across a dock move, and the fold comes back the way it is now.
+            if (DataContext is CodeEditorViewModel foldOwner)
+                ObserveHeaderFold(foldOwner);
             FoldingManager.Uninstall(_foldingManager);
             _foldingManager = null;
         }
@@ -481,7 +489,106 @@ public partial class CodeEditorView : UserControl
     private void OnTextChangedForFolding(object? sender, EventArgs e)
     {
         if (DataContext is not CodeEditorViewModel vm) return;
+        // Not left to the debounced request below: a reload removes every fold, and the header would show
+        // expanded for half a second, or for good were the request to fail.
+        if (!HeaderFoldIsCurrent(vm))
+            ApplyFolds(vm, null);
         ScheduleFolding(vm);
+    }
+
+    /// <summary>Marks the folding section that is the header's, among the ones a server's answer creates.</summary>
+    private static readonly object HeaderFoldTag = new();
+
+    /// <summary>
+    /// Applies the window's own folds and a server's together: the header's fold, folded unless the developer
+    /// expanded it in this window (#273 task 3.14).
+    /// </summary>
+    /// <param name="server">The server's folds, or null to keep the ones shown.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>The window sets the fold's state itself, every time.</b> The folding manager cannot be left to keep
+    /// it. It honours <see cref="NewFolding.DefaultClosed"/> only in its first update. It unfolds every section
+    /// it removes, and it removes them all on a reload and the header's on a rewrite covering the whole fold.
+    /// And a server fold listed first that starts where the header does took the header's section, leaving the
+    /// header's fold new and expanded. Measured headlessly on AvaloniaEdit 12.0.0, 2026-10-02; that it pairs
+    /// folds with sections by start offset alone is read from its source, and agrees.
+    /// <see cref="Vb6FoldingAdapter.Merge"/> drops such a fold.
+    /// </para>
+    /// <para>
+    /// <b>Whether the developer expanded it is read from the fold before every re-creation</b>, because the
+    /// folding manager raises nothing when a fold is toggled. So it is read here, before the document
+    /// changes and before the view detaches. An expansion the editor makes itself, when the caret moves into
+    /// the folded header, is read as the developer's too, which is why nothing the IDE does on its own may put
+    /// the caret there.
+    /// </para>
+    /// </remarks>
+    private void ApplyFolds(CodeEditorViewModel vm, IReadOnlyList<NewFolding>? server)
+    {
+        if (_foldingManager is not { } manager) return;
+        ObserveHeaderFold(vm);
+
+        var shown = new List<NewFolding>();
+        if (server is null)
+        {
+            foreach (var section in manager.AllFoldings)
+            {
+                if (!ReferenceEquals(section.Tag, HeaderFoldTag))
+                    shown.Add(new NewFolding(section.StartOffset, section.EndOffset) { Name = section.Title });
+            }
+        }
+
+        var header = Vb6FoldingAdapter.Header(vm.Document, vm.ReadOnlyRegionsNow);
+        manager.UpdateFoldings(Vb6FoldingAdapter.Merge(header is null ? [] : [header], server ?? shown), -1);
+
+        // The header's section is the one at its offsets. The manager kept the old one if it still starts at the
+        // top of the file, and nothing else can have taken it: the merge drops any other fold starting there.
+        if (header is null) return;
+        foreach (var section in manager.GetFoldingsAt(header.StartOffset))
+        {
+            if (section.EndOffset != header.EndOffset) continue;
+            section.Tag = HeaderFoldTag;
+            section.IsFolded = !vm.HeaderFoldExpanded;
+        }
+    }
+
+    /// <summary>Records on the view model whether the header's fold is expanded, while it is still shown.</summary>
+    private void ObserveHeaderFold(CodeEditorViewModel vm)
+    {
+        if (HeaderSection() is { } section)
+            vm.HeaderFoldExpanded = !section.IsFolded;
+    }
+
+    /// <summary>The header's folding section, or null when none is shown.</summary>
+    private FoldingSection? HeaderSection()
+    {
+        if (_foldingManager is null) return null;
+        foreach (var section in _foldingManager.GetFoldingsAt(0))
+        {
+            if (ReferenceEquals(section.Tag, HeaderFoldTag))
+                return section;
+        }
+        return null;
+    }
+
+    /// <summary>True when the header's fold is shown where the header is, or neither exists.</summary>
+    private bool HeaderFoldIsCurrent(CodeEditorViewModel vm)
+    {
+        if (_foldingManager is null) return true;
+        var header = Vb6FoldingAdapter.Header(vm.Document, vm.ReadOnlyRegionsNow);
+        var section = HeaderSection();
+        return header is null
+            ? section is null
+            : section is not null && section.StartOffset == header.StartOffset && section.EndOffset == header.EndOffset;
+    }
+
+    /// <summary>
+    /// Records the header fold's state before a change that may remove it: a whole-document assignment
+    /// removes every fold, and the folding manager unfolds each one it removes.
+    /// </summary>
+    private void OnDocumentChangingForFolding(object? sender, DocumentChangeEventArgs e)
+    {
+        if (DataContext is CodeEditorViewModel vm)
+            ObserveHeaderFold(vm);
     }
 
     /// <summary>
@@ -528,7 +635,7 @@ public partial class CodeEditorView : UserControl
             await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (token.IsCancellationRequested || _foldingManager is null) return;
-                Vb6FoldingAdapter.Apply(_foldingManager, doc, ranges);
+                ApplyFolds(vm, Vb6FoldingAdapter.FromServer(doc, ranges));
             });
         }
         catch (OperationCanceledException) { }

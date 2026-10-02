@@ -38,7 +38,7 @@ A document with no file yet SHALL hold the header its first save will write.
 
 ### Requirement: The header SHALL be folded, greyed out and read-only
 The header SHALL be shown folded when a code window opens, and SHALL be folded again whenever its fold is
-re-created — unless the developer has expanded it in that window. Its text SHALL be shown in a colour that
+re-created — unless the developer has expanded it in that window, or it is a single line. Its text SHALL be shown in a colour that
 marks it as not the developer's to edit, meeting the same contrast requirement as other editor text in every
 theme. It SHALL NOT be editable.
 
@@ -52,9 +52,17 @@ reloaded would put a designer block of hundreds of lines back in front of them a
 
 The fold SHALL NOT depend on any language server, and SHALL be present when none is attached.
 
+A header of a single line SHALL NOT be folded. A fold shows its first line in place of the lines it hides, so on
+one line it would hide nothing. A standard module's header, which is its `Attribute VB_Name` line alone, is that
+case: it is still shown greyed out, and is still read-only.
+
 #### Scenario: Opening a form
 - **WHEN** a form's code window opens
 - **THEN** its designer block and attribute lines are folded into one line, shown greyed out
+
+#### Scenario: Opening a standard module
+- **WHEN** the code window of a standard module whose header is its `Attribute VB_Name` line alone opens
+- **THEN** that line is shown greyed out and cannot be edited, and is not folded
 
 #### Scenario: Reformatting after expanding the header
 - **GIVEN** a developer who has expanded a class's header

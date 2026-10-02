@@ -417,6 +417,40 @@ is folded when its fold is first created, and folded again whenever it is re-cre
 expanded that region in this editor. The reason not to rely on the fold library's "closed by default" flag:
 it is honoured only on a fold manager's first update, and whole-document replacements recreate folds.
 
+**Settled while building 3.14**, from the fold library's behaviour measured headlessly on AvaloniaEdit
+12.0.0 (the measurements are in the task's notes):
+
+- **A server fold that starts where one of the editor's own starts is dropped too**, whatever its length.
+  The library pairs the folds it is given with the sections it holds by start offset alone, so two that
+  start together can trade sections, and with them whether each is folded. Measured: a server fold from the
+  top of the file, listed first, took the header's section and left the header's fold new and expanded. One
+  identical to the header's is a duplicate, and the others nest awkwardly inside it at best.
+- **The header's fold ends before the header's last line break**, so the first line of code stays a line of
+  its own and the folded header reads as one line above it. **A one-line header is not folded**: a fold
+  shows its first line in place of the lines it hides, so on one line it hides nothing. A `.bas` whose
+  header is its `VB_Name` line is that case.
+- **Whether the developer expanded the header is held by the code window's view model**, so a dock move,
+  which re-materialises the view around it, brings the fold back as it was. The library raises nothing when
+  a fold is toggled and unfolds every section it removes, so the state is read from the fold at the three
+  points before it can be lost: before each fold application, when the document is about to change (a
+  reload removes every fold, and a header rewrite covering the whole fold removes that one), and as the view
+  detaches.
+- **On every change the window compares the header's fold with where the header now is, and re-makes it at
+  once when they differ**, rather than waiting for the debounced server request. Otherwise a reload shows
+  the header expanded for half a second, or for good if the request fails, and a header that grows at its
+  end shows the new text after the folded row: text inserted exactly at a fold's end is left outside it. The
+  server's folds already shown are kept through that re-make, with their state.
+- **Moving the caret into the folded header expands it**, because the editor unfolds any fold the caret moves
+  inside, **and the window counts that as the developer expanding it.** A developer who navigates to a header
+  line wants to see it, and folding it again under them on the next server answer would be worse. So nothing
+  the IDE does on its own may put the caret there. The one writer that did, found by review and then seen live,
+  was a reload: it put the caret back at its old offset, which a longer header had moved into the header, and
+  the header opened and stayed open. It now moves the caret with the header's change in length, as the
+  reload already moves the marks.
+- **The fold margin's click cannot be driven by automation**, like the other margins (#707). What it does was
+  read in the library's source: it flips the section's folded state and nothing else, which is what the
+  headless tests do in its place.
+
 The lsp-client contract says folding comes through the language-client interface. These folds present the
 file's structure and are not language intelligence. The contract is amended to say so explicitly.
 

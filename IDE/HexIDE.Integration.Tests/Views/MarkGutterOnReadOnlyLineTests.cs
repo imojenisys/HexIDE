@@ -120,14 +120,16 @@ public class MarkGutterOnReadOnlyLineTests : IDisposable
         return (window, view, editor);
     }
 
-    /// <summary>Folds the header as one section, the way the header fold will (task 3.14).</summary>
-    private static void FoldHeader(TextEditor editor)
+    /// <summary>
+    /// Folds or expands the header's own fold, which the window makes as it opens, folded (task 3.14).
+    /// </summary>
+    private static void SetHeaderFolded(TextEditor editor, bool folded)
     {
         var folding = editor.TextArea.TextView.GetService(typeof(FoldingManager)) as FoldingManager;
         folding.Should().NotBeNull("the code window installs a folding manager on its text area");
-        var document = editor.Document;
-        var section = folding!.CreateFolding(0, document.GetLineByNumber(HeaderLines).EndOffset);
-        section.IsFolded = true;
+        var section = folding!.GetFoldingsAt(0).Single();
+        section.EndOffset.Should().Be(editor.Document.GetLineByNumber(HeaderLines).EndOffset, "the fold is the header's");
+        section.IsFolded = folded;
         editor.TextArea.TextView.EnsureVisualLines();
         Dispatcher.UIThread.RunJobs();
     }
@@ -164,6 +166,7 @@ public class MarkGutterOnReadOnlyLineTests : IDisposable
         // The control: proves the click reaches the gutter and maps to the row it was aimed at.
         var vm = OpenForm();
         var (window, editor) = Show(vm);
+        SetHeaderFolded(editor, false);
 
         var line = ClickGutter<BreakpointMargin>(window, editor, HeaderLines + 2);
 
@@ -176,6 +179,7 @@ public class MarkGutterOnReadOnlyLineTests : IDisposable
     {
         var vm = OpenForm();
         var (window, editor) = Show(vm);
+        SetHeaderFolded(editor, false);
 
         ClickGutter<BreakpointMargin>(window, editor, 2).Should().Be(3);
 
@@ -189,7 +193,7 @@ public class MarkGutterOnReadOnlyLineTests : IDisposable
         // first of them. The row after it is the first line of code.
         var vm = OpenForm();
         var (window, editor) = Show(vm);
-        FoldHeader(editor);
+        SetHeaderFolded(editor, true);
 
         ClickGutter<BreakpointMargin>(window, editor, 0).Should().Be(1, "a folded row starts with the fold's first line");
         breakpoints.GetBreakpoints(vm.Identity).Should().BeEmpty();
@@ -203,7 +207,7 @@ public class MarkGutterOnReadOnlyLineTests : IDisposable
     {
         var vm = OpenForm();
         var (window, editor) = Show(vm);
-        FoldHeader(editor);
+        SetHeaderFolded(editor, true);
 
         ClickGutter<BookmarkMargin>(window, editor, 0);
         bookmarks.GetBookmarks(vm.Identity).Should().BeEmpty();

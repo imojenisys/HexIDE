@@ -1228,11 +1228,72 @@
   `hasUnsavedChanges` true, because the save had written the pasted text before the answer came. A
   keystroke in the header cannot be driven live: `type_text` and `press_key` refuse it before raising it,
   by design, so that case rests on the headless tests.
-- [ ] 3.14 Folds: the header fold is merged into every fold application, including an empty or absent server
+- [x] 3.14 Folds: the header fold is merged into every fold application, including an empty or absent server
   answer, with the merged list sorted by start offset (the manager throws otherwise) and zero-length folds
   discarded (it skips them silently). It sets its own folded state rather than relying on the library's
   closed-by-default flag, which applies only on the first update. Folded when created or re-created unless
   expanded in this window. Overlapping server folds dropped.
+  — **The fold library measured first, headlessly, on AvaloniaEdit 12.0.0 (2026-10-02)**, then read in its
+  decompiled source, which agrees on every point. An update with the same offsets keeps a section, its
+  folded state and its `Tag`. Equal start offsets are accepted, outer first. `Document.Replace` inside a
+  fold keeps it folded and moves its end. `DefaultClosed` is honoured only in the manager's first update.
+  `Document.Text =` removes every fold, a replace covering a fold's whole extent collapses it to nothing and
+  removes it, and **every removal unfolds the section**, so its state cannot be read afterwards. Text
+  inserted exactly at a fold's end is left outside it. And **the manager pairs the folds it is given with
+  the sections it holds by start offset alone**: a server fold from the top of the file, listed first, took
+  the header's section, and the header's fold came back as a new, expanded one.
+  — **So the window keeps the state and sets it itself.** `CodeEditorViewModel.HeaderFoldExpanded` holds
+  whether the developer expanded the header in this window; a dock move re-materialises the view around it.
+  It is read from the fold before each fold application, on the document's `Changing` event (before a
+  reload or a whole-header rewrite can remove the fold), and as the view detaches. After every application
+  the header's section is found by its offsets, tagged, and folded unless expanded.
+  — **The fold is the window's own, with or without a server.** It is applied as the view attaches, before
+  any request goes out, and merged into every server answer (`Vb6FoldingAdapter.Merge`). On every change the
+  window compares the fold with where the header now is and re-makes it at once when they differ, keeping
+  the server's folds already shown and their state: a reload otherwise showed the header expanded until the
+  debounced request came back, and a header that grew at its end showed the new text after the folded row.
+  — **A server fold starting where the header starts is dropped as well as one crossing it**, because of
+  the pairing rule above; one wholly inside the header nests. The fold ends before the header's last line
+  break, so the first line of code keeps its own row, and a one-line header (a `.bas`) is not folded: a fold
+  on one line hides nothing. Its label is its first line, as a server fold's is; 3.20 owns labels.
+  — **Tests:** `Vb6FoldingAdapterTests` (17) for the fold, the conversion and the merge; `HeaderFoldTests`
+  (25) against a rendered editor for every fold scenario in the code-editor and lsp-client deltas (greying
+  is 3.15's) plus the paths the library makes fragile: reload, a class header rewritten whole, growth at the
+  fold's end, a server fold at offset 0 answered twice, a dock move, a server that never answers.
+  `MarkGutterOnReadOnlyLineTests` now uses the window's own fold instead of making one.
+  — **Adversarial review (four lenses, two skeptics per finding) found one product defect, and it was this
+  task's.** The editor unfolds any fold the caret moves strictly inside (read in the decompiled
+  `FoldingManagerInstallation`), and the window takes an unfolded header as the developer's choice. A reload
+  put the caret back at its old offset, which a longer header had moved into the header, so a reload after
+  the form gained something on disk opened the header and kept it open. **Seen live before the fix:** caret
+  on line 91, the designer block grown by 39 characters on disk, and after the reload the header expanded
+  with the caret on line 89. `ReloadFrom` now moves the caret with the prefix's change in length, as the
+  reload already moves the marks, and `CodeEditorViewModelTests` pins it both ways. Moving the caret into
+  the header by navigation still expands it and counts as expanding it, deliberately (design.md). Reading
+  every other place the IDE moves the caret found two searches that a caption naming a handler can send
+  into the header, filed as #711.
+  — **The other findings were test strength, all fixed:** a re-fold test that a flag which could only ever
+  be set would pass; two expanded-header tests that asserted before anything re-made the fold; a comment
+  claiming the attach-time fold was asserted alone. And neither delta said a one-line header is not folded:
+  it is now a requirement paragraph and a scenario, and the lsp-client scenario names a form or class.
+  — **Mutation: 18 at first, 15 caught.** The fold at attach survived because the stub answered at once and
+  its answer made the fold too, and is caught by a test whose server never answers. A branch clearing a
+  stale header tag was unreachable, because the merge drops any fold that could take the header's section,
+  and was removed. So was a check that the header region starts at offset 0, which the region builder
+  guarantees, in favour of the anchor check, which the unit tests do distinguish. Three more after the
+  review were all caught: the reload's caret shift, a flag that could only be set, and the always-folded
+  mutation again against the strengthened tests.
+  — **Verified in the running IDE** on a scratch copy of `demo/bill-of-fare` with the bundled server. The
+  form opened with its 90-line header as one row labelled `VERSION 5.00` and code from line 91, and kept it
+  folded when the server's eleven procedure folds arrived. None of those starts in or crosses the header,
+  so the same-start rule only ever matters for another server. The reload above, before and after the fix.
+  A caption changed by `set_control_property` with the header folded left it folded, and with it expanded
+  left it expanded through the server's next answer. The window closed and reopened came back folded. A
+  new `.bas` showed its one header line with no fold marker, and a new class folded its 13-line header
+  under `VERSION 1.0 CLASS`. **The fold margin's own click cannot be driven** (added to #707), so expanding
+  was done by moving the caret into the header.
+  — Seen on the way and added to #512: a document highlight stays at its old offsets across a header write,
+  exactly as the diagnostic markers do.
 - [ ] 3.15 Greying: a named palette colour for each theme, meeting the dark palette's recorded contrast bar,
   applied after syntax colouring. Theme packs carry the key.
 - [x] 3.16 Line numbers from the top of the file in the margin, status bar, Call Stack, automation and add-in

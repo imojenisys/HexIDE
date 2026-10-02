@@ -457,6 +457,17 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     public CodeWindowText CodeWindowText => new(Document.Text, bufferPrefix.Length);
 
     /// <summary>
+    /// True once the developer has expanded the header's fold in this window, and false again once they fold
+    /// it (#273 task 3.14).
+    /// </summary>
+    /// <remarks>
+    /// Held here rather than by the view, because the view is not the window: a dock move re-materialises the
+    /// view around this view model, and the fold has to come back the way the developer left it. The view
+    /// reads it when it re-creates the fold and writes it back from the fold before each re-creation.
+    /// </remarks>
+    internal bool HeaderFoldExpanded { get; set; }
+
+    /// <summary>
     /// Toggles a breakpoint on the 1-based <paramref name="line"/>, unless it would set one on a read-only line.
     /// </summary>
     /// <returns>False when nothing changed because the line is read-only; the status bar then says why.</returns>
@@ -835,10 +846,20 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// Unlike <see cref="RefreshPrefix"/> this does assign <c>Document.Text</c>, because the body changed
     /// too: there is no region to replace and no anchor below the change to preserve.
     /// </para>
+    ///
+    /// <para>
+    /// <b>The caret is kept where it was in the code, as the marks are</b>, by moving it with the prefix's
+    /// change in length. Put back at its old offset, a caret in the code landed in the header whenever the
+    /// reload made the header longer -- two lines up from the first line of code, measured on a form whose
+    /// designer block gained a longer caption -- and the editor unfolds a fold the caret moves into, so the
+    /// header opened as though the developer had expanded it (#273 task 3.14). A caret that was in the header
+    /// is left at its offset, clamped, since nothing says where the same text now is.
+    /// </para>
     /// </remarks>
     internal void ReloadFrom(string newPrefix, string newBody)
     {
         var whole = newPrefix + newBody;
+        var oldPrefixLength = bufferPrefix.Length;
         bufferPrefix = newPrefix;
 
         // The reload has already adopted the file's fidelity verdict into the same FormDefinition, so nothing
@@ -852,6 +873,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             return;
         var caret = CaretOffset;
         Document.Text = whole;
+        if (caret >= oldPrefixLength)
+            caret += newPrefix.Length - oldPrefixLength;
         CaretOffset = Math.Clamp(caret, 0, Document.TextLength);
 
         // The history is discarded, because what it describes is gone: every entry holds an absolute offset
