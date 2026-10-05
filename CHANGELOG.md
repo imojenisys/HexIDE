@@ -75,6 +75,15 @@ there isn't one yet. Anything may change between 0.x releases.
   it, the code window kept its old answer until it was closed and reopened. It stayed locked with the
   warning showing, or stayed typable with no warning. The designer already followed the reload.
   ([#475](https://github.com/hexide-io/HexIDE/issues/475))
+- **Bookmarks and breakpoints are no longer lost on the way to their file.** A bookmark set just before
+  closing the project, or HexIDE, was not saved, and nor was one set in a project of a group while another
+  project changed or closed. A save that failed, because another program held the file, is now made again
+  when the project closes.
+- **The per-project file they live in (`<project>.user.hexproj`) keeps what it does not know.** Anything a
+  newer HexIDE wrote into it is kept, even when both had the project open at once. It goes with the project
+  when the project is saved somewhere else, is not created by a save with nothing to record, and is left
+  untouched when it cannot be read rather than overwritten.
+
 ## [0.2.0] — 2026-09-24
 
 Most of this release is about not losing work. A save now gives back the file it read, and a form HexIDE
