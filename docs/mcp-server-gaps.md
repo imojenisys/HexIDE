@@ -76,6 +76,20 @@ mechanism seen from two starting states. Retiring it needs a session that begins
 condition nobody has deliberately arranged. **Left open on purpose**, since this entry has already survived
 one wrong retirement.
 
+**Reproduced 2026-10-05 from that starting state, which confirms the reading above.** The session began with
+`hexide` refused (`ECONNREFUSED`) and was attached by one `/mcp` reconnect, which listed all 64 tools. Then:
+
+1. `shutdown_ide()` was called with its defaults, so `force: true`. The client at once reported all 64
+   `mcp__hexide__*` tools removed.
+2. The same Debug build was relaunched, and `/health` answered 200 with the new process's `pid` within two
+   seconds.
+3. `ToolSearch("select:mcp__hexide__get_breakpoints,mcp__hexide__set_breakpoints,mcp__hexide__shutdown_ide")`
+   returned no match, with `hexide` still reported `ECONNREFUSED`.
+
+So an attachment made mid-session by a reconnect behaves like the one recorded here, not like one made at
+session start. **It is still the client's behaviour (#645), and the entry stays open.** What it costs a
+caller is one more reconnect per rebuild, which `CLAUDE.md` now says.
+
 **Fix consideration.** Auto-reconnect the MCP client when a known server reappears on its port, or a
 lightweight "reconnect MCP" affordance — so the shutdown→build→relaunch→verify loop keeps the tools live
 without a full resume.

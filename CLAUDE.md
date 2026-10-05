@@ -316,7 +316,10 @@ restarted since. **If the IDE was up and answering at session start, do the rebu
 before asking.** If it was not, relaunch the IDE, wait for `/health`, and ask the user to run **`/mcp` and
 reconnect `hexide`** — which attaches a session that started without it, no resume needed (measured
 2026-09-21: a session whose `hexide` connection was refused at start got all 64 tools after one reconnect).
-A resume works too, and is the slower of the two.
+A resume works too, and is the slower of the two. **An attachment made by a reconnect does not survive the
+next `shutdown_ide`** (measured 2026-10-05): the client dropped all 64 tools on shutdown, and a relaunch
+answering `/health` within two seconds did not bring them back. In such a session every rebuild costs
+another reconnect, so do every live check that needs the IDE before shutting it down.
 
 **Never reach for raw HTTP either way.** That rule is unchanged and is not about schemas: a bypass proves
 nothing about the surface a real caller uses.
