@@ -520,15 +520,31 @@ loads, once every document is loaded:
   file is missing or unreadable — the second is the case that matters, because such a module is still a
   document of the project, so a rule written in terms of "no such document" would not catch it. Guessing an
   offset misplaces a mark; dropping the entry loses it;
-- unrecognised top-level content is kept (today it is dropped on save, contrary to the user-sidecar spec,
-  which is #466);
+- unrecognised top-level content is kept, as every save has kept it since #466 was fixed (#718);
 - the file is rewritten as version 2 only if something changed, and never after a read that failed.
 
 **Downgrade.** An older build cannot be fixed. Given a version-2 sidecar it ignores the new keys and, on its
 next save, erases them — which is #466, the unrecognised-content defect, biting where the spec already says
 it should not. That is the lesser harm: reusing the old keys with moved lines would instead have the old
-build show every mark the prefix's length too low, silently. Fixing #466 first narrows the window to builds
-released before that fix, and the rest is recorded rather than mitigated.
+build show every mark the prefix's length too low, silently. #466 is fixed (#718, merged 2026-10-05), so the
+window is builds released before the fix, 0.2.0 and earlier, and the rest is recorded rather than mitigated.
+
+**Two things the #466 fix leaves for this migration**, found while building it:
+
+1. **Version-1 keys inside a version-2 file.** A build with the #466 fix but without this migration keeps a
+   version-2 file's version and its new keys, and writes its own `bookmarks` and `breakpoints` beside them,
+   under the version-2 label. Only builds counting lines from the first line the code window showed write
+   those two keys. **So a reader treats `bookmarks` and `breakpoints` as version-1-counted whatever
+   `version` says**, and migrates them as it would in a version-1 file.
+2. **Absent documents versus renamed ones.** Carrying forward an entry for a document that is absent must
+   tell one absent since the project opened from one renamed or removed this session. The obvious rule,
+   "carry every entry naming no document of the project", fails three ways:
+   - a renamed document's old-name entry stays in the file beside the new one;
+   - a mark removed while it was renamed comes back when the name does;
+   - a later document of the old name inherits marks nobody set in it.
+
+   **Keep the names the project had when it opened, and carry only entries naming none of them.** This is
+   why #466 itself carries no such entries: a first attempt at the obvious rule was refuted in review.
 
 ## The shipped surfaces
 
