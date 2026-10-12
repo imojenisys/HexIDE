@@ -52,6 +52,13 @@ namespace HexIDE.Tests.Infrastructure;
 /// </remarks>
 public class McpRestartTests
 {
+    // DIAGNOSTIC (#778), not for commit: which server took each request, and which connections the client opened.
+    private static readonly System.Collections.Concurrent.ConcurrentQueue<string> Trace = new();
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<WebApplication, int> ServerIds = new();
+    private static int _servers;
+    private static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
+    private static void Note(string line) => Trace.Enqueue($"{Clock.ElapsedMilliseconds,7} ms  {line}");
+
     [McpServerToolType]
     public sealed class Tools
     {
@@ -86,14 +93,52 @@ public class McpRestartTests
             .WithTools<Tools>()
             .WithRequestFilters(filters => filters.AddCallToolFilter(ToolFailures.Filter));
         var app = builder.Build();
+        var id = Interlocked.Increment(ref _servers);
+        ServerIds[app] = id;
+        app.Use(async (http, next) =>
+        {
+            var conn = $"{http.Connection.Id} from {http.Connection.RemoteIpAddress}:{http.Connection.RemotePort}";
+            Note($"server{id} begin {http.Request.Method} conn={conn}");
+            try { await next(http); }
+            finally { Note($"server{id} end {http.Response.StatusCode} conn={conn}"); }
+        });
         app.MapMcp("/mcp");
+        Note($"server{id} starting on {port}");
         await app.StartAsync(TestContext.Current.CancellationToken);
+        Note($"server{id} started");
         return app;
     }
 
+    /// <summary>
+    /// Stops a server the way a restart of the IDE does. A process exit resets every connection at once, so a
+    /// client's pooled keep-alive connection is dead before its next request, and the client opens a new one.
+    /// </summary>
+    /// <remarks>
+    /// A graceful stop drains connections instead, and once, under the full suite's load, the first call after the
+    /// restart went unanswered for the test's 20 seconds (#778). A cancelled token makes Kestrel abort its connections
+    /// rather than drain them, which is what an exit does. The client is left alone: its pooled connection is exactly
+    /// what a real client brings across a restart, so the test must not lose it.
+    /// </remarks>
     private static async Task StopAsync(WebApplication app)
     {
-        await app.StopAsync(TestContext.Current.CancellationToken);
+        var sid = ServerIds.TryGetValue(app, out var known) ? known : 0;
+        Note($"server{sid} stopping");
+        try { await StopCoreAsync(app); }
+        finally { Note($"server{sid} stopped and disposed"); }
+    }
+
+    private static async Task StopCoreAsync(WebApplication app)
+    {
+        using var now = new CancellationTokenSource();
+        await now.CancelAsync();
+        try
+        {
+            await app.StopAsync(now.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // The host reports the cancelled token it was given; the abort it asked for is what this wants.
+        }
         await app.DisposeAsync();
     }
 
@@ -106,7 +151,26 @@ public class McpRestartTests
         };
         if (maxReconnectionAttempts is { } attempts)
             options.MaxReconnectionAttempts = attempts;
-        return McpClient.CreateAsync(new HttpClientTransport(options),
+        var handler = new SocketsHttpHandler
+        {
+            ConnectCallback = async (context, ct) =>
+            {
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    await socket.ConnectAsync(context.DnsEndPoint, ct);
+                    Note($"client connected {socket.LocalEndPoint} -> {socket.RemoteEndPoint}");
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch (Exception e)
+                {
+                    Note($"client connect to {context.DnsEndPoint} failed: {e.GetType().Name} {e.Message}");
+                    socket.Dispose();
+                    throw;
+                }
+            },
+        };
+        return McpClient.CreateAsync(new HttpClientTransport(options, new HttpClient(handler), ownsHttpClient: true),
             cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -137,7 +201,30 @@ public class McpRestartTests
         var second = await StartAsync(port, McpTransport.Configure);
         try
         {
-            (await EchoAsync(client, "after")).Should().Be("after", "the restart must be invisible to the client");
+            string after;
+            try
+            {
+                Note("client call 'after' begins");
+                after = await EchoAsync(client, "after");
+                Note("client call 'after' answered");
+            }
+            catch (Exception e)
+            {
+                Note($"client call 'after' failed: {e.GetType().Name}");
+                string fresh;
+                try
+                {
+                    await using var other = await ConnectAsync(port);
+                    fresh = await EchoAsync(other, "fresh");
+                    Note("a fresh client was answered: " + fresh);
+                }
+                catch (Exception f)
+                {
+                    Note($"a fresh client failed too: {f.GetType().Name} {f.Message}");
+                }
+                throw new Exception("DIAGNOSTIC TRACE (#778)\n" + string.Join("\n", Trace), e);
+            }
+            after.Should().Be("after", "the restart must be invisible to the client");
             (await EchoAsync(client, "again")).Should().Be("again");
         }
         finally
