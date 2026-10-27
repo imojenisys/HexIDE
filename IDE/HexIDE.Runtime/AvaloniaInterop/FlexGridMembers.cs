@@ -86,6 +86,21 @@ internal static class FlexGridMembers
         }
     }
 
+    internal static Vb6Value Call(VBMSFlexGrid grid, string name, IReadOnlyList<Vb6Value> args)
+    {
+        switch (name.ToLowerInvariant())
+        {
+            case "additem" when args.Count is 1 or 2:
+                grid.Model.AddItem(Text(args[0]), args.Count == 2 ? Index(args[1]) : null);
+                break;
+            case "removeitem" when args.Count == 1:
+                grid.Model.RemoveItem(Index(args[0]));
+                break;
+            default: throw Refused(name);
+        }
+        return Vb6Value.Nothing;
+    }
+
     private static bool IsCellFormat(string name) => name.ToLowerInvariant() is
         "cellalignment" or "cellfontname" or "cellfontsize" or "cellfontbold" or "cellfontitalic" or
         "cellfontunderline" or "cellfontstrikethrough";

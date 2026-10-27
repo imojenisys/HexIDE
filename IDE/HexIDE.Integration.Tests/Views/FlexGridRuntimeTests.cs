@@ -28,6 +28,35 @@ public class FlexGridRuntimeTests
     }
 
     [AvaloniaFact]
+    public async Task Rows_can_be_appended_inserted_and_removed_from_code()
+    {
+        (await Run("""
+            Grid1.Cols = 3
+            Grid1.AddItem "x" & vbTab & "y" & vbTab & "z" & vbTab & "extra"
+            Grid1.AddItem "only", Grid1.Rows
+            Grid1.AddItem "a" & vbCr & "b", 2
+            Debug.Print Grid1.Rows, Grid1.TextMatrix(2, 0), Grid1.TextMatrix(2, 1)
+            Debug.Print Grid1.TextMatrix(3, 0), Grid1.TextMatrix(3, 1), Grid1.TextMatrix(3, 2)
+            Debug.Print Grid1.TextMatrix(4, 0), Grid1.TextMatrix(4, 1)
+            Grid1.Row = 2
+            Grid1.RemoveItem 1
+            Debug.Print Grid1.Rows, Grid1.Row, Grid1.TextMatrix(1, 0), Grid1.TextMatrix(2, 0)
+            """)).Should().Equal("5", "a\rb", "", "x", "y", "z", "only", "", "4", "2", "a\rb", "x");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Grid1.AddItem \"x\", 0", "30001")]
+    [InlineData("Grid1.AddItem \"x\", 3", "30002")]
+    [InlineData("Grid1.RemoveItem 0", "30000")]
+    [InlineData("Grid1.RemoveItem 99", "30002")]
+    [InlineData("Grid1.RemoveItem 1", "30015")]
+    public async Task Row_operations_raise_measured_errors_without_mutating(string statement, string error)
+    {
+        (await Run($"On Error Resume Next\n{statement}\nDebug.Print Err.Number, Grid1.Rows"))
+            .Should().Equal(error, "2");
+    }
+
+    [AvaloniaFact]
     public async Task A_form_can_fill_and_read_its_grid()
     {
         (await Run("""

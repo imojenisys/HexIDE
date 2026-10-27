@@ -248,6 +248,45 @@ internal sealed class FlexGridModel
             foreach (var cell in Selection()) cellFormatting[(cell.Row, cell.Col, member)] = value;
     }
 
+    public void AddItem(string item, int? index = null)
+    {
+        var at = index ?? rows;
+        if (at >= 0 && at < fixedRows) throw Error(30001, "Cannot use AddItem on a fixed row");
+        if (at < 0) throw new NotImplementedException("MSFlexGrid.AddItem negative index is not implemented (#1099)");
+        if (at > rows) throw Error(30002, "Grid does not contain that row");
+        RefuseRowEditEdges();
+        var fields = item.Split('\t');
+        var moved = new Dictionary<(int Row, int Col), string>();
+        foreach (var cell in text)
+            moved[(cell.Key.Row >= at ? cell.Key.Row + 1 : cell.Key.Row, cell.Key.Col)] = cell.Value;
+        Rows++;
+        text.Clear();
+        foreach (var cell in moved) text[cell.Key] = cell.Value;
+        for (var c = 0; c < fields.Length && c < cols; c++) SetText(at, c, fields[c]);
+    }
+
+    public void RemoveItem(int index)
+    {
+        if (index >= 0 && index < fixedRows) throw Error(30000, "Cannot do a RemoveItem on a fixed row");
+        if (index < 0) throw new NotImplementedException("MSFlexGrid.RemoveItem negative index is not implemented (#1099)");
+        if (index >= rows) throw Error(30002, "Grid does not contain that row");
+        if (rows - fixedRows == 1) throw Error(30015, "Can not remove last non-fixed row");
+        RefuseRowEditEdges();
+        var moved = new Dictionary<(int Row, int Col), string>();
+        foreach (var cell in text)
+            if (cell.Key.Row != index)
+                moved[(cell.Key.Row > index ? cell.Key.Row - 1 : cell.Key.Row, cell.Key.Col)] = cell.Value;
+        Rows--;
+        text.Clear();
+        foreach (var cell in moved) text[cell.Key] = cell.Value;
+    }
+
+    private void RefuseRowEditEdges()
+    {
+        if (rows == 0 || cols == 0 || cellFormatting.Count != 0 || rowHeights.Count != 0)
+            throw new NotImplementedException("MSFlexGrid row operations with empty dimensions, formatting or row heights are not implemented (#1099)");
+    }
+
     private string formatString = "";
     public string FormatString
     {

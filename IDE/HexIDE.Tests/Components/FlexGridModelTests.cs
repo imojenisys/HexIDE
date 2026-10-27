@@ -13,6 +13,24 @@ public class FlexGridModelTests
         return Activator.CreateInstance(type!)!;
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void UnmeasuredRowMetadataMovementIsRefusedWithoutMutation(bool height)
+    {
+        var grid = Grid();
+        grid.Rows = 3;
+        grid.SetText(1, 0, "keep");
+        if (height) grid.SetRowHeight(1, 500);
+        else grid.SetCellFormat("cellfontbold", true);
+        Action add = () => grid.AddItem("new", 1);
+        Action remove = () => grid.RemoveItem(1);
+        add.Should().Throw<NotImplementedException>();
+        remove.Should().Throw<NotImplementedException>();
+        ((int)grid.Rows).Should().Be(3);
+        ((string)grid.GetText(1, 0)).Should().Be("keep");
+    }
+
     [Fact]
     public void DefaultsAndEmptyDimensions()
     {

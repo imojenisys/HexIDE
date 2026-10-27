@@ -15,7 +15,7 @@ public static class AvaloniaMethodsInteroperability
     public static Vb6Value Call(this Control c, string method, IReadOnlyList<Vb6Value> args)
     {
         VBProps.RefuseIfRemoved(c);
-        if (c is VBMSFlexGrid) throw FlexGridMembers.Refused(method);
+        if (c is VBMSFlexGrid grid) return FlexGridMembers.Call(grid, method, args);
         // An in-box control's own methods, and those it lacks, by its member table (#1082). One it lacks, such as a
         // ProgressBar's SetFocus, is refused as a property it lacks is: VB6's compile error on the early-bound call, which
         // is 438 late-bound (measured).
