@@ -246,4 +246,4 @@ cell never given one,** not the grid's BackColor.
 
 ### In HexIDE
 
-HexIDE doesn't model the MSFlexGrid (#1099). The designer draws it as an empty box (#157), and running a form that holds one is refused, as for any control HexIDE can't create (#857).
+HexIDE has an internal shape, cursor and text model as the first slice of #1099, covered by `FlexGridModelTests`. It is not registered or dispatched to VB6 yet. Valid FixedCols assignments refuse because their cursor effects have not been measured. Cell formatting, sizes, row operations, enumerated appearance properties, FormatString and Sort remain for the rest of Part A; input/drawing and file persistence remain Parts B and C. The designer draws it as an empty box (#157), and running a form that holds one is refused, as for any control HexIDE can't create (#857).

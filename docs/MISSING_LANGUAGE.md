@@ -1326,3 +1326,10 @@ Two known drift hazards, both live:
 2. `IDE/HexIDE.Runtime/README.md` carries a walls table that has already gone stale at least once
    (it listed `Implements` as permanently out of scope after it had been implemented).
 
+## Referenced control groundwork
+
+These referenced ActiveX members are outside the language inventory above; its counts are unchanged.
+
+| Member | Implementation | Reason |
+|---|---|---|
+| `MSFlexGrid.FixedCols` assignment | Not implemented | #1099: the upper-bound error is measured, but negative values and the cursor effects of a valid assignment have not been measured. The internal model refuses those assignments with `NotImplementedException`. Registration and runtime dispatch remain outstanding, so a form holding a grid still refuses at startup. |
