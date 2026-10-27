@@ -19,6 +19,7 @@ internal sealed class FlexGridModel
         set
         {
             if (value < 0) throw InvalidRow();
+            RefuseRemovedFormatting(value, cols);
             rows = value;
             fixedRows = Math.Min(fixedRows, Math.Max(0, rows - 1));
             row = Math.Min(row, rows - 1);
@@ -33,6 +34,7 @@ internal sealed class FlexGridModel
         set
         {
             if (value < 0) throw InvalidColumn();
+            RefuseRemovedFormatting(rows, value);
             cols = value;
             fixedCols = Math.Min(fixedCols, Math.Max(0, cols - 1));
             col = Math.Min(col, cols - 1);
@@ -216,6 +218,36 @@ internal sealed class FlexGridModel
         }
     }
 
+    private readonly Dictionary<(int Row, int Col, string Member), object> cellFormatting = new();
+
+    public object GetCellFormat(string member)
+    {
+        CheckFormattingCell();
+        if (cellFormatting.TryGetValue((row, col, member), out var value)) return value;
+        return member switch
+        {
+            "cellfontname" => "MS Sans Serif",
+            "cellfontsize" => 8.25,
+            "cellfontbold" => false,
+            _ => throw new NotImplementedException($"MSFlexGrid.{member} default is not implemented (#1099)"),
+        };
+    }
+
+    public void SetCellFormat(string member, object value)
+    {
+        CheckFormattingCell();
+        if (member == "cellalignment")
+        {
+            var alignment = (int)value;
+            if (alignment == 10) throw Error(30005, "Invalid Alignment value");
+            if (alignment < 0 || alignment > 10)
+                throw new NotImplementedException("MSFlexGrid.CellAlignment validation is not implemented (#1099)");
+        }
+        if (fillStyle == 0) cellFormatting[(row, col, member)] = value;
+        else
+            foreach (var cell in Selection()) cellFormatting[(cell.Row, cell.Col, member)] = value;
+    }
+
     private string formatString = "";
     public string FormatString
     {
@@ -254,6 +286,19 @@ internal sealed class FlexGridModel
     {
         CellEvent?.Invoke("EnterCell");
         CellEvent?.Invoke("RowColChange");
+    }
+
+    private void CheckFormattingCell()
+    {
+        if (row < 0 || col < 0)
+            throw new NotImplementedException("MSFlexGrid formatting without a current cell is not implemented (#1099)");
+    }
+
+    private void RefuseRemovedFormatting(int newRows, int newCols)
+    {
+        foreach (var cell in cellFormatting.Keys)
+            if (cell.Row >= newRows || cell.Col >= newCols)
+                throw new NotImplementedException("MSFlexGrid resizing formatted cells is not implemented (#1099)");
     }
 
     private void DiscardRemovedText()

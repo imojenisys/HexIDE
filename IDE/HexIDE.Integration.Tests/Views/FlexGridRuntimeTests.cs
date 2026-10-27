@@ -175,6 +175,57 @@ public class FlexGridRuntimeTests
     }
 
     [AvaloniaTheory]
+    [InlineData("CellAlignment", "4", "7", "4", "7")]
+    [InlineData("CellFontName", "\"MS Sans Serif\"", "\"Arial\"", "MS Sans Serif", "Arial")]
+    [InlineData("CellFontSize", "12", "8.25", "12", "8.25")]
+    [InlineData("CellFontBold", "True", "False", "True", "False")]
+    [InlineData("CellFontItalic", "True", "False", "True", "False")]
+    [InlineData("CellFontUnderline", "True", "False", "True", "False")]
+    [InlineData("CellFontStrikeThrough", "True", "False", "True", "False")]
+    public async Task Cell_formatting_uses_FillStyle_and_reads_the_current_cell(
+        string member, string first, string second, string firstRead, string secondRead)
+    {
+        (await Run($"""
+            Grid1.Rows = 4
+            Grid1.Cols = 3
+            Grid1.Row = 3
+            Grid1.Col = 2
+            Grid1.RowSel = 0
+            Grid1.ColSel = 0
+            Grid1.FillStyle = 1
+            Grid1.{member} = {first}
+            Grid1.FillStyle = 0
+            Grid1.{member} = {second}
+            Grid1.FillStyle = 1
+            Debug.Print Grid1.{member}
+            Grid1.Row = 0
+            Grid1.Col = 0
+            Debug.Print Grid1.{member}
+            Grid1.Row = 2
+            Grid1.Col = 1
+            Debug.Print Grid1.{member}, Grid1.RowHeight(2)
+            """)).Should().Equal(secondRead, firstRead, firstRead, "240");
+        var shrinkRows = () => Run($"Grid1.{member} = {first}\nGrid1.Rows = 1");
+        await shrinkRows.Should().ThrowAsync<NotImplementedException>().WithMessage("*resizing formatted cells*#1099*");
+        var shrinkCols = () => Run($"Grid1.{member} = {first}\nGrid1.Cols = 1");
+        await shrinkCols.Should().ThrowAsync<NotImplementedException>().WithMessage("*resizing formatted cells*#1099*");
+        var empty = () => Run($"Grid1.Rows = 0\nGrid1.{member} = {first}");
+        await empty.Should().ThrowAsync<NotImplementedException>().WithMessage("*without a current cell*#1099*");
+    }
+
+    [AvaloniaFact]
+    public async Task Cell_font_defaults_and_invalid_alignment_are_measured()
+    {
+        (await Run("""
+            Debug.Print Grid1.CellFontName, Grid1.CellFontSize, Grid1.CellFontBold
+            Grid1.CellAlignment = 4
+            On Error Resume Next
+            Grid1.CellAlignment = 10
+            Debug.Print Err.Number, Grid1.CellAlignment
+            """)).Should().Equal("MS Sans Serif", "8.25", "False", "30005", "4");
+    }
+
+    [AvaloniaTheory]
     [InlineData("Grid1.Sort = 1")]
     [InlineData("Grid1.Clear")]
     [InlineData("Debug.Print Grid1.hWnd")]

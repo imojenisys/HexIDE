@@ -9,6 +9,18 @@ internal static class FlexGridMembers
     {
         if (args.Count != 0 && !IsIndexed(name)) throw Refused(name);
         var model = grid.Model;
+        if (IsCellFormat(name))
+        {
+            var value = model.GetCellFormat(name.ToLowerInvariant());
+            return value switch
+            {
+                int n => new Vb6Value(n),
+                double n => new Vb6Value(n),
+                bool b => new Vb6Value(b),
+                string text => new Vb6Value(text),
+                _ => throw Refused(name),
+            };
+        }
         return name.ToLowerInvariant() switch
         {
             "rows" => new Vb6Value(model.Rows),
@@ -37,6 +49,19 @@ internal static class FlexGridMembers
     {
         if (args.Count != 0 && !IsIndexed(name)) throw Refused(name);
         var model = grid.Model;
+        if (IsCellFormat(name))
+        {
+            var member = name.ToLowerInvariant();
+            object format = member switch
+            {
+                "cellalignment" => Index(value),
+                "cellfontname" => Text(value),
+                "cellfontsize" => FontSize(value),
+                _ => value.Value is bool b ? b : throw Refused("font Boolean conversion"),
+            };
+            model.SetCellFormat(member, format);
+            return;
+        }
         switch (name.ToLowerInvariant())
         {
             case "rows": model.Rows = Index(value); break;
@@ -59,6 +84,23 @@ internal static class FlexGridMembers
             case "formatstring": model.FormatString = Text(value); break;
             default: throw Refused(name);
         }
+    }
+
+    private static bool IsCellFormat(string name) => name.ToLowerInvariant() is
+        "cellalignment" or "cellfontname" or "cellfontsize" or "cellfontbold" or "cellfontitalic" or
+        "cellfontunderline" or "cellfontstrikethrough";
+
+    private static double FontSize(Vb6Value value)
+    {
+        var size = value.Value switch
+        {
+            int n => n,
+            long n => (double)n,
+            float n => n,
+            double n => n,
+            _ => throw Refused("font size conversion"),
+        };
+        return double.IsFinite(size) && size > 0 ? size : throw Refused("font size validation");
     }
 
     private static bool IsIndexed(string name) => name.ToLowerInvariant() is
