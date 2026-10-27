@@ -157,6 +157,33 @@ internal sealed class FlexGridModel
         }
     }
 
+    private string formatString = "";
+    public string FormatString
+    {
+        get => formatString;
+        set
+        {
+            formatString = value;
+            if (fixedRows == 0 && fixedCols == 0) return;
+            var sections = value.Split(';', 2);
+            var columns = sections[0].Split('|');
+            if (columns.Length > cols) Cols = columns.Length;
+            if (fixedRows > 0)
+                for (var c = 0; c < columns.Length; c++)
+                {
+                    var heading = columns[c];
+                    if (heading.Length > 0 && heading[0] is '<' or '^' or '>') heading = heading[1..];
+                    SetText(0, c, heading.TrimEnd(' '));
+                }
+            if (fixedCols > 0 && sections.Length == 2)
+            {
+                var headings = sections[1].Split('|');
+                for (var r = 0; r < headings.Length && r < rows; r++)
+                    SetText(r, 0, headings[r]);
+            }
+        }
+    }
+
     private IEnumerable<(int Row, int Col)> Selection()
     {
         for (var r = Math.Min(row, rowSel); r <= Math.Max(row, rowSel); r++)

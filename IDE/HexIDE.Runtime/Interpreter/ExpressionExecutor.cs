@@ -1492,6 +1492,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new VBMethodOrDataMemberNotFoundException(memberName, variable.Type);
         }
 
+        if (variable.Value is VBMSFlexGrid grid)
+        {
+            VBProps.RefuseIfRemoved(grid);
+            return FlexGridMembers.Read(grid, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
+        }
+
         // A list's List(i) and a ListBox's Selected(i), the control members here that take an index (#821, #1395).
         if (variable.Value is Control listControl && ListMembers.IsList(listControl) && MemberArgs(member) is { } listIndexes)
         {
@@ -2188,6 +2194,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             {
                 VBCommonDialog => "MSComDlg",
                 VBProgressBar bar => bar.Library.Name,
+                VBMSFlexGrid => "MSFlexGridLib",
                 _ => "VB",
             };
             return new Vb6Value(string.Equals(targetName, "Object", StringComparison.OrdinalIgnoreCase)

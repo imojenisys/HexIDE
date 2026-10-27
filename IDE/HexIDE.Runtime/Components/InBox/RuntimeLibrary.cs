@@ -17,7 +17,7 @@ public sealed class RuntimeLibrary
     private readonly Lazy<Constants> constants;
 
     internal RuntimeLibrary(string name, string description, string guid, string version, string file, int persistedVersion,
-        IReadOnlyDictionary<string, int> controls, string constantsResource)
+        IReadOnlyDictionary<string, int> controls, string? constantsResource)
     {
         Name = name;
         Description = description;
@@ -120,6 +120,8 @@ public sealed class RuntimeLibrary
 
     private Constants Load()
     {
+        if (constantsResource is null) return new Constants(new(StringComparer.OrdinalIgnoreCase),
+            new(StringComparer.OrdinalIgnoreCase), new(StringComparer.OrdinalIgnoreCase));
         var asm = typeof(RuntimeLibrary).Assembly;
         var resource = asm.GetManifestResourceNames().Single(n => n.EndsWith(constantsResource!, StringComparison.Ordinal));
         using var stream = asm.GetManifestResourceStream(resource)!;
@@ -174,8 +176,12 @@ public static class ControlLibraries
         },
         "comctl32-constants.json");
 
+    public static readonly RuntimeLibrary MSFlexGridLib = new("MSFlexGridLib", "MSFLXGRD.OCX",
+        "{5E9E78A0-531B-11CF-91F6-C2863C385E30}", "1.0", "MSFLXGRD.OCX", 393216,
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["MSFlexGrid"] = 1099 }, null);
+
     /// <summary>Every in-box control library HexIDE knows.</summary>
-    public static IReadOnlyList<RuntimeLibrary> All { get; } = [MSComctlLib, ComctlLib];
+    public static IReadOnlyList<RuntimeLibrary> All { get; } = [MSComctlLib, ComctlLib, MSFlexGridLib];
 
     /// <summary>The library <paramref name="reference"/> names, or null for one HexIDE doesn't know.</summary>
     public static RuntimeLibrary? For(ObjectReference reference) => All.FirstOrDefault(l => l.IsNamedBy(reference));

@@ -2270,6 +2270,15 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             // Every member of a control Controls.Remove took out is 735 (measured, #1556).
             VBProps.RefuseIfRemoved(control);
 
+            if (control is VBMSFlexGrid grid)
+            {
+                var gridMember = members[0].iCS_S_ProcedureOrArrayCall();
+                FlexGridMembers.Write(grid, UdtFieldName(members[0]),
+                    gridMember is not null && gridMember.argsCall().Length == 1
+                        ? await expressionExecutor.EvaluateCallArgs(gridMember.argsCall(0)) : [], value);
+                return default;
+            }
+
             // An in-box control's own members, and the extender's it lacks, by its member table (#1082).
             if (ProgressBarMembers.TrySet(control, memberIdentifier, value) is { } inBox)
                 return inBox ? default

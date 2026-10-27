@@ -398,8 +398,10 @@ GridLineWidth, FormatString, the Font block, OLEDropMode
 
 ### In HexIDE
 
-HexIDE doesn't model the MSFlexGrid (#1099). The designer draws it as an empty box (#157), and running a form that holds one is refused, as for any control HexIDE can't create (#857).
-
-### In HexIDE
-
-HexIDE has an internal shape, cursor and text model as the first slice of #1099, covered by `FlexGridModelTests`. It is not registered or dispatched to VB6 yet. Valid FixedCols assignments refuse because their cursor effects have not been measured. Cell formatting, sizes, row operations, enumerated appearance properties, FormatString and Sort remain for the rest of Part A; input/drawing and file persistence remain Parts B and C. The designer draws it as an empty box (#157), and running a form that holds one is refused, as for any control HexIDE can't create (#857).
+HexIDE registers MSFlexGrid on the in-box foundation and binds Rows, Cols, Row, Col, Text, TextMatrix,
+FixedRows, FixedCols reads and FormatString headings to the interpreter (#1099). A form holding a grid can
+run and fill/read its cells; `FlexGridRuntimeTests` covers that path. The internal shape/cursor/text model
+remains covered by `FlexGridModelTests`. Valid FixedCols assignments and unmeasured conversions refuse.
+Other members, default-member access, events, input/drawing, FormatString width/alignment effects and file
+fidelity remain for later slices; see `MISSING_LANGUAGE.md`'s referenced control table. No measurements
+were added by the binding slice.
