@@ -38,6 +38,7 @@ internal static class FlexGridMembers
             "fixedcols" => new Vb6Value(model.FixedCols),
             "rowsel" => new Vb6Value(model.RowSel),
             "colsel" => new Vb6Value(model.ColSel),
+            "selectionmode" => new Vb6Value(model.SelectionMode),
             "fillstyle" => new Vb6Value(model.FillStyle),
             "allowbigselection" => new Vb6Value(model.AllowBigSelection),
             "clip" => new Vb6Value(model.Clip),
@@ -104,6 +105,7 @@ internal static class FlexGridMembers
                 case "fixedcols": model.FixedCols = Index(value); break;
                 case "rowsel": model.RowSel = Index(value); break;
                 case "colsel": model.ColSel = Index(value); break;
+                case "selectionmode": model.SelectionMode = Index(value); break;
                 case "fillstyle": model.FillStyle = Index(value); break;
                 case "allowbigselection": model.AllowBigSelection = value.Value is bool b ? b : throw Refused(name); break;
                 case "clip": model.Clip = Text(value); break;

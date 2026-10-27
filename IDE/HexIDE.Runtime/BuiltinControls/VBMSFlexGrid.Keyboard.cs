@@ -57,10 +57,32 @@ public sealed partial class VBMSFlexGrid
             case Key.PageDown: row += PageRows(); break;
             case Key.PageUp: row -= PageRows(); break;
         }
+        if (Model.SelectionMode == 1)
+        {
+            if (!extend && e.Key is Key.Up or Key.PageUp or Key.PageDown)
+                throw FlexGridMembers.Refused(nameof(Model.SelectionMode));
+            col = Model.Col;
+            if (!control && e.Key is Key.Left or Key.Right or Key.Home or Key.End)
+                row = extend && e.Key is Key.Left or Key.Right ? Model.RowSel : Model.Row;
+        }
+        else if (Model.SelectionMode == 2)
+        {
+            row = Model.Row;
+            if (e.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown)
+            {
+                col = extend ? Model.ColSel : Model.Col;
+                if (!extend && (e.Key != Key.Down || Model.RowSel == Model.Rows - 1))
+                    throw FlexGridMembers.Refused(nameof(Model.SelectionMode));
+            }
+            else if (!extend && col == Model.Col)
+                throw FlexGridMembers.Refused(nameof(Model.SelectionMode));
+        }
         if (row < Model.FixedRows || row >= Model.Rows || col < Model.FixedCols || col >= Model.Cols)
             throw FlexGridMembers.Refused("keyboard selection at the grid boundary");
-        var firstRow = KeepVisible(row, Model.TopRow, Model.FixedRows, viewport.Height - FixedHeight, RowSize);
-        var firstCol = KeepVisible(col, Model.LeftCol, Model.FixedCols, viewport.Width - FixedWidth, ColSize);
+        var firstRow = Model.SelectionMode == 2 ? Model.TopRow
+            : KeepVisible(row, Model.TopRow, Model.FixedRows, viewport.Height - FixedHeight, RowSize);
+        var firstCol = Model.SelectionMode == 1 ? Model.LeftCol
+            : KeepVisible(col, Model.LeftCol, Model.FixedCols, viewport.Width - FixedWidth, ColSize);
         Model.ScrollTo(firstRow, firstCol);
         Model.SelectKeyboardCell(row, col, extend);
         RefreshView();

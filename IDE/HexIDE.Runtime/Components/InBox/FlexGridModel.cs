@@ -8,7 +8,7 @@ namespace HexIDE.Runtime.Components.InBox;
 internal sealed class FlexGridModel
 {
     private int rows = 2, cols = 2, fixedRows = 1, fixedCols = 1;
-    private int row = 1, col = 1, rowSel = 1, colSel = 1, fillStyle;
+    private int row = 1, col = 1, rowSel = 1, colSel = 1, fillStyle, selectionMode;
     private readonly Dictionary<(int Row, int Col), string> text = new();
 
     public Action<string>? CellEvent { get; set; }
@@ -124,6 +124,8 @@ internal sealed class FlexGridModel
     public int ColSel { get => colSel; set { CheckColumn(value); colSel = value; } }
     public int FillStyle { get => fillStyle; set { if (value is 0 or 1) fillStyle = value; } }
 
+    public int SelectionMode { get => selectionMode; set { if (value is >= 0 and <= 2) selectionMode = value; } }
+
     public bool AllowBigSelection { get; set; } = true;
 
     internal bool SelectMouseCell(int atRow, int atCol, bool extend)
@@ -153,17 +155,25 @@ internal sealed class FlexGridModel
     {
         if (extend)
         {
-            rowSel = atRow;
-            colSel = atCol;
+            var endRow = selectionMode == 2 ? rows - 1 : atRow;
+            var endCol = selectionMode == 1 ? cols - 1 : atCol;
+            if (selectionMode != 0 && rowSel == endRow && colSel == endCol) return;
+            rowSel = endRow;
+            colSel = endCol;
             CellEvent?.Invoke("SelChange");
             return;
         }
-        if (row == atRow && col == atCol) return;
-        CellEvent?.Invoke("LeaveCell");
+        var moved = row != atRow || col != atCol;
+        if (selectionMode == 0 && !moved) return;
+        if (moved) CellEvent?.Invoke("LeaveCell");
         row = rowSel = atRow;
         col = colSel = atCol;
-        CellEvent?.Invoke("SelChange");
-        EnterCell();
+        // Preserve the cell events; row/column selection adds the measured SelChange (#1099).
+        if (moved || selectionMode == 1) CellEvent?.Invoke("SelChange");
+        if (moved) EnterCell();
+        if (selectionMode == 1) colSel = cols - 1;
+        if (selectionMode == 2) rowSel = rows - 1;
+        if (selectionMode != 0) CellEvent?.Invoke("SelChange");
     }
 
     private readonly Dictionary<int, int> columnWidths = new();

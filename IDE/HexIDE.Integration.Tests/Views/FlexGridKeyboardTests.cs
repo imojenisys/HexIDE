@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -215,13 +216,136 @@ public class FlexGridKeyboardTests
     }
 
     [AvaloniaTheory]
-    [InlineData(1)]
-    [InlineData(2)]
-    public void Nondefault_SelectionMode_remains_refused(int mode)
+    [InlineData(1, true)]
+    [InlineData(1, false)]
+    [InlineData(2, true)]
+    [InlineData(2, false)]
+    public void Row_and_column_modes_follow_the_measured_keyboard_sequence(int mode, bool big)
     {
         using var root = new Root();
-        var act = () => FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(mode));
-        act.Should().Throw<NotImplementedException>();
+        var model = root.Grid.Model;
+        FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(mode));
+        FlexGridMembers.Read(root.Grid, "SelectionMode", []).Value.Should().Be(mode);
+        model.AllowBigSelection = big;
+        void Start()
+        {
+            root.Grid.SetFirstCell(1, 1);
+            model.Row = 3;
+            model.Col = 2;
+            model.RowSel = 3;
+            model.ColSel = 2;
+            root.Log.Clear();
+        }
+        void Check(Key key, RawInputModifiers mods, int row, int col, int endRow, int endCol, int changes)
+        {
+            root.Log.Clear();
+            root.Key(key, mods);
+            (model.Row, model.Col, model.RowSel, model.ColSel).Should().Be((row, col, endRow, endCol));
+            root.Log.Count(e => e.StartsWith("SelChange:", StringComparison.Ordinal)).Should().Be(changes);
+            if (mode == 1) model.LeftCol.Should().Be(1);
+            else model.TopRow.Should().Be(1);
+        }
+        Start();
+        (model.RowSel, model.ColSel).Should().Be((3, 2), "code selection is not forced to the mode");
+        Check(Key.Down, RawInputModifiers.Shift, 3, 2, mode == 1 ? 4 : 29, mode == 1 ? 5 : 2, 1);
+        Check(Key.Down, RawInputModifiers.Shift, 3, 2, mode == 1 ? 5 : 29, mode == 1 ? 5 : 2, mode == 1 ? 1 : 0);
+        Check(Key.Right, RawInputModifiers.Shift, 3, 2, mode == 1 ? 5 : 29, mode == 1 ? 5 : 3, mode == 1 ? 0 : 1);
+        for (var r = 4; r >= 2; r--)
+            Check(Key.Up, RawInputModifiers.Shift, 3, 2, mode == 1 ? r : 29, mode == 1 ? 5 : 3, mode == 1 ? 1 : 0);
+        Check(Key.Left, RawInputModifiers.Shift, 3, 2, mode == 1 ? 2 : 29, mode == 1 ? 5 : 2, mode == 1 ? 0 : 1);
+        Check(Key.Left, RawInputModifiers.Shift, 3, 2, mode == 1 ? 2 : 29, mode == 1 ? 5 : 1, mode == 1 ? 0 : 1);
+        Start();
+        Check(Key.Home, RawInputModifiers.Shift, 3, 2, mode == 1 ? 3 : 29, mode == 1 ? 5 : 1, 1);
+        Check(Key.End, RawInputModifiers.Shift, 3, 2, mode == 1 ? 3 : 29, 5, mode == 1 ? 0 : 1);
+        Check(Key.Home, RawInputModifiers.Shift, 3, 2, mode == 1 ? 3 : 29, mode == 1 ? 5 : 1, mode == 1 ? 0 : 1);
+        Start();
+        Check(Key.PageDown, RawInputModifiers.Shift, 3, 2, mode == 1 ? 13 : 29, mode == 1 ? 5 : 2, 1);
+        if (mode == 1) model.TopRow.Should().Be(4);
+        Check(Key.PageUp, RawInputModifiers.Shift, 3, 2, mode == 1 ? 3 : 29, mode == 1 ? 5 : 2, mode == 1 ? 1 : 0);
+        if (mode == 1) model.TopRow.Should().Be(3);
+        Start();
+        Check(Key.Home, RawInputModifiers.Control, mode == 1 ? 1 : 3, mode == 1 ? 2 : 1,
+            mode == 1 ? 1 : 29, mode == 1 ? 5 : 1, 2);
+        Check(Key.End, RawInputModifiers.Control, mode == 1 ? 29 : 3, mode == 1 ? 2 : 5, 29, 5, 2);
+        if (mode == 1) model.TopRow.Should().Be(20);
+        else model.LeftCol.Should().Be(3);
+        Start();
+        Check(Key.End, RawInputModifiers.Control | RawInputModifiers.Shift, 3, 2, 29, 5, 1);
+        Check(Key.Home, RawInputModifiers.Control | RawInputModifiers.Shift, 3, 2, mode == 1 ? 1 : 29, mode == 1 ? 5 : 1, 1);
+        Start();
+        Check(Key.Down, RawInputModifiers.None, mode == 1 ? 4 : 3, 2, mode == 1 ? 4 : 29, mode == 1 ? 5 : 2, mode == 1 ? 2 : 1);
+        Check(Key.Right, RawInputModifiers.None, mode == 1 ? 4 : 3, mode == 1 ? 2 : 3, mode == 1 ? 4 : 29, mode == 1 ? 5 : 3, 2);
+        Check(Key.Home, RawInputModifiers.None, mode == 1 ? 4 : 3, mode == 1 ? 2 : 1, mode == 1 ? 4 : 29, mode == 1 ? 5 : 1, 2);
+        Check(Key.End, RawInputModifiers.None, mode == 1 ? 4 : 3, mode == 1 ? 2 : 5, mode == 1 ? 4 : 29, 5, 2);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Nondefault_mode_mouse_selection_remains_refused(int mode)
+    {
+        using var root = new Root();
+        FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(mode));
+        var point = root.Grid.TranslatePoint(new Point(148, 40), root)!.Value;
+        Action click = () => KeepingContext(() => root.MouseDown(point, MouseButton.Left));
+        click.Should().Throw<NotImplementedException>().WithMessage("*SelectionMode*#1099*");
+        (root.Grid.Model.Row, root.Grid.Model.Col).Should().Be((1, 1));
+    }
+
+    [AvaloniaFact]
+    public void SelectionMode_keeps_code_selection_and_ignores_the_measured_invalid_enum_values()
+    {
+        using var root = new Root();
+        root.Grid.Model.Row = 3;
+        root.Grid.Model.Col = 2;
+        root.Log.Clear();
+        foreach (var mode in new[] { 1, 2, 0 })
+        {
+            FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(mode));
+            foreach (var invalid in new[] { -1, 5 })
+            {
+                FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(invalid));
+                FlexGridMembers.Read(root.Grid, "SelectionMode", []).Value.Should().Be(mode);
+            }
+            (root.Grid.Model.Row, root.Grid.Model.Col, root.Grid.Model.RowSel, root.Grid.Model.ColSel)
+                .Should().Be((3, 2, 3, 2));
+        }
+        root.Log.Should().BeEmpty();
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1, Key.Up)]
+    [InlineData(1, Key.PageDown)]
+    [InlineData(1, Key.PageUp)]
+    [InlineData(2, Key.Up)]
+    [InlineData(2, Key.Down)]
+    [InlineData(2, Key.PageDown)]
+    [InlineData(2, Key.PageUp)]
+    public void Modes_refuse_unmeasured_plain_vertical_event_counts(int mode, Key key)
+    {
+        using var root = new Root();
+        FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(mode));
+        root.Grid.Model.Row = 3;
+        root.Grid.Model.Col = 2;
+        root.Key(Key.Down, RawInputModifiers.Shift);
+        root.Log.Clear();
+        Action input = () => root.Key(key);
+        input.Should().Throw<NotImplementedException>().WithMessage("*SelectionMode*#1099*");
+        root.Log.Should().BeEmpty();
+        (root.Grid.Model.Row, root.Grid.Model.Col, root.Grid.Model.RowSel, root.Grid.Model.ColSel)
+            .Should().Be(mode == 1 ? (3, 2, 4, 5) : (3, 2, 29, 2));
+    }
+
+    [AvaloniaFact]
+    public void Column_mode_refuses_an_unmeasured_plain_horizontal_key_that_moves_nothing()
+    {
+        using var root = new Root();
+        FlexGridMembers.Write(root.Grid, "SelectionMode", [], new Vb6Value(2));
+        root.Grid.Model.Row = 3;
+        root.Log.Clear();
+        Action input = () => root.Key(Key.Home);
+        input.Should().Throw<NotImplementedException>().WithMessage("*SelectionMode*#1099*");
+        root.Log.Should().BeEmpty();
     }
 
     [AvaloniaTheory]

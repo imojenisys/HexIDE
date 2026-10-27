@@ -77,7 +77,7 @@ public sealed class FlexGridComponentClass : InBoxComponentClass
         new("FocusRect", MemberKind.Property, MemberOrigin.Version6, true, true),
         new("HighLight", MemberKind.Property, MemberOrigin.Version6, true, true),
         new("FillStyle", MemberKind.Property, MemberOrigin.Version6, true, true),
-        new("SelectionMode", MemberKind.Property, MemberOrigin.Version6, true, false),
+        new("SelectionMode", MemberKind.Property, MemberOrigin.Version6, true, true),
         new("MergeCells", MemberKind.Property, MemberOrigin.Version6, true, false),
         new("AllowBigSelection", MemberKind.Property, MemberOrigin.Version6, true, true),
         new("AllowUserResizing", MemberKind.Property, MemberOrigin.Version6, true, false),

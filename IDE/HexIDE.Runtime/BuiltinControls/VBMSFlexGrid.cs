@@ -44,6 +44,11 @@ public sealed partial class VBMSFlexGrid : Control, ICustomHitTest
         secondPress = e.ClickCount % 2 == 0;
         if (e.GetCurrentPoint(this).Properties.PointerUpdateKind != PointerUpdateKind.LeftButtonPressed) return;
         if (CellAt(e.GetPosition(this)) is not { } cell) return;
+        if (Model.SelectionMode != 0)
+        {
+            RefuseInput(AvaloniaInterop.FlexGridMembers.Refused(nameof(Model.SelectionMode)));
+            return;
+        }
         pressedCell = cell;
         if (!secondPress)
             selectionChanged = Model.SelectMouseCell(cell.Row, cell.Col, e.KeyModifiers.HasFlag(KeyModifiers.Shift));
