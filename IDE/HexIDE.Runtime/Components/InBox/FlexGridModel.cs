@@ -149,6 +149,23 @@ internal sealed class FlexGridModel
         return old != (row, col, rowSel, colSel);
     }
 
+    internal void SelectKeyboardCell(int atRow, int atCol, bool extend)
+    {
+        if (extend)
+        {
+            rowSel = atRow;
+            colSel = atCol;
+            CellEvent?.Invoke("SelChange");
+            return;
+        }
+        if (row == atRow && col == atCol) return;
+        CellEvent?.Invoke("LeaveCell");
+        row = rowSel = atRow;
+        col = colSel = atCol;
+        CellEvent?.Invoke("SelChange");
+        EnterCell();
+    }
+
     private readonly Dictionary<int, int> columnWidths = new();
     private readonly Dictionary<int, int> rowHeights = new();
     private readonly Dictionary<int, int> columnAlignments = new();

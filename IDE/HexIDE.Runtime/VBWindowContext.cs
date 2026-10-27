@@ -508,6 +508,10 @@ public class VBWindowContext : IModuleExecutionRoot
         Raise(name, () => argList, EventCoalescing.Timer, key);
     }
 
+    // Input the control cannot implement must use the run's fault boundary, even without an event handler (#1099).
+    internal void RefuseInput(NotImplementedException error) =>
+        Events.Raise("Input", async () => { await Report(() => Task.FromException(error)); });
+
     private void Raise(string name, Func<IReadOnlyList<Vb6Value>?> args,
         EventCoalescing coalescing = EventCoalescing.None, string? key = null, Func<bool>? when = null)
     {
