@@ -156,9 +156,7 @@ public class FlexGridKeyboardTests
 
     [AvaloniaTheory]
     [InlineData(Key.Up, RawInputModifiers.None)]
-    [InlineData(Key.Up, RawInputModifiers.Shift)]
     [InlineData(Key.Down, RawInputModifiers.Control)]
-    [InlineData(Key.Home, RawInputModifiers.Shift)]
     public void Unmeasured_navigation_modifiers_refuse(Key key, RawInputModifiers mods)
     {
         using var root = new Root();
@@ -192,7 +190,7 @@ public class FlexGridKeyboardTests
     public void Unmeasured_input_is_reported_as_a_run_fault_even_without_a_key_handler()
     {
         var grid = new VBMSFlexGrid { Width = 333, Height = 200 };
-        grid.Model.AllowBigSelection = false;
+        grid.Model.Row = 0;
         var window = new VBFormRuntime { Content = grid };
         var faults = new List<Exception>();
         void Faulted(VBWindowContext context, Exception error)
@@ -207,7 +205,7 @@ public class FlexGridKeyboardTests
             input.Should().NotThrow("an unsupported grid input must stop the run, not escape Avalonia's input dispatch");
             KeepingContext(() => Avalonia.Threading.Dispatcher.UIThread.RunJobs());
             faults.Should().ContainSingle().Which.Should().BeOfType<NotImplementedException>();
-            grid.Model.Row.Should().Be(1);
+            grid.Model.Row.Should().Be(0);
         }
         finally
         {
@@ -226,12 +224,60 @@ public class FlexGridKeyboardTests
         act.Should().Throw<NotImplementedException>();
     }
 
+    [AvaloniaTheory]
+    [InlineData(Key.Up, RawInputModifiers.Shift, 2, 2)]
+    [InlineData(Key.Left, RawInputModifiers.Shift, 3, 1)]
+    [InlineData(Key.Home, RawInputModifiers.Shift, 3, 1)]
+    [InlineData(Key.End, RawInputModifiers.Shift, 3, 5)]
+    [InlineData(Key.PageDown, RawInputModifiers.Shift, 13, 2)]
+    [InlineData(Key.PageUp, RawInputModifiers.Shift, 3, 2)]
+    [InlineData(Key.End, RawInputModifiers.Control | RawInputModifiers.Shift, 29, 5)]
+    [InlineData(Key.Home, RawInputModifiers.Control | RawInputModifiers.Shift, 1, 1)]
+    public void Free_selection_extends_from_its_endpoint_and_keeps_its_anchor(Key key, RawInputModifiers mods, int row, int col)
+    {
+        using var root = new Root();
+        root.Grid.Model.Row = 3;
+        root.Grid.Model.Col = 2;
+        if (key == Key.PageUp) root.Key(Key.PageDown, RawInputModifiers.Shift);
+        root.Log.Clear();
+        root.Key(key, mods);
+        root.Grid.Model.Row.Should().Be(3);
+        root.Grid.Model.Col.Should().Be(2);
+        root.Grid.Model.RowSel.Should().Be(row);
+        root.Grid.Model.ColSel.Should().Be(col);
+        root.Log.Where(e => e.StartsWith("SelChange:", StringComparison.Ordinal)).Should().Equal($"SelChange:3,2:{row},{col}");
+        if (key == Key.PageDown) root.Grid.Model.TopRow.Should().Be(4);
+        if (key == Key.PageUp) root.Grid.Model.TopRow.Should().Be(3);
+    }
+
     [AvaloniaFact]
-    public void Keyboard_selection_with_AllowBigSelection_false_refuses()
+    public void Free_selection_crosses_the_anchor_and_a_plain_key_collapses_it()
+    {
+        using var root = new Root();
+        root.Grid.Model.Row = 3;
+        root.Grid.Model.Col = 2;
+        root.Key(Key.Down, RawInputModifiers.Shift);
+        root.Key(Key.Down, RawInputModifiers.Shift);
+        root.Key(Key.Right, RawInputModifiers.Shift);
+        for (var i = 0; i < 3; i++) root.Key(Key.Up, RawInputModifiers.Shift);
+        root.Grid.Model.RowSel.Should().Be(2);
+        root.Grid.Model.ColSel.Should().Be(3);
+        root.Key(Key.Down);
+        root.Grid.Model.Row.Should().Be(4);
+        root.Grid.Model.RowSel.Should().Be(4);
+        root.Grid.Model.ColSel.Should().Be(2);
+    }
+
+    [AvaloniaFact]
+    public void AllowBigSelection_false_does_not_disable_keyboard_selection()
     {
         using var root = new Root();
         root.Grid.Model.AllowBigSelection = false;
-        var act = () => root.Key(Key.Down);
-        act.Should().Throw<NotImplementedException>();
+        root.Key(Key.Down);
+        root.Key(Key.Right, RawInputModifiers.Shift);
+        root.Grid.Model.Row.Should().Be(2);
+        root.Grid.Model.Col.Should().Be(1);
+        root.Grid.Model.RowSel.Should().Be(2);
+        root.Grid.Model.ColSel.Should().Be(2);
     }
 }

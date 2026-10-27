@@ -36,12 +36,12 @@ public sealed partial class VBMSFlexGrid
             }
             return;
         }
-        var extend = e.KeyModifiers == KeyModifiers.Shift && e.Key is Key.Down or Key.Right;
-        var control = e.KeyModifiers == KeyModifiers.Control && e.Key is Key.Home or Key.End;
+        var extend = e.KeyModifiers == KeyModifiers.Shift
+            || e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift) && e.Key is Key.Home or Key.End;
+        var control = (e.KeyModifiers == KeyModifiers.Control || e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+            && e.Key is Key.Home or Key.End;
         if (e.KeyModifiers != KeyModifiers.None && !extend && !control)
             throw FlexGridMembers.Refused("keyboard modifiers");
-        if (!Model.AllowBigSelection)
-            throw FlexGridMembers.Refused("keyboard selection with AllowBigSelection False");
         if (Model.Row < Model.FixedRows || Model.Col < Model.FixedCols || Model.Rows <= Model.FixedRows || Model.Cols <= Model.FixedCols)
             throw FlexGridMembers.Refused("keyboard selection without a non-fixed current cell");
         var row = extend ? Model.RowSel : Model.Row;
