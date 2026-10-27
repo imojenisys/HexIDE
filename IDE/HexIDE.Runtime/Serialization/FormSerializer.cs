@@ -363,7 +363,8 @@ public class FormSerializer
     private static bool IsOwnRunLine(InBoxComponentClass inBox, string name) =>
         name.Equals("_ExtentX", StringComparison.OrdinalIgnoreCase) || name.Equals("_ExtentY", StringComparison.OrdinalIgnoreCase)
         || name.Equals("_Version", StringComparison.OrdinalIgnoreCase)
-        || inBox.CarriedOwnProperties.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        || inBox.CarriedOwnProperties.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+        || inBox.CarriedOwnPropertyOrder.Contains(name, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// An in-box control's second run (#1082), written after its extender's as VB6 writes it (measured): <c>_ExtentX</c>,
@@ -414,5 +415,8 @@ public class FormSerializer
                 if (ReferenceEquals(after, property) && Carried(name) is { } carried)
                     WriteCarried(carried);
         }
+        foreach (var name in inBox.CarriedOwnPropertyOrder)
+            if (Carried(name) is { } carried)
+                WriteCarried(carried);
     }
 }

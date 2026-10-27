@@ -1,9 +1,8 @@
 # In-box control corpus
 
-The only files in the repository holding one of VB6's in-box ActiveX controls that HexIDE models: the ProgressBar, from
-MSCOMCTL.OCX (`MSComctlLib`, 6.0) and COMCTL32.OCX (`ComctlLib`, 5.0). They exist because nothing else in the tree is
-one, and because what VB6 writes for such a control isn't what it writes for an intrinsic: the extender's properties by
-name, then `_ExtentX`, `_ExtentY` and `_Version`, then the control's own properties in the control's own order
+VB6-authored saves for the in-box ActiveX controls HexIDE models: the ProgressBar, from
+MSCOMCTL.OCX (`MSComctlLib`, 6.0) and COMCTL32.OCX (`ComctlLib`, 5.0), and the MSFlexGrid from MSFLXGRD.OCX.
+What VB6 writes for such a control differs from an intrinsic: the extender's properties by name, then `_ExtentX`, `_ExtentY` and `_Version`, then the control's own properties in the control's own order
 (hexide-io/HexIDE#1082).
 
 ## Two halves
@@ -41,10 +40,17 @@ too: VB6's save of a form doesn't rewrite the project, so none is VB6's.
 | `sizes-six/`, `sizes-five/` | Every own property off its default in one control, a control whose extents agree with its size, and four aligned controls VB6 sized itself, which set the extent formula (132, 156, 177 and 180 px) |
 | `window/` | One control with every own property off its default, set from VB6's Properties window. Its `MouseIcon` didn't load, so where VB6 writes one is not measured |
 
+## MSFlexGrid saved forms
+
+`saved/msflexgrid/` holds VB6 SP6's 2026-10-26 save: three grids, one with every own property off its
+default, one minimal and one double-clicked from the toolbox (#1099). Its Font block and Boolean comments
+are VB6's bytes. Cell text is not persisted, so this save has no `.frx`. The `.vbp` beside it is hand-written.
+`FlexGridSerializationTests` checks the whole form and a caption edit; the corpus lane walks it too.
+
 ## `pending/`
 
 Written by VB6's IDE (SP6) on the oracle VM, 2026-10-26, on the console session, for the measurements in the oracle's "In-box
-controls: the ImageList" (hexide-io/HexIDE#1083) and "In-box controls: the StatusBar" (#1087) and "In-box controls: the Toolbar" (#1088) and "In-box controls: the ListView" (#1085) and "In-box controls: the TreeView" (#1086) and "In-box controls: the CommonDialog" (#1084) and "In-box controls: the SSTab" (#1090) and "In-box controls: the MSFlexGrid" (#1099). The `.vbp` files beside them are hand-written, as in `input/`.
+controls: the ImageList" (hexide-io/HexIDE#1083) and "In-box controls: the StatusBar" (#1087) and "In-box controls: the Toolbar" (#1088) and "In-box controls: the ListView" (#1085) and "In-box controls: the TreeView" (#1086) and "In-box controls: the CommonDialog" (#1084) and "In-box controls: the SSTab" (#1090). The `.vbp` files beside them are hand-written, as in `input/`.
 
 | Folder | What it is |
 |---|---|
@@ -61,5 +67,4 @@ controls: the ImageList" (hexide-io/HexIDE#1083) and "In-box controls: the Statu
 | `commondialog/` | Four CommonDialogs saved by VB6. Three were written by hand: one with every property off its default and its lines reversed, one with only its position and `_Version`, and one with its defaults written out, which VB6 cut back to the minimal block. The fourth, `CommonDialog4`, was double-clicked from the toolbox, and VB6 wrote it ahead of the other three (#1084). There is no `.frx` |
 | `sstab/` | An SSTab drawn in VB6's IDE: three tabs, with a CommandButton drawn on tab 0, a TextBox on tab 1 and a CheckBox on tab 2, tab 1 left showing. The hidden tabs' controls are 75000 twips left, and each tab has a `TabPicture` record in the `.frx` (#1090) |
 | `sstab-resaved/` | Three SSTabs written by hand and saved by VB6, with a fourth double-clicked from the toolbox: one with every property off its default and its lines reversed, a minimal block, and one whose `ControlEnabled` flags and lists did not match its controls, which VB6 rewrote. See the oracle entry before taking it as a model (#1090) |
-| `msflexgrid/` | Three MSFlexGrids saved by VB6: one written by hand with every property off its default and its lines reversed, a minimal block, and one double-clicked from the toolbox. There is no `.frx`: cell text is not saved, only FormatString (#1099) |
 | `defaults/` | All nine MSCOMCTL.OCX controls double-clicked from the toolbox onto an empty 6000 x 4500 form, as VB6 saved them. The ImageCombo's name, `s`, is the rig's: a keystroke meant for Ctrl+S landed in its (Name) row |

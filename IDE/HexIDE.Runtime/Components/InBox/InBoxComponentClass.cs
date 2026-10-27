@@ -59,6 +59,9 @@ public abstract class InBoxComponentClass : ComponentBaseClass
     /// </summary>
     public virtual IReadOnlyList<(string Name, PropertyClass After)> CarriedOwnProperties => [];
 
+    /// <summary>Own properties carried as a complete run, in the control's measured save order.</summary>
+    public virtual IReadOnlyList<string> CarriedOwnPropertyOrder => [];
+
     /// <summary>The type name <paramref name="instance"/> is written under: the one it was read under, or this class's.</summary>
     public string TypeNameOf(ComponentInstance instance) =>
         instance.GetPropertyOrDefault(LoadedTypeNameProperty) ?? VBTypeName;

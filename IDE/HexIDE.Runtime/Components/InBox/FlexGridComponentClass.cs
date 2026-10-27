@@ -5,13 +5,23 @@ namespace HexIDE.Runtime.Components.InBox;
 
 public sealed class FlexGridComponentClass : InBoxComponentClass
 {
-    private FlexGridComponentClass() : base([], [], []) { }
+    private FlexGridComponentClass() : base([VBProperties.TabIndexProperty], [], []) { }
     public static FlexGridComponentClass Instance { get; } = new();
     public override string Name => "MSFlexGrid";
     public override string ControlClassName => "MSFlexGrid";
     public override RuntimeLibrary Library => ControlLibraries.MSFlexGridLib;
     public override (int X, int Y) DefaultExtent => (2646, 1323);
     public override (int Width, int Height) AddedSize => (1500, 750);
+    public override IReadOnlyList<string> CarriedOwnPropertyOrder { get; } =
+    [
+        "Rows", "Cols", "FixedRows", "FixedCols", "RowHeightMin", "BackColor", "ForeColor",
+        "BackColorFixed", "ForeColorFixed", "BackColorSel", "ForeColorSel", "BackColorBkg",
+        "GridColor", "GridColorFixed", "WordWrap", "Redraw", "AllowBigSelection", "ScrollTrack",
+        "RightToLeft", "TextStyle", "TextStyleFixed", "FocusRect", "HighLight", "FillStyle",
+        "GridLines", "GridLinesFixed", "ScrollBars", "SelectionMode", "MergeCells", "AllowUserResizing",
+        "PictureType", "BorderStyle", "Appearance", "MousePointer", "GridLineWidth", "FormatString",
+        "Font", "OLEDropMode"
+    ];
     public override IReadOnlyList<InBoxMember> Members { get; } =
     [
         new("Rows", MemberKind.Property, MemberOrigin.Version6, true, true),

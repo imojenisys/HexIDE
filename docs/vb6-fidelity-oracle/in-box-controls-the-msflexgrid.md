@@ -398,7 +398,7 @@ Screenshots on Windows 10 at 96 dpi, one fresh form per state, native code:
 
 **The programs:**
 - **The save:** a form written by hand, opened in VB6's IDE, dirtied with a comment and saved. VB6's save is in
-  `corpus/inbox-controls/pending/msflexgrid/`.
+  `corpus/inbox-controls/saved/msflexgrid/`.
   - MSFlexGrid1 had every property off its default, its lines in reverse order.
   - MSFlexGrid2 had only its position, extents and `_Version`.
   - A third grid was double-clicked from the toolbox first.
@@ -445,16 +445,20 @@ GridLineWidth, FormatString, the Font block, OLEDropMode
 
 ### In HexIDE
 
-HexIDE registers MSFlexGrid on the in-box foundation and binds Rows, Cols, Row, Col, Text, TextMatrix,
-FixedRows, FixedCols reads and FormatString headings to the interpreter (#1099). A form holding a grid can
-run and fill/read its cells; `FlexGridRuntimeTests` covers that path. The internal shape/cursor/text model
-remains covered by `FlexGridModelTests`. Valid FixedCols assignments and unmeasured conversions refuse.
-The selection/size slice additionally binds RowSel, ColSel, FillStyle, Clip, TextArray, ColWidth, RowHeight,
-ColAlignment and FixedAlignment reads, plus RowHeightMin assignments over existing rows. Its interpreter
-tests exercise the measured rounding, selection writes and 300xx errors. FixedAlignment assignments,
-ColAlignment assignment index errors and RowHeightMin readback remain refused without measurements.
-Mouse clicks now select cells and headings with the recorded cursor/mouse event order, including
-Shift/Ctrl selection, right-click and double-click. AllowBigSelection is bound; FlexGridMouseTests
-drives pointer input headlessly. Keyboard input, dragging, scrolling, drawing, other members,
-default-member access, FormatString width/alignment effects and file fidelity remain for later slices; see `MISSING_LANGUAGE.md`'s referenced control table. No measurements
-were added by the binding slice.
+HexIDE registers MSFlexGrid on the in-box foundation (#1099). Programs can fill/read the grid, select
+cells, set measured sizes and cell formatting, add/remove text rows and sort them. Sort reproduces the
+recorded unstable orders and custom Compare traces. `FlexGridModelTests`, `FlexGridSortTests` and
+`FlexGridRuntimeTests` cover these paths and the measured errors.
+
+Mouse and keyboard input follow the recorded selection and event orders, including the measured
+SelectionMode 1 and 2 keyboard cases. Drawing covers fixed headings, gridlines, aligned and clipped or
+wrapped text, cell fonts/colours, selection/focus rectangles and scrolling. The headless mouse, keyboard
+and drawing tests exercise these paths without pinning pixel metrics.
+
+The file slice preserves the saved grid property run, including its Font block and comments, in VB6's
+recorded order. `FlexGridSerializationTests` checks its bytes and a form caption edit;
+`InBoxToolboxTests` checks the measured bare 1500 × 750 block. Carried own properties stay unavailable
+for designer editing. This preservation does not add runtime application of those saved settings.
+FormatString width/alignment effects, other unimplemented members and unmeasured edges remain listed
+in `MISSING_LANGUAGE.md`; their existing behavior is unchanged by the file slice. No measurements
+were added here.

@@ -46,6 +46,34 @@ public class InBoxToolboxTests
         toolbox.Components.Where(c => c.BaseClass is InBoxComponentClass).Select(c => c.Library).ToArray();
 
     [AvaloniaFact]
+    public void A_toolbox_grid_writes_the_measured_bare_block()
+    {
+        var (_, _, vm, form) = Designer(ControlLibraries.MSFlexGridLib);
+        var root = form.Components.Single(c => c.BaseClass is FormComponentClass);
+        root.SetProperty(VBProperties.WidthProperty, 640d);
+        root.SetProperty(VBProperties.HeightProperty, 480d);
+        vm.SpawnControlCenter(FlexGridComponentClass.Instance, ControlLibraries.MSFlexGridLib);
+        vm.CommitLayout();
+
+        var grid = form.Components.Single(c => c.BaseClass is FlexGridComponentClass);
+        grid.GetPropertyOrDefault(VBProperties.WidthProperty).Should().Be(100);
+        grid.GetPropertyOrDefault(VBProperties.HeightProperty).Should().Be(50);
+        var (text, companion) = new FormSerializer().Serialize(form, "Form1.frm");
+        text.Should().Contain("   Begin MSFlexGridLib.MSFlexGrid MSFlexGrid1 \r\n" + """
+                  Height          =   750
+                  Left            =   4050
+                  TabIndex        =   0
+                  Top             =   3225
+                  Width           =   1500
+                  _ExtentX        =   2646
+                  _ExtentY        =   1323
+                  _Version        =   393216
+               End
+            """.ReplaceLineEndings("\r\n"));
+        companion.Should().BeNull();
+    }
+
+    [AvaloniaFact]
     public void A_project_that_references_no_library_offers_no_in_box_control()
     {
         var (_, toolbox, _, _) = Designer();
