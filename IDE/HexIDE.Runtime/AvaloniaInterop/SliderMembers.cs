@@ -37,6 +37,7 @@ internal static class SliderMembers
         if (control is not VBSlider s)
             return null;
         Refuse(name);
+        s.InvalidateVisual();
         var key = name.ToUpperInvariant();
         if (key == "GETNUMTICKS")
             throw new VBRunTimeException(VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment);
@@ -116,7 +117,7 @@ internal static class SliderMembers
         switch (name.ToUpperInvariant())
         {
             case "CLEARSEL":
-                if (s.SelectRange) { s.SelectionStart = -1; s.SelectionLength = 0; }
+                if (s.SelectRange) { s.SelectionStart = -1; s.SelectionLength = 0; s.InvalidateVisual(); }
                 return true;
             case "DOCLICK": s.ExecuteSub(ComponentBaseClass.ClickEvent); return true;
             case "REFRESH": s.InvalidateVisual(); return true;

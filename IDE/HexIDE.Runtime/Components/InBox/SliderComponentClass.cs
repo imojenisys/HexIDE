@@ -7,7 +7,7 @@ namespace HexIDE.Runtime.Components.InBox;
 public sealed class SliderComponentClass : InBoxComponentClass
 {
     private SliderComponentClass() : base([TabIndexProperty, TabStopProperty, ToolTipTextProperty], [],
-        [ChangeEvent, ScrollEvent, ClickEvent]) { }
+        [ChangeEvent, ScrollEvent, ClickEvent, KeyDownEvent, KeyUpEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent]) { }
 
     public static readonly EventClass ChangeEvent = new("Change");
     public static readonly EventClass ScrollEvent = new("Scroll");
@@ -19,7 +19,7 @@ public sealed class SliderComponentClass : InBoxComponentClass
     public override (int X, int Y) DefaultExtent => throw new NotImplementedException("Slider missing extents are not measured (#1091).");
     public override bool CanSaveFaithfully => false;
 
-    // Persistence and user events remain for parts C and B respectively.
+    // Persistence remains for part C.
     public override IReadOnlyList<InBoxMember> Members { get; } =
         OwnMembers("Min", "Max", "Value", "SmallChange", "LargeChange", "TickStyle", "TickFrequency", "GetNumTicks",
             "Orientation", "SelectRange", "SelStart", "SelLength", "Text", "TextPosition", "BorderStyle", "Enabled",
@@ -29,7 +29,7 @@ public sealed class SliderComponentClass : InBoxComponentClass
         .Append(new("OLEDrag", MemberKind.Method, MemberOrigin.Version6, false, false))
         .Concat(new[] { "Change", "Scroll", "Click", "KeyDown", "KeyPress", "KeyUp", "MouseDown", "MouseMove", "MouseUp",
             "OLEStartDrag", "OLEGiveFeedback", "OLESetData", "OLECompleteDrag", "OLEDragOver", "OLEDragDrop" }
-            .Select(n => new InBoxMember(n, MemberKind.Event, MemberOrigin.Version6, false, n == "Change"))).ToArray();
+            .Select(n => new InBoxMember(n, MemberKind.Event, MemberOrigin.Version6, false, n is "Change" or "Scroll" or "Click" or "KeyDown" or "KeyUp" or "MouseDown" or "MouseMove" or "MouseUp"))).ToArray();
 
     private static IEnumerable<InBoxMember> OwnMembers(params string[] names) =>
         names.Select(n => new InBoxMember(n, MemberKind.Property, MemberOrigin.Version6, n is not ("Text" or "GetNumTicks"), true));
@@ -45,5 +45,5 @@ public sealed class SliderComponentClass : InBoxComponentClass
         return slider;
     }
 
-    public override Control InstantiateForDesigner(ComponentInstance instance) => new Control();
+    public override Control InstantiateForDesigner(ComponentInstance instance) => new VBSlider();
 }

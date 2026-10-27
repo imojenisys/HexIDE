@@ -3,7 +3,7 @@
 ## Purpose
 
 The MSComctlLib Slider object model, measured against VB6 SP6 in the fidelity oracle (#1091 A).
-Input and drawing are deferred to part B, and persisted own properties and faithful file writing to C.
+Measured input and drawing are implemented (#1091 B); persisted own properties and faithful file writing remain for C.
 
 ## Requirements
 
@@ -48,3 +48,32 @@ until their writer is proven faithful. Runtime loading of persisted Slider own p
 
 - **WHEN** a form contains a Slider
 - **THEN** the form cannot be saved and the designer is read-only
+
+### Requirement: Measured input and drawing
+
+The Slider SHALL use SmallChange for arrows and wheel input and LargeChange for paging. It SHALL draw the measured
+tick sides, thumb direction, selection band and markers, single border, disabled thumb dither and dotted focus rectangle,
+without pinning pixel metrics. A horizontal drag SHALL show Text above the thumb.
+
+#### Scenario: Dragging
+
+- **WHEN** the user drags the thumb
+- **THEN** Scroll fires for every traversed value
+- **AND** release raises MouseUp, Click if released over the control, Scroll and one Change
+- **AND** Change fires even if Value ends where it started
+
+#### Scenario: Channel and keyboard
+
+- **WHEN** the user clicks or holds the channel
+- **THEN** Value pages toward the pointer with Scroll at each step and one Change on release
+- **WHEN** arrows or page keys are pressed and released
+- **THEN** KeyDown, Scroll, KeyUp and Change fire even at an endpoint
+- **WHEN** Home or End is pressed and released
+- **THEN** KeyDown, Change, KeyUp and Change fire without Scroll
+
+#### Scenario: Wheel and right click
+
+- **WHEN** the wheel moves up or down one notch
+- **THEN** Value decreases or increases by SmallChange with Scroll only
+- **WHEN** the user right clicks
+- **THEN** MouseDown, MouseUp and Click fire without changing Value

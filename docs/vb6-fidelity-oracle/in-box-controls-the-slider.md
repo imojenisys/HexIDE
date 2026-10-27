@@ -263,6 +263,7 @@ as the setters do would refuse a form VB6 runs.
 ### In HexIDE
 
 HexIDE implements the measured MSComctlLib object model (#1091 A), including code-generated Change and hidden DoClick.
-Input and drawing remain for B. Persisted own properties and the byte-for-byte round trip remain for C: runtime loading
-refuses such properties, and forms containing Sliders stay read-only. The designer still shows an empty placeholder.
+Measured keyboard, mouse and wheel input and drawing are implemented (#1091 B), including ticks, selection, disabled
+thumb and focus. No pixel metrics are pinned. Persisted own properties and the byte-for-byte round trip remain for C: runtime loading
+refuses such properties, and forms containing Sliders stay read-only. The designer shows the default Slider drawing.
 Native handles, MouseIcon, OLE drag and unmeasured conversions refuse as not implemented; see MISSING_LANGUAGE.md.
