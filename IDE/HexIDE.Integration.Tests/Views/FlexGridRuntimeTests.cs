@@ -94,9 +94,87 @@ public class FlexGridRuntimeTests
             """)).Should().Equal("Name", "Wide", "Name     |Wide");
     }
 
+    [AvaloniaFact]
+    public async Task Selection_text_and_clip_are_reachable_from_code()
+    {
+        (await Run("""
+            Grid1.Rows = 4
+            Grid1.Cols = 3
+            Grid1.Row = 3
+            Grid1.Col = 2
+            Grid1.RowSel = 1
+            Grid1.ColSel = 0
+            Grid1.FillStyle = 1
+            Grid1.Text = "all"
+            Grid1.FillStyle = -1
+            Grid1.FillStyle = 5
+            Grid1.FillStyle = 2
+            Debug.Print Grid1.FillStyle, Grid1.RowSel, Grid1.ColSel
+            Grid1.TextArray(7) = "array"
+            Debug.Print Grid1.TextMatrix(1, 0), Grid1.TextArray(7)
+            Grid1.Row = 1
+            Grid1.Col = 1
+            Grid1.RowSel = 2
+            Grid1.ColSel = 2
+            Grid1.Clip = "1" & vbTab & "2" & vbTab & "extra" & vbCr & "4"
+            Debug.Print Grid1.Clip
+            """)).Should().Equal("1", "1", "0", "all", "array", "1\t2\r4\tall");
+    }
+
+    [AvaloniaFact]
+    public async Task Sizes_round_to_pixels_restore_defaults_and_set_all_columns()
+    {
+        (await Run("""
+            Debug.Print Grid1.ColWidth(1), Grid1.RowHeight(1)
+            Grid1.ColWidth(1) = 500
+            Grid1.RowHeight(1) = 500
+            Debug.Print Grid1.ColWidth(1), Grid1.RowHeight(1)
+            Grid1.ColWidth(1) = 0
+            Grid1.RowHeight(1) = 0
+            Debug.Print Grid1.ColWidth(1), Grid1.RowHeight(1)
+            Grid1.ColWidth(1) = -1
+            Grid1.RowHeight(1) = -1
+            Debug.Print Grid1.ColWidth(1), Grid1.RowHeight(1)
+            Grid1.ColWidth(-1) = 777
+            Debug.Print Grid1.ColWidth(0), Grid1.ColWidth(1)
+            Grid1.ColWidth(1) = 100000
+            Debug.Print Grid1.ColWidth(1)
+            Grid1.RowHeightMin = 400
+            Debug.Print Grid1.RowHeight(0), Grid1.RowHeight(1)
+            """)).Should().Equal("960", "240", "495", "495", "0", "0", "960", "240",
+                "780", "780", "100005", "405", "405");
+    }
+
     [AvaloniaTheory]
-    [InlineData("Debug.Print Grid1.Clip")]
-    [InlineData("Grid1.RowSel = 0")]
+    [InlineData("Grid1.ColWidth(1) = -2", "30014")]
+    [InlineData("Grid1.RowHeight(1) = -2", "30013")]
+    [InlineData("Grid1.RowHeightMin = -1", "30013")]
+    [InlineData("Grid1.ColWidth(2) = 500", "30010")]
+    [InlineData("Grid1.ColAlignment(1) = 10", "30005")]
+    [InlineData("Grid1.ColAlignment(1) = -1", "30005")]
+    [InlineData("Debug.Print Grid1.ColAlignment(2)", "30004")]
+    [InlineData("Debug.Print Grid1.FixedAlignment(2)", "30004")]
+    [InlineData("Debug.Print Grid1.TextArray(4)", "381")]
+    [InlineData("Grid1.TextArray(-1) = \"bad\"", "381")]
+    public async Task Size_alignment_and_array_errors_keep_the_measured_numbers(string statement, string error)
+    {
+        (await Run("On Error Resume Next\n" + statement + "\nDebug.Print Err.Number"))
+            .Should().Equal(error);
+    }
+
+    [AvaloniaFact]
+    public async Task Column_alignments_accept_every_measured_value()
+    {
+        (await Run("""
+            Debug.Print Grid1.ColAlignment(1), Grid1.FixedAlignment(1)
+            For i = 0 To 9
+                Grid1.ColAlignment(1) = i
+                Debug.Print Grid1.ColAlignment(1)
+            Next
+            """)).Should().Equal("9", "9", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9");
+    }
+
+    [AvaloniaTheory]
     [InlineData("Grid1.Sort = 1")]
     [InlineData("Grid1.Clear")]
     [InlineData("Debug.Print Grid1.hWnd")]

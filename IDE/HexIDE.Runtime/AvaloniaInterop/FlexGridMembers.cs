@@ -7,7 +7,7 @@ internal static class FlexGridMembers
 {
     internal static Vb6Value Read(VBMSFlexGrid grid, string name, IReadOnlyList<Vb6Value> args)
     {
-        if (args.Count != 0 && !name.Equals("TextMatrix", StringComparison.OrdinalIgnoreCase)) throw Refused(name);
+        if (args.Count != 0 && !IsIndexed(name)) throw Refused(name);
         var model = grid.Model;
         return name.ToLowerInvariant() switch
         {
@@ -17,6 +17,15 @@ internal static class FlexGridMembers
             "col" => new Vb6Value(model.Col),
             "fixedrows" => new Vb6Value(model.FixedRows),
             "fixedcols" => new Vb6Value(model.FixedCols),
+            "rowsel" => new Vb6Value(model.RowSel),
+            "colsel" => new Vb6Value(model.ColSel),
+            "fillstyle" => new Vb6Value(model.FillStyle),
+            "clip" => new Vb6Value(model.Clip),
+            "textarray" when args.Count == 1 => new Vb6Value(model.GetTextArray(Index(args[0]))),
+            "colwidth" when args.Count == 1 => new Vb6Value(model.GetColWidth(Index(args[0]))),
+            "rowheight" when args.Count == 1 => new Vb6Value(model.GetRowHeight(Index(args[0]))),
+            "colalignment" when args.Count == 1 => new Vb6Value(model.GetAlignment(Index(args[0]))),
+            "fixedalignment" when args.Count == 1 => new Vb6Value(model.GetAlignment(Index(args[0]), true)),
             "text" => new Vb6Value(model.Text),
             "textmatrix" when args.Count == 2 => new Vb6Value(model.GetText(Index(args[0]), Index(args[1]))),
             "formatstring" => new Vb6Value(model.FormatString),
@@ -26,7 +35,7 @@ internal static class FlexGridMembers
 
     internal static void Write(VBMSFlexGrid grid, string name, IReadOnlyList<Vb6Value> args, Vb6Value value)
     {
-        if (args.Count != 0 && !name.Equals("TextMatrix", StringComparison.OrdinalIgnoreCase)) throw Refused(name);
+        if (args.Count != 0 && !IsIndexed(name)) throw Refused(name);
         var model = grid.Model;
         switch (name.ToLowerInvariant())
         {
@@ -36,12 +45,24 @@ internal static class FlexGridMembers
             case "col": model.Col = Index(value); break;
             case "fixedrows": model.FixedRows = Index(value); break;
             case "fixedcols": model.FixedCols = Index(value); break;
+            case "rowsel": model.RowSel = Index(value); break;
+            case "colsel": model.ColSel = Index(value); break;
+            case "fillstyle": model.FillStyle = Index(value); break;
+            case "clip": model.Clip = Text(value); break;
+            case "textarray" when args.Count == 1: model.SetTextArray(Index(args[0]), Text(value)); break;
+            case "colwidth" when args.Count == 1: model.SetColWidth(Index(args[0]), Index(value)); break;
+            case "rowheight" when args.Count == 1: model.SetRowHeight(Index(args[0]), Index(value)); break;
+            case "rowheightmin": model.SetRowHeightMin(Index(value)); break;
+            case "colalignment" when args.Count == 1: model.SetColAlignment(Index(args[0]), Index(value)); break;
             case "text": model.Text = Text(value); break;
             case "textmatrix" when args.Count == 2: model.SetText(Index(args[0]), Index(args[1]), Text(value)); break;
             case "formatstring": model.FormatString = Text(value); break;
             default: throw Refused(name);
         }
     }
+
+    private static bool IsIndexed(string name) => name.ToLowerInvariant() is
+        "textmatrix" or "textarray" or "colwidth" or "rowheight" or "colalignment" or "fixedalignment";
 
     // This slice accepts Integer/Long inputs and strings. Refuse unmeasured conversions.
     private static int Index(Vb6Value value) => value.Value switch

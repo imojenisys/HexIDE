@@ -402,6 +402,10 @@ HexIDE registers MSFlexGrid on the in-box foundation and binds Rows, Cols, Row, 
 FixedRows, FixedCols reads and FormatString headings to the interpreter (#1099). A form holding a grid can
 run and fill/read its cells; `FlexGridRuntimeTests` covers that path. The internal shape/cursor/text model
 remains covered by `FlexGridModelTests`. Valid FixedCols assignments and unmeasured conversions refuse.
+The selection/size slice additionally binds RowSel, ColSel, FillStyle, Clip, TextArray, ColWidth, RowHeight,
+ColAlignment and FixedAlignment reads, plus RowHeightMin assignments over existing rows. Its interpreter
+tests exercise the measured rounding, selection writes and 300xx errors. FixedAlignment assignments,
+ColAlignment assignment index errors and RowHeightMin readback remain refused without measurements.
 Other members, default-member access, events, input/drawing, FormatString width/alignment effects and file
 fidelity remain for later slices; see `MISSING_LANGUAGE.md`'s referenced control table. No measurements
 were added by the binding slice.

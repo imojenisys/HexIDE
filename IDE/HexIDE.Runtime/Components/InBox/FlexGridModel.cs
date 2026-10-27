@@ -93,6 +93,65 @@ internal sealed class FlexGridModel
     public int ColSel { get => colSel; set { CheckColumn(value); colSel = value; } }
     public int FillStyle { get => fillStyle; set { if (value is 0 or 1) fillStyle = value; } }
 
+    private readonly Dictionary<int, int> columnWidths = new();
+    private readonly Dictionary<int, int> rowHeights = new();
+    private readonly Dictionary<int, int> columnAlignments = new();
+
+    public int GetColWidth(int index)
+    {
+        if (index == -1) throw new NotImplementedException("MSFlexGrid.ColWidth(-1) read is not implemented (#1099)");
+        CheckColumn(index);
+        return columnWidths.GetValueOrDefault(index, 960);
+    }
+
+    public void SetColWidth(int index, int value)
+    {
+        if (index != -1) CheckColumn(index);
+        if (value < -1) throw Error(30014, "Invalid Column Width Value");
+        var width = value == -1 ? 960 : PixelTwips(value);
+        if (index == -1)
+            for (var c = 0; c < cols; c++) columnWidths[c] = width;
+        else columnWidths[index] = width;
+    }
+
+    public int GetRowHeight(int index)
+    {
+        if (index == -1) throw new NotImplementedException("MSFlexGrid.RowHeight(-1) is not implemented (#1099)");
+        CheckRow(index);
+        return rowHeights.GetValueOrDefault(index, 240);
+    }
+
+    public void SetRowHeight(int index, int value)
+    {
+        if (index == -1) throw new NotImplementedException("MSFlexGrid.RowHeight(-1) is not implemented (#1099)");
+        CheckRow(index);
+        if (value < -1) throw Error(30013, "Invalid Row Height Value");
+        rowHeights[index] = value == -1 ? 240 : PixelTwips(value);
+    }
+
+    public void SetRowHeightMin(int value)
+    {
+        if (value < 0) throw Error(30013, "Invalid Row Height Value");
+        var height = PixelTwips(value);
+        for (var r = 0; r < rows; r++)
+            if (GetRowHeight(r) < height) rowHeights[r] = height;
+    }
+
+    public int GetAlignment(int index, bool fixedCell = false)
+    {
+        if (index < 0 || index >= cols) throw Error(30004, "Application-defined or object-defined error");
+        return fixedCell ? 9 : columnAlignments.GetValueOrDefault(index, 9);
+    }
+
+    public void SetColAlignment(int index, int value)
+    {
+        if (index < 0 || index >= cols) throw new NotImplementedException("MSFlexGrid.ColAlignment index error is not implemented (#1099)");
+        if (value < 0 || value > 9) throw Error(30005, "Invalid Alignment value");
+        columnAlignments[index] = value;
+    }
+
+    private static int PixelTwips(int value) => checked((int)(Math.Round(value / 15.0) * 15));
+
     public string Text
     {
         get => GetText(row, col);
