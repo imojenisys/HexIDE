@@ -129,6 +129,9 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
             windowContext.WindowResized();
     }
 
+    public System.Threading.Tasks.Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp) =>
+        windowContext.CompareRowsAsync(name, row1, row2, cmp);
+
     public void ExecuteSub(string name, IReadOnlyList<Vb6Value>? args = null)
     {
         windowContext.ExecuteSub(name, args);

@@ -474,6 +474,28 @@ public class VBWindowContext : IModuleExecutionRoot
     public void ExecuteEvent(string name, Func<IReadOnlyList<Vb6Value>> args, EventCoalescing coalescing = EventCoalescing.None) =>
         Raise(name, args, coalescing);
 
+    public async Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp)
+    {
+        if (!Handles(name)) return cmp;
+        if (!started) await EnsureDeclarations();
+        var state = ExecutionContext.State;
+        var argument = new Vb6Value(cmp);
+        var result = state.Alloc(argument, Vb6Value.ValueType.Integer);
+        state.RefuseUntilAssigned(result, "MSFlexGrid.Compare initial Cmp is not implemented (#1099)");
+        await interpreter!.RaiseFormEvent(EnsureInstance(), name, new List<CallArg>
+        {
+            new(new Vb6Value(row1), null),
+            new(new Vb6Value(row2), null),
+            new(argument, result),
+        });
+        return state[result].Value switch
+        {
+            short n => n,
+            int n => n,
+            _ => throw new NotImplementedException("MSFlexGrid.Compare Cmp conversion is not implemented (#1099)"),
+        };
+    }
+
     /// <inheritdoc/>
     public bool Handles(string name) => interpreter is not null && EnsureInstance().ClassDef.PrePass.Procedures.ContainsKey(name);
 

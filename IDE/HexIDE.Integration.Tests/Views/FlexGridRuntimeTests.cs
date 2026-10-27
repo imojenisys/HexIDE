@@ -1,7 +1,14 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using HexIDE.Runtime;
+using HexIDE.Runtime.BuiltinControls;
+using HexIDE.Runtime.Interpreter;
+using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 
 namespace HexIDE.Integration.Tests.Views;
 
@@ -25,6 +32,79 @@ public class FlexGridRuntimeTests
         var (_, _, ctx, env) = ContainerRuntimeHarness.Spawn(Form);
         return (await ContainerRuntimeHarness.Run(ctx, env, code))
             .Select(v => Convert.ToString(v.Value, System.Globalization.CultureInfo.InvariantCulture) ?? "").ToArray();
+    }
+
+    [AvaloniaFact]
+    public async Task Sort_is_write_only_and_keeps_its_measured_error()
+    {
+        (await Run("""
+            Grid1.Rows = 4
+            Grid1.TextMatrix(1, 0) = "fixed column b"
+            Grid1.TextMatrix(1, 1) = "b"
+            Grid1.TextMatrix(2, 0) = "fixed column a"
+            Grid1.TextMatrix(2, 1) = "a"
+            Grid1.TextMatrix(3, 1) = "z"
+            Grid1.RowSel = 2
+            Grid1.Sort = 1
+            Debug.Print Grid1.TextMatrix(1, 0), Grid1.TextMatrix(2, 0), Grid1.TextMatrix(3, 1)
+            On Error Resume Next
+            Grid1.Sort = 10
+            Debug.Print Err.Number
+            """)).Should().Equal("fixed column a", "fixed column b", "z", "380");
+        var read = () => Run("Debug.Print Grid1.Sort");
+        await read.Should().ThrowAsync<NotImplementedException>();
+    }
+
+    private sealed class CompareRoot(VBWindowContext context) : Decorator, IModuleExecutionRoot
+    {
+        public void ExecuteSub(string name, IReadOnlyList<Vb6Value>? args = null) =>
+            context.ExecuteSub(name, args);
+        public bool Handles(string name) => context.Handles(name);
+        // Bind by name so this test also builds against the pre-Sort execution root.
+        public Task<int> CompareRowsAsync(string name, int a, int b, int cmp) =>
+            ((dynamic)context).CompareRowsAsync(name, a, b, cmp);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task Custom_Compare_runs_inline_on_the_owning_form_and_returns_ByRef_Cmp(int incomingCmp)
+    {
+        var library = Substitute.For<IBasicStandardLibrary>();
+        var context = new VBWindowContext(library);
+        context.SetCode($$"""
+            Private Sub Grid1_Compare(ByVal Row1 As Long, ByVal Row2 As Long, Cmp As Integer)
+                {{(incomingCmp == 1 ? "Debug.Print Cmp" : incomingCmp == 2 ? "Exit Sub" : "")}}
+                Debug.Print Row1, Grid1.TextMatrix(Row1, 1), Row2, Grid1.TextMatrix(Row2, 1)
+                Cmp = CInt(Grid1.TextMatrix(Row2, 1)) - CInt(Grid1.TextMatrix(Row1, 1))
+            End Sub
+            """, "Form1");
+        var project = new ProjectDefinition(VBProjectType.EXE, "SortTest");
+        var sink = Substitute.For<IDeserializeErrorSink>();
+        var form = new FormDeserializer().Deserialize(project, Form, sink)!;
+        var content = VBLoader.SpawnComponents(form, context.ExecutionContext, context.InstanceEnv);
+        var root = new CompareRoot(context) { Child = content };
+        var act = () => ContainerRuntimeHarness.Run(context.ExecutionContext, context.InstanceEnv, """
+            Grid1.Rows = 3
+            Grid1.TextMatrix(1, 1) = "1"
+            Grid1.TextMatrix(2, 1) = "2"
+            Grid1.RowSel = 2
+            Grid1.Sort = 9
+            """);
+        if (incomingCmp != 0)
+        {
+            await act.Should().ThrowAsync<NotImplementedException>().WithMessage("*initial Cmp*#1099*");
+            return;
+        }
+        var printed = await act();
+        var grid = ((DockPanel)content).Children.OfType<Canvas>().Single()
+            .Children.OfType<VBMSFlexGrid>().Single();
+        grid.Model.GetText(1, 1).Should().Be("2");
+        grid.Model.GetText(2, 1).Should().Be("1");
+        printed.Select(value => value.Value)
+            .Should().Equal(1L, "1", 2L, "2", 1L, "1", 2L, "2", 1L, "2", 2L, "1");
+        GC.KeepAlive(root);
     }
 
     [AvaloniaFact]
@@ -255,7 +335,6 @@ public class FlexGridRuntimeTests
     }
 
     [AvaloniaTheory]
-    [InlineData("Grid1.Sort = 1")]
     [InlineData("Grid1.Clear")]
     [InlineData("Debug.Print Grid1.hWnd")]
     [InlineData("Grid1.Text = 42")]

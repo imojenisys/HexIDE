@@ -240,9 +240,52 @@ cell never given one,** not the grid's BackColor.
 | 9, custom | by the **Compare** event's Cmp. By length, it raised Compare 4 times for 5 rows |
 | 10 | **380** |
 
-- **Rows whose keys tie aren't kept in their order.** Each run started from the previous one's order, and tied keys
-  came out swapped as often as not: in run 1, `B` (r4) came before `b` (r3).
+- **Rows whose keys tie aren't kept in their order.** This initial probe started each sort from the previous
+  sort's order. The fresh-grid measurements below identify the exact tie rule.
 - **Col 2 with ColSel 1** keyed on columns 1 then 2, left to right, as Col 1 with ColSel 2 would.
+
+#### How ties resolve: the algorithm
+
+Measured on VB6 SP6 with MSFLXGRD.OCX, native and p-code agreeing, recorded in
+[#1099's sort comment](https://github.com/hexide-io/HexIDE/issues/1099#issuecomment-6438162882).
+Every sort started from a freshly filled grid, twice. Each row carried an identity in column 2,
+RowData and its fixed column; all three moved together.
+
+Run 1 measured 2, 3, 5, 8 and 17 rows, settings 1–8, over five patterns: equal keys, alternating
+`a`/`b`, repeating `1,2,0`, alternating `a`/`A`, and alternating `1`/`0` with every third key `x`. It also logged every Compare
+for four custom handlers on 2, 3, 5 and 8 rows. All 200 orders and 16 traces are reproduced in
+`FlexGridSortTests`. For example, eight alternating `a`/`b` rows sort to
+`a1 a7 a3 a5 b6 b4 b2 b8` ascending and `b4 b6 b8 b2 a3 a7 a5 a1` descending.
+
+The identified algorithm first compares adjacent pairs until a positive comparison. If none is
+positive, it returns without moving rows. Otherwise it runs this median-of-three quicksort:
+
+```text
+quicksort(lo, hi):
+    if hi <= lo: return
+    mid = (lo + hi) \ 2
+    if compare(lo, mid) > 0: swap(lo, mid)
+    if compare(lo, hi) > 0: swap(lo, hi)
+    if compare(mid, hi) > 0: swap(mid, hi)
+    if hi - lo < 2: return
+    swap(mid, hi - 1)
+    p = hi - 1; i = lo; j = p
+    repeat:
+        increment i until compare(i, p) >= 0
+        decrement j until compare(j, p) <= 0
+        if i >= j: break
+        swap(i, j)
+    swap(i, p)
+    quicksort the smaller partition first (left on a tie), then the other
+```
+
+A self-comparison returns zero without raising Compare. Descending settings negate the key
+comparison. Compare receives positions in the grid as it stands at that call, after earlier swaps.
+All-equal and already-ordered ranges therefore make only n−1 comparisons and keep their order.
+
+The comment also records a successful held-out run 2: 72 orders, two sub-range sorts, and custom
+handlers on 17 and 33 rows with 61 and 155 calls. Its raw data is not present in this checkout or
+issue brief, so the implementation tests cannot yet replay those recordings.
 
 ### Events, with real input
 

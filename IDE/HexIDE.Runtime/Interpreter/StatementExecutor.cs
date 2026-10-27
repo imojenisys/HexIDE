@@ -2033,6 +2033,14 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
                     : new NotImplementedException($"`{varOrProcCall.GetText()} = …` is supported only on a Collection, which refuses it");
             }
             var identifier = varOrProcCall.GetText() ?? throw new VBRunTimeException(context, VBStandardError.ObjectRequired, "Null variable name");
+            // Filling an event result must not read its unmeasured incoming value (#1099).
+            var state = interpreter.ExecutionContext.State;
+            if (currentEnv.TryGetVariableLocation(identifier, out var resultSlot) && state.IsUnmeasuredInput(resultSlot)
+                && state.DeclaredTypeOf(resultSlot) is { } resultType)
+            {
+                state[resultSlot] = VbNumeric.CoerceOnStore(value, resultType, context);
+                return ControlFlow.Nothing;
+            }
             // A UDT is a value type: `b = a` stores an independent deep copy so mutating b never touches a.
             if (!interpreter.TryReadNow(currentEnv, identifier, out var letFound, out var oldLet, out var letFoundNeed))
                 (letFound, oldLet) = await interpreter.ReadVariableAfter(currentEnv, identifier, letFoundNeed!);
@@ -2273,9 +2281,12 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             if (control is VBMSFlexGrid grid)
             {
                 var gridMember = members[0].iCS_S_ProcedureOrArrayCall();
-                FlexGridMembers.Write(grid, UdtFieldName(members[0]),
-                    gridMember is not null && gridMember.argsCall().Length == 1
-                        ? await expressionExecutor.EvaluateCallArgs(gridMember.argsCall(0)) : [], value);
+                var gridArgs = gridMember is not null && gridMember.argsCall().Length == 1
+                    ? await expressionExecutor.EvaluateCallArgs(gridMember.argsCall(0)) : [];
+                if (string.Equals(UdtFieldName(members[0]), "Sort", StringComparison.OrdinalIgnoreCase))
+                    await FlexGridMembers.SortAsync(grid, gridArgs, value);
+                else
+                    FlexGridMembers.Write(grid, UdtFieldName(members[0]), gridArgs, value);
                 return default;
             }
 

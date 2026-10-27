@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace HexIDE.Runtime.Components.InBox;
 
@@ -279,6 +280,95 @@ internal sealed class FlexGridModel
         Rows--;
         text.Clear();
         foreach (var cell in moved) text[cell.Key] = cell.Value;
+    }
+
+    public async Task SortAsync(int setting, Func<int, int, Task<int>>? compare = null)
+    {
+        if (setting == 10) throw new VBRunTimeException(VBStandardError.InvalidPropertyValue);
+        if (setting < 1 || setting > 9)
+            throw new NotImplementedException("MSFlexGrid.Sort setting is not implemented (#1099)");
+        if (rows == 0 || cols == 0 || rowHeights.Count != 0 || cellFormatting.Count != 0)
+            throw new NotImplementedException("MSFlexGrid.Sort with empty dimensions, formatting or row heights is not implemented (#1099)");
+        var first = Math.Max(fixedRows, Math.Min(row, rowSel));
+        var last = Math.Max(row, rowSel);
+        var firstCol = Math.Min(col, colSel);
+        var lastCol = Math.Max(col, colSel);
+
+        async Task<int> Compare(int a, int b)
+        {
+            if (a == b) return 0;
+            if (setting == 9) return compare is null
+                ? throw new NotImplementedException("MSFlexGrid.Sort without a Compare handler is not implemented (#1099)")
+                : await compare(a, b);
+            for (var c = firstCol; c <= lastCol; c++)
+            {
+                var left = GetText(a, c);
+                var right = GetText(b, c);
+                var leftNumber = double.TryParse(left, out var x);
+                var rightNumber = double.TryParse(right, out var y);
+                var result = setting switch
+                {
+                    1 or 2 when leftNumber && rightNumber => x.CompareTo(y),
+                    1 or 2 when leftNumber != rightNumber => leftNumber ? -1 : 1,
+                    3 or 4 => (leftNumber ? x : 0).CompareTo(rightNumber ? y : 0),
+                    7 or 8 => string.Compare(left, right, StringComparison.CurrentCulture),
+                    _ => string.Compare(left, right, StringComparison.CurrentCultureIgnoreCase),
+                };
+                if (result != 0) return setting % 2 == 0 ? -Math.Sign(result) : Math.Sign(result);
+            }
+            return 0;
+        }
+
+        void Swap(int a, int b)
+        {
+            if (a == b) return;
+            for (var c = 0; c < cols; c++)
+            {
+                var saved = GetText(a, c);
+                SetText(a, c, GetText(b, c));
+                SetText(b, c, saved);
+            }
+        }
+
+        async Task QuickSort(int lo, int hi)
+        {
+            if (hi <= lo) return;
+            var mid = (lo + hi) / 2;
+            if (await Compare(lo, mid) > 0) Swap(lo, mid);
+            if (await Compare(lo, hi) > 0) Swap(lo, hi);
+            if (await Compare(mid, hi) > 0) Swap(mid, hi);
+            if (hi - lo < 2) return;
+            Swap(mid, hi - 1);
+            var pivot = hi - 1;
+            var i = lo;
+            var j = pivot;
+            while (true)
+            {
+                do { i++; } while (await Compare(i, pivot) < 0);
+                do { j--; } while (await Compare(j, pivot) > 0);
+                if (i >= j) break;
+                Swap(i, j);
+            }
+            Swap(i, pivot);
+            if (i - lo <= hi - i)
+            {
+                await QuickSort(lo, i - 1);
+                await QuickSort(i + 1, hi);
+            }
+            else
+            {
+                await QuickSort(i + 1, hi);
+                await QuickSort(lo, i - 1);
+            }
+        }
+
+        // Measured MSFlexGrid algorithm, including tie order and stateful Compare calls (#1099).
+        for (var k = first; k < last; k++)
+            if (await Compare(k, k + 1) > 0)
+            {
+                await QuickSort(first, last);
+                return;
+            }
     }
 
     private void RefuseRowEditEdges()

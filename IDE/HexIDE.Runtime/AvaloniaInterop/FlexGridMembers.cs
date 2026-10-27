@@ -1,3 +1,5 @@
+using System.Threading.Tasks;
+using Avalonia.LogicalTree;
 using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Interpreter;
 
@@ -84,6 +86,24 @@ internal static class FlexGridMembers
             case "formatstring": model.FormatString = Text(value); break;
             default: throw Refused(name);
         }
+    }
+
+    internal static Task SortAsync(VBMSFlexGrid grid, IReadOnlyList<Vb6Value> args, Vb6Value value)
+    {
+        if (args.Count != 0) throw Refused("Sort arguments");
+        return grid.Model.SortAsync(Index(value), async (first, second) =>
+        {
+            var cmp = 0;
+            var handled = false;
+            foreach (var handler in ControlEvents.Handlers(grid, grid.FindLogicalAncestorOfType<IModuleExecutionRoot>(), "Compare"))
+            {
+                if (!handler.Root.Handles(handler.Name)) continue;
+                if (handler.Own && VBProps.GetIndex(grid) is not null) throw Refused("Compare on a control array");
+                handled = true;
+                cmp = await handler.Root.CompareRowsAsync(handler.Name, first, second, cmp);
+            }
+            return handled ? cmp : throw Refused("Sort without a Compare handler");
+        });
     }
 
     internal static Vb6Value Call(VBMSFlexGrid grid, string name, IReadOnlyList<Vb6Value> args)

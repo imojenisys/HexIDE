@@ -197,15 +197,26 @@ public class ExecutionState
             target.Unlock();
     }
 
+    // An event result whose incoming value is unmeasured must be assigned before it can be read (#1099).
+    private readonly Dictionary<int, string> unmeasuredInputs = new();
+    internal void RefuseUntilAssigned(int location, string reason) => unmeasuredInputs[location] = reason;
+    internal bool IsUnmeasuredInput(int location) => unmeasuredInputs.Count > 0 && unmeasuredInputs.ContainsKey(location);
+
     public Vb6Value this[int location]
     {
-        get => refSlots.Count > 0 && refSlots.TryGetValue(location, out var target) ? target.Read() : memory[location];
+        get
+        {
+            if (unmeasuredInputs.Count > 0 && unmeasuredInputs.TryGetValue(location, out var reason))
+                throw new System.NotImplementedException(reason);
+            return refSlots.Count > 0 && refSlots.TryGetValue(location, out var target) ? target.Read() : memory[location];
+        }
         set
         {
             if (refSlots.Count > 0 && refSlots.TryGetValue(location, out var target))
                 target.Write(value);
             else
                 memory[location] = value;
+            unmeasuredInputs.Remove(location);
         }
     }
 }

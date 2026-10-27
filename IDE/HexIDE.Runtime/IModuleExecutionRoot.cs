@@ -9,6 +9,10 @@ public interface IModuleExecutionRoot
     // args carries a control-array event's leading `Index As Integer` (null for a parameterless handler).
     void ExecuteSub(string name, IReadOnlyList<Vb6Value>? args = null);
 
+    // MSFlexGrid's Compare must finish and return its ByRef Cmp before the sort continues (#1099).
+    System.Threading.Tasks.Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp) =>
+        throw new NotImplementedException("MSFlexGrid.Compare is not implemented by this execution root (#1099)");
+
     /// <summary>
     /// Raise an event that runs only if <paramref name="when"/> still holds when its turn comes, behind whatever was raised
     /// before it. A menu shortcut's item is one: its Enabled is read after its parents' Clicks have run, since they may
