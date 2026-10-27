@@ -116,6 +116,55 @@
 - **The hidden DoClick raises Click.**
 - Refresh raised nothing.
 
+### Events, with real input
+
+**The probe:** the Slider at Min 0, Max 10, SmallChange 1, LargeChange 5, Text `the tip`, run on the guest's console.
+- The program asked the control for its channel and thumb rectangles (`TBM_GETCHANNELRECT`, `TBM_GETTHUMBRECT` sent to
+  Slider1's hWnd, a window of class `Slider20WndClass`). A driver clicked, dragged and typed at those points.
+- Native and p-code logged the same lines, mouse coordinates apart.
+
+| Action | Events, in order |
+|---|---|
+| Click the channel right of the thumb, at 8 | MouseDown, **Scroll** (Value already 5), MouseUp, Click, **Change**. **Value moved by LargeChange, not to the point clicked** |
+| the same, from 5 | Value 10 |
+| Click the channel left of the thumb | Value down by LargeChange |
+| Press and hold on the channel at 9, from 0 | MouseDown, Scroll at 5, Scroll at 10, then MouseUp, Click, **one Change** |
+| **Drag the thumb from 0 to 7** | MouseDown; **Scroll at every value, 0 through 7, while dragging**; then on release MouseUp, Click, **Scroll again, then Change** |
+| Click the thumb, not moving it | MouseDown, Scroll, MouseUp, Click, Scroll, **Change, with Value unchanged at 4** |
+| Drag from 4 to 8 and back to 4 | Scroll for each value both ways, then **Change at 4**, the value it started at |
+| Drag off the right end and release there | Scroll up to 10, then MouseUp, Scroll, Change. **No Click**, the button having come up off the control |
+| Drag far below the control | Value stayed where the thumb had got to, 9 |
+| Right arrow, Down arrow | KeyDown, Scroll, KeyUp, Change: **+1**. **Down raises Value**, as Right does |
+| Left arrow, Up arrow | the same, **-1** |
+| Left arrow at 0 | KeyDown, Scroll, KeyUp, **Change, though Value stayed 0** |
+| Page Down, Page Up | +5, -5, with Scroll and Change |
+| **Home, End** | KeyDown, **Change**, KeyUp, **Change**: **no Scroll, and Change twice**, even with Value already 0 |
+| The wheel, one notch up, then down | **Scroll only, no Change.** Up lowered Value, 10 to 9, and down raised it |
+| Right-click | MouseDown and MouseUp with Button 2, Click. No change of value |
+| With SelectRange and a selection from 2 to 5, click the channel | pages as before; the selection stays |
+| Tab, Shift+Tab | the focus leaves and comes back |
+
+- **While dragging, the Text tip shows beside the thumb:** above it with TextPosition 0.
+- **Change comes from user input whether or not Value changed.** Clicking the thumb, Left at Min, Home at Min and a drag
+  back to the start each raised it. Code raises Change only when Value really changes.
+- **Scroll is the event that tracks the thumb.** Change comes once, when the gesture ends.
+
+### Drawing
+
+Screenshots on Windows 10 at 96 dpi, one fresh form per state, native code:
+- **TickStyle 0** puts the ticks below and points the thumb down.
+  - **1** puts them above and points it up.
+  - **2** draws both, with a square thumb.
+  - **3** draws none, the thumb still pointing down.
+- **Orientation 1** stands the Slider upright with Min at the top. The ticks are on the right with TickStyle 0, and on the
+  left with 1.
+- **BorderStyle 1** draws a single line round the control.
+- **Enabled False fills the thumb with a dither.** The channel and the ticks don't change.
+- **A selection** widens the channel into a white band and fills the selected range blue. A small triangle marks the
+  ticks at each end.
+- **TickFrequency 3 on 0 to 20** drew 8 ticks: 0, 3, 6, 9, 12, 15, 18 and 20.
+- **The focus** is a dotted rectangle round the whole control.
+
 ### In HexIDE
 
 HexIDE doesn't model the Slider (#1091). The designer draws it as an empty box (#157). Running a form that holds one is
