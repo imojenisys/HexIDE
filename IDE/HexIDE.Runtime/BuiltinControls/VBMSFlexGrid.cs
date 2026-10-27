@@ -7,7 +7,7 @@ using HexIDE.Runtime.Components.InBox;
 
 namespace HexIDE.Runtime.BuiltinControls;
 
-public sealed class VBMSFlexGrid : Control, ICustomHitTest
+public sealed partial class VBMSFlexGrid : Control, ICustomHitTest
 {
     public bool HitTest(Point point) => new Rect(Bounds.Size).Contains(point);
 
@@ -20,7 +20,12 @@ public sealed class VBMSFlexGrid : Control, ICustomHitTest
     public VBMSFlexGrid()
     {
         Focusable = true;
-        Model.CellEvent = name => this.ExecuteSub(new EventClass(name));
+        Model.CellEvent = name =>
+        {
+            if (name == "RowColChange") RefreshView(true);
+            this.ExecuteSub(new EventClass(name));
+        };
+        InitializeDrawing();
     }
 
     static VBMSFlexGrid()
@@ -66,20 +71,8 @@ public sealed class VBMSFlexGrid : Control, ICustomHitTest
 
     private (int Row, int Col)? CellAt(Point point)
     {
-        if (point.X < 0 || point.Y < 0) return null;
-        var y = 0.0;
-        for (var r = 0; r < Model.Rows; r++)
-        {
-            y += Model.GetRowHeight(r) / 15.0;
-            if (point.Y >= y) continue;
-            var x = 0.0;
-            for (var c = 0; c < Model.Cols; c++)
-            {
-                x += Model.GetColWidth(c) / 15.0;
-                if (point.X < x) return (r, c);
-            }
-            return null;
-        }
+        foreach (var cell in VisibleCells())
+            if (cell.Bounds.Contains(point)) return (cell.Row, cell.Col);
         return null;
     }
 }

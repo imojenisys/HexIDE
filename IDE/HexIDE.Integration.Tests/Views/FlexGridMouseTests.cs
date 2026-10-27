@@ -53,6 +53,23 @@ public class FlexGridMouseTests
     }
 
     [AvaloniaFact]
+    public void Scrolling_preserves_headings_and_maps_mouse_input_to_visible_cells()
+    {
+        using var root = new Root();
+        FlexGridMembers.Write(root.Grid, "Cols", [], new Vb6Value(10));
+        KeepingContext(() => Avalonia.Threading.Dispatcher.UIThread.RunJobs());
+        FlexGridMembers.Write(root.Grid, "TopRow", [], new Vb6Value(10));
+        FlexGridMembers.Write(root.Grid, "LeftCol", [], new Vb6Value(3));
+        root.Log.Should().Equal("Scroll:1,1:1,1", "Scroll:1,1:1,1");
+        root.Click(2, 2);
+        root.Grid.Model.Row.Should().Be(11);
+        root.Grid.Model.Col.Should().Be(4);
+        root.Click(0, 2);
+        root.Grid.Model.Row.Should().Be(1, "a fixed column heading stays in the fixed row");
+        root.Grid.Model.Col.Should().Be(4);
+    }
+
+    [AvaloniaFact]
     public void Click_moves_both_coordinates_before_MouseDown_and_changes_selection_after_it()
     {
         using var root = new Root();

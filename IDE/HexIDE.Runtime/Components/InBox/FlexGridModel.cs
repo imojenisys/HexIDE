@@ -13,6 +13,34 @@ internal sealed class FlexGridModel
 
     public Action<string>? CellEvent { get; set; }
     public int TopRow { get; private set; } = 1;
+    public int LeftCol { get; private set; } = 1;
+
+    internal readonly Dictionary<string, long> Appearance = new()
+    {
+        ["backcolor"] = 0x80000005, ["forecolor"] = 0x80000008,
+        ["backcolorfixed"] = 0x8000000f, ["forecolorfixed"] = 0x80000012,
+        ["backcolorsel"] = 0x8000000d, ["forecolorsel"] = 0x8000000e,
+        ["backcolorbkg"] = 0x808080, ["gridcolor"] = 0xc0c0c0, ["gridcolorfixed"] = 0,
+        ["gridlines"] = 1, ["gridlinesfixed"] = 2, ["gridlinewidth"] = 1,
+        ["focusrect"] = 1, ["highlight"] = 1, ["wordwrap"] = 0, ["scrollbars"] = 3,
+    };
+
+    internal object? CellFormat(int r, int c, string member) =>
+        cellFormatting.GetValueOrDefault((r, c, member));
+
+    internal void ScrollTo(int firstRow, int firstCol)
+    {
+        if (TopRow != firstRow)
+        {
+            TopRow = firstRow;
+            CellEvent?.Invoke("Scroll");
+        }
+        if (LeftCol != firstCol)
+        {
+            LeftCol = firstCol;
+            CellEvent?.Invoke("Scroll");
+        }
+    }
 
     public int Rows
     {
@@ -255,6 +283,7 @@ internal sealed class FlexGridModel
             "cellfontname" => "MS Sans Serif",
             "cellfontsize" => 8.25,
             "cellfontbold" => false,
+            "cellbackcolor" or "cellforecolor" => 0L,
             _ => throw new NotImplementedException($"MSFlexGrid.{member} default is not implemented (#1099)"),
         };
     }
