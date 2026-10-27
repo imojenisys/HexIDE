@@ -34,6 +34,7 @@ internal static class FlexGridMembers
             "rowsel" => new Vb6Value(model.RowSel),
             "colsel" => new Vb6Value(model.ColSel),
             "fillstyle" => new Vb6Value(model.FillStyle),
+            "allowbigselection" => new Vb6Value(model.AllowBigSelection),
             "clip" => new Vb6Value(model.Clip),
             "textarray" when args.Count == 1 => new Vb6Value(model.GetTextArray(Index(args[0]))),
             "colwidth" when args.Count == 1 => new Vb6Value(model.GetColWidth(Index(args[0]))),
@@ -75,6 +76,7 @@ internal static class FlexGridMembers
             case "rowsel": model.RowSel = Index(value); break;
             case "colsel": model.ColSel = Index(value); break;
             case "fillstyle": model.FillStyle = Index(value); break;
+            case "allowbigselection": model.AllowBigSelection = value.Value is bool b ? b : throw Refused(name); break;
             case "clip": model.Clip = Text(value); break;
             case "textarray" when args.Count == 1: model.SetTextArray(Index(args[0]), Text(value)); break;
             case "colwidth" when args.Count == 1: model.SetColWidth(Index(args[0]), Index(value)); break;

@@ -453,6 +453,8 @@ The selection/size slice additionally binds RowSel, ColSel, FillStyle, Clip, Tex
 ColAlignment and FixedAlignment reads, plus RowHeightMin assignments over existing rows. Its interpreter
 tests exercise the measured rounding, selection writes and 300xx errors. FixedAlignment assignments,
 ColAlignment assignment index errors and RowHeightMin readback remain refused without measurements.
-Other members, default-member access, events, input/drawing, FormatString width/alignment effects and file
-fidelity remain for later slices; see `MISSING_LANGUAGE.md`'s referenced control table. No measurements
+Mouse clicks now select cells and headings with the recorded cursor/mouse event order, including
+Shift/Ctrl selection, right-click and double-click. AllowBigSelection is bound; FlexGridMouseTests
+drives pointer input headlessly. Keyboard input, dragging, scrolling, drawing, other members,
+default-member access, FormatString width/alignment effects and file fidelity remain for later slices; see `MISSING_LANGUAGE.md`'s referenced control table. No measurements
 were added by the binding slice.

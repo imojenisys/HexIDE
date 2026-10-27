@@ -96,6 +96,31 @@ internal sealed class FlexGridModel
     public int ColSel { get => colSel; set { CheckColumn(value); colSel = value; } }
     public int FillStyle { get => fillStyle; set { if (value is 0 or 1) fillStyle = value; } }
 
+    public bool AllowBigSelection { get; set; } = true;
+
+    internal bool SelectMouseCell(int atRow, int atCol, bool extend)
+    {
+        if (atRow < 0 || atCol < 0 || atRow >= rows || atCol >= cols
+            || rows <= fixedRows || cols <= fixedCols) return false;
+        var old = (row, col, rowSel, colSel);
+        atRow = Math.Max(fixedRows, atRow);
+        atCol = Math.Max(fixedCols, atCol);
+        if (extend)
+        {
+            rowSel = atRow;
+            colSel = atCol;
+        }
+        else
+        {
+            var moved = row != atRow || col != atCol;
+            if (moved) CellEvent?.Invoke("LeaveCell");
+            row = rowSel = atRow;
+            col = colSel = atCol;
+            if (moved) EnterCell();
+        }
+        return old != (row, col, rowSel, colSel);
+    }
+
     private readonly Dictionary<int, int> columnWidths = new();
     private readonly Dictionary<int, int> rowHeights = new();
     private readonly Dictionary<int, int> columnAlignments = new();
