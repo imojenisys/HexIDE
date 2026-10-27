@@ -169,7 +169,7 @@ Screenshots on Windows 10 at 96 dpi, one fresh form per state, native code:
 
 **The programs:**
 - **The save:** a form written by hand, opened in VB6's IDE, dirtied with a comment and saved. VB6's save is in
-  `corpus/inbox-controls/pending/slider/`.
+  `corpus/inbox-controls/saved/slider/`.
   - Slider1 had every property off its default, Text included, with its lines in reverse order.
   - Slider2 had only its position, extents and `_Version`.
   - Slider3 was upright: `Orientation = 1`, 675 wide and 3000 high, Value 4.
@@ -265,5 +265,6 @@ as the setters do would refuse a form VB6 runs.
 HexIDE implements the measured MSComctlLib object model (#1091 A), including code-generated Change and hidden DoClick.
 Measured keyboard, mouse and wheel input and drawing are implemented (#1091 B), including ticks, selection, disabled
 thumb and focus. No pixel metrics are pinned. Persisted own properties load with the measured file rules and the saved Slider form round-trips byte for byte (#1091 C).
-The designer draws the loaded state but remains read-only pending modelled property editing and saving files without extents.
+Forms holding Sliders can be saved, carrying their own property lines unchanged, including file-only values. The designer
+draws the loaded state; own-property editing remains unfinished. Missing extents stay absent while the size is unchanged.
 Native handles, MouseIcon, OLE drag and unmeasured conversions refuse as not implemented; see MISSING_LANGUAGE.md.

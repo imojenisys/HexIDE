@@ -1,7 +1,7 @@
 # In-box control corpus
 
-The only files in the repository holding one of VB6's in-box ActiveX controls that HexIDE models: the ProgressBar, from
-MSCOMCTL.OCX (`MSComctlLib`, 6.0) and COMCTL32.OCX (`ComctlLib`, 5.0). They exist because nothing else in the tree is
+Files holding VB6's in-box ActiveX controls, including the modelled ProgressBar from MSCOMCTL.OCX (`MSComctlLib`, 6.0)
+and COMCTL32.OCX (`ComctlLib`, 5.0), and the Slider from MSCOMCTL.OCX. They exist because nothing else in the tree is
 one, and because what VB6 writes for such a control isn't what it writes for an intrinsic: the extender's properties by
 name, then `_ExtentX`, `_ExtentY` and `_Version`, then the control's own properties in the control's own order
 (hexide-io/HexIDE#1082).
@@ -41,6 +41,11 @@ too: VB6's save of a form doesn't rewrite the project, so none is VB6's.
 | `sizes-six/`, `sizes-five/` | Every own property off its default in one control, a control whose extents agree with its size, and four aligned controls VB6 sized itself, which set the extent formula (132, 156, 177 and 180 px) |
 | `window/` | One control with every own property off its default, set from VB6's Properties window. Its `MouseIcon` didn't load, so where VB6 writes one is not measured |
 
+The `saved/slider/` fixture holds five Sliders saved by VB6 on 2026-10-27: one with its own properties off their
+defaults, a minimal one, an upright one, one with Value alone, and one double-clicked from the toolbox. Text was dropped
+by VB6; there is no `.frx` (#1091). Its form now participates in the byte-for-byte round-trip lane. Own-property editing
+remains unfinished.
+
 ## `pending/`
 
 Written by VB6's IDE (SP6) on the oracle VM, 2026-10-26, on the console session, for the measurements in the oracle's "In-box
@@ -64,4 +69,3 @@ controls: the ImageList" (hexide-io/HexIDE#1083) and "In-box controls: the Statu
 | `msflexgrid/` | Three MSFlexGrids saved by VB6: one written by hand with every property off its default and its lines reversed, a minimal block, and one double-clicked from the toolbox. There is no `.frx`: cell text is not saved, only FormatString (#1099) |
 | `richtextbox/` | Three RichTextBoxes saved by VB6: one written by hand with every property off its default, its lines reversed and its TextRTF inline, then Locked set in the Properties window (saved as `ReadOnly`); a minimal block; and one double-clicked from the toolbox. Every TextRTF is in the `.frx` (#1100) |
 | `defaults/` | All nine MSCOMCTL.OCX controls double-clicked from the toolbox onto an empty 6000 x 4500 form, as VB6 saved them. The ImageCombo's name, `s`, is the rig's: a keystroke meant for Ctrl+S landed in its (Name) row |
-| `slider/` | Five Sliders saved by VB6 on 2026-10-27, for the oracle's "In-box controls: the Slider": one written by hand with every property off its default and its lines reversed, its `Text` line dropped as VB6 doesn't save it; a minimal block; an upright one; one with only `Value`; and one double-clicked from the toolbox. There is no `.frx` (#1091) |

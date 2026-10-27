@@ -17,7 +17,6 @@ public sealed class SliderComponentClass : InBoxComponentClass
     public override IEnumerable<RuntimeLibrary> Libraries => [ControlLibraries.MSComctlLib];
     public override (int Width, int Height) AddedSize => (1500, 675);
     public override (int X, int Y) DefaultExtent => throw new NotImplementedException("Slider missing extents are not measured (#1091).");
-    public override bool CanSaveFaithfully => false;
 
     // Own properties remain read-only in the designer until property editing is modelled.
     public override IReadOnlyList<InBoxMember> Members { get; } =
@@ -37,20 +36,6 @@ public sealed class SliderComponentClass : InBoxComponentClass
     internal static readonly string[] FileProperties =
         ["BorderStyle", "MousePointer", "Enabled", "OLEDropMode", "LargeChange", "SmallChange", "Min", "Max",
          "SelectRange", "SelStart", "SelLength", "TickStyle", "TickFrequency", "Orientation", "Value", "TextPosition"];
-
-    internal void WriteFileProperties(Serialization.VbFrmFormatSerializer writer, ComponentInstance instance)
-    {
-        var values = ReadFileProperties(instance);
-        foreach (var name in FileProperties)
-        {
-            if (name == "SelStart" && values["SelectRange"] == 0 &&
-                !instance.UnknownRawProperties.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
-                continue;
-            if (values[name] != FileDefault(name))
-                writer.WriteProperty(name, name is "Enabled" or "SelectRange" ? typeof(bool) : typeof(int),
-                    name is "Enabled" or "SelectRange" ? (object)(values[name] != 0) : checked((int)values[name]));
-        }
-    }
 
     private static long FileDefault(string name) => name switch
     {

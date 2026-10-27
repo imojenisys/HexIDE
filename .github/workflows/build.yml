@@ -18,13 +18,14 @@ concurrency:
 # The fewest tests each suite may run and still pass (#1448). One run of the Integration suite went green after 978 of its
 # 1682 tests and said nothing about it: no warning, no skip, exit code 0. That is the fail-open shape the foreign-server
 # fixture exists to prevent, one level up. Microsoft.Testing.Platform's --minimum-expected-tests turns a short run into a
-# failure. The four main-suite floors are about 95% of totals measured on main c9d5ef1e under WSL,
-# 2026-10-26 (#883). Theory rows are counted by execution, not discovery. Raise floors as suites grow.
+# failure. The four main-suite floors are about 95% of the totals recorded beside them. The initial baseline was
+# main c9d5ef1e under WSL, 2026-10-26 (#883); later measurements are noted on their rows. Theory rows are counted
+# by execution, not discovery. Raise floors as suites grow.
 # The async test-context lifetime fix is separate: https://github.com/hexide-io/HexIDE/issues/2194.
 env:
-  MIN_TESTS_RUNTIME: 5860       # 6169 measured; catches short runs; raise to 95% of a new full total.
+  MIN_TESTS_RUNTIME: 5865       # 6174 measured under WSL, 2026-10-27 (#1091).
   MIN_TESTS_TWINBASIC: 200      # 226
-  MIN_TESTS_IDE: 4042           # 4255 measured; catches short runs; raise to 95% of a new full total.
+  MIN_TESTS_IDE: 4140           # 4358 measured under WSL, 2026-10-27 (#1091).
   MIN_TESTS_INTEGRATION: 2657   # 2797 measured; catches short runs; raise to 95% of a new full total.
   MIN_TESTS_LSP_SERVER: 528     # 556 measured; catches short runs; raise to 95% of a new full total.
 

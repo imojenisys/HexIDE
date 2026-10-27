@@ -3,7 +3,7 @@
 ## Purpose
 
 The MSComctlLib Slider object model, measured against VB6 SP6 in the fidelity oracle (#1091 A).
-Measured input and drawing are implemented (#1091 B); persisted own properties load and the measured saved form round-trips byte for byte. Designer editing remains read-only.
+Measured input and drawing are implemented (#1091 B); persisted own properties load and the measured saved form round-trips byte for byte. Forms containing Sliders can be saved; their own persisted properties remain view-only.
 
 ## Requirements
 
@@ -36,18 +36,20 @@ validation, selection, tick count and methods. Value SHALL be its default member
 
 ### Requirement: Incomplete surface
 
-Unmeasured members and conversions SHALL refuse as not implemented. Forms containing Sliders SHALL stay read-only
-until designer edits can be saved faithfully.
+Unmeasured members and conversions SHALL refuse as not implemented. Slider own properties SHALL remain view-only
+until their designer edits can be saved faithfully. The form itself SHALL permit saving.
 
 #### Scenario: Native handle
 
 - **WHEN** code reads Slider.hWnd
 - **THEN** HexIDE reports that the member is not implemented
 
-#### Scenario: Designer editing before modelled persistence
+#### Scenario: Saving before modelled own-property editing
 
-- **WHEN** a form contains a Slider
-- **THEN** the form cannot be saved and the designer is read-only
+- **WHEN** a form contains a Slider whose own properties have not been edited
+- **THEN** the form can be saved
+- **AND** its Slider own property lines retain their file values, spelling and order
+- **AND** those own properties remain view-only
 
 ### Requirement: Measured input and drawing
 
@@ -83,6 +85,8 @@ without pinning pixel metrics. A horizontal drag SHALL show Text above the thumb
 The reader SHALL load Slider properties in control order, accept Min equal to or greater than Max, clamp Value silently,
 ignore Text and ignore selection when SelectRange is False. File Orientation SHALL preserve the recorded dimensions.
 The writer SHALL round-trip the saved Slider corpus byte for byte, omit Text and preserve whether SelStart was explicitly read.
+It SHALL carry own property lines without replacing them with the runtime interpretation. Missing extents SHALL remain absent
+while the size is unchanged; resizing SHALL write extents for the new size.
 
 #### Scenario: File range and selection
 
