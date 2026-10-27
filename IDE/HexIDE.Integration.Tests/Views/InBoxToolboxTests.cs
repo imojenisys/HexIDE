@@ -43,7 +43,7 @@ public class InBoxToolboxTests
     }
 
     private static RuntimeLibrary?[] InBoxLibraries(ToolBoxToolViewModel toolbox) =>
-        toolbox.Components.Where(c => c.BaseClass is InBoxComponentClass).Select(c => c.Library).ToArray();
+        toolbox.Components.Where(c => c.BaseClass is InBoxComponentClass).Select(c => c.Library).Distinct().ToArray();
 
     [AvaloniaFact]
     public void A_project_that_references_no_library_offers_no_in_box_control()
@@ -53,7 +53,7 @@ public class InBoxToolboxTests
         InBoxLibraries(toolbox).Should().BeEmpty();
     }
 
-    // One button for each library the project references, after the intrinsic controls, as VB6's toolbox adds a library's.
+    // The referenced libraries' controls follow the intrinsic controls.
     [AvaloniaFact]
     public void Each_referenced_library_offers_its_ProgressBar_after_the_intrinsic_controls()
     {
@@ -64,7 +64,7 @@ public class InBoxToolboxTests
         toolbox.Components[shape + 1].BaseClass.Should().BeSameAs(ProgressBarComponentClass.Instance);
         toolbox.Components[shape + 1].Name.Should().Be("ProgressBar");
         toolbox.Components.Where(c => c.Library is not null).Select(c => c.VBTypeName)
-            .Should().Equal("MSComctlLib.ProgressBar", "ComctlLib.ProgressBar");
+            .Should().Equal("MSComctlLib.ProgressBar", "MSComctlLib.Slider", "ComctlLib.ProgressBar");
     }
 
     // The Components dialog is how a project comes to reference a library, and the toolbox follows it both ways.
@@ -78,7 +78,7 @@ public class InBoxToolboxTests
         dialog.ApplyCommand.Execute(null);
         InBoxLibraries(toolbox).Should().Equal(ControlLibraries.MSComctlLib);
 
-        toolbox.SelectedComponent = toolbox.Components.Single(c => c.Library is not null);
+        toolbox.SelectedComponent = toolbox.Components.First(c => c.Library is not null);
         dialog.Controls.Single(c => c.Library == ControlLibraries.MSComctlLib).IsSelected = false;
         dialog.ApplyCommand.Execute(null);
         InBoxLibraries(toolbox).Should().BeEmpty();

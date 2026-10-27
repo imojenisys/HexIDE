@@ -1514,6 +1514,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         VBProps.RefuseIfRemoved(control);
 
         // An in-box control's own members, and the extender's it lacks, by its member table (#1082).
+        if (AvaloniaInterop.SliderMembers.TryGet(control, memberIdentifier, out var sliderValue) is { } slider)
+            return slider ? sliderValue : throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
         if (AvaloniaInterop.ProgressBarMembers.TryGet(control, memberIdentifier, out var inBoxValue) is { } inBox)
             return inBox ? inBoxValue : throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
 
@@ -2188,6 +2190,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             {
                 VBCommonDialog => "MSComDlg",
                 VBProgressBar bar => bar.Library.Name,
+                VBSlider => "MSComctlLib",
                 _ => "VB",
             };
             return new Vb6Value(string.Equals(targetName, "Object", StringComparison.OrdinalIgnoreCase)

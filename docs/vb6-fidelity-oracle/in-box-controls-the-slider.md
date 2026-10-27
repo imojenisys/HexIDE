@@ -262,5 +262,7 @@ as the setters do would refuse a form VB6 runs.
 
 ### In HexIDE
 
-HexIDE doesn't model the Slider (#1091). The designer draws it as an empty box (#157). Running a form that holds one is
-refused, as for any control HexIDE can't create (#857), and the refusal names #1091 as the issue that tracks it.
+HexIDE implements the measured MSComctlLib object model (#1091 A), including code-generated Change and hidden DoClick.
+Input and drawing remain for B. Persisted own properties and the byte-for-byte round trip remain for C: runtime loading
+refuses such properties, and forms containing Sliders stay read-only. The designer still shows an empty placeholder.
+Native handles, MouseIcon, OLE drag and unmeasured conversions refuse as not implemented; see MISSING_LANGUAGE.md.

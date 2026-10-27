@@ -135,6 +135,7 @@ public static class AvaloniaInteroperability
         RegisterTabOrder<VBFrame>(tabStop: false);
         RegisterTabOrder<VBLabel>(tabStop: false);
         RegisterTabOrder<VBProgressBar>(tabStop: false);
+        RegisterTabOrder<VBSlider>(tabStop: true);
         // A Label paints its own BackColor (VBLabel.Render), not the attached one every other control's template
         // draws, so it is bound first: a run-time assignment then paints, and a read gives the form's colour (#795).
         Register<VBLabel, VBColor>(VBProperties.BackColorProperty, VBLabel.BackColorProperty);
