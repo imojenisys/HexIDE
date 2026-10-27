@@ -283,9 +283,13 @@ A self-comparison returns zero without raising Compare. Descending settings nega
 comparison. Compare receives positions in the grid as it stands at that call, after earlier swaps.
 All-equal and already-ordered ranges therefore make only n−1 comparisons and keep their order.
 
-The comment also records a successful held-out run 2: 72 orders, two sub-range sorts, and custom
-handlers on 17 and 33 rows with 61 and 155 calls. Its raw data is not present in this checkout or
-issue brief, so the implementation tests cannot yet replay those recordings.
+The [held-out run 2 recording](https://github.com/hexide-io/HexIDE/issues/1099#issuecomment-6439681340)
+is also pinned in `FlexGridSortTests`: 72 orders (17, 33 and 100 rows, settings 1–8), both directions
+of the rows 3–8 sub-range, and custom handlers on 17 and 33 rows with all 61 and 155 comparisons.
+The keys for row i are `Chr$(97 + ((i * 37 + 11) Mod 4))`, `CStr((i * 53 + 7) Mod 5)` and
+`Mid$("aAbB", 1 + ((i * 29 + 3) Mod 4), 1)`. The custom handler returns `1,-1,1,0,-1` in turn.
+Each custom assertion checks positions, the row identities at those positions, the returned Cmp,
+and the final order.
 
 ### Events, with real input
 
