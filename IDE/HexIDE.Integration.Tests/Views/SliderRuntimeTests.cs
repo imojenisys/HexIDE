@@ -159,7 +159,7 @@ public class SliderRuntimeTests
     }
 
     [AvaloniaFact]
-    public void Slider_forms_stay_read_only_until_the_file_slice()
+    public void Slider_forms_stay_read_only_until_designer_edits_can_be_saved()
     {
         var project = new HexIDE.Runtime.ProjectElements.ProjectDefinition(
             HexIDE.Runtime.ProjectElements.VBProjectType.EXE, "Test");
@@ -167,9 +167,6 @@ public class SliderRuntimeTests
         var form = new HexIDE.Runtime.Serialization.FormDeserializer().Deserialize(project, Form, sink)!;
         form.Components.Single(c => c.GetPropertyOrDefault(HexIDE.Runtime.Components.VBProperties.NameProperty) == "Slider1").BaseClass.ClassName.Should().Be("Slider");
         form.CanSaveFaithfully.Should().BeFalse();
-        Action loadOwnProperty = () => ContainerRuntimeHarness.Spawn(
-            Form.Replace("Width = 3000", "Width = 3000\r\n      Value = 6"));
-        loadOwnProperty.Should().Throw<NotImplementedException>().WithMessage("Loading Slider properties*#1091 C*");
     }
 
     [AvaloniaFact]

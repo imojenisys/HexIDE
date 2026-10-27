@@ -3,7 +3,7 @@
 ## Purpose
 
 The MSComctlLib Slider object model, measured against VB6 SP6 in the fidelity oracle (#1091 A).
-Measured input and drawing are implemented (#1091 B); persisted own properties and faithful file writing remain for C.
+Measured input and drawing are implemented (#1091 B); persisted own properties load and the measured saved form round-trips byte for byte. Designer editing remains read-only.
 
 ## Requirements
 
@@ -37,14 +37,14 @@ validation, selection, tick count and methods. Value SHALL be its default member
 ### Requirement: Incomplete surface
 
 Unmeasured members and conversions SHALL refuse as not implemented. Forms containing Sliders SHALL stay read-only
-until their writer is proven faithful. Runtime loading of persisted Slider own properties SHALL refuse until part C.
+until designer edits can be saved faithfully.
 
 #### Scenario: Native handle
 
 - **WHEN** code reads Slider.hWnd
 - **THEN** HexIDE reports that the member is not implemented
 
-#### Scenario: Saving before part C
+#### Scenario: Designer editing before modelled persistence
 
 - **WHEN** a form contains a Slider
 - **THEN** the form cannot be saved and the designer is read-only
@@ -77,3 +77,23 @@ without pinning pixel metrics. A horizontal drag SHALL show Text above the thumb
 - **THEN** Value decreases or increases by SmallChange with Scroll only
 - **WHEN** the user right clicks
 - **THEN** MouseDown, MouseUp and Click fire without changing Value
+
+### Requirement: Measured file persistence
+
+The reader SHALL load Slider properties in control order, accept Min equal to or greater than Max, clamp Value silently,
+ignore Text and ignore selection when SelectRange is False. File Orientation SHALL preserve the recorded dimensions.
+The writer SHALL round-trip the saved Slider corpus byte for byte, omit Text and preserve whether SelStart was explicitly read.
+
+#### Scenario: File range and selection
+
+- **WHEN** a file records Min 20 with default Max 10
+- **THEN** it loads Min 20, Max 10 and Value 20
+- **WHEN** SelectRange is True with SelStart 8 and SelLength 10 at Max 10
+- **THEN** SelLength loads as 2
+
+#### Scenario: Explicit SelStart
+
+- **WHEN** a saved file records Value 6 without SelStart
+- **THEN** saving does not invent SelStart
+- **WHEN** it also records SelStart 6
+- **THEN** saving keeps that line before Value

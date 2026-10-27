@@ -19,7 +19,7 @@ public sealed class SliderComponentClass : InBoxComponentClass
     public override (int X, int Y) DefaultExtent => throw new NotImplementedException("Slider missing extents are not measured (#1091).");
     public override bool CanSaveFaithfully => false;
 
-    // Persistence remains for part C.
+    // Own properties remain read-only in the designer until property editing is modelled.
     public override IReadOnlyList<InBoxMember> Members { get; } =
         OwnMembers("Min", "Max", "Value", "SmallChange", "LargeChange", "TickStyle", "TickFrequency", "GetNumTicks",
             "Orientation", "SelectRange", "SelStart", "SelLength", "Text", "TextPosition", "BorderStyle", "Enabled",
@@ -34,16 +34,91 @@ public sealed class SliderComponentClass : InBoxComponentClass
     private static IEnumerable<InBoxMember> OwnMembers(params string[] names) =>
         names.Select(n => new InBoxMember(n, MemberKind.Property, MemberOrigin.Version6, n is not ("Text" or "GetNumTicks"), true));
 
-    protected override Control InstantiateInternal(ComponentInstance instance)
+    internal static readonly string[] FileProperties =
+        ["BorderStyle", "MousePointer", "Enabled", "OLEDropMode", "LargeChange", "SmallChange", "Min", "Max",
+         "SelectRange", "SelStart", "SelLength", "TickStyle", "TickFrequency", "Orientation", "Value", "TextPosition"];
+
+    internal void WriteFileProperties(Serialization.VbFrmFormatSerializer writer, ComponentInstance instance)
+    {
+        var values = ReadFileProperties(instance);
+        foreach (var name in FileProperties)
+        {
+            if (name == "SelStart" && values["SelectRange"] == 0 &&
+                !instance.UnknownRawProperties.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (values[name] != FileDefault(name))
+                writer.WriteProperty(name, name is "Enabled" or "SelectRange" ? typeof(bool) : typeof(int),
+                    name is "Enabled" or "SelectRange" ? (object)(values[name] != 0) : checked((int)values[name]));
+        }
+    }
+
+    private static long FileDefault(string name) => name switch
+    {
+        "Max" => 10, "SmallChange" or "TickFrequency" => 1, "LargeChange" => 5, "Enabled" => -1, _ => 0,
+    };
+
+    private Dictionary<string, long> ReadFileProperties(ComponentInstance instance)
     {
         if (LibraryOf(instance) != ControlLibraries.MSComctlLib)
             throw new NotImplementedException("ComctlLib Slider behaviour is not implemented (#1091): unmeasured.");
-        if (instance.UnknownRawProperties.Any(p => p.Name is not ("_ExtentX" or "_ExtentY" or "_Version")))
-            throw new NotImplementedException("Loading Slider properties is not implemented until #1091 C.");
-        var slider = new VBSlider();
-        AttachedProperties.SetMousePointer(slider, BuiltinTypes.VBCursorType.Default);
+        var values = FileProperties.ToDictionary(n => n, FileDefault, StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in instance.UnknownRawProperties)
+        {
+            if (raw.Name.Equals("Text", StringComparison.OrdinalIgnoreCase) || raw.Name is "_ExtentX" or "_ExtentY" or "_Version")
+                continue;
+            if (!values.ContainsKey(raw.Name) || raw.Lines.Count != 1)
+                throw new NotImplementedException($"Slider file property {raw.Name} is not implemented (#1091).");
+            var text = raw.Lines[0];
+            var value = text[(text.IndexOf('=') + 1)..].Split('\'')[0].Trim();
+            if (!long.TryParse(value, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var n))
+                throw new NotImplementedException($"Slider file property {raw.Name} is not implemented (#1091): unmeasured representation.");
+            var measured = n is >= int.MinValue and <= int.MaxValue && (raw.Name.ToUpperInvariant() switch
+            {
+                "ENABLED" or "SELECTRANGE" => n is 0 or -1,
+                "TICKSTYLE" => n is >= 0 and <= 3 or 7,
+                "ORIENTATION" or "TEXTPOSITION" or "BORDERSTYLE" or "OLEDROPMODE" => n is 0 or 1,
+                "SMALLCHANGE" or "LARGECHANGE" or "TICKFREQUENCY" => n >= 0,
+                "MOUSEPOINTER" => n is >= 0 and <= 4 or 99,
+                _ => true,
+            });
+            if (!measured)
+                throw new NotImplementedException($"Slider file property {raw.Name} value is not implemented (#1091): unmeasured.");
+            values[raw.Name] = n;
+        }
+        // File ranges bypass code validation; selection is loaded only after the range and Value.
+        values["Value"] = System.Math.Max(values["Min"], System.Math.Min(values["Max"], values["Value"]));
+        if (values["SelectRange"] == 0)
+        {
+            values["SelLength"] = 0;
+        }
+        else
+        {
+            if (values["SelStart"] < 0 || values["SelStart"] < values["Min"] || values["SelStart"] > values["Max"] || values["SelLength"] < 0)
+                throw new NotImplementedException("Slider file selection is not implemented (#1091): unmeasured.");
+            values["SelLength"] = System.Math.Min(values["SelLength"], values["Max"] - values["SelStart"]);
+        }
+        if (values["TickStyle"] == 7) values["TickStyle"] = 0;
+        return values;
+    }
+
+    protected override Control InstantiateInternal(ComponentInstance instance)
+    {
+        var values = ReadFileProperties(instance);
+        // Orientation from a file preserves Width and Height.
+        var slider = new VBSlider
+        {
+            Min = values["Min"], Max = values["Max"], Value = values["Value"],
+            SmallChange = values["SmallChange"], LargeChange = values["LargeChange"],
+            TickFrequency = values["TickFrequency"], TickStyle = values["TickStyle"],
+            Orientation = values["Orientation"], TextPosition = values["TextPosition"],
+            BorderStyle = values["BorderStyle"], OLEDropMode = values["OLEDropMode"],
+            IsEnabled = values["Enabled"] != 0, SelectRange = values["SelectRange"] != 0,
+            SelectionStart = values["SelectRange"] != 0 ? values["SelStart"] : 0, SelectionLength = values["SelLength"],
+        };
+        AttachedProperties.SetMousePointer(slider, (BuiltinTypes.VBCursorType)values["MousePointer"]);
         return slider;
     }
 
-    public override Control InstantiateForDesigner(ComponentInstance instance) => new VBSlider();
+    public override Control InstantiateForDesigner(ComponentInstance instance) => Instantiate(instance);
 }

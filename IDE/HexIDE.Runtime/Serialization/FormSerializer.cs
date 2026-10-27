@@ -363,7 +363,9 @@ public class FormSerializer
     private static bool IsOwnRunLine(InBoxComponentClass inBox, string name) =>
         name.Equals("_ExtentX", StringComparison.OrdinalIgnoreCase) || name.Equals("_ExtentY", StringComparison.OrdinalIgnoreCase)
         || name.Equals("_Version", StringComparison.OrdinalIgnoreCase)
-        || inBox.CarriedOwnProperties.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        || inBox.CarriedOwnProperties.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+        || inBox is SliderComponentClass && (SliderComponentClass.FileProperties.Contains(name, StringComparer.OrdinalIgnoreCase)
+            || name.Equals("Text", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// An in-box control's second run (#1082), written after its extender's as VB6 writes it (measured): <c>_ExtentX</c>,
@@ -404,6 +406,9 @@ public class FormSerializer
             WriteCarried(version);
         else
             vb.WriteProperty("_Version", typeof(int), inBox.LibraryOf(instance).PersistedVersion);
+
+        if (inBox is SliderComponentClass slider)
+            slider.WriteFileProperties(vb, instance);
 
         foreach (var property in inBox.OwnProperties)
         {
