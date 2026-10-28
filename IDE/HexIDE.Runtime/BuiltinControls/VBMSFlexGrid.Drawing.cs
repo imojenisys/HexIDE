@@ -7,6 +7,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.TextFormatting;
 using HexIDE.Runtime.BuiltinTypes;
 
 namespace HexIDE.Runtime.BuiltinControls;
@@ -216,11 +217,23 @@ public sealed partial class VBMSFlexGrid
         if (area.Width > 0 && area.Height > 0)
         {
             if (Model.Appearance["wordwrap"] != 0) formatted.MaxTextWidth = area.Width;
-            if (Model.CellFormat(row, col, "cellfontunderline") is true) formatted.SetTextDecorations(TextDecorations.Underline);
             if (Model.CellFormat(row, col, "cellfontstrikethrough") is true) formatted.SetTextDecorations(TextDecorations.Strikethrough);
             var x = (alignment / 3) switch { 1 => (area.Width - formatted.Width) / 2, 2 => area.Width - formatted.Width, _ => 0 };
             var y = (alignment % 3) switch { 1 => (area.Height - formatted.Height) / 2, 2 => area.Height - formatted.Height, _ => 0 };
-            using (context.PushClip(area)) context.DrawText(formatted, area.TopLeft + new Vector(Math.Max(0, x), Math.Max(0, y)));
+            y = Math.Max(0, y);
+            if (Model.CellFormat(row, col, "cellfontunderline") is true
+                && Model.CellFormat(row, col, "cellfontstrikethrough") is not true)
+            {
+                var metrics = new TextMetrics(typeface.GlyphTypeface, (Model.CellFormat(row, col, "cellfontsize") as double? ?? 8.25) * 96 / 72);
+                // A font's underline can fall below the cell clip even when its glyphs fit.
+                var bottom = y + formatted.Baseline + metrics.UnderlinePosition + metrics.UnderlineThickness / 2;
+                formatted.SetTextDecorations(new TextDecorationCollection
+                {
+                    new TextDecoration { Location = TextDecorationLocation.Underline,
+                        StrokeOffsetUnit = TextDecorationUnit.Pixel, StrokeOffset = Math.Min(0, area.Height - bottom) }
+                });
+            }
+            using (context.PushClip(area)) context.DrawText(formatted, area.TopLeft + new Vector(Math.Max(0, x), y));
         }
         if (current && active && Model.Appearance["focusrect"] != 0)
             context.DrawRectangle(null, new Pen(foreground, Model.Appearance["focusrect"] == 2 ? 2 : 1,

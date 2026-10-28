@@ -1,8 +1,10 @@
 using System;
 using System.Linq;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Headless.XUnit;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using HexIDE.Runtime.AvaloniaInterop;
@@ -89,6 +91,39 @@ public class FlexGridDrawingTests
         var before = Draw(grid).Cast<int>().ToArray();
         FlexGridMembers.Write(grid, member, [], new Vb6Value(true));
         Draw(grid).Cast<int>().Should().NotEqual(before);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Underline_stays_inside_a_cell_shorter_than_its_font_metrics(int alignment)
+    {
+        var grid = Grid();
+        grid.Model.Text = "Text";
+        const double size = 18;
+        var typeface = new Typeface(FontFamily.Default);
+        FlexGridMembers.Write(grid, "CellFontName", [], new Vb6Value(typeface.FontFamily.Name));
+        FlexGridMembers.Write(grid, "CellFontSize", [], new Vb6Value(size * 72 / 96));
+        grid.Model.SetColAlignment(1, alignment);
+        var metrics = typeface.GlyphTypeface.Metrics;
+        var scale = size / metrics.DesignEmHeight;
+        var formatted = new FormattedText("Text", CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
+            typeface, size, Brushes.Black);
+        var underlineTop = formatted.Baseline + (metrics.UnderlinePosition - metrics.UnderlineThickness / 2.0) * scale;
+        var textHeight = (int)Math.Floor(underlineTop) - 1;
+        grid.Model.SetRowHeight(1, (textHeight + 4) * 15);
+        var before = Draw(grid);
+        Ink(before, height: textHeight + 4);
+        FlexGridMembers.Write(grid, "CellFontUnderline", [], new Vb6Value(true));
+        var after = Draw(grid);
+        var changed = (from y in Enumerable.Range(0, (int)grid.Height)
+                       from x in Enumerable.Range(0, (int)grid.Width)
+                       where before[x, y] != after[x, y]
+                       select new Point(x, y)).ToArray();
+        changed.Should().NotBeEmpty("the font's natural underline falls entirely below the text clip");
+        changed.Should().OnlyContain(p => p.X >= 66 && p.X < 126 && p.Y >= 18 && p.Y < 18 + textHeight,
+            "the underline must stay inside the current cell's text area");
     }
 
     [AvaloniaFact]
