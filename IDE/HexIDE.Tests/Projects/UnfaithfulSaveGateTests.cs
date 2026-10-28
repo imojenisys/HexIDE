@@ -8,6 +8,7 @@ using HexIDE.IDE;
 using HexIDE.Projects;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Sidecar;
+using HexIDE.Tests.Infrastructure;
 
 namespace HexIDE.Tests.Projects;
 
@@ -184,10 +185,7 @@ public class UnfaithfulSaveGateTests : IDisposable
     [InlineData(true)]
     public async Task The_slider_corpus_saves_byte_for_byte_with_only_the_code_edit(bool editCode)
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !Directory.Exists(Path.Join(root.FullName, "corpus"))) root = root.Parent;
-        root.Should().NotBeNull();
-        var original = File.ReadAllBytes(Path.Join(root!.FullName, "corpus", "inbox-controls", "saved", "slider", "Form1.frm"));
+        var original = File.ReadAllBytes(Path.Join(RepoTree.Root(), "corpus", "inbox-controls", "saved", "slider", "Form1.frm"));
         var text = System.Text.Encoding.Latin1.GetString(original);
         var svc = MakeService();
         await svc.OpenProject(Stage(text));
