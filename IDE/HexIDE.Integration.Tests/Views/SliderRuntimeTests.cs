@@ -158,13 +158,15 @@ public class SliderRuntimeTests
         await act.Should().ThrowAsync<NotImplementedException>().WithMessage("*Slider*not implemented*");
     }
 
-    [AvaloniaFact]
-    public void Slider_forms_stay_read_only_until_designer_edits_can_be_saved()
+    [AvaloniaTheory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public void Slider_forms_stay_read_only_until_designer_edits_can_be_saved(string lineEnding)
     {
         var project = new HexIDE.Runtime.ProjectElements.ProjectDefinition(
             HexIDE.Runtime.ProjectElements.VBProjectType.EXE, "Test");
         var sink = NSubstitute.Substitute.For<HexIDE.Runtime.Serialization.IDeserializeErrorSink>();
-        var form = new HexIDE.Runtime.Serialization.FormDeserializer().Deserialize(project, Form, sink)!;
+        var form = new HexIDE.Runtime.Serialization.FormDeserializer().Deserialize(project, Form.ReplaceLineEndings(lineEnding), sink)!;
         form.Components.Single(c => c.GetPropertyOrDefault(HexIDE.Runtime.Components.VBProperties.NameProperty) == "Slider1").BaseClass.ClassName.Should().Be("Slider");
         form.CanSaveFaithfully.Should().BeFalse();
     }

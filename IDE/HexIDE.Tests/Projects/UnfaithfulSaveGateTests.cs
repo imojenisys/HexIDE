@@ -155,8 +155,10 @@ public class UnfaithfulSaveGateTests : IDisposable
         (await File.ReadAllTextAsync(Path.Join(dir, "Form1.frm"), TestContext.Current.CancellationToken)).Should().Contain("Begin VB.TextBox Text1");
     }
 
-    [Fact]
-    public async Task A_form_holding_a_slider_saves_edited_code_and_carries_slider_properties()
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task A_form_holding_a_slider_refuses_saving_until_designer_edits_can_be_saved(string lineEnding)
     {
         var svc = MakeService();
         var text = "VERSION 5.00\r\nBegin VB.Form Form1 \r\n"
@@ -165,18 +167,16 @@ public class UnfaithfulSaveGateTests : IDisposable
             + "      _ExtentX        =   7938\r\n      _ExtentY        =   1191\r\n"
             + "      _Version        =   393216\r\n      Value           =   6\r\n"
             + "   End\r\nEnd\r\nAttribute VB_Name = \"Form1\"\r\n";
+        text = text.ReplaceLineEndings(lineEnding);
         await svc.OpenProject(Stage(text));
         var form = loaded.Single().Forms.Single();
         form.UpdateCode(form.Code + "' edited code\r\n");
 
         await svc.SaveProject(loaded.Single(), saveAs: false);
 
-        warningsShown.Should().Be(0);
-        var written = (await File.ReadAllTextAsync(Path.Join(dir, "Form1.frm"),
-            TestContext.Current.CancellationToken)).ReplaceLineEndings("\n");
-        written.Should().Contain("' edited code\n");
-        written.Should().Contain("      Value           =   6\n");
-        written.Should().NotContain("SelStart");
+        warningsShown.Should().Be(1);
+        (await File.ReadAllTextAsync(Path.Join(dir, "Form1.frm"),
+            TestContext.Current.CancellationToken)).Should().Be(text);
     }
 
     [Fact]

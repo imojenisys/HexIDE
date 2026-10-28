@@ -3,7 +3,7 @@
 ## Purpose
 
 The MSComctlLib Slider object model, measured against VB6 SP6 in the fidelity oracle (#1091 A).
-Measured input and drawing are implemented (#1091 B); persisted own properties load and the measured saved form round-trips byte for byte. Forms containing Sliders can be saved; their own persisted properties remain view-only.
+Measured input and drawing are implemented (#1091 B); persisted own properties load and the measured saved form round-trips byte for byte. Forms containing Sliders remain read-only until designer edits can be saved faithfully.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ validation, selection, tick count and methods. Value SHALL be its default member
 ### Requirement: Incomplete surface
 
 Unmeasured members and conversions SHALL refuse as not implemented. Slider own properties SHALL remain view-only
-until their designer edits can be saved faithfully. The form itself SHALL permit saving.
+until their designer edits can be saved faithfully. The form itself SHALL remain read-only until those edits can be saved faithfully, regardless of file line endings.
 
 #### Scenario: Native handle
 
@@ -47,8 +47,8 @@ until their designer edits can be saved faithfully. The form itself SHALL permit
 #### Scenario: Saving before modelled own-property editing
 
 - **WHEN** a form contains a Slider whose own properties have not been edited
-- **THEN** the form can be saved
-- **AND** its Slider own property lines retain their file values, spelling and order
+- **THEN** the form remains read-only with either LF or CRLF line endings
+- **AND** direct serialization retains its Slider own property file values, spelling and order
 - **AND** those own properties remain view-only
 
 ### Requirement: Measured input and drawing

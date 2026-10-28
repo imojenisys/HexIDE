@@ -16,6 +16,8 @@ public sealed class SliderComponentClass : InBoxComponentClass
     public override string ControlClassName => "Slider";
     public override IEnumerable<RuntimeLibrary> Libraries => [ControlLibraries.MSComctlLib];
     public override (int Width, int Height) AddedSize => (1500, 675);
+    // Carrying loaded lines does not yet make designer property edits saveable (#1091).
+    public override bool CanSaveFaithfully => false;
     public override (int X, int Y) DefaultExtent => throw new NotImplementedException("Slider missing extents are not measured (#1091).");
 
     // Own properties remain read-only in the designer until property editing is modelled.
