@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
@@ -702,7 +703,8 @@ public partial class CodeEditorView : UserControl
 
     private void OnTextChangedForFolding(object? sender, EventArgs e)
     {
-        if (DataContext is not CodeEditorViewModel vm) return;
+        // Binding the document before attach is covered by the initial folding request on attach.
+        if (_foldingManager is null || DataContext is not CodeEditorViewModel vm) return;
         // Not left to the debounced request below: a reload removes every fold, and the header would show
         // expanded for half a second, or for good were the request to fail. A member's run is the same, and one
         // an edit turns into an orphan has to lose its fold now rather than when a server next answers (task 4.3).
@@ -2234,6 +2236,10 @@ public partial class CodeEditorView : UserControl
     {
         try
         {
+            // The document change is debounced 300ms, but completion needs the current source.
+            await vm.FlushDocumentAsync(token);
+            if (token.IsCancellationRequested) return;
+
             var items = triggerCharacter is null
                 ? await vm.RequestCompletionAsync(position, token)
                 : await vm.RequestCompletionForTriggerAsync(position, triggerCharacter, token);
@@ -2638,8 +2644,15 @@ internal sealed class VbSignatureProvider : IOverloadProvider
 
             var label = sig.Label;
             if (sig.Parameters[activeParam].Label.RangeIn(label) is not { } range) return label;
-            return label[..range.Start] + "[" + label.Substring(range.Start, range.Length)
-                + "]" + label[(range.Start + range.Length)..];
+            return new TextBlock
+            {
+                Inlines =
+                [
+                    new Run(label[..range.Start]),
+                    new Run(label.Substring(range.Start, range.Length)) { FontWeight = FontWeight.Bold },
+                    new Run(label[(range.Start + range.Length)..])
+                ]
+            };
         }
     }
 

@@ -16,9 +16,9 @@ public partial class VB6BuiltIns
     internal sealed record IntrinsicParameters(string[] Names, int Required, bool OmittedIsSyntaxError = false);
 
     // #1561 measured positional calls only, and so did #1510 for the byte-string functions. Refuse named calls
-    // explicitly until an oracle probe supplies them.
+    // explicitly until an oracle probe supplies them. #2516, #2523 and #2622 likewise measure only positional calls.
     private static readonly HashSet<string> UnmeasuredNamedArguments = new(StringComparer.OrdinalIgnoreCase)
-    { "AscB", "ChrB", "CurDir", "Dir", "FileLen", "FileDateTime", "GetAttr", "InStrB", "LeftB", "MidB", "RightB" };
+    { "AscB", "CallByName", "ChrB", "CurDir", "Dir", "FileAttr", "FileDateTime", "FileLen", "FormatDateTime", "FV", "GetAttr", "IMEStatus", "InStrB", "IPmt", "LeftB", "MidB", "NPer", "ObjPtr", "Partition", "Pmt", "PPmt", "PV", "Rate", "RightB" };
 
     private static readonly Dictionary<string, IntrinsicParameters> NamedParameterTable = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -73,6 +73,7 @@ public partial class VB6BuiltIns
         ["Join"] = new(["SourceArray", "Delimiter"], 1),
         ["LCase"] = new(["String"], 1),
         ["Left"] = new(["String", "Length"], 2),
+        ["LoadPicture"] = new(["FileName", "Size", "ColorDepth", "X", "Y"], 0),
         ["Log"] = new(["Number"], 1),
         ["LTrim"] = new(["String"], 1),
         ["Mid"] = new(["String", "Start", "Length"], 2),
@@ -88,6 +89,7 @@ public partial class VB6BuiltIns
         ["Rnd"] = new(["Number"], 0),
         ["Round"] = new(["Number", "NumDigitsAfterDecimal"], 1),
         ["RTrim"] = new(["String"], 1),
+        ["SavePicture"] = new(["Picture", "FileName"], 2),
         ["SaveSetting"] = new(["AppName", "Section", "Key", "Setting"], 4),
         ["Second"] = new(["Time"], 1),
         ["Shell"] = new(["Pathname", "WindowStyle"], 1),
@@ -127,6 +129,8 @@ public partial class VB6BuiltIns
         ["Command"] = "Named arguments not allowed",
         ["Date"] = "Syntax error",
         ["DoEvents"] = "Wrong number of arguments or invalid property assignment",
+        // `Erl(X:=1)` and `Erl(1)` alike (measured, #2528).
+        ["Erl"] = "Wrong number of arguments or invalid property assignment",
         ["Now"] = "Named arguments not allowed",
         ["Time"] = "Named arguments not allowed",
         ["Timer"] = "Wrong number of arguments or invalid property assignment",

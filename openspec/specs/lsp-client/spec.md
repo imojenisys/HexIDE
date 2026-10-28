@@ -265,28 +265,59 @@ teardown SHALL close only its connection. A launched pipe server SHALL get two s
 its remaining process tree is killed, including during bring-up. Both messages
 SHALL omit the `params` member. The stdio transport SHALL allow two seconds for an orderly exit, then
 kill the remaining process tree and wait up to two seconds for termination before disposing the process
-handle. The process exit code SHALL remain observable in the conversation during client stop.
+handle. On Linux and macOS, both transports SHALL allow an additional two seconds for the guard's
+group cleanup before killing it. The process exit code SHALL remain observable in the conversation during client stop.
+Both process-owning transports SHALL retain the process exit handler until disposal has recorded the
+exit, and SHALL record it once. During deliberate disposal, they SHALL log the exit code at information
+level with the server identity and SHALL log a timeout kill separately. Deliberate disposal SHALL NOT
+raise the transport's unexpected-close event.
 
 On Windows, each stdio or launched pipe server SHALL be assigned immediately after launch to
 `ChildProcessJob`, whose kill-on-close job ends assigned processes and descendants created after
 assignment when the IDE ends, including without managed shutdown. Assignment failure SHALL fail
 the connection and clean up the launched process. Externally owned pipe servers SHALL NOT be
 assigned. Descendants created before assignment are not covered, since `Process.Start` cannot
-start suspended. Unix crash teardown remains cooperative pending the watchdog part of #406.
+start suspended.
+
+On Linux and macOS, stdio and launched pipe servers SHALL run under `HexIDE.LspGuard`, which
+SHALL create its own process group before starting the server with inherited stdin, stdout and stderr.
+Every 500 ms the guard SHALL check whether its parent has changed. On reparenting it SHALL send
+SIGTERM to its group and, after two seconds, SIGKILL. When the server exits on its own, it SHALL
+perform the same group cleanup, leaving the group before SIGKILL to preserve the server's exit code.
+After the normal transport grace period, a remaining guard SHALL be
+terminated with its group. Externally owned servers SHALL NOT be guarded. Descendants that leave
+the group are outside this guarantee.
 
 An orphaned server process outliving the IDE would hold file handles and consume memory with nothing to
 serve. Asking first and terminating second means a well-behaved server exits cleanly while a wedged one
 still goes away.
+
+#### Scenario: A launched pipe server exits during disposal
+- **WHEN** a launched pipe server exits during its disposal grace period
+- **THEN** the conversation contains its numeric exit code once
+- **AND** an information log names the server and its exit code
+- **AND** no unexpected-close event is raised
 
 #### Scenario: The Windows IDE is killed without shutdown
 - **GIVEN** a launched stdio or pipe server has been assigned to the job and then spawned a child
 - **WHEN** the IDE process is killed without disposing the transport
 - **THEN** the OS ends both the server and its child by closing the IDE's job handle
 
+#### Scenario: The Unix IDE is killed without shutdown
+- **GIVEN** a launched stdio or pipe server and its child remain in the guard's process group
+- **WHEN** the IDE is killed without disposing the transport
+- **THEN** the guard detects reparenting and terminates the group, escalating after two seconds
+
 #### Scenario: Shutting down the IDE
 - **WHEN** the IDE shuts down
 - **THEN** an initialized server owned by HexIDE is asked to shut down and its process is ended
 - **AND** an externally owned pipe server is left running
+
+#### Scenario: A Unix server exits cleanly with a child still running
+- **GIVEN** a launched server has spawned a child in the guard's process group
+- **WHEN** the server exits on its own
+- **THEN** the guard sends SIGTERM to the group and SIGKILL after two seconds
+- **AND** a child that ignores SIGTERM is ended, and the guard preserves the server's exit code
 
 #### Scenario: A server never answers shutdown
 - **WHEN** the server receives `shutdown` but never answers it
@@ -883,9 +914,14 @@ A server that does not advertise the capability SHALL NOT be reported as deficie
 complete and correct answer — it publishes instead — and treating the absence as a missing feature would
 blame every conformant publishing server for the way it conforms.
 
-The client SHALL ask when a document is opened, after it changes, and when it is saved. It SHALL NOT
-introduce pacing of its own for this: the edit stream is already coalesced before it reaches the client, and
+The client SHALL ask when a document is opened, after it changes, and when it is saved. For these triggers
+it SHALL NOT introduce pacing of its own: the edit stream is already coalesced before it reaches the client, and
 a second authority over the same question would answer it differently.
+
+A document pull answered ContentModified (`-32801`) or ServerCancelled (`-32802`) SHALL be retried,
+unless ServerCancelled carries `data.retriggerRequest: false`. Retries SHALL wait 250 ms initially,
+doubling to a 4-second cap, and SHALL stop when the document closes, changes, a newer pull supersedes them,
+or the connection is replaced. Each retry SHALL be recorded as its own protocol request.
 
 A server MAY additionally ask to be asked again, and the client SHALL honour that by re-requesting every
 open document. It is the only means such a server has of reporting a change that is not a document — its
@@ -905,6 +941,18 @@ derived from a configuration that no longer exists, with no event that would eve
 #### Scenario: The document changes
 - **WHEN** an open document is edited
 - **THEN** the client asks again, and the answer replaces what that server last said about the document
+
+#### Scenario: A diagnostic pull is temporarily unavailable
+- **WHEN** a document pull is answered ContentModified and the document remains open and unchanged
+- **THEN** the client asks again after back-off and publishes the successful report
+
+#### Scenario: The server refuses a diagnostic retry
+- **WHEN** a document pull is answered ServerCancelled with `data.retriggerRequest: false`
+- **THEN** the client does not retry that request
+
+#### Scenario: The document closes during diagnostic back-off
+- **WHEN** the document closes before a retry is sent
+- **THEN** that retry is not sent
 
 #### Scenario: The server says its answers are stale
 - **WHEN** such a server asks for diagnostics to be refreshed
@@ -1174,12 +1222,19 @@ anyway, so it is recorded rather than defended.
 - **AND** the public add-in provider contract remains outside this change
 
 ### Requirement: Completion SHALL merge within a bounded popup budget
+The editor SHALL flush pending document changes before requesting completion, including requests triggered
+by letters and advertised trigger characters.
+
 The registry SHALL ask every document claimant concurrently and return when all answer or one
 second from the request elapses. It SHALL include only answers received within that budget and SHALL
 deduplicate by ordinal label and kind, retaining the complete item from the higher-priority server or the
 earlier registration on a tie. Late answers SHALL be dropped, logged at debug level, and recorded in the
 protocol inspector as answered after the popup opened. The underlying request SHALL retain its normal
 deadline and caller cancellation.
+
+#### Scenario: Typing requests completion before the debounce expires
+- **WHEN** a letter or advertised trigger character is typed with a pending document change
+- **THEN** the `didChange` carrying that character precedes `textDocument/completion` on the wire
 
 #### Scenario: A server returns a bare completion array
 - **WHEN** a completion reply is a `CompletionItem[]` rather than a `CompletionList`
@@ -1221,6 +1276,8 @@ Empty lists for other documents SHALL NOT prevent applying edits to the current 
 
 The client SHALL accept signature-help parameter labels as strings or UTF-16 offset pairs into the
 signature label. The popup SHALL use the exact offset range for highlighting and parameter text.
+The header SHALL preserve the signature label verbatim and show only the active parameter range in bold,
+keeping the label's own optional-parameter brackets (#2632).
 String labels SHALL retain first-match highlighting; an out-of-bounds offset SHALL produce no highlight.
 A reply that fails deferred result deserialization SHALL be recorded as Failed with an answer-dropped
 explanation, retaining any captured reply body.
@@ -1254,3 +1311,154 @@ version or detached view SHALL NOT be applied. Delta, range and refresh requests
 - **WHEN** a full request fails
 - **THEN** the editor keeps lexical colouring
 - **AND** a later edit schedules another full request
+
+### Requirement: Initialize UI locale
+
+The client SHALL send `initialize.locale` as the resolved Options Language setting's BCP 47 tag,
+using the same system-language resolution as the IDE and `en` for either pseudo-locale.
+The client SHALL read the locale at each handshake and SHALL NOT restart servers automatically
+when the UI language changes.
+
+#### Scenario: Language changes between connections
+- **WHEN** the UI language changes while a server is connected
+- **THEN** the existing connection stays open
+- **AND** the next connection's initialize request carries the newly resolved locale
+
+### Requirement: Existing outside sources contribute initial workspace folders
+At initialization, the client SHALL include each loaded project's folder before any existing outside
+source folders contributed by that project. It SHALL deduplicate folders by full host path and SHALL
+keep one project per `.vbp`, irrespective of the folders its sources occupy. Missing source files SHALL
+NOT contribute folders. Connections SHALL send deduplicated added and removed folders
+to servers declaring `workspace.workspaceFolders.changeNotifications` as true or a string.
+The notification SHALL precede project import on the same debounced trigger; unchanged folders SHALL
+produce no notification.
+
+#### Scenario: A listed source lives beside the project directory
+- **GIVEN** a project in `App` lists an existing module in sibling directory `Shared`
+- **WHEN** a language server initializes
+- **THEN** its workspace folders include `App` followed by `Shared`
+- **AND** the module remains part of the listing project
+
+#### Scenario: A membership change adds an outside folder
+- **WHEN** a project-import connection's project gains a source in a new outside folder
+- **THEN** its opted-in server receives one folder-change notification before the debounced import
+- **AND** removing that source removes only the outside folder when no other source needs it
+
+### Requirement: Project-import declarations SHALL be validated independently of server startup
+
+The configuration loader SHALL recognise a `projectImport` object containing a non-empty command and a
+JSON arguments array. Invalid declarations SHALL report configuration problems without rejecting the
+server entry. Valid declarations SHALL be retained for runtime dispatch.
+
+#### Scenario: An import declaration omits its argument array
+
+- **WHEN** an entry declares `projectImport` with a command but no arguments array
+- **THEN** the loader reports the invalid `projectImport.arguments` field and retains the server entry
+
+#### Scenario: A valid import declaration is retained
+
+- **WHEN** an entry declares a non-empty import command and an arguments array
+- **THEN** the loader recognises the declaration without an ignored-field warning
+
+### Requirement: Project-import templates SHALL preserve JSON values
+
+The template model SHALL substitute string values exactly equal to `{uri}` or `{text}` recursively in
+objects and arrays. It SHALL preserve property names, other string values, and non-string scalar types.
+Substituted values SHALL be JSON-escaped and SHALL NOT be interpreted as templates again.
+
+#### Scenario: Unsaved project text contains a placeholder token
+
+- **WHEN** a template's `{text}` value is expanded with project text containing `{uri}`
+- **THEN** the resulting text retains that token literally, along with its original quotes and line endings
+
+### Requirement: Declared project imports SHALL replace generated artefacts
+
+On a registry-started connection after initialization, and on the workspace artefact service's
+debounced project-change trigger, the client SHALL call each declared import command with each loaded project's saved URI and in-memory
+project text. The command MUST be advertised by the server. An importing entry SHALL skip workspace
+artefact generation. Reply notes SHALL reach the server log used for `window/logMessage`; object
+notes SHALL use their `message` text. Failures or unavailable saved paths
+SHALL be reported as configuration problems without disabling the connection.
+
+#### Scenario: Project membership changes before saving
+- **WHEN** a module is removed from a saved project's in-memory membership
+- **THEN** the debounced import sends the current project serialization without writing the `.vbp`
+
+### Requirement: Imports SHALL refresh open-document diagnostics until the server does
+
+After a successful import, the client SHALL invalidate previous diagnostic result identifiers and
+re-pull open documents. Once that connection receives `workspace/diagnostic/refresh`, the import
+fallback SHALL cease for that connection alone and the ordinary server-requested refresh handler SHALL
+remain responsible. The client SHALL declare `workspace.diagnostics.refreshSupport: true` during
+initialization.
+
+#### Scenario: The server starts issuing refresh requests
+- **WHEN** a connected importing server requests diagnostic refresh
+- **THEN** subsequent imports do not add a duplicate diagnostic pull
+
+#### Scenario: Another server refreshes
+- **WHEN** one connection requests diagnostic refresh
+- **THEN** a different connection continues re-pulling open documents after its imports
+### Requirement: Explicit file-operation senders SHALL respect server filters
+The connection's explicit create, rename and delete notification entry points SHALL send only disk-file
+URIs selected by the corresponding `workspace.fileOperations` registration filters. Filters SHALL
+respect scheme, glob, file/folder kind and case options. Rename SHALL match either the old or new URI.
+A missing registration or an empty matching batch SHALL send no notification.
+
+The client SHALL advertise support for the three notifications in initialize. The registry SHALL route
+file operations to every running connection whose operation filter matches, independently of document
+language claims. Entries with `workspaceArtifact` SHALL receive no file-operation notifications:
+HexIDE's generated artefact describes their project. An entry without `workspaceArtifact` SHALL remain
+eligible for matching notifications. File operations SHALL NOT start a server.
+
+Successful first saves and Save As writes to a new destination SHALL report creation after the bytes
+reach disk. Overwriting an existing file SHALL NOT report creation. Temporary Make EXE copies SHALL NOT
+report file operations. Save As retains the original, so it SHALL NOT report a rename. Explorer name
+changes and removal without disk deletion SHALL NOT report file operations.
+
+Disk rename and Remove-with-delete hooks remain outstanding (#2248): current explorer operations change
+names and membership only.
+
+#### Scenario: A server requests only Basic modules
+- **GIVEN** a server registers `didCreate` with a `file` scheme and `**/*.bas` file pattern
+- **WHEN** the connection is explicitly told about a created `.bas` and `.frm` file
+- **THEN** one `workspace/didCreateFiles` notification contains only the `.bas` URI
+
+#### Scenario: A server has no delete registration
+- **WHEN** the connection is explicitly told about a deleted file
+- **THEN** no `workspace/didDeleteFiles` notification is sent
+
+#### Scenario: Save As creates a file
+- **GIVEN** a saved module and a destination that does not exist
+- **WHEN** Save As successfully writes the destination
+- **THEN** matching running servers receive creation of the destination
+- **AND** the original file remains and no rename is reported
+
+#### Scenario: A first save creates a form
+- **WHEN** a new form is successfully written for the first time
+- **THEN** matching running servers receive creation of its disk URI
+- **AND** saving it again reports no file creation
+
+#### Scenario: HexIDE generates the server's workspace artefact
+- **GIVEN** a running server with `workspaceArtifact` and matching file-operation filters
+- **WHEN** a file is created, renamed or deleted
+- **THEN** the server receives no file-operation notification
+
+#### Scenario: The server owns its workspace artefact
+- **GIVEN** a running server without `workspaceArtifact` and with matching file-operation filters
+- **WHEN** a file is created, renamed or deleted
+- **THEN** the server receives the corresponding notification
+
+### Requirement: Cancel superseded background work before document changes
+
+Before sending a document's didChange, the client SHALL cancel its outstanding diagnostic pulls,
+full semantic-token requests and folding requests through the LSP cancellation strategy, and SHALL
+send their cancellation notifications before the change notification. User requests and requests for
+other documents SHALL remain outstanding. A fresh diagnostic pull SHALL follow the change; editor
+refreshes SHALL request tokens and folds for the changed text.
+
+#### Scenario: Editing while analysis is pending
+- **WHEN** diagnostic, semantic-token or folding requests for a document are outstanding at a change
+- **THEN** their $/cancelRequest frames precede that document's didChange
+- **AND** pending hover or completion requests and requests for other documents are not cancelled
+- **AND** a fresh diagnostic pull follows didChange

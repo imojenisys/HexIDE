@@ -1,7 +1,7 @@
 ## In-box controls: the Slider (2026-10-27, #1091)
 
 **The probes.**
-- **The software:** VB6 6.00.8176 SP6, with MSCOMCTL.OCX 6.01.9782, on Windows 10 at 96 dpi.
+- **The software:** VB6 SP6 (6.00.9782), with MSCOMCTL.OCX 6.01.9782, on Windows 10 at 96 dpi.
   - The form line is `Object = "{831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.0#0"; "MSCOMCTL.OCX"`.
   - The block is `Begin MSComctlLib.Slider`, `_Version` 393216.
 - **The form:** VB6's own double-clicked Slider block from `corpus/inbox-controls/pending/defaults/`, moved to 120, 120 and
@@ -169,7 +169,7 @@ Screenshots on Windows 10 at 96 dpi, one fresh form per state, native code:
 
 **The programs:**
 - **The save:** a form written by hand, opened in VB6's IDE, dirtied with a comment and saved. VB6's save is in
-  `corpus/inbox-controls/saved/slider/`.
+  `corpus/inbox-controls/pending/slider/`.
   - Slider1 had every property off its default, Text included, with its lines in reverse order.
   - Slider2 had only its position, extents and `_Version`.
   - Slider3 was upright: `Orientation = 1`, 675 wide and 3000 high, Value 4.
@@ -262,9 +262,5 @@ as the setters do would refuse a form VB6 runs.
 
 ### In HexIDE
 
-HexIDE implements the measured MSComctlLib object model (#1091 A), including code-generated Change and hidden DoClick.
-Measured keyboard, mouse and wheel input and drawing are implemented (#1091 B), including ticks, selection, disabled
-thumb and focus. No pixel metrics are pinned. Persisted own properties load with the measured file rules and the saved Slider form round-trips byte for byte (#1091 C).
-Forms holding Sliders can be saved, carrying their own property lines unchanged, including file-only values. The designer
-draws the loaded state; own-property editing remains unfinished. Missing extents stay absent while the size is unchanged.
-Native handles, MouseIcon, OLE drag and unmeasured conversions refuse as not implemented; see MISSING_LANGUAGE.md.
+HexIDE doesn't model the Slider (#1091). The designer draws it as an empty box (#157). Running a form that holds one is
+refused, as for any control HexIDE can't create (#857), and the refusal names #1091 as the issue that tracks it.

@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
@@ -44,6 +45,109 @@ public class MainViewViewModelTests
         _sut = Build(_runnerService);
     }
 
+    private static System.IDisposable MenuTheme()
+    {
+        var theme = new Avalonia.Themes.Simple.SimpleTheme();
+        Avalonia.Application.Current!.Styles.Add(theme);
+        return R3.Disposable.Create(() => Avalonia.Application.Current!.Styles.Remove(theme));
+    }
+
+    private static System.IDisposable ShowMenu(MainView view)
+    {
+        var window = new Avalonia.Controls.Window { Content = view };
+        window.Show();
+        var item = Avalonia.Controls.ControlExtensions.FindControl<Avalonia.Controls.MenuItem>(view, "RemoveProjectMemberMenuItem")!;
+        ((Avalonia.Controls.MenuItem)item.Parent!).IsSubMenuOpen = true;
+        return R3.Disposable.Create(window.Close);
+    }
+
+    private ProjectService RemovalService(bool cancel = false)
+    {
+        _windowManager.ShowDialog(Arg.Any<IDialog>()).Returns(ci =>
+        {
+            if (ci.Arg<IDialog>() is HexIDE.Forms.ViewModels.SaveChangesViewModel prompt)
+            {
+                prompt.No();
+                return Task.FromResult(!cancel);
+            }
+            return Task.FromResult(true);
+        });
+        return new ProjectService(() => throw new System.InvalidOperationException(), _windowManager,
+            _eventBus, _projectManager, _recentProjects, Substitute.For<IReferenceLibraryService>(),
+            Substitute.For<HexIDE.Sidecar.IUserSidecarService>(), new FileBaselineStore(), _localization,
+            Substitute.For<IHeaderRefresher>());
+    }
+
+    [AvaloniaTheory]
+    [InlineData(null)]
+    [InlineData(ModuleKind.StandardModule)]
+    [InlineData(ModuleKind.ClassModule)]
+    [InlineData(ModuleKind.UserControl)]
+    [InlineData(ModuleKind.PropertyPage)]
+    public void ProjectRemoveMenu_RemovesTheNamedSelection(ModuleKind? kind)
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "Project1");
+        var document = kind is { } moduleKind
+            ? DocumentIdentity.For(new ModuleDefinition(project, "Member1", moduleKind))
+            : DocumentIdentity.For(new FormDefinition(project, HexIDE.Runtime.Components.FormComponentClass.Instance, "Member1"));
+        if (document.Module is { } module) project.AddModule(module);
+        else project.AddForm(document.Form!);
+        _projectManager.LoadedProjects.Returns(new List<ProjectDefinition> { project });
+        var root = Build(_runnerService, projects: RemovalService());
+        var tree = root.ProjectExplorer.LoadedProjects.Single();
+        root.ProjectExplorer.SelectedItem = tree.Elements.OfType<IProjectFileNode>().Single();
+        _localization.GetString("Str.Menu.Project.RemoveFormFormat").Returns("Remove {0}");
+        using var theme = MenuTheme();
+        var view = new MainView { DataContext = root };
+        using var window = ShowMenu(view);
+        var item = Avalonia.Controls.ControlExtensions.FindControl<Avalonia.Controls.MenuItem>(view, "RemoveProjectMemberMenuItem")!;
+
+        item.Should().NotBeNull();
+        item.Header.Should().Be("Remove Member1");
+        item.IsEffectivelyEnabled.Should().BeTrue();
+        item.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
+
+        DocumentLookup.DocumentsOf(project).Should().BeEmpty();
+        item.IsEffectivelyEnabled.Should().BeFalse();
+        _windowManager.Received(1).ShowDialog(Arg.Is<IDialog>(d => d is HexIDE.Forms.ViewModels.SaveChangesViewModel));
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProjectRemoveMenu_UsesFocusedMemberAndRetainsItOnCancellation(bool cancel)
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "Project1");
+        var module = new ModuleDefinition(project, "Module1", ModuleKind.StandardModule);
+        project.AddModule(module);
+        var dock = Substitute.For<IDocumentDockService>();
+        var editor = Substitute.For<HexIDE.Forms.ViewModels.BaseEditorWindowViewModel>();
+        editor.OpenDocument.Returns(DocumentIdentity.For(module));
+        dock.ActiveDocument.Returns(editor);
+        var root = Build(_runnerService, dock, projects: RemovalService(cancel));
+        _localization.GetString("Str.Menu.Project.RemoveFormFormat").Returns("Remove {0}");
+        using var theme = MenuTheme();
+        var view = new MainView { DataContext = root };
+        using var window = ShowMenu(view);
+        var item = Avalonia.Controls.ControlExtensions.FindControl<Avalonia.Controls.MenuItem>(view, "RemoveProjectMemberMenuItem")!;
+        item.Header.Should().Be("Remove Module1");
+        item.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Avalonia.Controls.MenuItem.ClickEvent));
+
+        _windowManager.Received(1).ShowDialog(Arg.Is<IDialog>(d => d is HexIDE.Forms.ViewModels.SaveChangesViewModel));
+        project.Modules.Contains(module).Should().Be(cancel);
+    }
+
+    [AvaloniaFact]
+    public void ProjectRemoveMenu_DisabledWithoutAMember()
+    {
+        using var theme = MenuTheme();
+        var view = new MainView { DataContext = _sut };
+        using var window = ShowMenu(view);
+        var item = Avalonia.Controls.ControlExtensions.FindControl<Avalonia.Controls.MenuItem>(view, "RemoveProjectMemberMenuItem")!;
+        item.Should().NotBeNull();
+        item.IsEffectivelyEnabled.Should().BeFalse();
+    }
+
     [AvaloniaFact]
     public void OpenAddInManager_OpensOptionsAtAddIns()
     {
@@ -58,8 +162,9 @@ public class MainViewViewModelTests
     /// where F5 does and end at what the user is shown.
     /// </summary>
     private MainViewViewModel Build(IProjectRunnerService runner, IDocumentDockService? dock = null,
-        HexIDE.Debugging.IBreakpointService? breakpoints = null)
+        HexIDE.Debugging.IBreakpointService? breakpoints = null, IProjectService? projects = null)
     {
+        projects ??= _projectService;
         var mockDocDock = dock ?? Substitute.For<IDocumentDockService>();
         var loc = _localization;
         loc.GetString("Str.MainWindow.NoProjectTitle").Returns("HexIDE [design]");
@@ -80,7 +185,7 @@ public class MainViewViewModelTests
         var watches = new WatchesToolViewModel(loc, new HexIDE.Debugging.WatchService(), Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.IDE.IWindowManager>());
         var callStack = new CallStackToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
         var editorService = Substitute.For<IEditorService>();
-        var projectExplorer = new ProjectToolViewModel(_projectManager, _eventBus, _projectService, editorService, loc);
+        var projectExplorer = new ProjectToolViewModel(_projectManager, _eventBus, projects, editorService, loc);
         var colorPalette = new ColorPaletteToolViewModel(mockDocDock);
         var objectBrowser = new ObjectBrowserToolViewModel(_projectManager, Substitute.For<ILspClient>(), editorService, Substitute.For<IComponentRegistry>(), Substitute.For<ITypeLibraryService>(), Substitute.For<IFocusedProjectUtil>(), loc,
             Substitute.For<ILanguageConnectionRegistry>());
@@ -127,7 +232,7 @@ public class MainViewViewModelTests
             protocolInspector,
             _projectManager,
             _focusedProjectUtil,
-            _projectService,
+            projects,
             editorService,
             mockDocDock,
             dockFactory,
@@ -326,6 +431,23 @@ public class MainViewViewModelTests
     {
         _runnerService.CanEndProject.Returns(allowed);
 
+        _sut.EndProjectCommand.CanExecute(null).Should().Be(allowed);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void EndProjectCommand_NotifiesWhenRunnerAvailabilityChanges(bool allowed)
+    {
+        _runnerService.CanEndProject.Returns(!allowed);
+        var changes = 0;
+        _sut.EndProjectCommand.CanExecuteChanged += (_, _) => changes++;
+        _runnerService.CanEndProject.Returns(allowed);
+
+        _runnerService.PropertyChanged += Raise.Event<PropertyChangedEventHandler>(
+            _runnerService, new PropertyChangedEventArgs(nameof(IProjectRunnerService.CanEndProject)));
+
+        changes.Should().Be(1);
         _sut.EndProjectCommand.CanExecute(null).Should().Be(allowed);
     }
 
@@ -839,5 +961,45 @@ public class MainViewViewModelTests
         breakpoints.GetBreakpoints(first.Identity).Should().BeEmpty();
         breakpoints.GetBreakpoints(second.Identity).Should().BeEmpty();
         breakpoints.GetBreakpoints(elsewhere.Identity).Should().BeEmpty();
+    }
+
+    // --- Tool windows tabbed in one dock: hiding one leaves the rest (#2362) ---
+
+    // The Properties window dragged into the Toolbox's dock, as a person can since #2239, so the two are tabs of one dock.
+    private (Dock.Model.Core.IDock Shared, Dock.Model.Core.IDockable Toolbox, Dock.Model.Core.IDockable Properties) TabPropertiesWithToolbox()
+    {
+        var factory = _sut.Layout.Factory!;
+        var toolbox = (Dock.Model.Core.IDockable)_sut.ToolBox;
+        var properties = (Dock.Model.Core.IDockable)_sut.Properties;
+        var shared = (Dock.Model.Core.IDock)toolbox.Owner!;
+        factory.MoveDockable((Dock.Model.Core.IDock)properties.Owner!, shared, properties, toolbox);
+        shared.VisibleDockables.Should().Contain([toolbox, properties]);
+        return (shared, toolbox, properties);
+    }
+
+    [AvaloniaFact]
+    public void Hiding_a_tool_tabbed_with_another_closes_it_alone()
+    {
+        var (shared, toolbox, _) = TabPropertiesWithToolbox();
+
+        var (error, note) = _sut.SetToolWindowVisible("Properties", false);
+
+        error.Should().BeNull();
+        note.Should().Be("Properties is now hidden.");
+        var windows = _sut.GetToolWindows();
+        windows.Single(t => t.Name == "Properties").Visible.Should().BeFalse();
+        windows.Single(t => t.Name == "Toolbox").Visible.Should().BeTrue();
+        shared.VisibleDockables.Should().ContainSingle().Which.Should().BeSameAs(toolbox);
+    }
+
+    [AvaloniaFact]
+    public void A_hidden_tool_shows_again_and_the_reply_says_when_nothing_changed()
+    {
+        TabPropertiesWithToolbox();
+        _sut.SetToolWindowVisible("Properties", false);
+
+        _sut.SetToolWindowVisible("properties", true).Should().Be(((string?)null, "Properties is now shown."));
+        _sut.GetToolWindows().Where(t => t.Name is "Properties" or "Toolbox").Should().OnlyContain(t => t.Visible);
+        _sut.SetToolWindowVisible("Properties", true).Note.Should().Be("Properties is now shown, as it was already.");
     }
 }
