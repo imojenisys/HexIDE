@@ -595,8 +595,8 @@ public class VBWindowContext : IModuleExecutionRoot
     }
 
     /// <inheritdoc/>
-    public void ExecuteEvent(string name, Func<IReadOnlyList<Vb6Value>> args, EventCoalescing coalescing = EventCoalescing.None) =>
-        Raise(name, args, coalescing);
+    public void ExecuteEvent(string name, Func<IReadOnlyList<Vb6Value>> args, EventCoalescing coalescing = EventCoalescing.None, Func<bool>? when = null) =>
+        Raise(name, args, coalescing, when: when);
 
     public async Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp)
     {
