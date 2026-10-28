@@ -6,12 +6,23 @@ namespace HexIDE.Runtime;
 
 public interface IModuleExecutionRoot
 {
+    // An editing event must return its ByRef arguments before the owner places or commits the editor.
+    System.Threading.Tasks.Task ExecuteEditEventAsync(string name, IList<Vb6Value> args) =>
+        throw new NotImplementedException();
+
     // args carries a control-array event's leading `Index As Integer` (null for a parameterless handler).
     void ExecuteSub(string name, IReadOnlyList<Vb6Value>? args = null);
 
     // MSFlexGrid's Compare must finish and return its ByRef Cmp before the sort continues (#1099).
     System.Threading.Tasks.Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp) =>
         throw new NotImplementedException("MSFlexGrid.Compare is not implemented by this execution root (#1099)");
+
+    // Keyboard arguments must return before the character is applied (#2325).
+    void ExecuteKeyboardEvent(string name, IReadOnlyList<Vb6Value> args, int writable, Action<int> completed)
+    {
+        ExecuteSub(name, args);
+        completed(Convert.ToInt32(args[writable].Value));
+    }
 
     /// <summary>
     /// Raise an event that runs only if <paramref name="when"/> still holds when its turn comes, behind whatever was raised

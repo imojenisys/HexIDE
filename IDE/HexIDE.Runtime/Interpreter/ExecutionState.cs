@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace HexIDE.Runtime.Interpreter;
 
@@ -51,7 +54,16 @@ public class ExecutionState
 
     public int Alloc(Vb6Value value, Vb6Value.ValueType? declaredType, string? declaredClass = null)
     {
-        var loc = nextFreeLocation++;
+        int loc;
+        try
+        {
+            loc = nextFreeLocation;
+            nextFreeLocation = checked(nextFreeLocation + 1);
+        }
+        catch (OverflowException)
+        {
+            throw new VBRunTimeException(VBStandardError.OutOfMemory);
+        }
         memory[loc] = value;
         if (declaredType != null)
             declaredTypes[loc] = declaredType;
@@ -168,6 +180,19 @@ public class ExecutionState
     /// <summary>Whether a slot is known to be a Variant (<see cref="MarkVariant"/>).</summary>
     public bool IsVariant(int location) => variantLocations.Contains(location);
 
+    private readonly HashSet<int> paramArrayLocations = new();
+
+    /// <summary>
+    /// Mark a slot as a procedure's ParamArray (#2462). VB6 refuses `ReDim` and `Erase` of one, and passing it whole to a ByRef
+    /// parameter, at compile time with "Invalid ParamArray use" (measured), which the walk raises as the statement runs. Kept
+    /// by slot, since VB6 decides it from the declaration: it still refuses them after `a = Array(7)` gave the name another
+    /// array.
+    /// </summary>
+    public void MarkParamArray(int location) => paramArrayLocations.Add(location);
+
+    /// <summary>Whether a slot is a procedure's ParamArray (<see cref="MarkParamArray"/>).</summary>
+    public bool IsParamArray(int location) => paramArrayLocations.Contains(location);
+
     // A ByRef parameter given a UDT field (#1451) or an array element (#1455): its slot reads and writes the target itself,
     // for as long as the call runs.
     private readonly Dictionary<int, IByRefTarget> refSlots = new();
@@ -180,9 +205,10 @@ public class ExecutionState
     /// as the target is, so a read through it is typed or a Variant's as a read of the target is (#987), and a store converts
     /// there. An element's array is locked until <see cref="ReleaseRef"/>.
     /// </summary>
-    public int AllocRef(IByRefTarget target)
+    public int AllocRef(IByRefTarget target, ExecutionEnvironment env)
     {
         var loc = Alloc(target.Read(), target.DeclaredType);
+        env.AllocatedSlots?.Add(loc);
         if (target.IsVariant)
             MarkVariant(loc);
         refSlots[loc] = target;
@@ -202,6 +228,32 @@ public class ExecutionState
     internal void RefuseUntilAssigned(int location, string reason) => unmeasuredInputs[location] = reason;
     internal bool IsUnmeasuredInput(int location) => unmeasuredInputs.Count > 0 && unmeasuredInputs.ContainsKey(location);
 
+    internal void Free(int location)
+    {
+        ReleaseRef(location);
+        memory.Remove(location);
+        declaredTypes.Remove(location);
+        declaredClasses.Remove(location);
+        variantLocations.Remove(location);
+        declaredArrayLocations.Remove(location);
+        fixedArrayLocations.Remove(location);
+        paramArrayLocations.Remove(location);
+        constantLocations.Remove(location);
+        readOnlyLocations.Remove(location);
+        autoNews.Remove(location);
+        pendingControls.Remove(location);
+        defaultForms.Remove(location);
+    }
+
+    public bool TryRead(int location, out Vb6Value value)
+    {
+        if (!memory.TryGetValue(location, out value))
+            return false;
+        if (refSlots.Count > 0 && refSlots.TryGetValue(location, out var target))
+            value = target.Read();
+        return true;
+    }
+
     public Vb6Value this[int location]
     {
         get
@@ -215,7 +267,12 @@ public class ExecutionState
             if (refSlots.Count > 0 && refSlots.TryGetValue(location, out var target))
                 target.Write(value);
             else
-                memory[location] = value;
+            {
+                ref var stored = ref CollectionsMarshal.GetValueRefOrNullRef(memory, location);
+                if (Unsafe.IsNullRef(ref stored))
+                    throw new InvalidOperationException($"Execution slot {location} is out of scope.");
+                stored = value;
+            }
             unmeasuredInputs.Remove(location);
         }
     }

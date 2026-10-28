@@ -12,7 +12,7 @@ public sealed class FlexGridComponentClass : InBoxComponentClass
     public override RuntimeLibrary Library => ControlLibraries.MSFlexGridLib;
     public override (int X, int Y) DefaultExtent => (2646, 1323);
     public override (int Width, int Height) AddedSize => (1500, 750);
-    public override IReadOnlyList<string> CarriedOwnPropertyOrder { get; } =
+    public override IReadOnlyList<string> CarriedPropertyOrder { get; } =
     [
         "Rows", "Cols", "FixedRows", "FixedCols", "RowHeightMin", "BackColor", "ForeColor",
         "BackColorFixed", "ForeColorFixed", "BackColorSel", "ForeColorSel", "BackColorBkg",

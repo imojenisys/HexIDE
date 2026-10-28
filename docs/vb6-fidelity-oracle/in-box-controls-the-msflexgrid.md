@@ -1,7 +1,7 @@
 ## In-box controls: the MSFlexGrid (2026-10-27, #1099)
 
 **The probes.**
-- **The software:** VB6 6.00.8176 SP6, with MSFLXGRD.OCX 6.01.9782.
+- **The software:** VB6 SP6 (6.00.9782), with MSFLXGRD.OCX 6.01.9782.
   - The form line is `Object = "{5E9E78A0-531B-11CF-91F6-C2863C385E30}#1.0#0"; "MSFLXGRD.OCX"`.
   - The block is `Begin MSFlexGridLib.MSFlexGrid`.
 - **The form:** written by hand, holding MSFlexGrid1 5000 × 3000 with only its position, extents and `_Version`, so
@@ -240,56 +240,90 @@ cell never given one,** not the grid's BackColor.
 | 9, custom | by the **Compare** event's Cmp. By length, it raised Compare 4 times for 5 rows |
 | 10 | **380** |
 
-- **Rows whose keys tie aren't kept in their order.** This initial probe started each sort from the previous
-  sort's order. The fresh-grid measurements below identify the exact tie rule.
+- **Rows whose keys tie aren't kept in their order.** Each run started from the previous one's order, and tied keys
+  came out swapped as often as not: in run 1, `B` (r4) came before `b` (r3).
 - **Col 2 with ColSel 1** keyed on columns 1 then 2, left to right, as Col 1 with ColSel 2 would.
 
-#### How ties resolve: the algorithm
+#### How ties resolve: the algorithm (2026-10-27)
 
-Measured on VB6 SP6 with MSFLXGRD.OCX, native and p-code agreeing, recorded in
-[#1099's sort comment](https://github.com/hexide-io/HexIDE/issues/1099#issuecomment-6438162882).
-Every sort started from a freshly filled grid, twice. Each row carried an identity in column 2,
-RowData and its fixed column; all three moved together.
+**The question.** The rows above whose keys tied came out in an order no simple rule gave. Is that order random, or a
+rule?
 
-Run 1 measured 2, 3, 5, 8 and 17 rows, settings 1–8, over five patterns: equal keys, alternating
-`a`/`b`, repeating `1,2,0`, alternating `a`/`A`, and alternating `1`/`0` with every third key `x`. It also logged every Compare
-for four custom handlers on 2, 3, 5 and 8 rows. All 200 orders and 16 traces are reproduced in
-`FlexGridSortTests`. For example, eight alternating `a`/`b` rows sort to
-`a1 a7 a3 a5 b6 b4 b2 b8` ascending and `b4 b6 b8 b2 a3 a7 a5 a1` descending.
+**The probe:**
+- **Each row carried its identity.** Every row held its original number in a second column, in RowData and in its fixed
+  column's `h` number, so a row could be followed through a sort. All three always moved together.
+- **Every sort started from a freshly filled grid,** keyed on column 1 over all the non-fixed rows, and ran twice.
+- **The first run:** grids of 2, 3, 5, 8 and 17 rows, under Sorts 1 to 8, with five key patterns:
+  - all `k`;
+  - `a` and `b` alternating;
+  - `1, 2, 0` repeating;
+  - `a` and `A` alternating;
+  - `1`, `0` and `x` mixed.
 
-The identified algorithm first compares adjacent pairs until a positive comparison. If none is
-positive, it returns without moving rows. Otherwise it runs this median-of-three quicksort:
+  Then Sort 9 on 2, 3, 5 and 8 rows, with four Compare handlers:
+  - `-1, 1, 0` in turn, whatever the rows;
+  - by row number, descending;
+  - always 0;
+  - by row number, ascending.
 
-```text
+  Every Compare's Row1, Row2, the rows at those positions, and the Cmp returned were logged.
+- **A held-out second run,** predicted before it was looked at:
+  - pseudo-random keys over four or five values;
+  - grids of 17, 33 and 100 rows under Sorts 1 to 8;
+  - a sub-range, rows 3 to 8 of 10;
+  - Sort 9 on 17 and 33 rows with a handler returning `1, -1, 1, 0, -1` in turn.
+- Native and p-code logged the same lines. **Every sort repeated exactly:** the order is a rule, not noise.
+
+**The rule fits every row of both runs exactly.** That is 200 orders in the first run and 72 in the second, the two
+sub-range sorts, and all 18 custom sorts Compare by Compare, 155 calls in the longest. Sort is a deterministic
+median-of-three quicksort, run after a check for a range already in order, with rows swapped in place as it goes:
+
+```
+sort(range):
+    for each adjacent pair (k, k+1) in the range:      ' the check: stop at the first pair out of order
+        if compare(k, k+1) > 0 then goto unsorted
+    return                                              ' already in order: nothing moves
+unsorted:
+    quicksort(first, last)
+
 quicksort(lo, hi):
-    if hi <= lo: return
+    if hi <= lo then return
     mid = (lo + hi) \ 2
-    if compare(lo, mid) > 0: swap(lo, mid)
-    if compare(lo, hi) > 0: swap(lo, hi)
-    if compare(mid, hi) > 0: swap(mid, hi)
-    if hi - lo < 2: return
-    swap(mid, hi - 1)
-    p = hi - 1; i = lo; j = p
-    repeat:
-        increment i until compare(i, p) >= 0
-        decrement j until compare(j, p) <= 0
-        if i >= j: break
-        swap(i, j)
-    swap(i, p)
-    quicksort the smaller partition first (left on a tie), then the other
+    if compare(lo, mid) > 0 then swap lo, mid
+    if compare(lo, hi)  > 0 then swap lo, hi
+    if compare(mid, hi) > 0 then swap mid, hi
+    if hi - lo < 2 then return                          ' two rows: done
+    swap mid, hi - 1                                    ' the pivot waits at hi - 1
+    p = hi - 1:  i = lo:  j = p
+    do
+        do: i = i + 1: loop while compare(i, p) < 0
+        do: j = j - 1: loop while compare(j, p) > 0
+        if i >= j then exit do
+        swap i, j
+    loop
+    swap i, p
+    quicksort the smaller of (lo, i - 1) and (i + 1, hi) first, the left one when they are the same size
+    then the other
 ```
 
-A self-comparison returns zero without raising Compare. Descending settings negate the key
-comparison. Compare receives positions in the grid as it stands at that call, after earlier swaps.
-All-equal and already-ordered ranges therefore make only n−1 comparisons and keep their order.
+- **`compare(a, b)` of a row with itself is 0 and never reaches the Compare event.** That is why a two-row range logs
+  two Compares from quicksort, and a three-row range four.
+- **For Sorts 1 to 8, `compare` is that sort's ordering of the key columns.** Its descending sorts are the ascending
+  comparison negated, not the ascending result reversed: their tie orders differ.
+- **Rows whose keys are all equal never move**, at any size, because the first check finds no pair out of order. Nor
+  does a range already in order under the sort, Sort 9's included: a handler returning 0, or always the right sign,
+  is asked n - 1 times and nothing moves.
+- **With some keys different, ties are scrambled the way the partition leaves them.** For example, Sort 1 on `a1 b2 a3
+  b4 a5 b6 a7 b8` gives `a1 a7 a3 a5 b6 b4 b2 b8`, and Sort 2 gives `b4 b6 b8 b2 a3 a7 a5 a1`. Up to 5 rows the tie
+  orders happened to look stable; from 8 rows on they don't.
+- **Row and RowSel in either order give the same range.** Rows 3 to 8 sorted alone, and with Row 8 and RowSel 3, came out
+  the same, the rows outside untouched, as the rule predicts for that range.
+- **Row1 and Row2 in Compare are positions at the moment of the call, not original rows.** Rows have already moved by
+  the time later Compares arrive. A handler reading `TextMatrix(Row1, c)` sees the row now at Row1.
 
-The [held-out run 2 recording](https://github.com/hexide-io/HexIDE/issues/1099#issuecomment-6439681340)
-is also pinned in `FlexGridSortTests`: 72 orders (17, 33 and 100 rows, settings 1–8), both directions
-of the rows 3–8 sub-range, and custom handlers on 17 and 33 rows with all 61 and 155 comparisons.
-The keys for row i are `Chr$(97 + ((i * 37 + 11) Mod 4))`, `CStr((i * 53 + 7) Mod 5)` and
-`Mid$("aAbB", 1 + ((i * 29 + 3) Mod 4), 1)`. The custom handler returns `1,-1,1,0,-1` in turn.
-Each custom assertion checks positions, the row identities at those positions, the returned Cmp,
-and the final order.
+**What the earlier probe saw is consistent with this.** Each of its runs started from the previous run's order, and
+tied keys "came out swapped as often as not". From a different starting order, the same partition leaves ties in a
+different order.
 
 ### Events, with real input
 
@@ -341,6 +375,84 @@ and the final order.
 - **KeyDown isn't raised for the keys the grid moves on:** the arrows, Home, End and the Page keys.
 - **KeyUp was raised for some of them and not others.** Home, End, Ctrl+Home, Ctrl+End, PageUp, PageDown and the
   Shift+arrows raised it; the plain arrows didn't. Native and p-code agreed on this, and no rule explains it.
+
+### Keyboard selection under each SelectionMode (2026-10-27)
+
+**The probe:**
+- **The grid:** the same 30 × 6 grid, rows 1 to 29 and columns 1 to 5 not fixed, 5000 × 3000 twips.
+- **The modes:** SelectionMode 0, 1 and 2, each with AllowBigSelection True and then False.
+- **The start:** before each group of keys, the program set the mode, TopRow and LeftCol 1, then **Row 3, Col 2, RowSel
+  3 and ColSel 2**, and gave the grid the focus.
+- **The input:** real keys from SendKeys on the guest's console. A Timer logged Row, Col, RowSel, ColSel, TopRow, LeftCol
+  and the count of SelChange events whenever they changed.
+- **The builds:** native and p-code logged the same lines. A first native run lost the Shift of one Shift+End to
+  SendKeys, and a second run matched p-code exactly.
+
+**AllowBigSelection made no difference to any key,** in any mode. It governs only a click on a heading, above.
+
+**Setting the selection from code isn't forced to the mode.** In modes 1 and 2 the start read RowSel 3 and ColSel 2, a
+single cell. The first key then widened it to the row or the column.
+
+**SelectionMode 0, free:**
+
+| Keys, from 3,2 | Row, Col | RowSel, ColSel | Scrolled |
+|---|---|---|---|
+| Shift+Down, twice | 3, 2 | 4, 2; then 5, 2 | |
+| Shift+Right | 3, 2 | 5, 3 | |
+| Shift+Up, three times | 3, 2 | 4, 3; 3, 3; **2, 3: past the anchor** | |
+| Shift+Left, twice | 3, 2 | 2, 2; **2, 1, the first non-fixed column** | |
+| Shift+Home; Shift+End; Shift+Home | 3, 2 | 3, 1; 3, 5; 3, 1 | LeftCol 3 at Shift+End, 1 again after |
+| Shift+PageDown; Shift+PageUp | 3, 2 | **13, 2: 10 rows on**; 3, 2 | TopRow 4; TopRow 3 |
+| Ctrl+Home | **1, 1** | 1, 1 | |
+| Ctrl+End | **29, 5** | 29, 5 | TopRow 20, LeftCol 3 |
+| Ctrl+Shift+End; Ctrl+Shift+Home | 3, 2 | **29, 5**; **1, 1** | TopRow 20, LeftCol 3; then 1, 1 |
+| Down; Right; Home; End | 4, 2; 4, 3; 4, 1; 4, 5 | the same: **a plain key collapses the selection** | LeftCol 3 at End |
+
+- **The anchor is Row and Col.** The Shift keys move only RowSel and ColSel, and Row and Col never moved.
+- **Each key that changed the selection raised one SelChange.**
+
+**SelectionMode 1, by row:**
+
+| Keys, from 3,2 | Row, Col | RowSel, ColSel | SelChange |
+|---|---|---|---|
+| Shift+Down, twice | 3, 2 | **4, 5**; 5, 5: the whole rows | one each |
+| Shift+Right | | nothing | none |
+| Shift+Up, three times | 3, 2 | 4, 5; 3, 5; 2, 5 | one each |
+| Shift+Left, twice | | nothing | none |
+| Shift+Home; Shift+End; Shift+Home | 3, 2 | 3, 5; then nothing; nothing | one, then none |
+| Shift+PageDown; Shift+PageUp | 3, 2 | 13, 5; 3, 5. TopRow 4; 3 | one each |
+| Ctrl+Home | **1, 2: Col stayed 2** | 1, 5 | **two** |
+| Ctrl+End | **29, 2** | 29, 5. TopRow 20, **LeftCol still 1** | two |
+| Ctrl+Shift+End; Ctrl+Shift+Home | 3, 2 | 29, 5, TopRow 20; 1, 5 | one each |
+| Down | 4, 2 | 4, 5 | two |
+| Right; Home; End | **4, 2: nothing moved** | 4, 5 | **two each** |
+
+- **Col never moved.** It stayed at 2, where the code put it, through Ctrl+Home and Ctrl+End. A click sets Col to 1, the
+  first non-fixed column, as measured above. A key doesn't.
+- **ColSel is always the last column,** and the grid never scrolled sideways.
+- **Left, Right, Home and End move nothing, with or without Shift.** Plain, they still raised SelChange twice.
+
+**SelectionMode 2, by column:**
+
+| Keys, from 3,2 | Row, Col | RowSel, ColSel | SelChange |
+|---|---|---|---|
+| Shift+Down | 3, 2 | **29, 2: the whole column** | one |
+| Shift+Down again; Shift+Up, three times | | nothing | none |
+| Shift+Right | 3, 2 | 29, 3 | one |
+| Shift+Left, twice | 3, 2 | 29, 2; 29, 1 | one each |
+| Shift+Home; Shift+End; Shift+Home | 3, 2 | 29, 1; 29, 5, LeftCol 3; 29, 1 | one each |
+| Shift+PageDown; Shift+PageUp | 3, 2 | 29, 2, **no scroll**; then nothing | one, then none |
+| Ctrl+Home | **3, 1: Row stayed 3** | 29, 1 | two |
+| Ctrl+End | **3, 5** | 29, 5. **TopRow still 1**, LeftCol 3 | two |
+| Ctrl+Shift+End; Ctrl+Shift+Home | 3, 2 | 29, 5, LeftCol 3; 29, 1 | one each |
+| Down | **3, 2: nothing moved** | 29, 2 | one |
+| Right; Home; End | 3, 3; 3, 1; 3, 5 | 29, 3; 29, 1; 29, 5 | two each |
+
+- **Row never moved.** It stayed at 3 through Ctrl+Home and Ctrl+End, and the grid never scrolled down.
+- **RowSel is always the last row.** Up, Down and the Page keys, with or without Shift, select nothing new.
+- **For the selection, mode 2 is mode 1 turned through a right angle.** The SelChange counts are as the tables give
+  them. This probe pressed no plain Up or Down in mode 2 after the selection had widened, so it doesn't show whether a
+  key that moves nothing raises two SelChanges here, as it does in mode 1.
 
 ### Drawing
 
@@ -398,7 +510,7 @@ Screenshots on Windows 10 at 96 dpi, one fresh form per state, native code:
 
 **The programs:**
 - **The save:** a form written by hand, opened in VB6's IDE, dirtied with a comment and saved. VB6's save is in
-  `corpus/inbox-controls/saved/msflexgrid/`.
+  `corpus/inbox-controls/pending/msflexgrid/`.
   - MSFlexGrid1 had every property off its default, its lines in reverse order.
   - MSFlexGrid2 had only its position, extents and `_Version`.
   - A third grid was double-clicked from the toolbox first.
@@ -445,20 +557,4 @@ GridLineWidth, FormatString, the Font block, OLEDropMode
 
 ### In HexIDE
 
-HexIDE registers MSFlexGrid on the in-box foundation (#1099). Programs can fill/read the grid, select
-cells, set measured sizes and cell formatting, add/remove text rows and sort them. Sort reproduces the
-recorded unstable orders and custom Compare traces. `FlexGridModelTests`, `FlexGridSortTests` and
-`FlexGridRuntimeTests` cover these paths and the measured errors.
-
-Mouse and keyboard input follow the recorded selection and event orders, including the measured
-SelectionMode 1 and 2 keyboard cases. Drawing covers fixed headings, gridlines, aligned and clipped or
-wrapped text, cell fonts/colours, selection/focus rectangles and scrolling. The headless mouse, keyboard
-and drawing tests exercise these paths without pinning pixel metrics.
-
-The file slice preserves the saved grid property run, including its Font block and comments, in VB6's
-recorded order. `FlexGridSerializationTests` checks its bytes and a form caption edit;
-`InBoxToolboxTests` checks the measured bare 1500 × 750 block. Carried own properties stay unavailable
-for designer editing. This preservation does not add runtime application of those saved settings.
-FormatString width/alignment effects, other unimplemented members and unmeasured edges remain listed
-in `MISSING_LANGUAGE.md`; their existing behavior is unchanged by the file slice. No measurements
-were added here.
+HexIDE doesn't model the MSFlexGrid (#1099). The designer draws it as an empty box (#157), and running a form that holds one is refused, as for any control HexIDE can't create (#857).

@@ -33,4 +33,34 @@ public class ControlLocalsTests
         props.Should().NotBeEmpty();
         props.Select(p => p.Name).Should().BeInAscendingOrder();
     }
+
+    [AvaloniaFact]
+    public void A_Timer_lists_only_its_runtime_properties()
+    {
+        var node = DebugInspector.NodeFor("Timer1", new Vb6Value(new VBTimer { Interval = 250 }), new ModuleExecutionContext());
+
+        var props = node.Expand();
+
+        props.Select(p => p.Name).Should().BeInAscendingOrder().And.Contain(new[] { "Enabled", "Interval", "Tag" });
+        props.Select(p => p.Name).Should().NotContain(new[] { "Left", "Top", "Width", "Height", "Visible", "Font", "BackColor", "ForeColor", "MousePointer", "RightToLeft", "TabIndex", "ToolTipText" });
+        props.Single(p => p.Name == "Interval").Value.Should().Be("250");
+    }
+
+    [AvaloniaFact]
+    public void ReadProperties_omits_a_Timers_designer_positions()
+    {
+        var props = AvaloniaInteroperability.ReadProperties(new VBTimer());
+
+        props.Select(p => p.Name).Should().NotContain(new[] { "Left", "Top" });
+        props.Should().OnlyContain(p => p.Error == null);
+    }
+
+    [AvaloniaFact]
+    public void A_scroll_bar_reads_every_property_without_an_error()
+    {
+        var props = AvaloniaInteroperability.ReadProperties(new VBScrollBar());
+
+        props.Should().NotBeEmpty().And.OnlyContain(p => p.Error == null);
+        props.Select(p => p.Name).Should().NotContain(new[] { "BackColor", "ForeColor" });
+    }
 }

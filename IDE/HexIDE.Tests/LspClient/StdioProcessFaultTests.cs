@@ -48,7 +48,9 @@ public class StdioProcessFaultTests
             timer.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10));
             if (mode is "ignore" or "tree")
                 timer.Elapsed.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(2));
-            process.HasExited.Should().BeTrue();
+            // On Unix the server is now the guard's child; a group kill reparents it just like
+            // its descendant below, so check the kernel's exited state as well as .NET's handle.
+            await WaitUntilGone(process);
             if (child is not null)
             {
                 // A reparented Unix child may briefly remain a zombie until the host reaps it.
@@ -89,8 +91,18 @@ public class StdioProcessFaultTests
             var timer = Stopwatch.StartNew();
             while (!process.HasExited && timer.Elapsed < TimeSpan.FromSeconds(5))
             {
-                if (OperatingSystem.IsLinux() && File.Exists($"/proc/{process.Id}/stat") &&
-                    File.ReadAllText($"/proc/{process.Id}/stat").Split(')')[1].TrimStart().StartsWith('Z')) return;
+                if (OperatingSystem.IsLinux())
+                {
+                    try
+                    {
+                        if (File.ReadAllText($"/proc/{process.Id}/stat").Split(')')[1].TrimStart().StartsWith('Z')) return;
+                    }
+                    catch (IOException)
+                    {
+                        // The process can exit and be reaped before /proc is read (#2461).
+                        return;
+                    }
+                }
                 await Task.Delay(10, token);
             }
             process.HasExited.Should().BeTrue("stopping a wrapper must terminate its server child too");

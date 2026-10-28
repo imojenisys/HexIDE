@@ -18,6 +18,7 @@
         <PackageReference Include="Avalonia.Headless.XUnit" />
         <PackageReference Include="Avalonia.Skia" />
         <PackageReference Include="AwesomeAssertions" />
+        <PackageReference Include="Microsoft.Testing.Extensions.HangDump" />
         <PackageReference Include="NSubstitute" />
         <PackageReference Include="xunit.v3" />
     </ItemGroup>
@@ -30,6 +31,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\HexIDE.AIChat\HexIDE.AIChat.csproj" />
         <ProjectReference Include="..\HexIDE.Desktop\HexIDE.Desktop.csproj" />
         <ProjectReference Include="..\HexIDE.Core\HexIDE.Core.csproj" />
         <ProjectReference Include="..\HexIDE\HexIDE.csproj" />

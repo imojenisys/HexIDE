@@ -180,8 +180,32 @@ public static class ControlLibraries
         "{5E9E78A0-531B-11CF-91F6-C2863C385E30}", "1.0", "MSFLXGRD.OCX", 393216,
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["MSFlexGrid"] = 1099 }, null);
 
+    public static readonly RuntimeLibrary TabDlg = new("TabDlg", "TabDlg",
+        "{BDC217C8-ED16-11CD-956C-0000C04E4C0A}", "1.1", "TABCTL32.OCX", 393216,
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["SSTab"] = 1090 }, "tabdlg-constants.json");
+
+    /// <summary>COMDLG32.OCX, Microsoft Common Dialog Control 6.0.</summary>
+    public static readonly RuntimeLibrary MSComDlg = new("MSComDlg", "Microsoft Common Dialog Control 6.0",
+        "{F9043C88-F6F2-101A-A3C9-08002B2F49FB}", "1.2", "COMDLG32.OCX", 393216,
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["CommonDialog"] = 1084 },
+        "comdlg32-constants.json");
+
+    /// <summary>MSCOMCT2.OCX, Microsoft Windows Common Controls-2 6.0 (SP6), from VB6's UpDown save (#1093).</summary>
+    public static readonly RuntimeLibrary MSComCtl2 = new("MSComCtl2", "Microsoft Windows Common Controls-2 6.0 (SP6)",
+        "{86CF1D34-0C5F-11D2-A9FC-0000F8754DA1}", "2.0",
+        "MSCOMCT2.OCX", 393216,
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["UpDown"] = 1093, ["DTPicker"] = 1081, ["MonthView"] = 1081, ["Animation"] = 1081, ["FlatScrollBar"] = 1081,
+        }, null);
+
+    // Its registry description is unmeasured; the dialog uses the recorded library name.
+    public static readonly RuntimeLibrary RichTextLib = new("RichTextLib", "RichTextLib",
+        "{3B7C8863-D78F-101B-B9B5-04021C009402}", "1.2", "RICHTX32.OCX", 393217,
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["RichTextBox"] = 1100 }, null);
+
     /// <summary>Every in-box control library HexIDE knows.</summary>
-    public static IReadOnlyList<RuntimeLibrary> All { get; } = [MSComctlLib, ComctlLib, MSFlexGridLib];
+    public static IReadOnlyList<RuntimeLibrary> All { get; } = [MSComctlLib, ComctlLib, MSFlexGridLib, TabDlg, MSComDlg, MSComCtl2, RichTextLib];
 
     /// <summary>The library <paramref name="reference"/> names, or null for one HexIDE doesn't know.</summary>
     public static RuntimeLibrary? For(ObjectReference reference) => All.FirstOrDefault(l => l.IsNamedBy(reference));
