@@ -158,7 +158,7 @@ public class UnfaithfulSaveGateTests : IDisposable
     [Theory]
     [InlineData("\n")]
     [InlineData("\r\n")]
-    public async Task A_form_holding_a_slider_refuses_saving_until_designer_edits_can_be_saved(string lineEnding)
+    public async Task A_form_holding_a_slider_saves_code_edits(string lineEnding)
     {
         var svc = MakeService();
         var text = "VERSION 5.00\r\nBegin VB.Form Form1 \r\n"
@@ -174,9 +174,33 @@ public class UnfaithfulSaveGateTests : IDisposable
 
         await svc.SaveProject(loaded.Single(), saveAs: false);
 
-        warningsShown.Should().Be(1);
+        warningsShown.Should().Be(0);
         (await File.ReadAllTextAsync(Path.Join(dir, "Form1.frm"),
-            TestContext.Current.CancellationToken)).Should().Be(text);
+            TestContext.Current.CancellationToken)).Should().Contain("' edited code");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_slider_corpus_saves_byte_for_byte_with_only_the_code_edit(bool editCode)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !Directory.Exists(Path.Join(root.FullName, "corpus"))) root = root.Parent;
+        root.Should().NotBeNull();
+        var original = File.ReadAllBytes(Path.Join(root!.FullName, "corpus", "inbox-controls", "saved", "slider", "Form1.frm"));
+        var text = System.Text.Encoding.Latin1.GetString(original);
+        var svc = MakeService();
+        await svc.OpenProject(Stage(text));
+        var form = loaded.Single().Forms.Single();
+        const string edit = "' edited code\r\n";
+        if (editCode) form.UpdateCode(form.Code + edit);
+
+        (await svc.SaveForm(form, saveAs: false)).Should().BeTrue();
+
+        warningsShown.Should().Be(0);
+        File.ReadAllBytes(Path.Join(dir, "Form1.frm")).Should().Equal(editCode
+            ? original.Concat(System.Text.Encoding.Latin1.GetBytes(edit)).ToArray()
+            : original);
     }
 
     [Fact]

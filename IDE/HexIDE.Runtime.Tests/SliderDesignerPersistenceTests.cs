@@ -20,9 +20,9 @@ public class SliderDesignerPersistenceTests
         + properties + "\nEnd\nEnd\nAttribute VB_Name = \"Form1\"\n", new Sink())!;
 
     [Fact]
-    public void Loaded_slider_refuses_saving_until_designer_edits_can_be_saved()
+    public void Loaded_slider_can_save_its_carried_lines()
     {
-        Load("Value = 6").CanSaveFaithfully.Should().BeFalse();
+        Load("Value = 6").CanSaveFaithfully.Should().BeTrue();
     }
 
     [Theory]

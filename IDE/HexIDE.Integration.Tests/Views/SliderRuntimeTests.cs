@@ -161,14 +161,16 @@ public class SliderRuntimeTests
     [AvaloniaTheory]
     [InlineData("\n")]
     [InlineData("\r\n")]
-    public void Slider_forms_stay_read_only_until_designer_edits_can_be_saved(string lineEnding)
+    public void Slider_forms_can_save_while_own_properties_remain_view_only(string lineEnding)
     {
         var project = new HexIDE.Runtime.ProjectElements.ProjectDefinition(
             HexIDE.Runtime.ProjectElements.VBProjectType.EXE, "Test");
         var sink = NSubstitute.Substitute.For<HexIDE.Runtime.Serialization.IDeserializeErrorSink>();
         var form = new HexIDE.Runtime.Serialization.FormDeserializer().Deserialize(project, Form.ReplaceLineEndings(lineEnding), sink)!;
         form.Components.Single(c => c.GetPropertyOrDefault(HexIDE.Runtime.Components.VBProperties.NameProperty) == "Slider1").BaseClass.ClassName.Should().Be("Slider");
-        form.CanSaveFaithfully.Should().BeFalse();
+        form.CanSaveFaithfully.Should().BeTrue();
+        form.Components.Single(c => c.BaseClass.ClassName == "Slider").BaseClass.Properties
+            .Should().NotContain(p => p.Name == "Value");
     }
 
     [AvaloniaFact]

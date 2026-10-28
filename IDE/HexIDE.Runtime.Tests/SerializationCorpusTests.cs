@@ -393,12 +393,7 @@ public class SerializationCorpusTests
         //     cannot see a 2-byte List/ItemData record; and the blobs were collected in declaration order
         //     while the references were written alphabetically, so the two offsets came out swapped.
         //   Web Browser — the records its ImageList cites were dropped with the lines citing them (#60).
-        // Slider is deliberately read-only until designer edits can be saved (#1091).
-        // Use its full path: several other saved controls also have a Form1.frm.
-        var expected = new Dictionary<string, UnfaithfulSaveCause>
-        {
-            [Path.Join(FindUpwards(Path.Join("corpus", "inbox-controls"))!, "saved", "slider", "Form1.frm")] = UnfaithfulSaveCause.None,
-        };
+        var expected = new Dictionary<string, UnfaithfulSaveCause>();
 
         var files = CorpusFiles(".frm", ".ctl");
         if (files.Count == 0)
