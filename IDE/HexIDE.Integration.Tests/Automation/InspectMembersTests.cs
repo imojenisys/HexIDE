@@ -91,7 +91,8 @@ public class InspectMembersTests
         var document = UiAutomationDriver.ReflectDataContextMembers(new EditorVm()).Single(m => m.Name == "Document");
 
         document.Value.Should().Be(
-            "<3 lines as the editor holds them, unsaved edits included; read the text with get_file_content>");
+            "<3 lines as the editor holds them, unsaved edits included; read the text with get_file_content, which "
+            + "CaretOffset, SelectionStart and SelectionLength count into>");
     }
 
     private sealed class ImmediateLikeVm
