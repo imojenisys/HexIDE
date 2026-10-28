@@ -914,6 +914,20 @@ as waiting to run separately from handlers already started.
 - **AND** events with handlers queued behind it are named as waiting to run
 - **AND** events without handlers are omitted
 
+### Requirement: interact SHALL turn the mouse wheel as a person does
+`interact`'s `wheel` SHALL send wheel input through the target's window, a notch at a time, at a point on the target or
+the centre of what shows of it, so the control's own wheel handling runs. Its reply SHALL say what scrolled, and how far,
+or that nothing did. `scroll` SHALL NOT say a control has nothing to scroll when it draws a scroll bar of its own; its
+refusal SHALL name that bar.
+
+#### Scenario: A wheel over a list
+- **WHEN** `wheel` turns 3 notches down over a ScrollViewer's content
+- **THEN** the viewer scrolls down by its own wheel step, and the reply says how far it went
+
+#### Scenario: A control that draws its own bar
+- **WHEN** `scroll` finds no scroller for a control that draws a vertical scroll bar
+- **THEN** the refusal names that bar and its position, with `set_range_value` and `wheel` as the routes that move it
+
 ### Requirement: Run-control replies SHALL say what the program printed
 A successful reply from `run_project`, `stop_project`, `continue_program`, `break_program`, a step or `run_to_cursor`,
 or from `interact`, `press_key` or `type_text` acting on a running program's form, SHALL give in `printed` what the program wrote with `Debug.Print` since its run began or a reply last reported it, and
