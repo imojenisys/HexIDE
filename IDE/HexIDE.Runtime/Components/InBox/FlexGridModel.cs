@@ -42,6 +42,20 @@ internal sealed class FlexGridModel
         }
     }
 
+    // Saved-file probe: cursor and viewport start at the first non-fixed cell.
+    internal void LoadFixedCells(int loadedRows, int loadedCols)
+    {
+        if (loadedRows >= rows && rows != 0 || loadedCols >= cols && cols != 0
+            || rows == 0 && loadedRows != 0 || cols == 0 && loadedCols != 0)
+            throw new NotImplementedException("MSFlexGrid saved fixed dimensions are not implemented (#1099)");
+        fixedRows = loadedRows;
+        fixedCols = loadedCols;
+        row = rowSel = rows == 0 ? -1 : fixedRows;
+        col = colSel = cols == 0 ? -1 : fixedCols;
+        TopRow = fixedRows;
+        LeftCol = fixedCols;
+    }
+
     public int Rows
     {
         get => rows;

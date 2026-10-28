@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
 using Avalonia.Controls;
+using HexIDE.Runtime.AvaloniaInterop;
+using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.BuiltinControls;
 
 namespace HexIDE.Runtime.Components.InBox;
@@ -136,5 +141,51 @@ public sealed class FlexGridComponentClass : InBoxComponentClass
         new("OLEDragOver", MemberKind.Event, MemberOrigin.Version6, false, false),
         new("OLEDragDrop", MemberKind.Event, MemberOrigin.Version6, false, false),
     ];
-    protected override Control InstantiateInternal(ComponentInstance instance) => new VBMSFlexGrid();
+    public override Control InstantiateForDesigner(ComponentInstance instance) => new VBMSFlexGrid();
+
+    protected override Control InstantiateInternal(ComponentInstance instance)
+    {
+        var grid = new VBMSFlexGrid();
+        // Keep the file's lines untouched. Loading is separate from writing and from runtime assignments
+        // (notably FixedCols, whose assignment cursor effects are unmeasured).
+        var saved = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        foreach (var property in instance.UnknownRawProperties)
+        {
+            var name = property.Name;
+            if (name.Equals("_ExtentX", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("_ExtentY", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("_Version", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!grid.Model.Appearance.ContainsKey(name.ToLowerInvariant())
+                && name.ToLowerInvariant() is not ("rows" or "cols" or "fixedrows" or "fixedcols"
+                    or "rowheightmin" or "allowbigselection" or "fillstyle" or "selectionmode"))
+                throw FlexGridMembers.Refused(name);
+            if (property.Lines is not [var line])
+                throw FlexGridMembers.Refused(name);
+            var equals = line.IndexOf('=');
+            if (equals < 0) throw FlexGridMembers.Refused(name);
+            var text = line[(equals + 1)..].Split('\'')[0].Trim();
+            var hex = text.StartsWith("&H", StringComparison.OrdinalIgnoreCase);
+            if (!long.TryParse(hex ? text[2..].TrimEnd('&') : text,
+                    hex ? NumberStyles.HexNumber : NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+                throw FlexGridMembers.Refused(name);
+            saved[name] = value;
+        }
+        int Dimension(string name, int fallback)
+        {
+            if (!saved.TryGetValue(name, out var value)) return fallback;
+            return value >= 0 && value <= int.MaxValue ? (int)value : throw FlexGridMembers.Refused(name);
+        }
+        grid.Model.Rows = Dimension("Rows", 2);
+        grid.Model.Cols = Dimension("Cols", 2);
+        grid.Model.LoadFixedCells(Dimension("FixedRows", grid.Model.FixedRows),
+            Dimension("FixedCols", grid.Model.FixedCols));
+        foreach (var (name, value) in saved)
+        {
+            if (name.ToLowerInvariant() is "rows" or "cols" or "fixedrows" or "fixedcols") continue;
+            var boolean = name.Equals("AllowBigSelection", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("WordWrap", StringComparison.OrdinalIgnoreCase);
+            FlexGridMembers.Write(grid, name, [], boolean ? new Vb6Value(value != 0) : new Vb6Value(value));
+        }
+        return grid;
+    }
 }

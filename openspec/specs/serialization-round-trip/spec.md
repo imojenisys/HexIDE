@@ -812,6 +812,27 @@ bare block, including its extender TabIndex, without adding own default-property
 - **WHEN** the form is saved unchanged, or only its caption is edited
 - **THEN** each grid's block remains byte for byte identical and no companion is produced
 
+### Requirement: MSFlexGrid applies or refuses saved settings at runtime
+
+At F5 the loader SHALL apply saved modelled MSFlexGrid settings, using the measured defaults when
+omitted, and SHALL refuse unsupported saved properties by name with the not-implemented error.
+Loading SHALL leave the carried lines unchanged for serialization. The designer SHALL retain its
+preview without enabling edits to carried settings.
+
+#### Scenario: Saved dimensions reach the running grid
+
+- **GIVEN** a saved grid with Rows 4, Cols 3, FixedRows 2 and FixedCols 0
+- **WHEN** the form runs
+- **THEN** those values are read back, with Row/RowSel/TopRow 2 and Col/ColSel/LeftCol 0
+- **AND** TextMatrix(0, 2) is accessible
+
+#### Scenario: An unsupported saved setting prevents a misleading run
+
+- **GIVEN** a grid carrying a saved Font or FormatString
+- **WHEN** the form starts at F5
+- **THEN** it refuses with the not-implemented error naming that property
+- **AND** its saved property block still round-trips unchanged
+
 ### Requirement: PropertyPage saves distinguish HelpContextID from StandardSize
 A PropertyPage designer SHALL expose HelpContextID as an editable integer property and save its value
 in the `.pag`. A save SHALL omit StandardSize, including a carried line from a loaded file, because

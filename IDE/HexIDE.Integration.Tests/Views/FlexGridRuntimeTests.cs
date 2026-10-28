@@ -34,6 +34,97 @@ public class FlexGridRuntimeTests
             .Select(v => Convert.ToString(v.Value, System.Globalization.CultureInfo.InvariantCulture) ?? "").ToArray();
     }
 
+    private static FormDefinition ReadCorpus()
+    {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.Directory.Exists(System.IO.Path.Join(dir.FullName, "corpus")))
+            dir = dir.Parent;
+        var source = System.IO.File.ReadAllText(System.IO.Path.Join(dir!.FullName,
+            "corpus", "inbox-controls", "saved", "msflexgrid", "Form1.frm"));
+        var form = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "P"),
+            source, Substitute.For<IDeserializeErrorSink>())!;
+        return form;
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1, 1, false)]
+    [InlineData(2, 0, true)]
+    public async Task Saved_dimensions_and_fixed_cells_are_used_at_run_time(int row, int col, bool explicitFixed)
+    {
+        var source = Form.Replace("Height = 750", "Height = 750\nRows = 4\nCols = 3"
+            + (explicitFixed ? "\nFixedRows = 2\nFixedCols = 0" : ""));
+        var (_, _, ctx, env) = ContainerRuntimeHarness.Spawn(source);
+        var values = await ContainerRuntimeHarness.Run(ctx, env, """
+            Debug.Print Grid1.Rows, Grid1.Cols, Grid1.FixedRows, Grid1.FixedCols
+            Debug.Print Grid1.Row, Grid1.Col, Grid1.RowSel, Grid1.ColSel, Grid1.TopRow, Grid1.LeftCol
+            Grid1.TextMatrix(0, 2) = "loaded"
+            Debug.Print Grid1.TextMatrix(0, 2)
+            """);
+        values.Select(v => Convert.ToString(v.Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Should().Equal("4", "3", row.ToString(), col.ToString(), row.ToString(), col.ToString(),
+                row.ToString(), col.ToString(), row.ToString(), col.ToString(), "loaded");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("BackColor", "12648447")]
+    [InlineData("ForeColor", "32768")]
+    [InlineData("BackColorFixed", "12632256")]
+    [InlineData("ForeColorFixed", "16711935")]
+    [InlineData("BackColorSel", "8421504")]
+    [InlineData("ForeColorSel", "65535")]
+    [InlineData("BackColorBkg", "16711680")]
+    [InlineData("GridColor", "65280")]
+    [InlineData("GridColorFixed", "255")]
+    [InlineData("WordWrap", "True")]
+    [InlineData("AllowBigSelection", "False")]
+    [InlineData("FocusRect", "2")]
+    [InlineData("HighLight", "2")]
+    [InlineData("FillStyle", "1")]
+    [InlineData("GridLines", "2")]
+    [InlineData("GridLinesFixed", "3")]
+    [InlineData("ScrollBars", "1")]
+    [InlineData("SelectionMode", "1")]
+    [InlineData("GridLineWidth", "2")]
+    [InlineData("RowHeightMin", "300")]
+    public async Task Saved_modelled_properties_are_applied(string member, string expected)
+    {
+        // Values from the oracle's saved-files probe; RowHeightMin is observed through its measured effect.
+        var form = ReadCorpus();
+        foreach (var grid in form.Components.Where(c => c.BaseClass is HexIDE.Runtime.Components.InBox.FlexGridComponentClass))
+            grid.UnknownRawProperties.RemoveAll(p => p.Name != member && !p.Name.StartsWith("_", StringComparison.Ordinal));
+        var ctx = new ModuleExecutionContext();
+        var env = new ExecutionEnvironment();
+        VBLoader.SpawnComponents(form, ctx, env);
+        var read = member == "RowHeightMin" ? "RowHeight(1)" : member;
+        var values = await ContainerRuntimeHarness.Run(ctx, env, $"Debug.Print MSFlexGrid1.{read}");
+        values.Select(v => Convert.ToString(v.Value, System.Globalization.CultureInfo.InvariantCulture))
+            .Should().Equal(expected);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Font")]
+    [InlineData("FormatString")]
+    [InlineData("Redraw")]
+    [InlineData("ScrollTrack")]
+    [InlineData("RightToLeft")]
+    [InlineData("TextStyle")]
+    [InlineData("TextStyleFixed")]
+    [InlineData("MergeCells")]
+    [InlineData("AllowUserResizing")]
+    [InlineData("PictureType")]
+    [InlineData("BorderStyle")]
+    [InlineData("Appearance")]
+    [InlineData("MousePointer")]
+    [InlineData("OLEDropMode")]
+    public void Unsupported_corpus_properties_refuse_by_name_at_F5(string member)
+    {
+        var form = ReadCorpus();
+        foreach (var grid in form.Components.Where(c => c.BaseClass is HexIDE.Runtime.Components.InBox.FlexGridComponentClass))
+            grid.UnknownRawProperties.RemoveAll(p => p.Name != member && !p.Name.StartsWith("_", StringComparison.Ordinal));
+        var act = () => VBLoader.SpawnComponents(form, new ModuleExecutionContext(), new ExecutionEnvironment());
+        act.Should().Throw<NotImplementedException>().WithMessage($"*MSFlexGrid.{member}*not implemented*#1099*");
+    }
+
     [AvaloniaFact]
     public async Task Sort_is_write_only_and_keeps_its_measured_error()
     {
