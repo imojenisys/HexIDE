@@ -217,6 +217,32 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     // frames are removed by identity — but it mirrors the physical stack, matching VB6's Call Stack semantics.
     private readonly List<StatementExecutor> activationStack = new();
 
+    /// <summary>
+    /// How many procedure activations deep one interpreter's VB code may go before Error 28, whatever the stack probe
+    /// in <see cref="RunProcedure"/> says (#3250).
+    /// </summary>
+    /// <remarks>
+    /// <para>The probe sees native frames only. A debugger's time-slice yield, under F5 and in a made EXE, releases
+    /// them and leaves the activations on the heap, so a runaway recursion there never raised 28. In a made EXE it
+    /// ran past 687,000 levels and 4 GB in two minutes. In the IDE it starved the machine.</para>
+    /// <para>The cap keeps the depth Jen chose on #3228, and bounds the rest. All figures are Windows x64:</para>
+    /// <list type="bullet">
+    /// <item><b>What 64 MiB of native stack holds with no yield,</b> where the probe decides: a recursive Function,
+    /// <c>StackSpaceTests</c>' <c>Down(n)</c>, gets about 1,490 levels in a Debug build and 4,300 in Release. 5,000 is
+    /// above both, so the cap doesn't change what that choice gave. A cheaper frame, a bare recursive Sub, is cut
+    /// short by it in Release: 64 MiB would hold about 11,260 of those at 5,958 bytes each.</item>
+    /// <item><b>What a runaway costs once it's held across yields.</b> In the IDE, commit grew by about 14 KB a level,
+    /// linearly (#3250's live check), so 5,000 levels should be about 70 MB. The live recheck at the cap peaked about
+    /// 170 MB above idle in the IDE and 140 MB in a made EXE, and reached Error 28 in about 2.5 seconds.</item>
+    /// </list>
+    /// <para>vb6.exe goes deeper, to 258,825 frames, so this is a divergence, recorded in interpreter-gaps.md.</para>
+    /// </remarks>
+    internal const int MaxCallDepth = 5_000;
+
+    /// <summary>How many procedures an unwinding error, Stop or End passes between yields, under a debugger (#3250). Small
+    /// enough to keep the inline nesting shallow; large enough that a shallow unwind, the usual one, never yields.</summary>
+    private const int UnwindYieldEvery = 32;
+
     /// <summary>The live procedure-activation call stack (outermost first). Read by the debugger only.</summary>
     public IReadOnlyList<StatementExecutor> ActivationStack => activationStack;
 
@@ -339,7 +365,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     /// <summary>
     /// The value a store keeps, copied as VB6 copies it: a UDT deeply, an array level by level
-    /// (<see cref="VBArray.CopyForLet"/>), everything else as it is. Applied wherever VB6 copies: a Let into a variable, a
+    /// (<see cref="VBArray.CopyForLet"/>), a String buffer independently, everything else as it is. Applied wherever VB6 copies: a Let into a variable, a
     /// field or an element, a ByVal argument and a For Each variable, and so a Function's return. A <c>VbObject</c> is
     /// never copied: objects are references, so <c>Set b = a</c> shares, and a copied array shares its objects with the
     /// original (measured, #970: <c>b(0) Is a(0)</c>). Each is held once more, so the copy AddRefs it, and every array then
@@ -350,6 +376,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     private Vb6Value CopyForStore(Vb6Value v, int depth) => v.Value switch
     {
+        string => v.CopyString(),
         VbUdt udt => CopyUdt(udt),
         VBArray array => v.WithArray(array.CopyForLet(element => CopyElement(element, depth + 1))),
         _ => v,
@@ -736,7 +763,6 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         Resources = Win32Resources.Load(info.ResourceFilePath);
         App = new VbApp(info, BuiltIns.Files);
         SeedProgramGlobal("App", () => new Vb6Value(App));
-        BuiltIns.CommonDialogReferenced = info.CommonDialogReferenced;
         BuiltIns.ControlLibraries = info.ControlLibraries ?? [];
         BuiltIns.CommandLine = info.CommandLine;
     }
@@ -751,15 +777,17 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     // Each module's conditional compilation is applied before it is parsed, so an inactive branch is never parsed, as in
     // vb6.exe, and a directive's error stops the program as it loads (#1112). The text is the parser's alone: the code
     // window and every save keep the module as written.
-    private ModuleInfo BuildModule(string name, InterpreterModuleKind kind, string moduleCode, ExecutionEnvironment env)
+    private ModuleInfo BuildModule(string name, InterpreterModuleKind kind, string moduleCode, ExecutionEnvironment env) => ParseStack.Run(() =>
     {
         var pp = new PrePass(env, ExecutionContext.State);
         pp.Visit(Parse(ConditionalCompiler.Preprocess(moduleCode, compilationConstants, name).Text, name));
         return new ModuleInfo(name, kind, pp, env);
-    }
+    });
 
     // The module being parsed, named in a syntax error's message so the person fixes the right file (#759).
     private string? parsingModule;
+
+    internal PredictionMode? ModuleParsePredictionMode { get; private set; }
 
     private Antlr4.Runtime.Tree.IParseTree Parse(string source, string moduleName)
     {
@@ -772,7 +800,9 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             var parser = new VB6Parser(NextCounterList.Tokens(lexer));
             parser.RemoveErrorListeners();
             parser.AddErrorListener(this);
-            return ParseWithFallback(parser, p => p.startRule(), moduleName: moduleName);
+            var tree = ParseWithFallback(parser, p => p.startRule(), moduleName: moduleName);
+            ModuleParsePredictionMode = parser.Interpreter.PredictionMode;
+            return tree;
         }
         finally
         {
@@ -780,9 +810,10 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         }
     }
 
-    private T ParseWithFallback<T>(VB6Parser parser, Func<VB6Parser, T> parse,
-        bool bailOnError = false, bool requireEnd = false, string? moduleName = null)
+    internal T ParseWithFallback<T>(VB6Parser parser, Func<VB6Parser, T> parse,
+        bool bailOnError = false, bool requireEnd = false, string? moduleName = null) => ParseStack.Run(() =>
     {
+        ParseDepthGuard.CheckNesting(parser, moduleName);
         parser.RemoveErrorListeners();
         parser.AddParseListener(new ParseDepthGuard(moduleName: moduleName));
         parser.Interpreter.PredictionMode = PredictionMode.SLL;
@@ -807,7 +838,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                 parser.AddErrorListener(this);
             return parse(parser);
         }
-    }
+    });
 
     private string SyntaxErrorAt(int line, int column) =>
         $"in {(parsingModule is null ? "" : parsingModule + ", ")}line {line}:{column}";
@@ -1416,6 +1447,9 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         // pathological NESTING — that is ParseDepthGuard, at parse time, on a different axis.
         if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
             throw new VBRunTimeException(VBStandardError.OutOfStackSpace);
+        // The same error by count, for the depth the probe cannot see: see MaxCallDepth (#3250).
+        if (activationStack.Count >= MaxCallDepth)
+            throw new VBRunTimeException(VBStandardError.OutOfStackSpace);
 
         // Named arguments go to their parameters, and are evaluated in parameter order (#1465), before anything of the call is
         // set up, so one that raises leaves nothing to undo.
@@ -1462,9 +1496,13 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             await BindParameters(proc, args, callee, owner, ownedSlots, refSlots);
             // The return slot is typed as the declaration says, so a failed store is raised inside the Function,
             // where its own handler traps it (measured, #1444).
+            var checkedArrayReturn = proc.CheckedArrayReturn;
             if (proc.IsFunction)
             {
-                ExecutionContext.AllocVariable(callee, proc.Name, SeedReturnValue(proc),
+                var seed = SeedReturnValue(proc);
+                if (proc.ReturnType.IsArray && seed.Value is VBArray { ElementType: var element } && element == Vb6Value.ValueType.Object)
+                    checkedArrayReturn = seed.Type;
+                ExecutionContext.AllocVariable(callee, proc.Name, seed,
                     proc.ReturnUdtTypeName is null && VbNumeric.IsDeclarableScalar(proc.ReturnType) ? proc.ReturnType : null);
                 hasReturnSlot = true;
             }
@@ -1473,13 +1511,13 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                 // The callee runs with its OWN per-activation statement-frame stack (re-entrancy isolation).
                 // A class's or a form's Statics are its instance's, and a standard module's are the run's (#1491).
                 var executor = new StatementExecutor(this, callee, owner, ownedSlots, new Stack<List<Vb6Value>>(), proc.Name,
-                    proc.CheckedArrayReturn)
+                    checkedArrayReturn)
                 {
                     IsEntry = isEntry,
                     VariantReturn = proc.IsFunction && proc.ReturnsVariant && !proc.ReturnsObject,
                     Statics = me?.Value is VbObject instance ? instance.Statics ??= new StaticLocals() : ExecutionContext.State.ModuleStatics,
                 };
-                // Debugger call stack + depth: push before running, remove THIS executor after (Remove, not
+                // Debugger call stack + depth: push before running, remove THIS executor after (by identity, not
                 // RemoveAt(Count-1), so overlapping async re-entrancy pops the right frame). Reflects the physical
                 // call stack — matching VB6's Call Stack, which shows a re-entrant handler's frames above the
                 // suspended chain.
@@ -1507,7 +1545,14 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                         await executor.ProcedureBoundary(ending.Stop.Line,
                             breakpointOnly: isEntry || ending is VB6Parser.PropertyGetStmtContext);
                 }
-                finally { activationStack.Remove(executor); }
+                // Searched from the top, where the frame almost always is: Remove searched from the bottom, which made a
+                // return N calls deep cost N (#3250).
+                finally
+                {
+                    var at = activationStack.LastIndexOf(executor);
+                    if (at >= 0)
+                        activationStack.RemoveAt(at);
+                }
             }
             if (proc.IsFunction)
                 ret = ExecutionContext.TryGetVariable(callee, proc.Name, out var rv)
@@ -1525,6 +1570,28 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                     : proc.ReturnsVariant ? returned.AsVariant()
                     : returned;
             completed = true;
+        }
+        catch (Exception signal) when (signal is VBRunTimeException or VBCompileErrorException or Debugging.StopExecutionSignal)
+        {
+            // Every UnwindYieldEvery procedures, give the thread back once on the way down (#3250). A debugger's time
+            // slice leaves the frames it yielded across waiting on their callees, so each one's continuation runs inline
+            // inside the catch below it as the signal unwinds. Each throw then costs more the deeper that nesting goes,
+            // and a 64 MiB stack lets it go thousands deep: on it, Error 28 at 5,000 calls took 138 s to reach a
+            // handler, against 0.8 s on a 1.5 MiB thread, where .NET stops inlining early. A yield starts the nesting
+            // again from the dispatcher. It's the same yield the time slice makes, so it can only come where one could.
+            if (DebugController is not null && SynchronizationContext.Current is not null
+                && activationStack.Count is > 0 and var below && below % UnwindYieldEvery == 0)
+                await Task.Yield();
+            // A fresh throw, not a rethrow, so what the program's walk throws through its frames leaves each procedure
+            // carrying only this procedure's .NET stack trace: a run-time error (#3247), a compile error found as it
+            // runs, and the signal that Stop and End unwind with (#3250). Every await between here and whoever catches
+            // it rethrows it, and a rethrow appends to the trace it carries, so with the whole trace kept, one thrown
+            // N calls deep cost N² to surface: minutes on #3228's 64 MiB stack, and a Stop 113,000 calls deep grew
+            // memory by 5 GB in 29 seconds. The object is the same, so Err and Erl are untouched. Anything else is a fault in HexIDE, and
+            // keeps its whole trace for diagnosis.
+#pragma warning disable CA2200 // Rethrow to preserve stack details: resetting it is the point.
+            throw signal;
+#pragma warning restore CA2200
         }
         catch (Exception ex) when (MarkUnimplementedFault(ex)) { throw; }
         finally
@@ -1581,12 +1648,27 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         => proc.ReturnUdtTypeName is { } rn
             ? (Types.ContainsKey(rn) ? Vb6Value.NewUdt(NewUdt(rn))
                 : Enums.ContainsKey(rn) ? new Vb6Value(0L)
-                : Modules.TryGet(rn, out var rc) && rc.Kind == InterpreterModuleKind.Class ? Vb6Value.Nothing
+                : Modules.TryGet(rn, out var rc) && rc.Kind == InterpreterModuleKind.Class
+                    ? proc.ReturnType.IsArray ? ObjectArrayReturn(rn) : Vb6Value.Nothing
                 : new Vb6Value(proc.ReturnType))
             // An `As Object` return, DefObj's included, and an `As Collection` one start at Nothing too, so a Let into the
             // first before a Set is 91 (measured, #169). They started Empty, which took the value.
+            : proc.ReturnType.IsArray && proc.CheckedArrayReturn == new Vb6Value.ValueType(Vb6Value.ValueType.Object, true)
+                ? ObjectArrayReturn(proc.Declaration switch
+                {
+                    VB6Parser.FunctionStmtContext f when f.asTypeClause()?.type()?.baseType()?.COLLECTION() != null => "Collection",
+                    VB6Parser.PropertyGetStmtContext p when p.asTypeClause()?.type()?.baseType()?.COLLECTION() != null => "Collection",
+                    _ => null,
+                })
             : proc.ReturnsObject ? Vb6Value.Nothing
             : new Vb6Value(proc.ReturnType);
+
+    private static Vb6Value ObjectArrayReturn(string? declaredClass)
+    {
+        var value = new Vb6Value(new Vb6Value.ValueType(Vb6Value.ValueType.Object, true));
+        ((VBArray)value.Value!).DeclaredClass = declaredClass;
+        return value;
+    }
 
     /// <summary>Resolve a procedure name as seen from <paramref name="currentModule"/>: the current module's own
     /// procedures (any visibility) win first, then other standard modules' <c>Public</c> procedures — 2+ matches
@@ -1842,7 +1924,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                     // 13 at the call, `S 5` with `ByVal x As String` is "5", `D "1/2/2000"` As Date is that date, and
                     // `NI "12"` As Integer is 12, which Narrow read as 0).
                     var stored = DeclaredSlotType(p) is { } dt
-                        ? VbNumeric.CoerceOnStore(passed, dt, proc.Body as Antlr4.Runtime.ParserRuleContext)
+                        ? VbNumeric.CoerceOnStore(passed, dt, proc.Body as Antlr4.Runtime.ParserRuleContext).CopyString()
                         : CopyForStore(passed);
                     ExecutionContext.AllocVariable(callee, p.Name, stored, DeclaredSlotType(p));
                     MarkParameterSlot(p, callee);
@@ -1950,13 +2032,13 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     public void SyntaxError(TextWriter output, IRecognizer recognizer, IToken offendingSymbol, int line, int charPositionInLine,
         string msg, RecognitionException e)
     {
-        throw new VBCompileErrorException($"{msg} {SyntaxErrorAt(line, charPositionInLine)}\nOffending symbol: {offendingSymbol.Text}")
+        throw new VBCompileErrorException($"{SyntaxErrorText.Of(msg)} {SyntaxErrorAt(line, charPositionInLine)}\nOffending symbol: {offendingSymbol.Text}")
             { Line = line };
     }
 
     public void SyntaxError(TextWriter output, IRecognizer recognizer, int offendingSymbol, int line, int charPositionInLine,
         string msg, RecognitionException e)
     {
-        throw new VBCompileErrorException($"{msg} {SyntaxErrorAt(line, charPositionInLine)}") { Line = line };
+        throw new VBCompileErrorException($"{SyntaxErrorText.Of(msg)} {SyntaxErrorAt(line, charPositionInLine)}") { Line = line };
     }
 }

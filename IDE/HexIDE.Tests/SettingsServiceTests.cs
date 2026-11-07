@@ -29,6 +29,43 @@ public class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void InlayHintsToggleIsStagedPersistedAndRestored()
+    {
+        var settings = CreateSut();
+        settings.ShowInlayHints.Should().BeTrue();
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        page.ShowInlayHints.Should().BeTrue();
+        page.ShowInlayHints = false;
+        settings.ShowInlayHints.Should().BeTrue();
+        page.SaveToSettings();
+        settings.ShowInlayHints.Should().BeFalse();
+        CreateSut().ShowInlayHints.Should().BeFalse();
+        page.RestoreDefaults();
+        page.ShowInlayHints.Should().BeTrue();
+        page.SaveToSettings();
+        CreateSut().ShowInlayHints.Should().BeTrue();
+    }
+
+    [Fact]
+    public void CodeLensesToggleIsStagedPersistedAndRestored()
+    {
+        var setting = typeof(SettingsService).GetProperty("ShowCodeLenses");
+        var option = typeof(HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel).GetProperty("ShowCodeLenses");
+        setting.Should().NotBeNull();
+        option.Should().NotBeNull();
+        var settings = CreateSut();
+        setting!.GetValue(settings).Should().Be(true);
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        option!.SetValue(page, false);
+        setting.GetValue(settings).Should().Be(true);
+        page.SaveToSettings();
+        setting.GetValue(CreateSut()).Should().Be(false);
+        page.RestoreDefaults();
+        page.SaveToSettings();
+        setting.GetValue(CreateSut()).Should().Be(true);
+    }
+
+    [Fact]
     public void SavingPreservesFileAtOldStagingName()
     {
         var settings = CreateSut();

@@ -14,9 +14,9 @@ worse than one that is obviously incomplete.
 > fail clearly" is not fully met. In each of the cases below, something HexIDE lacks is raised as an error a
 > handler can trap, so under `On Error Resume Next` the statement is skipped and the program carries on:
 >
-> - **A member on a value that is not a control.** `Clipboard.SetText` and `Collection.Remove` raise a run-time
->   error with no number, and `Err.Number` is left at 0. Tracked in
->   [#257](https://github.com/hexide-io/HexIDE/issues/257).
+> - **Unmeasured member-call receiver kinds.** Some fall-throughs still raise a run-time error without a number.
+>   The measured non-object Variant, Nothing and Collection paths are covered by #257; a form member through
+>   Object likewise raises 438 when absent.
 > - **`For Each` over anything but an array,** a control array included, raises Type mismatch (13).
 > - **A `Class_Terminate` that raises while the failure unwinds** replaces it with its own error
 >   ([#767](https://github.com/hexide-io/HexIDE/issues/767)).
@@ -28,6 +28,43 @@ worse than one that is obviously incomplete.
 > here, not the intent.
 
 ## Requirements
+
+### Requirement: Trailing argument and declared array type refusals
+
+The interpreter SHALL raise `VBCompileErrorException` with "Syntax error" when executing a call
+with a trailing omitted argument. A plain `ReDim ... As T` SHALL refuse a changed declared array
+element type with "Can't change data types of array elements". These refusals follow the
+[VB6 SP6 native and p-code measurements in #2938](https://github.com/hexide-io/HexIDE/issues/2938).
+
+#### Scenario: Trailing comma in a user procedure call
+- **WHEN** execution reaches `Show 1,`, `Call Show(1, )` or `x = F(1, )` with an optional second parameter
+- **THEN** it raises "Syntax error"
+- **AND** `Show 1` without a comma still supplies the declared default, and an interior omission keeps its slot
+
+#### Scenario: Declared Variant array versus scalar Variant
+- **WHEN** execution reaches `ReDim Arr(10) As String` after a module-level or local `Dim Arr()`
+- **THEN** it raises "Can't change data types of array elements"
+- **AND** the scalar Variant control `Dim Arr` still accepts the ReDim and stores "Hello" in a `String()`
+
+### Requirement: For Each collection references and declarations
+
+The interpreter SHALL parse a For Each collection as a reference, refusing parenthesised expressions,
+number/string literals, the bare keywords Nothing, True, False, Null and Empty, New expressions and operators as syntax errors (#3213, measured in
+[the issue](https://github.com/hexide-io/HexIDE/issues/3213) and [PR #3215](https://github.com/hexide-io/HexIDE/pull/3215)).
+When execution finds a known declared scalar collection, it SHALL raise a compile refusal with
+"For Each may only iterate over a collection object or an array". This check occurs on execution,
+so it does not diagnose a never-taken path. A late-bound member SHALL count as Variant when a
+raised collection under Resume Next determines whether to empty the loop element.
+
+#### Scenario: Typed array element is not a collection
+- **WHEN** execution reaches `For Each x In Items(Boom())` with `Dim Items(1) As Long`
+- **THEN** it refuses with "For Each may only iterate over a collection object or an array"
+- **AND** it does not evaluate Boom
+
+#### Scenario: Late-bound array Function raises under Resume Next
+- **WHEN** `o.Items()` through untyped `Dim o` raises and Items is declared As Long()
+- **THEN** the failed loop runs its body once and Next empties the loop element and raises 92
+
 
 ### Requirement: Read-only project resources
 
@@ -67,6 +104,33 @@ as not implemented.
 #### Scenario: Measured invalid operands
 - **WHEN** `ObjPtr(5)` or `ObjPtr("a")` executes
 - **THEN** it SHALL raise run-time error 13 for VB6's compile-time Type mismatch
+
+### Requirement: StrPtr and VarPtr SHALL preserve measured identities
+`StrPtr` and `VarPtr` SHALL return Long identities satisfying the native/p-code relations in
+[issue #2622](https://github.com/hexide-io/HexIDE/issues/2622), measured in PRs #2624 and #2628.
+The identities SHALL NOT promise native addresses. Unmeasured conversions and target shapes SHALL
+be refused as not implemented.
+
+#### Scenario: String buffers and variable storage
+- **WHEN** StrPtr reads vbNullString or an unassigned String
+- **THEN** it SHALL return zero
+- **WHEN** a String is assigned empty text or copied from another assigned String
+- **THEN** its buffer identity SHALL be non-zero and separate from the source buffer
+- **AND** repeated reads SHALL preserve its identity
+- **WHEN** VarPtr reads variables
+- **THEN** each variable SHALL have a stable, distinct, non-zero identity separate from its String buffer
+
+#### Scenario: Array storage and parameter passing
+- **WHEN** VarPtr reads adjacent one-dimensional Long, Integer, Currency or Variant elements
+- **THEN** their identities SHALL differ by 4, 2, 8 or 16 respectively
+- **WHEN** a parameter is passed ByRef
+- **THEN** VarPtr and a String parameter's StrPtr SHALL match the caller's identities
+- **WHEN** it is passed ByVal
+- **THEN** those identities SHALL differ from the caller's
+
+#### Scenario: Measured temporary operands
+- **WHEN** StrPtr(5) or VarPtr(5) executes
+- **THEN** it SHALL return a non-zero Long identity
 
 ### Requirement: ErrObject assignments and creation SHALL match measured VB6 errors
 
@@ -259,6 +323,23 @@ by value will run such a program to completion while producing the wrong answer.
 - **WHEN** a member call statement puts its parenthesised argument directly after the member name
 - **THEN** it runs as the spaced form does, with the parenthesised expression passed by value
 
+### Requirement: Measured straight-line and sum-of-years depreciation
+
+The interpreter SHALL implement positional `SLN` and `SYD` calls with Double results matching
+all measured rows in [#2524](https://github.com/hexide-io/HexIDE/issues/2524) bit for bit.
+It SHALL refuse their unmeasured named calls and argument counts as not implemented.
+`DDB` remains unimplemented until every measured row can be reproduced.
+
+#### Scenario: Straight-line depreciation
+- **WHEN** a program evaluates `SLN(30000, 7500, 10)`
+- **THEN** it returns Double with bits `40A1940000000000`
+- **AND** life zero raises error 5, while life -2 returns Double with bits `C0C5F90000000000`
+
+#### Scenario: Fractional sum-of-years period
+- **WHEN** a program evaluates `SYD(30000, 7500, 10, 2.5)`
+- **THEN** it returns Double with bits `40AB2A8BA2E8BA2F`
+- **AND** a period outside 1 to life raises error 5
+
 ### Requirement: Name resolution SHALL let user code shadow built-in functions
 A name SHALL be resolved as a local variable or array first, then as a procedure defined in the project, and
 only then as a built-in function.
@@ -377,6 +458,11 @@ program that never fails.
 - **WHEN** an arithmetic operation overflows or divides by zero
 - **THEN** it raises a trappable error with VB6's number for that condition
 
+#### Scenario: A member on a non-object Variant
+- **WHEN** a member is called, read or assigned on a Variant holding Empty, Null, an Integer, a String or an array
+- **THEN** it SHALL raise trappable error 424 (Object required)
+- **AND** a Nothing receiver SHALL raise 91, while an unknown Collection member or a missing form member through Object SHALL raise 438
+
 #### Scenario: The line an error was raised on
 - **WHEN** an error is raised on line 20 of a numbered procedure or below it with no number between, or in a procedure
   it called there, and that procedure's handler reads `Erl`
@@ -386,7 +472,7 @@ program that never fails.
 #### Scenario: Diagnostic type names
 - **WHEN** an interpreter diagnostic formats a value's type
 - **THEN** it SHALL print the inner type name and array suffixes without an internal `Left` or `Right` wrapper
-- **AND** missing-member diagnostics SHALL omit the receiver type, retaining the member and, for assignment, variable name
+- **AND** member-not-found diagnostics SHALL omit the receiver type, retaining the member and, for assignment, variable name
 
 ### Requirement: Unimplemented language surface SHALL fail clearly
 Where the engine does not implement part of the language, it SHALL fail in a way that identifies what is
@@ -467,9 +553,10 @@ without calling the label as a procedure.
 - **THEN** it prints both `T` and `AFTER` without attempting to call `Fin`
 
 ### Requirement: A jump to a closing line SHALL end the block it is in
-A line number or label MAY stand on the line that closes a block or opens its next part, other than a procedure's End
-(#2561). A jump to one from inside its construct SHALL end the block it is in as if that block had run to its end, so a
-loop goes round and an If, Select Case or With is done, as vb6.exe does, native and p-code alike (#2529).
+A line number or label MAY stand on the line that closes a block or opens its next part, a procedure's End included. A
+jump to one from inside its construct SHALL end the block it is in as if that block had run to its end, so a loop goes
+round, an If, Select Case or With is done, and a procedure returns, as vb6.exe does, native and p-code alike (#2529,
+#2561).
 
 #### Scenario: Going round a loop from a labelled Next
 - **WHEN** a For loop from 1 to 3 jumps to `Skip: Next` when its counter is 2, and appends the counter otherwise
@@ -570,7 +657,7 @@ class factories for separate instances.
 - **AND** the implicit instance remains held until Sub Main returns
 
 ### Requirement: Interpreter parsing uses SLL with an LL fallback
-Module, standalone expression and standalone statement parsing SHALL first try SLL prediction with a
+Module, syntax-check, standalone expression and standalone statement parsing SHALL first try SLL prediction with a
 bailing error strategy, then retry from the beginning with LL on a cancelled parse or an incomplete standalone entry. Each pass SHALL use
 a fresh nesting guard. The LL pass SHALL preserve the entry point's existing error policy: throwing
 syntax errors for modules and expressions, and returning null for unparseable standalone statements.
@@ -793,6 +880,46 @@ freed storage SHALL report it as out of scope without throwing into the UI.
 - **WHEN** the debugger inspects a frame after its procedure returns
 - **THEN** freed locals are absent from Locals and a watch on freed storage is out of scope
 
+### Requirement: ImageCombo collection model
+
+The interpreter SHALL support the internal ImageCombo collection model with one-based integer indices,
+string keys, insertion, removal, clearing and held-item renumbering. Item Text SHALL be its default member
+and Tag SHALL retain the assigned scalar value's type, except that Empty SHALL become an empty String.
+A new item's Tag SHALL be an empty String, and assigning Nothing SHALL preserve Nothing. String keys
+SHALL compare case-sensitively. Forms carrying MSComctlLib.ImageCombo SHALL refuse at F5 with a message naming #1092 until drawing and input are implemented.
+The designer SHALL preserve the original carried block and warn that the control is unsupported.
+ImageList binding and the remaining owner members are pending.
+The internal owner SHALL support Text, SelectedItem, Locked and default Indentation for new items.
+Selecting an item SHALL copy its Text to the owner; changing that selected item's Text SHALL update the owner.
+Removing the selected item or assigning Nothing SHALL clear selection while retaining Text.
+Text writes SHALL never select an item. Text writes and selection writes, even unchanged, and selected-item
+Text writes SHALL post Change through the event pump, without coalescing or raising Click.
+Count and Index SHALL return Long, and item Indentation SHALL return Integer.
+
+#### Scenario: Carried ImageCombo cannot run invisibly
+- **WHEN** a form carrying an ImageCombo is started with F5
+- **THEN** the loader refuses with a message naming #1092 until drawing and input land
+
+#### Scenario: Insert then remove before a held item
+- **WHEN** Alpha and Bravo are added, Charlie is inserted at index 1, and Charlie is removed
+- **THEN** the held Bravo item's Index changes from 3 to 2
+
+#### Scenario: Unmeasured collection behavior
+- **WHEN** a caller reads an item after Clear
+- **THEN** the model refuses with HexIDE's not-implemented error rather than guessing the error number
+
+#### Scenario: Distinct keys differing only in case
+- **WHEN** items keyed `abc` and `ABC` are added
+- **THEN** each exact key retrieves its own item, and `Abc` raises 35601
+
+#### Scenario: Code changes wait for a yield
+- **WHEN** code assigns Text twice to the same value during a running handler
+- **THEN** no Change handler runs before the next yield, and DoEvents delivers both queued Changes
+
+#### Scenario: Unknown selection edges refuse
+- **WHEN** code assigns Selected = False, selects an item from another owner, writes owner Text while selected, or clears a collection with a selected item
+- **THEN** the model refuses with HexIDE's not-implemented error
+
 ### Requirement: Control Font references SHALL retain identity and share mutations
 
 For the built-in font-bearing controls with runtime implementations, Font SHALL expose an object whose
@@ -812,6 +939,12 @@ the file controls and Data, and Locals expansion remain outside this implementat
 
 - **WHEN** `Set Label1.Font = Nothing` executes
 - **THEN** error 380 is raised and the original Font reference remains assigned
+
+#### Scenario: An Arial Font is changed through a retained reference
+
+- **WHEN** `Set f = Label1.Font` retains an Arial font and `f.Size = 14` executes
+- **THEN** `Label1.FontSize` and the Currency `f.Size` read 14.25
+- **AND** `Set Text1.Font = Label1.Font` makes Text1 read Arial 14.25 too
 
 ### Requirement: A literal's sign SHALL be an operator
 The interpreter SHALL type numeric literals from their digits before applying a leading sign, and SHALL
@@ -917,6 +1050,26 @@ remain outside this implementation.
 - **THEN** their sizes read 75 × 195, 135 × 255, 30 × 30, or 15 × 15 respectively
 - **WHEN** a ComboBox is assigned Width 7 or Height 7
 - **THEN** its Width reads 390, and the Height assignment raises 383
+
+### Requirement: Object array stores SHALL distinguish declarations from Variant values
+A Function returning Object(), Collection() or a project class array SHALL accept an array of objects through a
+Variant without inspecting the elements' classes. A Variant array such as `Array(1, 2)` SHALL raise error 13 at the
+return store, leaving the caller's target unchanged. Direct assignments from a named array with a different declared
+element type SHALL raise "Can't assign to array" as the statement executes, for returns and dynamic array variables.
+These rules are measured on vb6.exe SP6, native and p-code (#999).
+
+#### Scenario: A Variant array stored into an object array return
+- **WHEN** a Function declared `As Object()` or `As Collection()` executes `F = Array(1, 2)`
+- **THEN** the store raises error 13 and a caller's Empty target stays Empty
+
+#### Scenario: Object is not a wildcard for a named array
+- **WHEN** a Function declared `As Object()` stores a named Collection() or Class1() array into its return name
+- **THEN** the interpreter raises "Can't assign to array"
+
+#### Scenario: A Variant bypasses the class compatibility check
+- **WHEN** a Function declared `As Class1()` stores a Variant holding an Object() whose first element is a Collection
+- **THEN** the call succeeds and the returned first element has TypeName "Collection"
+- **AND** assigning that element with Set into a variable declared `As Class1` raises error 13
 
 ### Requirement: The Screen object SHALL answer as VB6's does
 `Screen` SHALL be a program global. Its size SHALL be the primary screen in twips, 15 to a device-independent pixel.
@@ -1256,3 +1409,140 @@ These outcomes are measured on vb6.exe SP6, native and p-code ([#2623](https://g
 #### Scenario: A Null target is preserved
 - **WHEN** `v` holds Null and `Mid$(v, 1, 1) = "9"` runs
 - **THEN** error 94 is raised and `v` remains Null
+
+### Requirement: A shown form focuses its first eligible tab stop
+
+On showing a startup form or a form through `Show vbModal` from Sub Main, the runtime SHALL focus
+its first enabled, visible control in tab order with TabStop True, passing over Labels. Its GotFocus
+SHALL follow Form_Activate (#2436, measured on vb6.exe, native and p-code agreeing).
+
+#### Scenario: The first control cannot receive initial focus
+- **GIVEN** Text1 precedes Text2 in tab order
+- **WHEN** the form is shown with Text1 disabled, hidden or TabStop False
+- **THEN** Text2 receives focus and GotFocus follows Form_Activate
+
+#### Scenario: SetFocus before and after showing inside Load
+- **WHEN** Form_Load calls Text2.SetFocus before showing the form
+- **THEN** it raises error 5 and showing the form subsequently focuses its first eligible control
+- **WHEN** Form_Load instead calls Me.Show then Text2.SetFocus
+- **THEN** Form_Activate, the first control's GotFocus and Text2_GotFocus occur inside Form_Load in that order
+
+### Requirement: CommonDialog uses the shared control library
+The runtime SHALL resolve CommonDialog constants through the referenced MSComDlg library record and take its
+TypeOf library identity from its component class, without a separate CommonDialog reference flag.
+The designer and loader SHALL use the registered nonvisual component rather than a preserved control block.
+
+#### Scenario: Qualified CommonDialog constants
+- **GIVEN** a project referencing MSComDlg
+- **WHEN** it reads `MSComDlg.cdlCancel` and `FileOpenConstants.cdlOFNReadOnly`
+- **THEN** the shared library resolver returns the recorded constants (see
+  [the CommonDialog oracle](../../../docs/vb6-fidelity-oracle/in-box-controls-the-commondialog.md))
+
+### Requirement: Numeric comparison pair domains
+The runtime SHALL use VB6's measured comparison domains for all six comparison operators:
+Single/Double compares as Single, Single/Long as Double, Currency/Double as Currency rounded
+to four decimal places, and Decimal/Double as Decimal. Narrowing SHALL NOT raise conversion
+overflow during comparison. Other numeric pairs SHALL retain their existing domains.
+Provenance: [numeric pair measurements](../../../docs/vb6-fidelity-oracle/numeric-type-pairs--five-arithmetic-tables-and-comparison-is-a-sixth.md#comparison-is-a-per-pair-table-and-it-narrows).
+
+#### Scenario: Single and Double equality narrows
+- **WHEN** Single 0.1 is compared with Double 0.1 in either order, typed or as Variants
+- **THEN** equality is True, inequality is False, and both strict orderings are False
+
+#### Scenario: Long retains its precision beside Single
+- **WHEN** Single 16777216 is compared with Long 16777217
+- **THEN** equality is False and the Single is less than the Long
+
+### Requirement: TextBox measured keyboard codes
+
+A runtime TextBox SHALL deliver KeyDown and KeyUp through its event queue for the
+letters, top-row digits, Space, navigation/editing keys, F1–F9/F11/F12 and keypad
+keys mapped by #2325's [keyboard sweep](https://github.com/hexide-io/HexIDE/issues/2325#issuecomment-6454480155),
+using its measured KeyCode and held-modifier Shift mask. KeyPreview SHALL retain
+the existing form-first delivery. Host-translated keypad navigation SHALL use
+the navigation key received from the host. Enter/Esc, Tab arbitration, punctuation
+and unmeasured combinations remain outside this additional code-mapping slice.
+
+#### Scenario: Home reaches a handler before TextBox navigation
+- **WHEN** Home is pressed and released in a TextBox with no modifier
+- **THEN** its KeyDown and KeyUp handlers receive KeyCode 36 and Shift 0
+
+#### Scenario: Numeric keypad Clear
+- **WHEN** the host reports keypad 5 with NumLock off as Clear
+- **THEN** the TextBox's KeyDown and KeyUp handlers receive KeyCode 12
+
+### Requirement: Runtime parsing has a sized synchronous stack
+
+Module parsing and PrePass, SyntaxChecker and standalone expression/statement parsing SHALL run on a
+dedicated 64 MiB thread, joined synchronously by the caller. Parser guards SHALL combine a count derived
+from this stack and #3210's measured costs with a physical stack probe, refusing excess depth with a
+catchable compile error. Execution SHALL keep its current thread and stack checks.
+Parenthesis depth SHALL be checked before prediction. Conditional-expression limits remain unchanged.
+For the reference nested-If shape, prediction SHALL use bounded lookahead per decision and a DFA state
+count independent of nesting depth, rather than scanning to each matching End If. Adjacent module
+statements SHALL remain in one module block; named module members separate those blocks.
+
+
+#### Scenario: Measured VB6 nesting parses
+- **WHEN** a Sub contains 7,643 nested parentheses or 7,227 nested If blocks (the #3210 reference shapes)
+- **THEN** runtime parsing and declaration collection accept the module without executing its body
+
+#### Scenario: Syntax checking runs off the caller
+- **WHEN** syntax checking reports a parser error
+- **THEN** the parser error callback runs on the sized worker rather than the caller or thread pool
+- **AND** the error is rethrown synchronously to the caller
+
+#### Scenario: Nested-block prediction cost
+- **WHEN** cold SLL-first runtime parses contain 100 and 400 nested If blocks
+- **THEN** prediction lookahead grows linearly with the input
+- **AND** the DFA cache size remains bounded independently of these depths
+
+### Requirement: VB code runs on a UI thread with a sized stack
+
+VB code runs on the UI thread, so that thread's stack SHALL be HexIDE's choice, not the launcher's (#3228).
+On Windows and Linux, the IDE and a made EXE SHALL start their UI on a new thread with a 64 MiB stack, STA on
+Windows, which the process's first thread joins. The process's exit code and any exception SHALL come out as
+they did from the first thread. On macOS, whose UI runs on the first thread only, the UI SHALL stay there.
+
+#### Scenario: Deep recursion on the UI thread's stack
+- **WHEN** a recursive Function calls itself 1,100 levels deep on a thread with the UI thread's stack
+- **THEN** it returns its result
+- **AND** a Function that recurses without bound still raises a trappable Error 28
+
+#### Scenario: The launcher's stack limit
+- **WHEN** a process on Linux starts under `ulimit -s 8192` or `ulimit -s unlimited`
+- **THEN** the UI thread's stack is 64 MiB either way
+
+### Requirement: Call depth is counted as well as probed
+
+The stack probe sees native frames only, and a debugger's time slice releases them, so one interpreter's VB code
+SHALL also raise Error 28 when it would pass 5,000 procedure activations, whatever the probe says (#3250). The count
+SHALL be at least what the UI thread's stack holds of a recursive Function uninterrupted, so the probe still decides
+where it can see.
+
+#### Scenario: A runaway recursion under a time-slicing debugger
+- **WHEN** a Sub calls itself without bound under a debugger that yields at every statement
+- **THEN** Error 28 is raised at the 5,000th activation, and a handler can trap it
+
+### Requirement: An unwinding error leaves each procedure with only that procedure's trace
+
+A run-time error SHALL reach its handler in time linear in the number of procedures it passes (#3247), and so SHALL
+a compile error found at run time and the signal that Stop and End unwind with (#3250). Each procedure SHALL throw
+them on with only its own .NET stack trace, never the trace gathered below it, and the error SHALL otherwise be
+unchanged: its number, description and Erl are what the handler reads. A frame asking whether the error halts SHALL
+reuse the trap a frame above it found. Under a debugger, the unwind SHALL yield once every 32 procedures, so the
+continuations of frames a time slice left waiting don't nest without bound.
+
+#### Scenario: An error raised deep in a recursion
+- **WHEN** an error is raised 400 calls deep and reaches a handler in the first procedure
+- **THEN** it carries no more stack trace than the same error raised 20 calls deep
+- **AND** the handler reads the same Err.Number, Err.Description and Erl as it would 3 calls deep
+
+#### Scenario: End deep in a recursion
+- **WHEN** End is reached 400 calls deep
+- **THEN** its signal carries no more stack trace than End reached 20 calls deep
+
+#### Scenario: A runaway on the UI thread's stack under a time-slicing debugger
+- **WHEN** a Sub with a handler calls a Sub that recurses without bound, on a 64 MiB thread, under a debugger that
+  yields every 15 ms
+- **THEN** Error 28 reaches the handler in seconds, not minutes

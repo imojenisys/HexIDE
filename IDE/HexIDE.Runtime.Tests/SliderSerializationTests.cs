@@ -17,10 +17,7 @@ public class SliderSerializationTests
     [Fact]
     public void VB6_saved_slider_form_round_trips_byte_for_byte()
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !Directory.Exists(Path.Join(root.FullName, "corpus"))) root = root.Parent;
-        root.Should().NotBeNull();
-        var path = Path.Join(root!.FullName, "corpus", "inbox-controls", "saved", "slider", "Form1.frm");
+        var path = Path.Join(RepoTree.Root(), "corpus", "inbox-controls", "saved", "slider", "Form1.frm");
         var bytes = File.ReadAllBytes(path);
         var form = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "P"),
             System.Text.Encoding.Latin1.GetString(bytes), new Sink())!;

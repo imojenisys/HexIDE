@@ -190,6 +190,17 @@ public class UnfaithfulSaveGateTests : IDisposable
         var svc = MakeService();
         await svc.OpenProject(Stage(text));
         var form = loaded.Single().Forms.Single();
+        var events = Substitute.For<IEventBus>();
+        events.Subscribe<HexIDE.Events.CreateOrNavigateToSubEvent>(Arg.Any<Action<HexIDE.Events.CreateOrNavigateToSubEvent>>())
+            .Returns(Substitute.For<IDisposable>());
+        using var editor = new CodeEditorViewModel(
+            Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), svc,
+            events, Substitute.For<HexIDE.Lsp.ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
+            Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
+            Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
+            Substitute.For<HexIDE.Localization.ILocalizationService>()).Initialize(form);
+        editor.IsReadOnly.Should().BeFalse("the corpus must open without the read-only banner");
+        editor.ReadOnlyReason.Should().BeNull();
         const string edit = "' edited code\r\n";
         if (editCode) form.UpdateCode(form.Code + edit);
 

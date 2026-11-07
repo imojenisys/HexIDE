@@ -148,7 +148,7 @@ public partial class VB6BuiltIns
     // CVar among them: CVar of an object is the object, whether its default member wants an argument, as a Collection's
     // does, or not (measured, #1466: TypeName(CVar(k)) is "K1" and IsObject(CVar(k)) True for a class with a default Value).
     private static readonly HashSet<string> TakesTheArgumentItself = new(StringComparer.OrdinalIgnoreCase)
-        { "TypeName", "IsObject", "IsMissing", "Array", "CVar", "ObjPtr" };
+        { "TypeName", "IsObject", "IsMissing", "Array", "CVar", "ObjPtr", "StrPtr", "VarPtr" };
 
     private static readonly HashSet<string> ReadsADefaultMemberIfAny = new(StringComparer.OrdinalIgnoreCase)
         { "VarType", "IsNumeric", "IsEmpty", "IsNull", "IsDate", "IsError", "IsArray" };
@@ -184,6 +184,7 @@ public partial class VB6BuiltIns
         RegisterConversion(d);
         RegisterMath(d);
         RegisterFinancial(d);
+        RegisterDepreciation(d);
         RegisterArray(d);
         RegisterInspection(d);
         d["LoadPicture"] = (self, args, _) => PanelPicture.Load(args, self.Files);
@@ -404,15 +405,11 @@ public partial class VB6BuiltIns
     /// <c>Enum</c> or <c>Const</c> of the same name wins over any library.</summary>
     public bool TryGetBuiltInConstant(string name, out Vb6Value constant)
         => VB6InBoxLibraries.TryBare(name, out constant)
-           || (CommonDialogReferenced && CommonDialogConstants.TryBare(name, out constant))
            || TryControlLibraryConstant(name, out constant);
 
-    /// <summary>Whether the project references the CommonDialog control, whose constants then resolve (#1084).</summary>
-    internal bool CommonDialogReferenced { get; set; }
-
     /// <summary>
-    /// The in-box control libraries the project references, in its order (#1082). Their constants resolve as the
-    /// CommonDialog's do, after the four in-box libraries, and only while the project references the library: a bare
+    /// The in-box control libraries the project references, in its order (#1082). Their constants resolve after the four
+    /// in-box libraries, and only while the project references the library: a bare
     /// <c>ccScrollingSmooth</c> without MSCOMCTL.OCX is an undeclared variable, as in VB6. The 5.0 and 6.0 libraries
     /// declare their 152 shared names with the same values in the same enums (measured), so their order never changes a value.
     /// </summary>

@@ -183,11 +183,17 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         windowContext.ExecuteSub(name, args);
     }
 
+    public void ExecuteEventByRef(string name, IReadOnlyList<Vb6Value> args, int byRefIndex, Action<Vb6Value> completed) =>
+        windowContext.ExecuteEventByRef(name, args, byRefIndex, completed);
+
     public System.Threading.Tasks.Task ExecuteEditEventAsync(string name, IList<Vb6Value> args) =>
         windowContext.ExecuteEditEventAsync(name, args);
 
     public void ExecuteSubIf(string name, IReadOnlyList<Vb6Value>? args, Func<bool> when) =>
         windowContext.ExecuteSubIf(name, args, when);
+
+    public System.Threading.Tasks.Task ExecuteControlEventAsync(string name, IReadOnlyList<CallArg> args) =>
+        windowContext.ExecuteControlEventAsync(name, args);
 
     public bool Handles(string name) => windowContext.Handles(name);
 
@@ -215,6 +221,9 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         positioned = true;
         ShowActivated = IsEnabled;
         Show();
+        // Me.Show in Load raises Activate and initial GotFocus before the next statement (#2436).
+        if (windowContext.Loading && IsEnabled)
+            windowContext.Program?.Activated(windowContext);
     }
 
     public void HideForm() => Hide();
