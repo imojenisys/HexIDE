@@ -1,4 +1,4 @@
-using System.ComponentModel;
+using HexIDE.IDE;
 using HexIDE.Desktop.Server;
 
 namespace HexIDE.Tests.Server;
@@ -9,19 +9,6 @@ namespace HexIDE.Tests.Server;
 /// </summary>
 public class ProgramPrintedTests
 {
-    private sealed class Runner : INotifyPropertyChanged
-    {
-        public bool IsRunning { get; private set; }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        public void Set(bool running)
-        {
-            IsRunning = running;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRunning)));
-        }
-    }
-
     [Fact]
     public void What_was_printed_is_taken_once_with_its_line_breaks_as_the_Immediate_window_shows_them()
     {
@@ -37,13 +24,16 @@ public class ProgramPrintedTests
     public void A_run_that_begins_starts_afresh_and_one_that_ends_keeps_its_output_for_the_stop_reply()
     {
         var printed = new ProgramPrinted();
-        var runner = new Runner();
-        printed.FollowRuns(runner, () => runner.IsRunning);
+        var runner = Substitute.For<IProjectRunnerService>();
+        printed.FollowRuns(runner);
         printed.Append("an earlier run's line\r\n");
 
-        runner.Set(true);
+        runner.RunStarting += Raise.Event<Action>();
         printed.Append("this run's line\r\n");
-        runner.Set(false);
+        runner.IsRunning.Returns(true);
+        runner.PropertyChanged += Raise.Event<PropertyChangedEventHandler>(runner, new PropertyChangedEventArgs("IsRunning"));
+        runner.IsRunning.Returns(false);
+        runner.PropertyChanged += Raise.Event<PropertyChangedEventHandler>(runner, new PropertyChangedEventArgs("IsRunning"));
 
         printed.Take().Should().Be("this run's line\n");
     }
@@ -75,5 +65,31 @@ public class ProgramPrintedTests
         field.Should().Be("…" + new string('y', ProgramPrinted.Limit), "the end is what the program wrote most recently");
         note.Should().Contain($"'printed' holds the last {ProgramPrinted.Limit} of their {taken.Length} characters")
             .And.Contain("the Immediate window holds them all");
+    }
+
+    // A click on a running form says what its handlers printed, as a run does, rather than leaving the caller to find the
+    // Immediate window and diff it (#2657).
+    [Fact]
+    public void An_action_on_a_running_form_gives_what_was_printed_beside_what_it_did()
+    {
+        var clicked = new HexIDE.Automation.InteractOutcome(true, "pointer", "clicked the left button at (10, 10)", null);
+
+        var reply = HexIdeTools.WithPrinted(clicked, "Down\r\nUp\r\n");
+
+        reply.Printed.Should().Be("Down\r\nUp\r\n", "printed is the text as the program wrote it");
+        reply.Detail.Should().Be("clicked the left button at (10, 10); Debug.Print wrote 2 lines since the run began, or "
+                                 + "since the last reply that reported its output; they are in 'printed'.");
+    }
+
+    [Fact]
+    public void An_action_that_printed_nothing_says_so()
+    {
+        var pressed = new HexIDE.Automation.InteractOutcome(true, "keyboard", "pressed End", null);
+
+        var reply = HexIdeTools.WithPrinted(pressed, "");
+
+        reply.Printed.Should().BeNull();
+        reply.Detail.Should().EndWith("pressed End; Debug.Print wrote nothing since the run began, or since the last reply "
+                                      + "that reported its output.");
     }
 }

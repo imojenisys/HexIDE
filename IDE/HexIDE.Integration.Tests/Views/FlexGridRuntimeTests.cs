@@ -126,6 +126,14 @@ public class FlexGridRuntimeTests
     }
 
     [AvaloniaFact]
+    public void The_complete_saved_corpus_refuses_at_F5()
+    {
+        var form = ReadCorpus();
+        var act = () => VBLoader.SpawnComponents(form, new ModuleExecutionContext(), new ExecutionEnvironment());
+        act.Should().Throw<NotImplementedException>().WithMessage("*MSFlexGrid.Redraw*not implemented*#1099*");
+    }
+
+    [AvaloniaFact]
     public async Task Sort_is_write_only_and_keeps_its_measured_error()
     {
         (await Run("""

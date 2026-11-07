@@ -130,6 +130,8 @@ public static class AvaloniaInteroperability
         RegisterToolTipText<VBLabel>();
         RegisterToolTipText<VBImage>();
         RegisterToolTipText<VBStatusBar>();
+        RegisterToolTipText<VBAnimation>();
+        RegisterToolTipText<VBFlatScrollBar>();
         // TabIndex and TabStop, on the controls VB6 gives them (measured, #1974). A TabIndex set renumbers the form.
         RegisterTabOrder<VBCommandButton>(tabStop: true);
         RegisterTabOrder<VBTextBox>(tabStop: true);
@@ -143,6 +145,7 @@ public static class AvaloniaInteroperability
         RegisterTabOrder<VBLabel>(tabStop: false);
         RegisterTabOrder<VBProgressBar>(tabStop: false);
         RegisterTabOrder<VBUpDown>(tabStop: true);
+        RegisterTabOrder<VBAnimation>(tabStop: true);
         RegisterTabOrder<VBDTPicker>(tabStop: true);
         RegisterTabOrder<VBStatusBar>(tabStop: false);
         RegisterTabOrder<VBSSTab>(tabStop: true);
@@ -577,7 +580,7 @@ public static class AvaloniaInteroperability
     /// control's runtime members; duplicates by name are collapsed.</summary>
     /// <remarks>
     /// A property whose read raises is listed with the raised error's own description and no value, rather than ending
-    /// the read (#2289). A Timer's designer positions and absent members aren't listed by VB6's Locals (#801).
+    /// the read (#2289). Locals lists a Timer by VB6's measured rows instead (<see cref="TimerMembers.LocalsRows"/>, #2329).
     /// </remarks>
     public static IReadOnlyList<(string Name, Vb6Value Value, string? Error)> ReadProperties(Control c)
     {
@@ -585,10 +588,6 @@ public static class AvaloniaInteroperability
         foreach (var property in bindingsByProperty.Keys)
         {
             if (byName.ContainsKey(property.Name))
-                continue;
-            if (c is VBTimer && (!TimerMembers.HasProperty(property.Name)
-                                 || ReferenceEquals(property, VBProperties.LeftProperty)
-                                 || ReferenceEquals(property, VBProperties.TopProperty)))
                 continue;
             if (c is VBScrollBar && (ReferenceEquals(property, VBProperties.BackColorProperty)
                                     || ReferenceEquals(property, VBProperties.ForeColorProperty)))

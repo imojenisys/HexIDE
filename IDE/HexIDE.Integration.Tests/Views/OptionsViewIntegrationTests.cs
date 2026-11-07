@@ -56,9 +56,67 @@ public class OptionsViewIntegrationTests
     }
 
     [AvaloniaTheory]
-    [InlineData("tab", "Str.Options.EditorFormatting.Indentation.TabWidth", "Tab _width:", "Tab width:")]
-    [InlineData("width", "Str.Options.Grid.Width", "_Width:", "Width:")]
-    [InlineData("height", "Str.Options.Grid.Height", "_Height:", "Height:")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StickyDepth_IsNamedByItsLocalizedLabel(bool enabled)
+    {
+        var settings = Substitute.For<ISettingsService>();
+        var vm = new EditorGeneralPageViewModel(settings) { IsStickyScrollEnabled = enabled };
+        var view = new EditorGeneralPageView { DataContext = vm };
+        var window = new Window { Content = view, Width = 480, Height = 400 };
+        window.Show();
+        try
+        {
+            var loc = new LocalizationService();
+            foreach (var id in LanguageManifest.Packs.Select(p => p.Id).Append("en-GB"))
+            {
+                var caption = ResolvedString(loc, id, "Str.Options.EditorGeneral.Display.StickyDepth");
+                view.Resources["Str.Options.EditorGeneral.Display.StickyDepth"] = caption;
+                Dispatcher.UIThread.RunJobs();
+                var spinner = view.GetVisualDescendants().OfType<NumericUpDown>().Single();
+                spinner.IsEnabled.Should().Be(enabled);
+                ControlAutomationPeer.CreatePeerForElement(spinner).GetName().Should()
+                    .Be(MenuPath.StripAccessKey(caption).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("de", "Erhöhen", "Verringern")]
+    [InlineData("nl", "Verhogen", "Verlagen")]
+    [InlineData("id", "Tambah", "Kurangi")]
+    [InlineData("fi", "Lisää", "Vähennä")]
+    [InlineData("cs", "Zvýšit", "Snížit")]
+    [InlineData("da", "Forøg", "Reducer")]
+    public void SpinnerTranslations_DescribeChangingANumber(string pack, string increase, string decrease)
+    {
+        Dispatcher.UIThread.CheckAccess().Should().BeTrue("language packs must load on the Avalonia thread (#2856)");
+        var loc = new LocalizationService();
+        ResolvedString(loc, pack, "Str.Spinner.Increase").Should().Be(increase);
+        ResolvedString(loc, pack, "Str.Spinner.Decrease").Should().Be(decrease);
+    }
+
+    private static string ResolvedString(LocalizationService loc, string pack, string key)
+    {
+        loc.TryResolveMap(pack, out var map, out _).Should().BeTrue("language pack '{0}' must resolve before comparing translations", pack);
+        return map.TryGetValue(key, out var value) ? value : key;
+    }
+
+    [AvaloniaFact]
+    public void UnresolvedPack_FailsBeforeComparingTranslations()
+    {
+        var loc = LocalizationService.CreateWithPackUris(id =>
+            new Uri($"avares://HexIDE/Localization/Packs/missing-{id}.json"));
+        Action read = () => ResolvedString(loc, "cs", "Str.Spinner.Increase");
+        read.Should().Throw<Exception>().WithMessage("*language pack 'cs' must resolve*");
+        loc.GetStringFrom("cs", "Str.Spinner.Increase").Should().Be("Increase");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("tab", "Str.Options.EditorFormatting.Indentation.TabWidth", "Tab _width:", "Tab width")]
+    [InlineData("width", "Str.Options.Grid.Width", "_Width:", "Width")]
+    [InlineData("height", "Str.Options.Grid.Height", "_Height:", "Height")]
     public void NumericOptionField_IsNamedByItsLocalizedLabel(string field, string key, string caption, string expected)
     {
         var settings = Substitute.For<ISettingsService>();
@@ -78,7 +136,7 @@ public class OptionsViewIntegrationTests
 
             view.Resources[key] = "名前:";
             Dispatcher.UIThread.RunJobs();
-            peer.GetName().Should().Be("名前:", "a language without access-key markers still names the field");
+            peer.GetName().Should().Be("名前", "a language without access-key markers still names the field");
         }
         finally { window.Close(); }
     }
@@ -102,8 +160,8 @@ public class OptionsViewIntegrationTests
         {
             foreach (var id in LanguageManifest.Packs.Select(p => p.Id).Append("en-GB"))
             {
-                var language = loc.GetStringFrom(id, "Str.Options.Language.LanguageLabel");
-                var region = loc.GetStringFrom(id, "Str.Options.Language.RegionLabel");
+                var language = ResolvedString(loc, id, "Str.Options.Language.LanguageLabel");
+                var region = ResolvedString(loc, id, "Str.Options.Language.RegionLabel");
                 view.Resources["Str.Options.Language.LanguageLabel"] = language;
                 view.Resources["Str.Options.Language.RegionLabel"] = region;
                 Dispatcher.UIThread.RunJobs();
@@ -114,9 +172,9 @@ public class OptionsViewIntegrationTests
                 boxes[1].IsEnabled.Should().Be(selection != "system");
                 if (selection == "system") boxes[1].ItemCount.Should().Be(0);
                 ControlAutomationPeer.CreatePeerForElement(boxes[0]).GetName()
-                    .Should().Be(MenuPath.StripAccessKey(language), id);
+                    .Should().Be(MenuPath.StripAccessKey(language).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
                 ControlAutomationPeer.CreatePeerForElement(boxes[1]).GetName()
-                    .Should().Be(MenuPath.StripAccessKey(region), id);
+                    .Should().Be(MenuPath.StripAccessKey(region).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
             }
         }
         finally { window.Close(); }
@@ -138,12 +196,12 @@ public class OptionsViewIntegrationTests
         {
             foreach (var id in LanguageManifest.Packs.Select(p => p.Id).Append("en-GB"))
             {
-                var caption = loc.GetStringFrom(id, key);
+                var caption = ResolvedString(loc, id, key);
                 view.Resources[key] = caption;
                 Dispatcher.UIThread.RunJobs();
                 var box = view.GetVisualDescendants().OfType<ComboBox>().Single();
                 ControlAutomationPeer.CreatePeerForElement(box).GetName()
-                    .Should().Be(MenuPath.StripAccessKey(caption), id);
+                    .Should().Be(MenuPath.StripAccessKey(caption).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
             }
         }
         finally { window.Close(); }

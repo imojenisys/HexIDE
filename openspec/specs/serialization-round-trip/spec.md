@@ -78,6 +78,15 @@ subset — and the developer discovers which parts by finding out what stopped w
   scalar properties and Buttons, until those edits can be saved faithfully; editing a surrounding form property
   SHALL survive save and reload without changing the carried Toolbar blocks or companion bytes
 
+#### Scenario: Runtime-only MonthView loading (#1095 A)
+- **WHEN** a form contains a top-level, non-array `MSComCtl2.MonthView` block
+- **THEN** its runtime SHALL create a MonthView with CurrentDate, date bounds and measured scalar settings loaded,
+  interpreting StartOfWeek by its low word and exposing Value as its default member
+- **AND** the designer SHALL retain the block verbatim and view-only, including the StartOfWeek high word,
+  until its file-writing slice can save edits faithfully
+- **AND** unsupported own members and saved properties SHALL refuse explicitly rather than supply invented values
+- **AND** input, events, drawing, nested and arrayed instances remain pending subsequent slices
+
 #### Scenario: A section left by another tool
 - **WHEN** a project file ends in a section belonging to some other tool
 - **THEN** that section is written back
@@ -833,6 +842,42 @@ preview without enabling edits to carried settings.
 - **THEN** it refuses with the not-implemented error naming that property
 - **AND** its saved property block still round-trips unchanged
 
+### Requirement: ListView saves preserve read-only own properties
+
+The serializer SHALL carry a loaded MSComctlLib ListView's own property runs and flat column blocks,
+including repeated OLEDragMode/OLEDropMode lines and binary citations, while writing editable extender
+properties from the designer model. A resize SHALL recompute extents from whole pixels. Own properties
+and columns without an edit writer SHALL remain unavailable for designer editing. ImageList bindings
+SHALL be preserved; saved Icons, SmallIcons and ColHdrIcons names SHALL resolve after runtime controls
+are created, with column ImageIndex selectors validated against ColumnHeaderIcons. Unmeasured bindings
+SHALL refuse rather than silently omit images.
+
+#### Scenario: Saving a designed ListView without edits
+- **WHEN** either saved ListView corpus form is loaded and saved without edits
+- **THEN** its form text and companion bytes are unchanged
+
+#### Scenario: Resizing a ListView with bound column images
+- **WHEN** the designer resizes a loaded ListView and changes its Tag
+- **THEN** its geometry, Tag and extents reflect the edits
+- **AND** its column blocks, image binding strings and companion records survive unchanged
+
+#### Scenario: Previewing bindings that the runtime cannot resolve
+- **WHEN** a loaded ListView is displayed in the designer
+- **THEN** the preview shows its name and optional checkbox without resolving ImageList bindings
+- **AND** report headers are not displayed
+
+### Requirement: Loaded ListViews use measured client edges
+
+A loaded MSComctlLib ListView SHALL use a client inset of 2 pixels for Appearance 1 plus 1 pixel
+for BorderStyle 1, including when the BorderStyle line is omitted and loads as 0. Drawing, hit testing
+and MouseDown/MouseMove/MouseUp coordinates SHALL use that same inset. These four combinations are
+measured in [#2730](https://github.com/hexide-io/HexIDE/issues/2730) (oracle PR #2732).
+
+#### Scenario: Running the saved ListView forms
+- **WHEN** either saved ListView corpus form runs without changing its saved properties
+- **THEN** its ListViews load, including Appearance 1 with omitted BorderStyle
+- **AND** its saved ImageList bindings resolve and the form can unload normally
+
 ### Requirement: PropertyPage saves distinguish HelpContextID from StandardSize
 A PropertyPage designer SHALL expose HelpContextID as an editable integer property and save its value
 in the `.pag`. A save SHALL omit StandardSize, including a carried line from a loaded file, because
@@ -947,6 +992,36 @@ unchanged because their insertion behaviour has not been measured.
 - **WHEN** an ActiveX EXE with no Retained line and adjacent Unattended=0 and ThreadPerObject=0 lines is saved
 - **THEN** Retained=0 is inserted between those lines
 - **AND** the remaining lines retain their order
+
+### Requirement: New-project scratch files require user-chosen destinations
+
+Save Project As and Save Project on a project still in its recorded scratch directory SHALL ask for
+scratch members' destinations in member order, then the project's destination. The project file SHALL
+be written last and name each member at its chosen path. Scratch files SHALL NOT count as user-saved.
+All destinations SHALL be collected before any write or path change; cancelling any picker SHALL
+cancel the whole save without writing files or marking edits saved. This follows the save workflow
+recorded in [#2678](https://github.com/hexide-io/HexIDE/issues/2678).
+
+Internal automation persistence SHALL write an existing scratch member to its scratch path without a
+file picker. This SHALL NOT give it a user-saved status. Explicit Save and Save As commands and save
+prompts SHALL still treat scratch members as needing a user-chosen destination. Automation's picker
+guard SHALL agree with its persistence path: only a pathless member needs an armed picker answer.
+
+#### Scenario: Save a new scratch project beside its first form
+
+- **WHEN** a new scratch project's form and project destinations are chosen in one folder
+- **THEN** the form picker precedes the project picker, both files are written there, and the project
+  names the form as `Form1.frm` without a path back into the scratch directory
+
+#### Scenario: Cancel a scratch member's destination
+
+- **WHEN** any scratch member's save picker is cancelled
+- **THEN** no file is written, all original paths remain, and unsaved edits remain unsaved
+
+#### Scenario: Persist an automation edit to a scratch member
+
+- **WHEN** automation persists a form or module with an existing scratch path
+- **THEN** the edit is written to that path without a picker, and the member remains user-unsaved
 
 ## Out of Scope
 - **Interpreting preserved binary content.** Binary resources the IDE has no model for stay opaque; they are

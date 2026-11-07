@@ -48,7 +48,7 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
     verification on the running IDE remains required.
   - **Remaining differences:** ownership still differs from VB6, and the program isn't paused for the prompt in
     run mode, so Timers keep firing. Floating a code window currently hides it instead (#1361).
-- **HexIDE:** the interpreter can apply *no* edit live, so **every** edit while running/paused pops that same
+- **HexIDE:** the interpreter can apply *no* edit live, so keyboard edits while running/paused pop that same
   prompt (OK = reset + keep the edit; Cancel = revert). So HexIDE over-prompts relative to VB6 (it resets even for a
   comment).
 - **Why:** honest + muscle-memory-recognisable — VB6's own dialog, surfaced for the whole edit set the interpreter
@@ -71,9 +71,17 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
   This fixes HexIDE's reset affordance; it does not establish new VB6 behaviour. Undo and Redo remain
   unmeasured and unchanged (#710, #513).
 - **"Every edit" is unmeasured for the routes that are not keystrokes.** Replace All, formatting, Insert File,
-  rename, an add-in's `ApplyEdits`/`SetContent` and automation's `set_file_content` while paused have not been
+  rename and an add-in's `ApplyEdits`/`SetContent` while paused have not been
   checked against the prompt. Paste, cut and Delete were assumed covered until they were tested, and were not.
   Tracked as [#710](https://github.com/hexide-io/HexIDE/issues/710).
+
+- **Automation edits (#3191, 2026-11-06):** measured in
+  [the issue](https://github.com/hexide-io/HexIDE/issues/3191), `set_file_content` and document-mode
+  `type_text` do not prompt and leave the run using its starting code, including modules and forms not
+  loaded yet. This is intentional for preparing the next run. Their replies now explain when the edits
+  take effect, and that breakpoints, and while paused the break location, keep the running code's line
+  numbers. Debug-state and breakpoint replies name documents
+  changed since start until the run ends. Keyboard-mode typing keeps the reset prompt.
 
 ### D3. E&C prompt fires per-keystroke, not on line-leave
 - **VB6:** evaluates an edit when you **leave the line** (or on Run/Continue), so you can finish typing a line /
@@ -141,9 +149,11 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
   set. Live-verified: a form with `Command0` paused in `Form_Load` → `Me` → `{form properties…, Command0 →
   {Caption="Hi", Left=100, Width=120, …}, mCount=5}`; the control is a child of `Me`, never a top-level sibling.
   Class-instance / object nodes still expand to their declared fields.
-- **Genuine residuals (separate, documented elsewhere — NOT this row):** **control arrays** collapse to one variable
-  (they aren't modelled as an indexed collection — interpreter-gaps "Runtime forms/controls surface" / E1); the
-  **`Controls` collection** isn't modelled; **container-child nesting** (a control inside a Frame/PictureBox) shows
+- **Since #2329:** a control array opens to `Item 1`, `Item 2` and on, as VB6's does. A Timer lists VB6's seven
+  rows, each with its declared type. A running form's `Me` reads `[_Default]` first, then its properties, controls and
+  own variables as one sorted list, then an `Item` row per control. All of that was measured by hexide-int, on #2289, #2329 and the
+  oracle's #2698. What is left is D30.
+- **Genuine residuals (separate, documented elsewhere — NOT this row):** **container-child nesting** (a control inside a Frame/PictureBox) shows
   flat under `Me` rather than under its container — the stated cause, that the runtime spawns all controls flat on
   one form canvas, stopped being true with #84 (a Frame and a PictureBox now host their contents on their own
   canvas), so what remains is that `DebugInspector`'s child provider enumerates the form's controls flat rather
@@ -178,17 +188,17 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
 Font reads on the supported intrinsic controls now return the shared Font object (#934), rather than a String or Null. Its Locals
 property expansion remains unimplemented; the object is currently a leaf labelled Font.
 
-### D9. Locals show only already-executed `Dim`s; value formatting is approximate
+### D9. Locals value formatting is approximate
 - **VB6:** the Locals window lists **every** declared local from procedure entry (unset ones show as `Empty`/0/""),
   and formats values per the VBA locale conventions.
-- **HexIDE:** locals appear **only once their `Dim` statement has executed** (the interpreter allocates a local's
-  slot lazily when its `Dim` runs), so a local declared later in the proc is absent until stepped past. Value
-  formatting is a close-but-not-identical approximation (strings quoted; `True`/`False`; `#yyyy-MM-dd HH:mm:ss#`
-  dates in the invariant culture; `Nothing`/`Empty`/`Null`; objects/arrays/UDTs show their type and expand). An
-  object- or UDT-typed array labels its header as `Variant()` (the element class/type name isn't recoverable from
-  the array's stored element type) while its populated elements label correctly.
-- **Why:** lazy `Dim` allocation is the interpreter's execution model; exact VBA value formatting is a rabbit hole
-  not worth chasing for a tyre-kicking debugger.
+- **HexIDE:** every declared local is allocated at procedure entry, before the body runs, including one in a branch
+  that is never taken (#172), so Locals lists it from the start as VB6 does. This entry used to record the opposite:
+  the interpreter once allocated a local only when its `Dim` ran. Value formatting is a close-but-not-identical
+  approximation (strings quoted; `True`/`False`; `#yyyy-MM-dd HH:mm:ss#` dates in the invariant culture;
+  `Nothing`/`Empty`/`Null`; objects/arrays/UDTs show their type and expand). An array of objects or of a class
+  gives its element type and bounds in its header, `Class1(1 to 2)`, since #2700 (see D30), where it used to read
+  `Variant()`. Whether a UDT-typed array's header still reads `Variant()` has not been re-checked.
+- **Why:** exact VBA value formatting is a rabbit hole not worth chasing for a tyre-kicking debugger.
 - **Status:** **by design** (approximation). Arrays are capped at 500 shown elements with a "… N more" marker (a
   visible, non-silent cap).
 
@@ -330,6 +340,11 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
 - **Status:** **by design** (a real tree-walker limit, not an artificial cap). Run To Cursor (P7a) has no such limit —
   it's a one-shot breakpoint, matched by line at any depth.
 
+External sessions delegate Set Next Statement to adapters advertising `supportsGotoTargetsRequest`
+via `gotoTargets` and `goto`; the interpreter granularity limit above does not constrain the adapter
+([#2914](https://github.com/hexide-io/HexIDE/issues/2914)). A refused move keeps the caret and scroll
+position, and so does a refused step. What VB6 does with the caret there hasn't been measured.
+
 ### D19. Step Into from design mode runs the program without breaking
 - **VB6:** F8 in design mode starts the program and breaks on the first executable line, so the developer watches
   it begin one statement at a time.
@@ -398,6 +413,20 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   `EventOrderTests` and `RunFaultTests` run with `TimeSliceMs` = -1, which yields at every statement. What remains is
   the granularity: a nested handler finishes before the raiser's next statement, the end of its block, or the return
   of a call, rather than inside the very expression that raised it.
+
+### D31. An error unwinding a deep recursion gives up the thread every 32 procedures
+- **VB6:** an error, Stop or End unwinds the stack without giving up the thread. It isn't a place where VB6 runs
+  `DoEvents`.
+- **HexIDE:** under the debugger, in the IDE or a made EXE, a run-time error, a compile error met while running, or
+  Stop's and End's signal yields the UI thread once at every 32nd procedure it passes on the way down (#3250). It's the
+  same yield the time slice makes, and the event pump still lets nothing in (D21). So no event procedure runs inside the
+  unwind. What can happen in it is repainting, input reaching the IDE, and Ctrl+Break. An unwind shallower than 32
+  procedures, the usual one, never yields.
+- **Why:** the time slice leaves the frames it yielded across waiting on their callees. On #3228's 64 MiB UI thread,
+  .NET then ran their continuations inline inside one another as the error unwound, and each throw cost more than the
+  last. Error 28 from the 5,000-call cap took 138 s to reach its handler, against 0.8 s on a 1.5 MiB thread. A yield
+  starts the nesting again from the dispatcher: it takes about 2.5 s now.
+- **Status:** **deliberate**. Avoiding it would need an unwind that doesn't pass through each frame's await.
 
 ### D22. A compile error met while a program runs is a run-time error dialog, and the run carries on
 - **VB6:** a compile error found while the program runs, such as a call to a Sub that does not exist, is shown in
@@ -605,13 +634,44 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   Recursion, cross-module contexts, Break When types and running-state refresh were not measured and
   keep their previous behavior.
 
+### D30. Locals rows beyond what is measured (#2329, #2700)
+- **VB6, measured** (hexide-int, #2289, #2329, #2700; oracle #2698 and #2702):
+  - **The Type column** gives a live object's declared type, then its class: `Object/Class1`, `Timer/Timer` for a control
+    under `Me`, `Variant/Object/Class1` in a Variant. `Nothing` reads as the declared type alone, and an array as its
+    element type and bounds, `Class1(1 to 2)`.
+  - **A class instance** lists its variables and its properties, sorted by name.
+  - **A control** lists the members its type has, and no others. A Timer's seven are on #2329.
+- **HexIDE:** all of the above for variables, members, array elements, `Item` rows and a Timer's `Parent`, since #2700.
+  What differs:
+  - **A class instance's properties aren't listed,** only its variables: reading a `Property Get` runs the program's code,
+    which can't run while it is paused (D15).
+  - **Every control but a Timer** lists every property HexIDE can read, and a raising read shows no type.
+  - **A watch's value keeps its own type,** as `Class1`, since an expression has no declaration. VB6's watch rows aren't
+    measured.
+  - **A module's variables keep their declaration order,** where an object's members are sorted. VB6's module row isn't
+    measured with variables in it.
+  - **An array of more than one dimension** writes its bounds as `Long(1 to 2, 0 to 3)`, which is inferred, not measured.
+    So are an undimensioned array's `String()` and an empty one's `String(0 to -1)`.
+  - **A Variant holding an array** keeps HexIDE's earlier row, `v()` of type `Integer()`, since VB6's isn't measured.
+  - **A UDT** reads as its type name, `TPoint`, as before. VB6's isn't measured.
+  - **`Me`'s own row** reads as its class alone, `Class1` in a class's method and `Form1` on a form, as before. VB6's isn't
+    measured for either.
+- **Why:** each control's member list, and the declared types its rows show, have to be measured on `vb6.exe` one class at
+  a time.
+- **Status:** **open**.
+  - Other controls' member lists follow as each is measured.
+  - `get_locals` marks a row that reopens an object open above it, such as a Timer's `Parent` under `Me`, with `repeats`,
+    and leaves its children out. The Locals window opens it, as VB6's does.
+
 ---
 
 ## Deferred debugger surfaces (not divergences yet — just not built)
 
 Immediate USER-CALL execution (calling a user Sub/Function from the Immediate window — the deadlock-prone part, D15;
-assignment/Set landed in P7c, D14); modern per-line conditional breakpoints / hit counts (deferred additive Evolution
-item — VB6's watch-based Break-When-True/Changed shipped in P6b). Tracked in
+assignment/Set landed in P7c, D14); hit counts and interpreter evaluation of per-line conditions (additive Evolution
+item — VB6's watch-based Break-When-True/Changed shipped in P6b). Condition… edits per-line expressions
+with gutter glyphs/tooltips and sidecar persistence (#2914). Interpreter runs ignore these expressions
+and stop unconditionally, with a localized Immediate notice once per run; capable DAP adapters evaluate them. Tracked in
 [`MISSING_FEATURES.md`](MISSING_FEATURES.md) and the spec's v2 list (P8). Serious/compiled debugging belongs to a
 compiled backend over DAP. *(Landed since this list was written: Watches + Break-When-True/Changed + Data Tips (P6), Run To Cursor
 + Set Next Statement + Immediate assignment/Set (P7), the Locals property/control surface incl. the form-`Me` +

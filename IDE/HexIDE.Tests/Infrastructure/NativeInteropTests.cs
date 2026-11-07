@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -18,6 +19,7 @@ public class NativeInteropTests
 
     [Theory]
     [InlineData("HexIDE", "Controls/MDI/MDIWindow.axaml.cs", 2)]
+    [InlineData("HexIDE", "IDE/Profiles/ProfileFileReader.cs", 6)]
     [InlineData("HexIDE.Desktop", "ConsoleOutput.cs", 5)]
     [InlineData("HexIDE.Desktop", "Server/ToolFailures.cs", 1)]
     [InlineData("HexIDE.Desktop", "Server/X11WindowManager.cs", 6)]
@@ -66,8 +68,8 @@ public class NativeInteropTests
     {
         var tree = CSharpSyntaxTree.ParseText(source, cancellationToken: TestContext.Current.CancellationToken);
         var root = tree.GetRoot(TestContext.Current.CancellationToken);
-        return root.DescendantTokens().Any(token => token.Kind() == SyntaxKind.UnsafeKeyword)
-            || root.DescendantTrivia().Where(trivia => trivia.Kind() == SyntaxKind.DisabledTextTrivia)
+        return root.DescendantTokens().Any(token => token.IsKind(SyntaxKind.UnsafeKeyword))
+            || root.DescendantTrivia().Where(trivia => trivia.IsKind(SyntaxKind.DisabledTextTrivia))
                 .Any(trivia => ContainsUnsafe(trivia.ToFullString()));
     }
 
