@@ -134,7 +134,7 @@ public class InBoxToolboxTests
         var (_, toolbox, _, _) = Designer(ControlLibraries.MSComctlLib, ControlLibraries.ComctlLib);
 
         InBoxLibraries(toolbox).Should().Equal(ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib,
-            ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.ComctlLib);
+            ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.ComctlLib);
         var shape = toolbox.Components.ToList().FindIndex(c => c.BaseClass is ShapeComponentClass);
         toolbox.Components[shape + 1].BaseClass.Should().BeSameAs(ProgressBarComponentClass.Instance);
         toolbox.Components[shape + 1].Name.Should().Be("ProgressBar");
