@@ -3735,28 +3735,10 @@ public static class UiAutomationDriver
             var keys = KeysOf(text);
             var start = surface is TextEditor editor ? editor.TextArea : surface;
 
-            // Judged before each key, where it goes, as the caret moves. The code window's check is the more specific,
-            // so it runs ahead of WhyNotTypable for the first key, as type_text's does.
-            InteractOutcome? Refused(Control at, int i)
-            {
-                if (AreaOf(at) is not { } area)
-                    return null;
-                var (key, mods, typed) = keys[i];
-                var span = EditSpan(area, key, mods) ?? (area.Selection.IsEmpty
-                    ? new EditedSpan(area.Caret.Offset, 0, Deletes: false)
-                    : new EditedSpan(area.Selection.SurroundingSegment.Offset, area.Selection.SurroundingSegment.Length, Deletes: false));
-                if (typed is not null && PartialSelection(area, deletes: false) is not null)
-                    return null;
-                return RefusedInReadOnlyRegion(area, span, "type_text", KeyboardMechanism, i == 0 ? null
-                    : $"Key {i + 1} of {keys.Count} wrote nothing, and the rest were not sent; the {i} before it went in.");
-            }
-
             // Ahead of the rest: under a dialog the key goes to the dialog, whatever the line or the control (#1290 review).
             if (KeysTakenBy(start, $"{surface.GetType().Name}{address}", "typed") is { } held)
                 return new InteractOutcome(false, KeyboardMechanism, null, held);
-            if (keys.Count > 0 && Refused(start, 0) is { } first)
-                return first;
-            if (WhyNotTypable(surface) is { } refusal)
+            if (WhyNotTypable(surface, deliverToCodeWindow: true) is { } refusal)
                 return new InteractOutcome(false, KeyboardMechanism, null,
                     $"{surface.GetType().Name}{address} {refusal}, so a person could not type there either; nothing was typed");
             if (TopLevel.GetTopLevel(start) is not { } top)
@@ -3784,10 +3766,11 @@ public static class UiAutomationDriver
                     return new InteractOutcome(false, KeyboardMechanism, null,
                         Stopped("focus has left the window, so a person's next key would not reach it"));
                 at = focused;
-                if (i > 0 && Refused(at, i) is { } refused)
-                    return refused;
 
                 var (key, mods, typed) = keys[i];
+                var area = AreaOf(at);
+                var textBefore = area?.Document.Text;
+                var span = area is null ? null : EditSpan(area, key, mods) ?? TypingSpan(area, typed);
                 if (DeliverKey(at, key, mods, typed) is { } handled)
                     (sentText, tookText) = (sentText + 1, tookText + (handled ? 1 : 0));
                 // The next key once what this one set off ahead of input has run, and the list or parameter info it
@@ -3796,6 +3779,11 @@ public static class UiAutomationDriver
                 if (FocusedEditor(top) is { } codeEditor && HexIDE.Forms.Views.CodeEditorView.PendingPopupsOf(codeEditor) is { } pending
                     && await Task.WhenAny(pending, Task.Delay(PopupWait, ct)) != pending)
                     unanswered++;
+
+                if (area is not null && span is not null && area.Document.Text == textBefore
+                    && AfterRefusedKey(area, span.Value, "type_text", KeyboardMechanism) is { } refused)
+                    return refused with { Error = refused.Error
+                        + $" Key {i + 1} of {keys.Count} was sent; the {i} before it went in, and nothing after it was sent." };
 
                 if (OpenDialogs.Among(OpenWindows()).FirstOrDefault(d => !dialogsBefore.Contains(Shown(d))) is { } dialog)
                 {
@@ -4014,15 +4002,16 @@ public static class UiAutomationDriver
     }
 
     /// <summary>Why a person could not type into <paramref name="surface"/> at its caret; null when they could.</summary>
-    private static string? WhyNotTypable(Control surface)
+    private static string? WhyNotTypable(Control surface, bool deliverToCodeWindow = false)
     {
         if (Shows(surface) is not { } shows) return "is not known to be showing (whether it or a container is hidden could not be read)";
         if (!shows) return "is not showing (it or a container is hidden, which dump_visual_tree marks \"isHidden\": true)";
         if (!surface.IsEffectivelyEnabled) return "is disabled";
         return surface switch
         {
-            TextEditor editor when !CanTypeInto(editor.TextArea) => "is read-only",
-            TextArea area when !CanTypeInto(area) => "is read-only",
+            TextEditor editor when !(deliverToCodeWindow && CodeWindowOf(editor.TextArea) is not null)
+                && !CanTypeInto(editor.TextArea) => "is read-only",
+            TextArea area when !(deliverToCodeWindow && CodeWindowOf(area) is not null) && !CanTypeInto(area) => "is read-only",
             TextBox { IsReadOnly: true } => "is read-only",
             _ => null,
         };
@@ -4102,12 +4091,9 @@ public static class UiAutomationDriver
             var lengthBefore = deletionArea?.Document.TextLength ?? 0;
             // A key that types a character writes it, as a person's does, so it is judged as typing is (#2428).
             var typedText = TypedBy(parsedKey, mods);
-            if (AreaOf(target) is { } pressedIn
-                && (EditSpan(pressedIn, parsedKey, mods) ?? TypingSpan(pressedIn, typedText)) is { } span
-                && partial is null
-                && RefusedInReadOnlyRegion(pressedIn, span, "press_key") is { } refused)
-                return selectionDelete && !pressedIn.Selection.IsEmpty
-                    ? refused with { Error = refused.Error + SelectionState(pressedIn) } : refused;
+            var textBefore = deletionArea?.Document.Text;
+            var span = deletionArea is null ? null
+                : EditSpan(deletionArea, parsedKey, mods) ?? TypingSpan(deletionArea, typedText);
 
             // From the target's window, which a flyout's item is in as the dump shows it, not from the item's own root,
             // whose path no tool can resolve (#2030).
@@ -4135,6 +4121,11 @@ public static class UiAutomationDriver
                 mechanism = "routed-key";
                 DeliverKey(target, parsedKey, mods, typedText);
             }
+
+            if (deletionArea is not null && span is not null && deletionArea.Document.Text == textBefore
+                && AfterRefusedKey(deletionArea, span.Value, "press_key", mechanism) is { } refused)
+                return selectionDelete && !deletionArea.Selection.IsEmpty
+                    ? refused with { Error = refused.Error + SelectionState(deletionArea) } : refused;
 
             // Naming the receiver is half the point. Both gaps this closes presented as "reports success and
             // nothing happens", and in each the answer was that the event went to a control other than the
@@ -4303,6 +4294,16 @@ public static class UiAutomationDriver
         && ReferenceEquals(editor.Document, area.Document)
             ? editor
             : null;
+
+    // Only after delivery and an unchanged document: the code window, not the tool, guards the write.
+    private static InteractOutcome? AfterRefusedKey(TextArea area, EditedSpan span, string tool, string mechanism)
+    {
+        if (RefusedInReadOnlyRegion(area, span, tool, mechanism) is not { } refused
+            || CodeWindowOf(area) is not { } editor)
+            return null;
+        return refused with { Error = $"{tool} refused by the code window: \"{editor.StatusBar.Message}\". "
+            + $"Nothing was written; the caret is at offset {area.Caret.Offset}. " + refused.Error };
+    }
 
     /// <summary>
     /// A refusal, when <paramref name="span"/> is in a region of a code window only the IDE may change
