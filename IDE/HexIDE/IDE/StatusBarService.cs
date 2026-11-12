@@ -34,12 +34,17 @@ public partial class StatusBarService : ObservableObject, IStatusBarService
         };
     }
 
-    public bool IsDefault => _isDefault;
+    private long _messageVersion;
+    public long MessageVersion => Interlocked.Read(ref _messageVersion);
 
     public string Message
     {
         get => _message;
-        private set => SetProperty(ref _message, value);
+        private set
+        {
+            Interlocked.Increment(ref _messageVersion);
+            SetProperty(ref _message, value);
+        }
     }
 
     public int? Line

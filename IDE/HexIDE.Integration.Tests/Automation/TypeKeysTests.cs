@@ -135,9 +135,11 @@ public class TypeKeysTests : IDisposable
     public async Task RefusedKeysReachTheCodeWindow(string region, bool keyboard)
     {
         var message = "Ready";
+        long version = 0;
+        status.MessageVersion.Returns(_ => version);
         status.Message.Returns(_ => message);
         status.When(s => s.SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>()))
-            .Do(call => message = call.Arg<string>());
+            .Do(call => { message = call.Arg<string>(); version++; });
         var editor = region == "header"
             ? Show("Attribute VB_Name = \"Form1\"\r\nOption Explicit\r\n", form: true)
             : Show(region == "member" ? WithRun : "Option Explicit\r\nAttribute Lost.VB_Description = \"lost\"\r\n");
@@ -152,6 +154,7 @@ public class TypeKeysTests : IDisposable
         editor.CaretOffset.Should().Be(caret);
         status.Received().SetTemporaryMessage("Str.CodeEditor.Msg.TypingChangesReadOnlyText", Arg.Any<TimeSpan>());
         result.Success.Should().BeFalse();
+        result.Error.Should().NotContain("  ");
         result.Error!.Split("Nothing was written").Length.Should().Be(2);
         result.Error.Should().Contain("refused by the code window: \"Str.CodeEditor.Msg.TypingChangesReadOnlyText\"")
             .And.Contain("Nothing was written.").And.Contain($"caret is at offset {caret}");
@@ -161,7 +164,6 @@ public class TypeKeysTests : IDisposable
     public async Task RefusedBackspaceWithoutAMessageDoesNotQuoteReady()
     {
         status.Message.Returns("Ready");
-        status.IsDefault.Returns(true);
         var editor = Show("Public Sub Foo()\r\n\r\nEnd Sub\r\n", header: "");
         editor.CaretOffset = "Public Sub Foo()\r\n".Length;
         await UiAutomationDriver.TypeKeysAsync(editor, "Attribute Foo.VB_Description");
@@ -175,16 +177,44 @@ public class TypeKeysTests : IDisposable
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("refused by the code window, which gave no message")
             .And.NotContain("Ready");
+        result.Error.Should().NotContain("  ");
         result.Error!.Split("Nothing was written").Length.Should().Be(2);
+    }
+
+    [AvaloniaFact]
+    public async Task SilentRefusalDoesNotQuoteThePreviousKeysMessage()
+    {
+        var message = "Ready";
+        long version = 0;
+        status.MessageVersion.Returns(_ => version);
+        status.Message.Returns(_ => message);
+        status.When(s => s.SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>()))
+            .Do(call => { message = call.Arg<string>(); version++; });
+        var editor = Show("Public Sub Foo()\r\n\r\nEnd Sub\r\n", header: "");
+        editor.CaretOffset = "Public Sub Foo()\r\n".Length;
+        await UiAutomationDriver.TypeKeysAsync(editor, "Attribute Foo.VB_Description");
+        var before = editor.Text;
+
+        var first = UiAutomationDriver.PressKey(editor, "X", null);
+        first.Error.Should().Contain("refused by the code window: \"Str.CodeEditor.Msg.TypingChangesReadOnlyText\"");
+        status.ClearReceivedCalls();
+        var second = UiAutomationDriver.PressKey(editor, "Back", null);
+
+        editor.Text.Should().Be(before);
+        status.DidNotReceive().SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>());
+        second.Error.Should().Contain("refused by the code window, which gave no message")
+            .And.NotContain("Str.CodeEditor.Msg.TypingChangesReadOnlyText");
     }
 
     [AvaloniaFact]
     public async Task KeyboardTypingReportsTheSentKeyAndKeepsTheEarlierText()
     {
         var message = "Ready";
+        long version = 0;
+        status.MessageVersion.Returns(_ => version);
         status.Message.Returns(_ => message);
         status.When(s => s.SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>()))
-            .Do(call => message = call.Arg<string>());
+            .Do(call => { message = call.Arg<string>(); version++; });
         var editor = Show("Public Sub Foo()\r\n\r\nEnd Sub\r\n", header: "");
         editor.CaretOffset = "Public Sub Foo()\r\n".Length;
 

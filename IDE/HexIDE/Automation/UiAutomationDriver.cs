@@ -3770,6 +3770,7 @@ public static class UiAutomationDriver
                 var (key, mods, typed) = keys[i];
                 var area = AreaOf(at);
                 var textBefore = area?.Document.Text;
+                var messageBefore = area is null ? 0 : CodeWindowOf(area)?.StatusBar.MessageVersion ?? 0;
                 var span = area is null ? null : EditSpan(area, key, mods) ?? TypingSpan(area, typed);
                 if (DeliverKey(at, key, mods, typed) is { } handled)
                     (sentText, tookText) = (sentText + 1, tookText + (handled ? 1 : 0));
@@ -3781,7 +3782,7 @@ public static class UiAutomationDriver
                     unanswered++;
 
                 if (area is not null && span is not null && area.Document.Text == textBefore
-                    && AfterRefusedKey(area, span.Value, "type_text", KeyboardMechanism) is { } refused)
+                    && AfterRefusedKey(area, span.Value, "type_text", KeyboardMechanism, messageBefore) is { } refused)
                     return refused with { Error = refused.Error
                         + $" Key {i + 1} of {keys.Count} was sent; the {i} before it went in, and nothing after it was sent." };
 
@@ -4114,6 +4115,7 @@ public static class UiAutomationDriver
                 ? $"moved focus from {beforePath} to {(after is null ? "nothing" : PathWithin(top!, "Window", after) ?? Describe(after))}; "
                 : string.Empty;
             mechanism = focused ? "window-input" : "routed-key";
+            var messageBefore = deletionArea is null ? 0 : CodeWindowOf(deletionArea)?.StatusBar.MessageVersion ?? 0;
             var throughWindow = focused && RawKeyboard.Press(target, parsedKey, mods);
             // Keep delivery to a target that cannot take focus, or whose platform input is unavailable.
             if (!throughWindow)
@@ -4123,7 +4125,7 @@ public static class UiAutomationDriver
             }
 
             if (deletionArea is not null && span is not null && deletionArea.Document.Text == textBefore
-                && AfterRefusedKey(deletionArea, span.Value, "press_key", mechanism) is { } refused)
+                && AfterRefusedKey(deletionArea, span.Value, "press_key", mechanism, messageBefore) is { } refused)
                 return selectionDelete && !deletionArea.Selection.IsEmpty
                     ? refused with { Error = refused.Error + SelectionState(deletionArea) } : refused;
 
@@ -4296,12 +4298,12 @@ public static class UiAutomationDriver
             : null;
 
     // Only after delivery and an unchanged document: the code window, not the tool, guards the write.
-    private static InteractOutcome? AfterRefusedKey(TextArea area, EditedSpan span, string tool, string mechanism)
+    private static InteractOutcome? AfterRefusedKey(TextArea area, EditedSpan span, string tool, string mechanism, long messageBefore)
     {
         if (RefusedInReadOnlyRegion(area, span, tool, mechanism, written: "") is not { } refused
             || CodeWindowOf(area) is not { } editor)
             return null;
-        var reason = editor.StatusBar.IsDefault
+        var reason = editor.StatusBar.MessageVersion == messageBefore
             ? ", which gave no message"
             : $": \"{editor.StatusBar.Message}\"";
         return refused with { Error = $"{tool} refused by the code window{reason}. "
@@ -4349,7 +4351,7 @@ public static class UiAutomationDriver
         var region = editor.DescribeRegions(affected);
         var unchanged = written ?? "Nothing was written.";
         var prefix = $"{tool} refused: ";
-        var ownership = ", which only the IDE changes. ";
+        var ownership = ", which only the IDE changes." + (written == "" ? "" : " ");
         const string offsets = " Offsets count from the start of the file, in the text get_file_content returns.";
         if (span.Deletes && span.Length > 0 && span.Offset + span.Length == area.Caret.Offset)
             return new InteractOutcome(false, mechanism, null,
