@@ -34,6 +34,8 @@ public partial class StatusBarService : ObservableObject, IStatusBarService
         };
     }
 
+    public bool IsDefault => _isDefault;
+
     public string Message
     {
         get => _message;

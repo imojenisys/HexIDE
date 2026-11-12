@@ -152,8 +152,30 @@ public class TypeKeysTests : IDisposable
         editor.CaretOffset.Should().Be(caret);
         status.Received().SetTemporaryMessage("Str.CodeEditor.Msg.TypingChangesReadOnlyText", Arg.Any<TimeSpan>());
         result.Success.Should().BeFalse();
+        result.Error!.Split("Nothing was written").Length.Should().Be(2);
         result.Error.Should().Contain("refused by the code window: \"Str.CodeEditor.Msg.TypingChangesReadOnlyText\"")
             .And.Contain("Nothing was written.").And.Contain($"caret is at offset {caret}");
+    }
+
+    [AvaloniaFact]
+    public async Task RefusedBackspaceWithoutAMessageDoesNotQuoteReady()
+    {
+        status.Message.Returns("Ready");
+        status.IsDefault.Returns(true);
+        var editor = Show("Public Sub Foo()\r\n\r\nEnd Sub\r\n", header: "");
+        editor.CaretOffset = "Public Sub Foo()\r\n".Length;
+        await UiAutomationDriver.TypeKeysAsync(editor, "Attribute Foo.VB_Description");
+        status.ClearReceivedCalls();
+        var before = editor.Text;
+
+        var result = UiAutomationDriver.PressKey(editor, "Back", null);
+
+        editor.Text.Should().Be(before);
+        status.DidNotReceive().SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>());
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("refused by the code window, which gave no message")
+            .And.NotContain("Ready");
+        result.Error!.Split("Nothing was written").Length.Should().Be(2);
     }
 
     [AvaloniaFact]

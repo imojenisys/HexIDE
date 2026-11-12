@@ -12,6 +12,9 @@ public interface IStatusBarService : INotifyPropertyChanged
     /// <summary>Current status message (default "Ready").</summary>
     string Message { get; }
 
+    /// <summary>Whether the status bar is showing its default idle message.</summary>
+    bool IsDefault { get; }
+
     /// <summary>Current cursor line (1-based), or null when no code editor is active.</summary>
     int? Line { get; set; }
 

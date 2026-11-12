@@ -4298,11 +4298,14 @@ public static class UiAutomationDriver
     // Only after delivery and an unchanged document: the code window, not the tool, guards the write.
     private static InteractOutcome? AfterRefusedKey(TextArea area, EditedSpan span, string tool, string mechanism)
     {
-        if (RefusedInReadOnlyRegion(area, span, tool, mechanism) is not { } refused
+        if (RefusedInReadOnlyRegion(area, span, tool, mechanism, written: "") is not { } refused
             || CodeWindowOf(area) is not { } editor)
             return null;
-        return refused with { Error = $"{tool} refused by the code window: \"{editor.StatusBar.Message}\". "
-            + $"Nothing was written; the caret is at offset {area.Caret.Offset}. " + refused.Error };
+        var reason = editor.StatusBar.IsDefault
+            ? ", which gave no message"
+            : $": \"{editor.StatusBar.Message}\"";
+        return refused with { Error = $"{tool} refused by the code window{reason}. "
+            + $"Nothing was written. The caret is at offset {area.Caret.Offset}. " + refused.Error };
     }
 
     /// <summary>

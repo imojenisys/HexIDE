@@ -1846,8 +1846,9 @@ segment fails in a non-English IDE.
 
 `type_text` in keyboard mode and `press_key` SHALL deliver an attempted edit to the code window before
 judging its protected regions. When the key leaves the document unchanged in a protected region, the
-reply SHALL say "refused by the code window", quote the status-bar message and report the caret offset
-and that nothing was written. Keyboard typing SHALL stop after that sent key and identify the unsent
+reply SHALL say "refused by the code window", quote the non-default status-bar message or say
+"which gave no message" when the status bar shows its default, and report the caret offset and once
+that nothing was written. Keyboard typing SHALL stop after that sent key and identify the unsent
 remainder. Document-mode typing SHALL keep its pre-check and existing replies.
 
 #### Scenario: A character in a protected region
