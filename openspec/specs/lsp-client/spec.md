@@ -2007,6 +2007,13 @@ replacing an outer field SHALL retire its inner stops and copies while retaining
 It SHALL resolve the nine LSP 3.17 `TM_*` variables from the original editor selection, caret and file URI. Unset variables SHALL use their
 default or empty text; unknown names without defaults SHALL become editable placeholders after
 numbered stops. Unsaved documents SHALL leave file variables unset.
+A surviving linked occurrence SHALL become editable when its primary occurrence is retired.
+An edit confined to a child or a deletion adjacent to an empty child SHALL preserve that child.
+Touching stops SHALL retain independent boundaries, and touching empty copies SHALL mirror once each.
+Indentation adjustment SHALL apply to snippet text before resolving variables, preserving multiline
+variable values verbatim. `TM_FILENAME_BASE` SHALL retain a leading dot when there is no later extension.
+A dollar sign that begins no tabstop or variable SHALL be literal text; an unterminated braced expression
+SHALL still refuse the completion.
 The editor SHALL cache each numbered field’s rendered value and refuse a snippet exceeding
 1,048,576 UTF-16 code units before changing the document.
 

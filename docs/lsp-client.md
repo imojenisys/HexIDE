@@ -107,14 +107,18 @@ refused in full. The editor expands numbered snippet tabstops (`$1`, `${1}`), de
 (`${1:Item}`), repeated linked placeholders, choices (`${1|one,two|}`), escaped `$`, `}` and
 backslashes, nested placeholders (`${1:Dim ${2:x}}`), and final `$0`.
 Editing an inner field updates linked copies of its enclosing field. Replacing an outer field retires
-its nested stops and copies, while navigation continues to the remaining fields.
+its consumed nested stops and copies, while navigation continues to the remaining fields.
+A surviving linked occurrence becomes editable if its earlier copy was retired. Edits confined to a
+child, or deletions beside an empty child, keep that child. Touching fields keep independent boundaries,
+including empty linked copies.
 Tab visits positive stops in numeric order, Shift+Tab goes back, and Tab after the last stop
 finishes at `$0` (or the insertion end); Escape ends linking. Multiline whitespace remains as sent
 under `asIs` (the default). An item requesting `adjustIndentation` (mode 2), directly or through
 `CompletionList.itemDefaults`, prefixes each later line with the caret line’s leading whitespace up to the caret,
 keeping that line’s own indentation. Tabs and spaces in both prefixes are preserved exactly.
 An explicit item mode overrides the list default. Snippet stops follow the adjusted text; additional
-edits remain literal.
+edits remain literal. Indentation adjustment applies to snippet text before variable resolution;
+multiline variable values retain their original whitespace.
 Unsupported or malformed snippet syntax refuses the whole completion before applying additional edits.
 Numbered field values are cached during expansion; rendered text over 1 MiB (1,048,576 UTF-16
 code units) also refuses the item, bounding repeated nested defaults.
@@ -127,7 +131,9 @@ close that list before using Tab to navigate the snippet.
 Snippet variables use the original selection, caret line/word, zero/one-based line numbers, and
 file URI for the nine `TM_*` variables listed in LSP 3.17. An unset variable uses its default (which
 can contain placeholders), or empty text. Unknown names without defaults become editable placeholders after
-numbered stops. Unsaved documents have no file path, so their file variables use defaults or empty text.
+numbered stops. A leading dot alone does not count as a filename extension (`.gitignore` keeps its
+whole name in `TM_FILENAME_BASE`). A `$` that begins no expression is literal text; an unterminated
+`${…` still refuses the item. Unsaved documents have no file path, so their file variables use defaults or empty text.
 Variable transforms remain unsupported and refuse the entire item, even inside an unused default.
 `CompletionForeignTests` requests a function completion from clangd and checks the inserted argument,
 editable stop, and final caret (#3483).

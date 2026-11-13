@@ -308,13 +308,15 @@ public class CompletionSnippetTests
     }
 
     [AvaloniaFact]
-    public void EditingAnInnerFieldWithTheSameExtentRetiresOnlyItsDescendants()
+    public void EditingAnInnerFieldWithTheSameExtentKeepsItsDescendants()
     {
         var area = Complete("${1:${2:${3:x}}} ${4:next}$0");
         Key(area, Avalonia.Input.Key.Tab);
         area.Selection.ReplaceSelectionWithText("y");
         area.Document.Text.Should().Be("y next");
         Key(area, Avalonia.Input.Key.Tab, KeyModifiers.Shift);
+        area.Selection.GetText().Should().Be("y");
+        Key(area, Avalonia.Input.Key.Tab);
         area.Selection.GetText().Should().Be("y");
         Key(area, Avalonia.Input.Key.Tab);
         area.Selection.GetText().Should().Be("y");
@@ -336,6 +338,91 @@ public class CompletionSnippetTests
         area.Selection.GetText().Should().Be("entry");
         area.Selection.ReplaceSelectionWithText("last");
         area.Document.Text.Should().Be("last replacement replacement");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("${1:a ${2:x}} $2", "q x")]
+    [InlineData("${1:a ${2:x}} ${3:b $2}", "q b x")]
+    public void ReplacingParentPromotesSurvivingChild(string snippet, string expected)
+    {
+        var area = Complete(snippet);
+        area.Selection.ReplaceSelectionWithText("q");
+        area.Document.Text.Should().Be(expected);
+        Key(area, Avalonia.Input.Key.Tab);
+        area.Selection.GetText().Should().Be("x");
+        area.Selection.ReplaceSelectionWithText("y");
+        area.Document.Text.Should().Be(expected[..^1] + "y");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("${1:Dim ${2:x}}", 4, 1, "y", "y")]
+    [InlineData("${1:foo($2)}", 4, 1, "", "")]
+    public void EditingWithinOrBesideChildKeepsIt(string snippet, int offset, int length, string value, string child)
+    {
+        var area = Complete(snippet);
+        area.Selection = Selection.Create(area, offset, offset + length);
+        area.Selection.ReplaceSelectionWithText(value);
+        Key(area, Avalonia.Input.Key.Tab);
+        area.StackedInputHandlers.Should().NotBeEmpty();
+        area.Selection.GetText().Should().Be(child);
+    }
+
+    [AvaloniaFact]
+    public void TypingInClearedChildDoesNotExtendItsSibling()
+    {
+        var area = Complete("${1:${2:a}${3:b}}");
+        Key(area, Avalonia.Input.Key.Tab);
+        area.Selection.ReplaceSelectionWithText("");
+        area.Selection.ReplaceSelectionWithText("z");
+        area.Document.Text.Should().Be("zb");
+        Key(area, Avalonia.Input.Key.Tab);
+        area.Selection.GetText().Should().Be("b");
+    }
+
+    [AvaloniaFact]
+    public void TouchingEmptyCopiesMirrorOnceEach()
+    {
+        var area = Complete("${3:$1$1}");
+        area.Selection.ReplaceSelectionWithText("z");
+        area.Document.Text.Should().Be("zz");
+        Key(area, Avalonia.Input.Key.Tab);
+        area.Selection.GetText().Should().Be("zz");
+    }
+
+    [AvaloniaFact]
+    public void AdjustIndentationPreservesMultilineVariableValues()
+    {
+        var area = new TextArea { Document = new TextDocument("  word\nselected") };
+        area.Caret.Offset = 6;
+        area.Selection = Selection.Create(area, 2, area.Document.TextLength);
+        var item = new CompletionItem("variable", CompletionItemKind.Text, InsertTextFormat: 2,
+            InsertText: "${1:begin\n$TM_SELECTED_TEXT\n${2:end}}") { InsertTextMode = 2 };
+        new VbCompletionData(item, (_, _) => false).Complete(area,
+            new TextSegment { StartOffset = 2, Length = area.Document.TextLength - 2 }, EventArgs.Empty);
+        area.Document.Text.Should().Be("  begin\n  word\nselected\n  end");
+        Key(area, Avalonia.Input.Key.Tab);
+        area.Selection.GetText().Should().Be("end");
+    }
+
+    [AvaloniaFact]
+    public void DotfileBaseKeepsItsLeadingDot()
+    {
+        var area = new TextArea { Document = new TextDocument("word") };
+        var item = new CompletionItem("file", CompletionItemKind.Text, InsertTextFormat: 2,
+            InsertText: "${TM_FILENAME_BASE:default}");
+        new VbCompletionData(item, (_, _) => false,
+            () => new Uri(Path.Combine(Path.GetTempPath(), ".gitignore")).AbsoluteUri).Complete(area,
+            new TextSegment { StartOffset = 0, Length = 4 }, EventArgs.Empty);
+        area.Document.Text.Should().Be(".gitignore");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("$ ")]
+    [InlineData("$)")]
+    [InlineData("$")]
+    public void DollarWithoutAnExpressionIsLiteral(string source)
+    {
+        Complete(source).Document.Text.Should().Be(source);
     }
 
     [AvaloniaFact]

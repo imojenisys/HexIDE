@@ -3437,19 +3437,19 @@ internal sealed class VbCompletionData(CompletionItem item, Func<int, int, bool>
             mainText = main.NewText;
         }
 
-        var snippet = item.InsertTextFormat == 2
-            ? CompletionSnippet.Parse(mainText, CompletionSnippet.Variables(textArea, documentUri?.Invoke())) : null;
-        if (item.InsertTextFormat == 2 && snippet is null)
-            return;
+        string? indentation = null;
         if (item.InsertTextMode == 2)
         {
             var line = document.GetLineByOffset(textArea.Caret.Offset);
             var beforeCaret = document.GetText(line.Offset, textArea.Caret.Offset - line.Offset);
-            var indentation = new string(beforeCaret.TakeWhile(c => c is ' ' or '\t').ToArray());
-            var adjusted = (snippet ?? new CompletionSnippet(mainText, [])).AdjustIndentation(indentation);
-            if (snippet is not null) snippet = adjusted;
-            mainText = adjusted.Text;
+            indentation = new string(beforeCaret.TakeWhile(c => c is ' ' or '\t').ToArray());
         }
+        var snippet = item.InsertTextFormat == 2
+            ? CompletionSnippet.Parse(mainText, CompletionSnippet.Variables(textArea, documentUri?.Invoke()), indentation) : null;
+        if (item.InsertTextFormat == 2 && snippet is null)
+            return;
+        if (snippet is null && indentation is not null)
+            mainText = new CompletionSnippet(mainText, []).AdjustIndentation(indentation).Text;
         mainText = snippet?.Text ?? mainText;
         var edits = new List<(int Offset, int Length, string Text)> { (mainOffset, mainLength, mainText) };
         foreach (var edit in item.AdditionalTextEdits ?? [])

@@ -17,7 +17,7 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
     private sealed record Part(string? Text = null, int? Number = null, string? Variable = null,
         IReadOnlyList<Part>? Children = null, string[]? Choices = null);
 
-    public static CompletionSnippet? Parse(string source, IReadOnlyDictionary<string, string?>? variables = null)
+    public static CompletionSnippet? Parse(string source, IReadOnlyDictionary<string, string?>? variables = null, string? indentation = null)
     {
         var position = 0;
         var definitions = new Dictionary<int, Part>();
@@ -70,7 +70,12 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
                 }
                 else
                 {
-                    if (position >= source.Length || !IsVariableStart(source[position])) return null;
+                    if (position >= source.Length || !IsVariableStart(source[position]))
+                    {
+                        if (braced) return null;
+                        literal.Append('$');
+                        continue;
+                    }
                     position++;
                     while (position < source.Length && (IsVariableStart(source[position]) || char.IsAsciiDigit(source[position]))) position++;
                     variable = source[first..position];
@@ -127,7 +132,8 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
             void Flush()
             {
                 if (literal.Length == 0) return;
-                result.Add(new(Text: literal.ToString()));
+                result.Add(new(Text: indentation is null ? literal.ToString()
+                    : new CompletionSnippet(literal.ToString(), []).AdjustIndentation(indentation).Text));
                 literal.Clear();
             }
         }
@@ -220,10 +226,17 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
             ["TM_LINE_INDEX"] = (line.LineNumber - 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["TM_LINE_NUMBER"] = line.LineNumber.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["TM_FILENAME"] = path is null ? null : System.IO.Path.GetFileName(path),
-            ["TM_FILENAME_BASE"] = path is null ? null : System.IO.Path.GetFileNameWithoutExtension(path),
+            ["TM_FILENAME_BASE"] = path is null ? null : FileBase(path),
             ["TM_DIRECTORY"] = path is null ? null : System.IO.Path.GetDirectoryName(path),
             ["TM_FILEPATH"] = path
         };
+
+        static string FileBase(string path)
+        {
+            var name = System.IO.Path.GetFileName(path);
+            var dot = name.LastIndexOf('.');
+            return dot > 0 ? name[..dot] : name;
+        }
 
         static bool IsWord(char c) => char.IsLetterOrDigit(c) || c == '_';
     }
@@ -300,6 +313,7 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
         private readonly InsertionContext _context;
         private bool _attached;
         private bool _copying;
+        private Element.Occurrence? _copyTarget;
         public Element[] Elements { get; }
         private int _selectedNumber;
 
@@ -340,18 +354,41 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
                 _context.Deactivate(new SnippetEventArgs(DeactivateReason.Deleted));
                 return;
             }
-            if (_copying || e.RemovalLength == 0) return;
-            var selected = Elements.First(element => element.Number == _selectedNumber).Segment;
-            foreach (var element in Elements.Where(element => element.IsEditable && element.Number != _selectedNumber))
+            var selectedElement = Elements.First(element => element.Number == _selectedNumber);
+            var selected = selectedElement.Segment;
+            if (!_copying && e.RemovalLength > 0)
             {
-                foreach (var occurrence in element.Occurrences.ToArray())
+                foreach (var element in Elements.Where(element => element.IsEditable && element.Number != _selectedNumber))
                 {
-                    var segment = occurrence.Segment;
-                    if (segment.Offset < selected.Offset || segment.EndOffset > selected.EndOffset
-                        || e.Offset > segment.Offset || e.Offset + e.RemovalLength < segment.EndOffset
-                        || !DescendsFrom(occurrence.Parent, _selectedNumber)) continue;
-                    if (ReferenceEquals(occurrence, element.Occurrences[0])) element.IsEditable = false;
-                    else element.Occurrences.Remove(occurrence);
+                    foreach (var occurrence in element.Occurrences.ToArray())
+                    {
+                        var segment = occurrence.Segment;
+                        if (segment.Offset < selected.Offset || segment.EndOffset > selected.EndOffset
+                            || e.Offset > segment.Offset || e.Offset + e.RemovalLength < segment.EndOffset
+                            || !DescendsFrom(occurrence.Parent, _selectedNumber)) continue;
+                        // A confined edit keeps the child, even when it shares its parent's extent.
+                        // An adjacent deletion does not consume an empty stop.
+                        if (e.Offset == segment.Offset && e.RemovalLength == segment.Length) continue;
+                        if (segment.Length == 0 && (e.Offset == segment.Offset
+                            || e.Offset + e.RemovalLength == segment.EndOffset)) continue;
+                        if (element.Occurrences.Count == 1) element.IsEditable = false;
+                        else element.Occurrences.Remove(occurrence);
+                    }
+                }
+            }
+            var target = _copyTarget ?? selectedElement.Occurrences[0];
+            foreach (var element in Elements.Where(element => element.IsEditable))
+            {
+                foreach (var occurrence in element.Occurrences)
+                {
+                    var ownsEdit = ReferenceEquals(occurrence, target)
+                        || e.RemovalLength > 0 && e.Offset >= occurrence.Segment.Offset
+                        && e.Offset + e.RemovalLength <= occurrence.Segment.EndOffset
+                        || DescendsFrom(target.Parent, element.Number)
+                        && occurrence.Segment.Offset <= e.Offset && occurrence.Segment.EndOffset >= e.Offset + e.RemovalLength;
+                    occurrence.Start.MovementType = ownsEdit ? AnchorMovementType.BeforeInsertion : AnchorMovementType.AfterInsertion;
+                    occurrence.End.MovementType = ownsEdit || occurrence.Segment.Length == 0
+                        ? AnchorMovementType.AfterInsertion : AnchorMovementType.BeforeInsertion;
                 }
             }
         }
@@ -369,12 +406,15 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
                 foreach (var element in Elements.Where(element => element.IsEditable).OrderByDescending(element => element.Depth))
                 {
                     var value = _area.Document.GetText(element.Segment);
-                    foreach (var mirror in element.Occurrences.Skip(1).Select(occurrence => occurrence.Segment).OrderByDescending(segment => segment.Offset))
-                        if (_area.Document.GetText(mirror) != value)
-                            _area.Document.Replace(mirror.Offset, mirror.Length, value);
+                    foreach (var mirror in element.Occurrences.Skip(1).OrderByDescending(occurrence => occurrence.Segment.Offset))
+                        if (_area.Document.GetText(mirror.Segment) != value)
+                        {
+                            _copyTarget = mirror;
+                            _area.Document.Replace(mirror.Segment.Offset, mirror.Segment.Length, value);
+                        }
                 }
             }
-            finally { _copying = false; }
+            finally { _copyTarget = null; _copying = false; }
         }
 
         public sealed class Element : IActiveElement
@@ -385,7 +425,10 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
             public int Depth => Parents.Select(parent => _owner.Elements.FirstOrDefault(element => element.Number == parent))
                 .OfType<Element>().Select(enclosing => 1 + enclosing.Depth).DefaultIfEmpty(0).Max();
             public string[]? Choices { get; }
-            public sealed record Occurrence(AnchorSegment Segment, int? Parent);
+            public sealed record Occurrence(TextAnchor Start, TextAnchor End, int? Parent)
+            {
+                public AnchorSegment Segment { get; } = new(Start, End);
+            }
             public List<Occurrence> Occurrences { get; }
             public bool IsEditable { get; set; } = true;
             public ISegment Segment => Occurrences[0].Segment;
@@ -406,7 +449,7 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
                     var end = owner._area.Document.CreateAnchor(offset + stop.Offset + stop.Length);
                     end.MovementType = AnchorMovementType.AfterInsertion;
                     end.SurviveDeletion = true;
-                    return new Occurrence(new AnchorSegment(start, end), stop.Parent);
+                    return new Occurrence(start, end, stop.Parent);
                 }).ToList();
 
                 bool HasChildren(Stop stop) => allStops.Any(child => child.Parent == stop.Number
