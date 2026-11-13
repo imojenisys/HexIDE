@@ -1,0 +1,61 @@
+diff --git a/IDE/HexIDE.Tests/Infrastructure/McpRestartTests.cs b/IDE/HexIDE.Tests/Infrastructure/McpRestartTests.cs
+index 4924b16a4..e774cc826 100644
+--- a/IDE/HexIDE.Tests/Infrastructure/McpRestartTests.cs
++++ b/IDE/HexIDE.Tests/Infrastructure/McpRestartTests.cs
+@@ -137,7 +137,10 @@ public class McpRestartTests
+         };
+         if (maxReconnectionAttempts is { } attempts)
+             options.MaxReconnectionAttempts = attempts;
+-        var transport = new HttpClientTransport(options);
++        var transport = Environment.GetEnvironmentVariable("HEXIDE_778_NO_POOL") == "1"
++            ? new HttpClientTransport(options, new HttpClient(new SocketsHttpHandler
++                { PooledConnectionLifetime = TimeSpan.Zero }), ownsHttpClient: true)
++            : new HttpClientTransport(options);
+         return McpClient.CreateAsync(transport,
+             cancellationToken: TestContext.Current.CancellationToken);
+     }
+@@ -244,6 +247,10 @@ public class McpRestartTests
+     [Fact]
+     public async Task A_client_attached_before_a_restart_is_answered_after_it()
+     {
++        using var events = new RestartNetworkEvents();
++        for (var iteration = 0; iteration < 2000; iteration++)
++        {
++        events.Mark($"iteration {iteration + 1}");
+         var output = TestContext.Current.TestOutputHelper;
+         var trace = new McpRestartDiagnostics((level, message) => output?.WriteLine($"[{level}] {message}"));
+         var port = FreePort();
+@@ -270,6 +277,8 @@ public class McpRestartTests
+         finally
+         {
+             await StopAsync(second);
++            events.Flush();
++        }
+         }
+     }
+ 
+@@ -678,3 +687,24 @@ public class McpRestartTests
+             "the server is started with the session --session named, or the guard has nothing to compare");
+     }
+ }
++
++internal sealed class RestartNetworkEvents : System.Diagnostics.Tracing.EventListener
++{
++    private readonly System.Collections.Concurrent.ConcurrentQueue<string> events = new();
++    protected override void OnEventSourceCreated(System.Diagnostics.Tracing.EventSource source)
++    {
++        if (source.Name is "System.Net.Http" or "System.Net.Sockets" or "System.Net.NameResolution")
++            EnableEvents(source, System.Diagnostics.Tracing.EventLevel.Verbose);
++    }
++    protected override void OnEventWritten(System.Diagnostics.Tracing.EventWrittenEventArgs args)
++    {
++        events?.Enqueue($"{System.Diagnostics.Stopwatch.GetTimestamp()} {args.EventSource.Name} {args.EventName} {string.Join(", ", args.Payload?.ToArray() ?? [])}");
++    }
++    public void Mark(string text) => events.Enqueue(text);
++    public void Flush()
++    {
++        var lines = new List<string>();
++        while (events.TryDequeue(out var line)) lines.Add(line);
++        File.AppendAllLines(Environment.GetEnvironmentVariable("HEXIDE_778_TRACE")!, lines);
++    }
++}
