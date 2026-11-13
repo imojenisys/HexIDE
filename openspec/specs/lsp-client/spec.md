@@ -2007,6 +2007,12 @@ replacing an outer field SHALL retire its inner stops and copies while retaining
 It SHALL resolve the nine LSP 3.17 `TM_*` variables from the original editor selection, caret and file URI. Unset variables SHALL use their
 default or empty text; unknown names without defaults SHALL become editable placeholders after
 numbered stops. Unsaved documents SHALL leave file variables unset.
+The editor SHALL cache each numbered field’s rendered value and refuse a snippet exceeding
+1,048,576 UTF-16 code units before changing the document.
+
+#### Scenario: Repeated defaults exceed the expansion limit
+- **WHEN** nested linked defaults would expand beyond 1,048,576 UTF-16 code units
+- **THEN** the completion is refused without changing the document
 
 #### Scenario: A completion repeats a loop variable
 - **WHEN** a snippet contains `${1:Item}` followed by `$1` and `${2:c}`

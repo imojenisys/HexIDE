@@ -34,6 +34,14 @@ public class CompletionSnippetTests
         args.Handled.Should().BeTrue();
     }
 
+    [Fact]
+    public void ExponentiallyLinkedDefaultsRefuseOutputOverOneMiB()
+    {
+        var source = string.Concat(Enumerable.Range(1, 21)
+            .Select(number => "${" + number + ":$" + (number + 1) + "$" + (number + 1) + "}")) + "${22:x}";
+        CompletionSnippet.Parse(source).Should().BeNull();
+    }
+
     [AvaloniaFact]
     public void DefaultsAreSelectedAndLinkedWhileAdditionalEditsRemainLiteral()
     {

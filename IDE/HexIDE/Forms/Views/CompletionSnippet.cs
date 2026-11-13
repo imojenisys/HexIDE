@@ -27,6 +27,8 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
         var nextNumber = definitions.Keys.DefaultIfEmpty(0).Max();
         var text = new StringBuilder();
         var stops = new List<Stop>();
+        const int maxRenderedLength = 1024 * 1024;
+        var renderedNumbers = new Dictionary<int, string>();
         var resolving = new HashSet<int>();
         if (!Render(parts, text, stops)) return null;
         return new(text.ToString(), stops);
@@ -134,22 +136,44 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
         {
             foreach (var part in values)
             {
-                if (part.Text is { } literal) { output.Append(literal); continue; }
+                if (part.Text is { } literal)
+                {
+                    if (literal.Length > maxRenderedLength - output.Length) return false;
+                    output.Append(literal);
+                    continue;
+                }
                 var start = output.Length;
                 if (part.Number is { } number)
                 {
-                    if (resolving.Count > 100 || !resolving.Add(number)) return false;
                     var definition = definitions[number];
-                    if (definition.Choices is { } choices) output.Append(choices[0]);
-                    else if (definition.Children is { } children && !Render(children, output,
-                                 ReferenceEquals(part, definition) ? locations : null, number)) return false;
-                    resolving.Remove(number);
+                    if (!renderedNumbers.TryGetValue(number, out var rendered))
+                    {
+                        if (resolving.Count > 100 || !resolving.Add(number)) return false;
+                        var buffer = new StringBuilder();
+                        if (definition.Choices is { } choices)
+                        {
+                            if (choices[0].Length > maxRenderedLength) return false;
+                            buffer.Append(choices[0]);
+                        }
+                        else if (definition.Children is { } children && !Render(children, buffer, null)) return false;
+                        resolving.Remove(number);
+                        renderedNumbers[number] = rendered = buffer.ToString();
+                    }
+                    if (rendered.Length > maxRenderedLength - output.Length) return false;
+                    if (locations is not null && ReferenceEquals(part, definition) && definition.Children is { } nestedChildren)
+                    {
+                        if (!Render(nestedChildren, output, locations, number)) return false;
+                    }
+                    else output.Append(rendered);
                     locations?.Add(new(number, start, output.Length - start, definition.Choices, parent));
                 }
                 else if (part.Variable is { } variable)
                 {
                     if (variables?.TryGetValue(variable, out var value) == true && !string.IsNullOrEmpty(value))
+                    {
+                        if (value.Length > maxRenderedLength - output.Length) return false;
                         output.Append(value);
+                    }
                     else if (part.Children is { } children)
                     {
                         if (!Render(children, output, locations, parent)) return false;
@@ -161,6 +185,7 @@ internal sealed record CompletionSnippet(string Text, IReadOnlyList<CompletionSn
                             if (nextNumber == int.MaxValue) return false;
                             unknowns[variable] = index = ++nextNumber;
                         }
+                        if (variable.Length > maxRenderedLength - output.Length) return false;
                         output.Append(variable);
                         locations?.Add(new(index, start, variable.Length, Parent: parent));
                     }

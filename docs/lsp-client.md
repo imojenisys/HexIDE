@@ -116,6 +116,8 @@ keeping that line’s own indentation. Tabs and spaces in both prefixes are pres
 An explicit item mode overrides the list default. Snippet stops follow the adjusted text; additional
 edits remain literal.
 Unsupported or malformed snippet syntax refuses the whole completion before applying additional edits.
+Numbered field values are cached during expansion; rendered text over 1 MiB (1,048,576 UTF-16
+code units) also refuses the item, bounding repeated nested defaults.
 Choice placeholders offer their values in the completion picker; selecting a value updates linked
 occurrences. Choice pickers also appear under their editor in automation dumps and snapshots,
 with each choice named by its text. Enter accepts a choice without a line break and keeps snippet navigation active (#3056). Commas and pipes can be escaped within choices.
