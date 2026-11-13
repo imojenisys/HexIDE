@@ -1203,6 +1203,12 @@ the conversation, rather than waiting out a diagnostics timeout. A clean exit or
 connection is not classified as that failure. This adds no retry and does not establish the cause of the
 intermittent SIGPIPE.
 
+The Linux stream-ownership review and reproducible CPU-load/pipe probes for #449
+are in [the investigation record](../scripts/probes/449-investigation.md). Stderr
+draining predates the last reported failure. Initialize-time RPC disposal can
+close stdout while the child is alive; a later SIGPIPE alone does not explain
+why initialize first went unanswered. The investigation does not claim a fix.
+
 The untitled-document tests drain and poll for clangd's URI refusal, with a five-second deadline, before
 asserting on standard error (#2269). Diagnostics arriving does not mean the independent stderr reader
 has finished recording those lines. The ruff test checks watched-file negotiation alongside pull diagnostics (#456).
