@@ -79,9 +79,9 @@ the production formatter and source-generated context to guard absence and prese
 | Custom | `vb/builtinSymbols` — see *Custom methods* |
 
 Initialize declares `textDocument.completion` with all 25 LSP completion kinds, `preselectSupport: true`,
-`documentationFormat: ["plaintext"]`, `insertReplaceSupport: true`, `insertTextModeSupport` with modes
-1 and 2, and default `insertTextMode: 1` (`asIs`). List item defaults advertise only `insertTextMode`.
-Snippets (#3483), resolve, commit characters, context and other list item defaults are not advertised.
+`documentationFormat: ["plaintext"]`, `snippetSupport: true`, `insertReplaceSupport: true`,
+`insertTextModeSupport` with modes 1 and 2, and default `insertTextMode: 1` (`asIs`). List item defaults advertise only `insertTextMode`.
+Resolve, commit characters, context and other list item defaults are not advertised.
 This follows the [LSP 3.17 completion capability contract](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#completionClientCapabilities).
 Items from all servers are ordered by `sortText ?? label`, ordinal. Matching uses `filterText ?? label`,
 while the displayed label and insertion fallback remain the label. The full list stays visible. The first
@@ -105,7 +105,9 @@ document coordinates and commit with the main edit as one undo step. The caret f
 insertion, including shifts from earlier edits. Invalid, overlapping or protected edit sets are
 refused in full. The editor expands numbered snippet tabstops (`$1`, `${1}`), defaults
 (`${1:Item}`), repeated linked placeholders, choices (`${1|one,two|}`), escaped `$`, `}` and
-backslashes, and final `$0`.
+backslashes, nested placeholders (`${1:Dim ${2:x}}`), and final `$0`.
+Editing an inner field updates linked copies of its enclosing field. Replacing an outer field retires
+its nested stops and copies, while navigation continues to the remaining fields.
 Tab visits positive stops in numeric order, Shift+Tab goes back, and Tab after the last stop
 finishes at `$0` (or the insertion end); Escape ends linking. Multiline whitespace remains as sent
 under `asIs` (the default). An item requesting `adjustIndentation` (mode 2), directly or through
@@ -120,8 +122,13 @@ with each choice named by its text. Enter accepts a choice without a line break 
 After typing in a placeholder, Tab advances when no completion list is open. With a completion
 list open, Tab accepts its selected item, following the editor's ordinary completion rule;
 close that list before using Tab to navigate the snippet.
-What's left is #3483: nested placeholders and variables still need support
-before `snippetSupport` can be advertised. The clangd snippet insertion proof remains with that slice.
+Snippet variables use the original selection, caret line/word, zero/one-based line numbers, and
+file URI for the nine `TM_*` variables listed in LSP 3.17. An unset variable uses its default (which
+can contain placeholders), or empty text. Unknown names without defaults become editable placeholders after
+numbered stops. Unsaved documents have no file path, so their file variables use defaults or empty text.
+Variable transforms remain unsupported and refuse the entire item, even inside an unused default.
+`CompletionForeignTests` requests a function completion from clangd and checks the inserted argument,
+editable stop, and final caret (#3483).
 
 Completion replies accept `CompletionItem[]`, `CompletionList`, or `null` (#2204). Bare arrays
 are normalized to a complete list (`isIncomplete: false`); list objects retain their supplied flag.
