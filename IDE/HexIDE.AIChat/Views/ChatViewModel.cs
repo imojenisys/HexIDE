@@ -393,14 +393,26 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             reason = result;
         }
 
-        var file = FileNameOf(tc) ?? ChatStrings.GetString("Str.AIChat.TheFile");
+        var file = FileNameOf(tc);
         if (tc.Name == "apply_edit")
-            return succeeded
-                ? new ChatMessageViewModel("assistant", ChatStrings.Format("Str.AIChat.Applied", file), isStatusLine: true)
-                : new ChatMessageViewModel("assistant", ChatStrings.Format("Str.AIChat.NotAppliedTo", file, reason ?? ChatStrings.GetString("Str.AIChat.NoReason")), isError: true);
+        {
+            if (succeeded)
+                return new ChatMessageViewModel("assistant", file is null
+                    ? ChatStrings.GetString("Str.AIChat.AppliedUnnamed")
+                    : ChatStrings.Format("Str.AIChat.Applied", file), isStatusLine: true);
+            return new ChatMessageViewModel("assistant", file is null
+                ? reason is null
+                    ? ChatStrings.GetString("Str.AIChat.NotAppliedToUnnamedNoReason")
+                    : ChatStrings.Format("Str.AIChat.NotAppliedToUnnamed", reason)
+                : reason is null
+                    ? ChatStrings.Format("Str.AIChat.NotAppliedToNoReason", file)
+                    : ChatStrings.Format("Str.AIChat.NotAppliedTo", file, reason), isError: true);
+        }
         return succeeded
             ? null
-            : new ChatMessageViewModel("assistant", ChatStrings.Format("Str.AIChat.ToolFailed", tc.Name, reason ?? ChatStrings.GetString("Str.AIChat.NoReason")), isError: true);
+            : new ChatMessageViewModel("assistant", reason is null
+                ? ChatStrings.Format("Str.AIChat.ToolFailedNoReason", tc.Name)
+                : ChatStrings.Format("Str.AIChat.ToolFailed", tc.Name, reason), isError: true);
     }
 
     /// <summary>The <c>file_name</c> a tool call names, or null.</summary>
@@ -424,7 +436,9 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
         return tc.Name switch
         {
-            "apply_edit"   => ChatStrings.Format("Str.AIChat.AllowReplace", string.IsNullOrEmpty(file) ? ChatStrings.GetString("Str.AIChat.AFile") : $"“{file}”"),
+            "apply_edit"   => file is null
+                ? ChatStrings.GetString("Str.AIChat.AllowReplaceUnnamed")
+                : ChatStrings.Format("Str.AIChat.AllowReplace", file),
             "run_project"  => ChatStrings.GetString("Str.AIChat.AllowRunProject"),
             "stop_project" => ChatStrings.GetString("Str.AIChat.AllowStopProject"),
             _              => ChatStrings.Format("Str.AIChat.AllowTool", tc.Name),

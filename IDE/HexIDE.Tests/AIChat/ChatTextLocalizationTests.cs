@@ -1,4 +1,6 @@
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.Reflection;
 using System.IO;
 using System.Net;
@@ -25,10 +27,13 @@ public class ChatTextLocalizationTests
     [InlineData("NotApplied")]
     [InlineData("UsingTool")]
     [InlineData("ToolFailed")]
-    [InlineData("TheFile")]
-    [InlineData("NoReason")]
     [InlineData("AllowReplace")]
-    [InlineData("AFile")]
+    [InlineData("AllowReplaceUnnamed")]
+    [InlineData("AppliedUnnamed")]
+    [InlineData("NotAppliedToUnnamed")]
+    [InlineData("NotAppliedToNoReason")]
+    [InlineData("NotAppliedToUnnamedNoReason")]
+    [InlineData("ToolFailedNoReason")]
     [InlineData("AllowRunProject")]
     [InlineData("AllowStopProject")]
     [InlineData("AllowTool")]
@@ -77,7 +82,7 @@ public class ChatTextLocalizationTests
             var prompt = approval.RawContent;
             approval.Reject();
             await send.WaitAsync(timeout.Token);
-            prompt.Should().Be("Der KI erlauben, den gesamten Inhalt von “Module1.bas” zu ersetzen?");
+            prompt.Should().Be("Der KI erlauben, den gesamten Inhalt von „Module1.bas“ zu ersetzen?");
             chat.SessionLog.Single(m => m.Role == "tool").Content.Should().Contain("The user declined this action.");
         }
         finally
@@ -120,7 +125,8 @@ public class ChatTextLocalizationTests
     }
 
     [AvaloniaTheory]
-    [InlineData("apply_edit", "{}", "AllowReplace", "Replace a file")]
+    [InlineData("apply_edit", "{}", "AllowReplaceUnnamed", "Replace a file")]
+    [InlineData("apply_edit", "{\"file_name\":\"Module1.bas\"}", "AllowReplace", "Replace «Module1.bas»")]
     [InlineData("run_project", "{}", "AllowRunProject", "Run")]
     [InlineData("stop_project", "{}", "AllowStopProject", "Stop")]
     [InlineData("other_tool", "{}", "AllowTool", "Tool other_tool")]
@@ -128,19 +134,18 @@ public class ChatTextLocalizationTests
     {
         Application.Current!.Resources["Str.AIChat." + key] = key switch
         {
-            "AllowReplace" => "Replace {0}", "AllowTool" => "Tool {0}",
+            "AllowReplace" => "Replace «{0}»", "AllowReplaceUnnamed" => "Replace a file", "AllowTool" => "Tool {0}",
             "AllowRunProject" => "Run", _ => "Stop"
         };
-        Application.Current.Resources["Str.AIChat.AFile"] = "a file";
         var prompt = typeof(ChatViewModel).GetMethod("DescribeWriteTool", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, [new ToolCall("id", tool, arguments)]);
         prompt.Should().Be(expected);
     }
 
     [AvaloniaTheory]
-    [InlineData("apply_edit", "{\"success\":true}", "Applied FILE")]
-    [InlineData("apply_edit", "{\"success\":false}", "Refused FILE: REASON")]
-    [InlineData("run_project", "{\"success\":false}", "Failed run_project: REASON")]
+    [InlineData("apply_edit", "{\"success\":true}", "Applied unnamed")]
+    [InlineData("apply_edit", "{\"success\":false}", "Refused unnamed without reason")]
+    [InlineData("run_project", "{\"success\":false}", "Failed run_project without reason")]
     [InlineData("stop_project", "{\"error\":\"raw detail\"}", "Failed stop_project: raw detail")]
     public void WriteOutcomesUseResources(string tool, string result, string expected)
     {
@@ -148,12 +153,63 @@ public class ChatTextLocalizationTests
         resources["Str.AIChat.Applied"] = "Applied {0}";
         resources["Str.AIChat.NotAppliedTo"] = "Refused {0}: {1}";
         resources["Str.AIChat.ToolFailed"] = "Failed {0}: {1}";
-        resources["Str.AIChat.TheFile"] = "FILE";
-        resources["Str.AIChat.NoReason"] = "REASON";
+        resources["Str.AIChat.AppliedUnnamed"] = "Applied unnamed";
+        resources["Str.AIChat.NotAppliedToUnnamedNoReason"] = "Refused unnamed without reason";
+        resources["Str.AIChat.ToolFailedNoReason"] = "Failed {0} without reason";
         var outcome = (ChatMessageViewModel)typeof(ChatViewModel)
             .GetMethod("DescribeWriteOutcome", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, [new ToolCall("id", tool, "{}"), result])!;
         outcome.RawContent.Should().Be(expected);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("{}", "{\"success\":true}", "AppliedUnnamed")]
+    [InlineData("{\"file_name\":\"Module1.bas\"}", "{\"success\":true}", "Applied")]
+    [InlineData("{}", "{\"success\":false,\"error\":\"detail\"}", "NotAppliedToUnnamed")]
+    [InlineData("{\"file_name\":\"Module1.bas\"}", "{\"success\":false,\"error\":\"detail\"}", "NotAppliedTo")]
+    [InlineData("{}", "{\"success\":false}", "NotAppliedToUnnamedNoReason")]
+    [InlineData("{\"file_name\":\"Module1.bas\"}", "{\"success\":false}", "NotAppliedToNoReason")]
+    public void EditOutcomeSelectsAWholeSentence(string arguments, string result, string key)
+    {
+        var localization = new LocalizationService();
+        localization.Apply("en");
+        try
+        {
+            Application.Current!.Resources["Str.AIChat." + key] = "WHOLE SENTENCE";
+            var outcome = (ChatMessageViewModel)typeof(ChatViewModel)
+                .GetMethod("DescribeWriteOutcome", BindingFlags.NonPublic | BindingFlags.Static)!
+                .Invoke(null, [new ToolCall("id", "apply_edit", arguments), result])!;
+            outcome.RawContent.Should().Be("WHOLE SENTENCE");
+        }
+        finally { localization.Apply("en"); }
+    }
+
+    [Fact]
+    public void ChatDoesNotPassLocalizedValuesIntoOtherLocalizedSentences()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !Directory.Exists(Path.Join(root.FullName, "IDE", "HexIDE.AIChat"))) root = root.Parent;
+        root.Should().NotBeNull();
+        foreach (var file in Directory.EnumerateFiles(Path.Join(root!.FullName, "IDE", "HexIDE.AIChat", "Views"), "*.cs"))
+        {
+            var syntax = CSharpSyntaxTree.ParseText(File.ReadAllText(file), cancellationToken: TestContext.Current.CancellationToken)
+                .GetRoot(TestContext.Current.CancellationToken);
+            static bool IsLocalizedCall(InvocationExpressionSyntax call) =>
+                call.Expression.ToString() is "ChatStrings.GetString" or "ChatStrings.Format";
+            var localizedVariables = syntax.DescendantNodes().OfType<VariableDeclaratorSyntax>()
+                .Where(v => v.Initializer?.DescendantNodes().OfType<InvocationExpressionSyntax>().Any(IsLocalizedCall) == true)
+                .Select(v => v.Identifier.ValueText).ToHashSet();
+            foreach (var call in syntax.DescendantNodes().OfType<InvocationExpressionSyntax>()
+                         .Where(c => c.Expression.ToString() == "ChatStrings.Format"))
+            foreach (var argument in call.ArgumentList.Arguments.Skip(1))
+            {
+                argument.DescendantNodes().OfType<InvocationExpressionSyntax>().Where(IsLocalizedCall)
+                    .Should().BeEmpty($"{file}: localized sentences must be complete");
+                argument.DescendantNodes().OfType<IdentifierNameSyntax>()
+                    .Where(i => localizedVariables.Contains(i.Identifier.ValueText))
+                    .Should().BeEmpty($"{file}: localized fragments must not be passed through variables");
+            }
+        }
     }
 
     [AvaloniaTheory]
