@@ -123,6 +123,13 @@ retains exit code, forced termination and stderr/cleanup diagnostics. A program'
 Ended but does not imply the adapter process exited: call `DisconnectAsync` to send disconnect with
 terminateDebuggee and then dispose. Plain disposal is the bounded fallback, not a protocol disconnect.
 
+`DisconnectAsync` awaits the response before disposal closes stdin; a `terminated` event during that
+wait leaves the connection open. `DapSessionTests.Terminated_during_disconnect_keeps_stdin_open_until_the_response`
+checks this order with a held response and observes stdin EOF only after the reply. Cancellation,
+timeout and transport failure still permit bounded cleanup without a response. The teardown inspection
+and loaded debugpy reproduction for [#3894](https://github.com/hexide-io/HexIDE/issues/3894) are recorded
+in [the probe notes](../scripts/probes/issue-3894/README.md).
+
 Stopped snapshots carry a session-specific `DapStop`. Pass it to Threads/StackTrace/Scopes/VariablesAsync.
 The raw response retains thread/frame IDs (including frame zero), source paths/references, variable
 references and unknown fields. Reads reject a stop that expired before or during the request. Call

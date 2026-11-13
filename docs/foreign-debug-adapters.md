@@ -74,6 +74,13 @@ successful incoming response with matching `request_seq` and command. Incoming i
 output, exited and terminated frames are inspected; a returned call alone is never the assertion.
 The tests consume the session update queue and put a deadline around the whole exchange.
 
+## Disconnect investigation (2026-11-13)
+
+The [#3894 investigation](../scripts/probes/issue-3894/README.md) checked disconnect ordering
+and repeated the debugpy session 200 times under CPU load on WSL with Python 3.14.4: all passed,
+without skips. This did not reproduce the reported CI failure on Python 3.14.10 or establish its
+cause. Adapter exit 1 remains a test failure.
+
 ## Linux findings (2026-11-07)
 
 Both complete sessions passed against the existing client; no product-code accommodation was required.
