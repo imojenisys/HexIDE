@@ -158,3 +158,8 @@ and its remembered control; hiding the last visible form retains both.
 
 The #173 brief's measured chained writes are recorded in
 [Chained writes: through a module qualifier, with Set, and through a member that returns a UDT](vb6-fidelity-oracle/chained-writes-qualified-set-and-udt-returning-members.md).
+
+The #2265 bare common-control class binding measurements are recorded in
+[In-box classes: a bare name binds to the first library](vb6-fidelity-oracle/in-box-classes-a-bare-name-binds-to-the-first-library.md).
+The additional-name measurements used by this slice are in [#2265's latest brief](https://github.com/hexide-io/HexIDE/issues/2265)
+with provenance in oracle PR #3956; they are not duplicated here.

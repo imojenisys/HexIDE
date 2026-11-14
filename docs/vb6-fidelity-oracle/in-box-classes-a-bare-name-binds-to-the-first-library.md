@@ -94,7 +94,10 @@ Four more projects, native and p-code alike:
 
 ### In HexIDE
 
-The first #2265 slice implements bare ProgressBar declarations, library-sensitive Set (13 on the other library) and
-`TypeOf`, using the project's referenced control-library order. The other measured classes and their interface
-`TypeName` results await their control/object implementations on this base. Ranking a `Reference=` type library
-against an `Object=` library remains unchanged and unmeasured.
+#2265 implements the measured bare MSComctlLib/ComctlLib class names, qualified Tab, class-preserving Set
+(13 on another class, retaining the earlier object), and TypeOf for controls and their collection/item objects.
+The first declaring library in combined project Reference=/Object= read order wins (#3524); project classes
+retain their existing precedence. TypeName returns the measured interface names, including IListSubItems,
+ITabs and ITab. The additional names come from [#2265's measurement comment](https://github.com/hexide-io/HexIDE/issues/2265)
+(oracle PR #3956); this implementation does not duplicate those measurements. Other libraries' bare class
+names and Slider/ImageCombo/ComboItem(s) remain unchanged pending measurements.
