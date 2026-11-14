@@ -218,7 +218,9 @@ translation: raise VB6's error number at run time instead of before it.
 - **`LSet` between UDTs containing strings, objects or Variants** — VB6 refuses at compile time. The
   layout-compatibility judgement is static; `LSet` itself is a deferral.
 - **Default members of third-party COM types** — see Platform limits; the marker lives in a type library, not
-  in any source HexIDE parsed. (For a `.cls` HexIDE *did* parse, collecting it is permitted — #174.)
+  in any source HexIDE parsed. (For a `.cls` HexIDE *did* parse, collecting it is permitted — #174. The pre-pass retains its name and kind, including a property
+  marked in its Let or Set and a variable marked with VB_VarUserMemId; async execution remains deferred. See
+  [the attribute measurements](vb6-fidelity-oracle/attribute-lines-inside-a-procedure.md).)
 
 ## Platform limits (COM / OS / type libraries)
 

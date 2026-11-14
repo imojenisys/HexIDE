@@ -66,7 +66,10 @@ For contrast, this is ordinary language surface that isn't implemented yet, or n
 
 - **Legacy branching:** `GoSub`/`Return` and computed `On … GoTo` or `On … GoSub` stop the run with a clear error.
   They need a position in a linear statement sequence, which a tree-walk doesn't have.
-- **Default members:** #174 for a class, #790 for a control. A class's default member used as a value is refused,
+- **Default members:** #174 for a class, #790 for a control. The pre-pass now collects the marked member's name
+  and kind (Function, property or variable), including a property marked in its Let or Set; execution is still deferred
+  ([attribute measurements](../../docs/vb6-fidelity-oracle/attribute-lines-inside-a-procedure.md)).
+  A class's default member used as a value is refused,
   untrappably, naming #174, and a class with none raises 438, as in VB6. A control is refused in a Let and in a numeric
   conversion, and still gives its .NET type name in a concatenation.
 - **Forms that run only in part:** fixed-length strings, `LSet` and `RSet` beyond named Strings and Variants, bang
