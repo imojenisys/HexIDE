@@ -186,7 +186,10 @@ public class VBListBox : ListBox
         if (pointerTop is not null)
             for (var visual = e.Source as Visual; visual is not null && !ReferenceEquals(visual, this); visual = visual.GetVisualParent())
                 if (visual is ScrollBar bar)
+                {
+                    bar.SetCurrentValue(ScrollBar.SmallChangeProperty, RowHeight());
                     bar.SetCurrentValue(ScrollBar.LargeChangeProperty, Math.Max(RowHeight(), Scroll!.Viewport.Height - RowHeight()));
+                }
     }
 
     private void EndBarInput()

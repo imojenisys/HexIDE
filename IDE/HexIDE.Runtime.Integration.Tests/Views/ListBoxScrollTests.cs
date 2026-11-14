@@ -52,7 +52,7 @@ public class ListBoxScrollTests : WindowTestFixture
             Calls.Add(name is "List1_Scroll" or "List1_Click" ? $"{name} top={Top()}" : name);
     }
 
-    private static async Task<(Recorder Recorder, ModuleExecutionContext Ctx, ExecutionEnvironment Env)> Loaded(string setup)
+    private static async Task<(Recorder Recorder, ModuleExecutionContext Ctx, ExecutionEnvironment Env)> Loaded(string setup, double? fontSize = null)
     {
         var (root, canvas, ctx, env) = ContainerRuntimeHarness.Spawn(FormWithList);
         var recorder = new Recorder { Child = root, List = (VBListBox)ContainerRuntimeHarness.Child(canvas, "List1") };
@@ -62,8 +62,14 @@ public class ListBoxScrollTests : WindowTestFixture
         await ContainerRuntimeHarness.Run(ctx, env, setup);
         Dispatcher.UIThread.RunJobs();
         var list = recorder.List!;
+        if (fontSize is not null)
+        {
+            list.FontSize = fontSize.Value;
+            list.UpdateLayout();
+        }
         var rowHeight = list.ContainerFromIndex(0)!.Bounds.Height;
         list.Height += 11 * rowHeight - list.Scroll!.Viewport.Height;
+        window.Height = System.Math.Max(window.Height, list.Height + 60);
         list.UpdateLayout();
         list.Scroll.Viewport.Height.Should().BeApproximately(11 * rowHeight, 0.01);
         recorder.Calls.Clear();
@@ -102,12 +108,13 @@ public class ListBoxScrollTests : WindowTestFixture
     }
 
     [AvaloniaTheory]
-    [InlineData(6, 0.98, 7)]
-    [InlineData(7, 0.8, 17)]
-    [InlineData(0, 0.02, 0)]
-    public async Task Scrollbar_source_arrow_track_and_top_boundary(int top, double fraction, int expected)
+    [InlineData(6, 0.98, 7, null)]
+    [InlineData(6, 0.98, 7, 24.0)]
+    [InlineData(7, 0.8, 17, null)]
+    [InlineData(0, 0.02, 0, null)]
+    public async Task Scrollbar_source_arrow_track_and_top_boundary(int top, double fraction, int expected, double? fontSize)
     {
-        var (recorder, ctx, env) = await Loaded(SixtyItems);
+        var (recorder, ctx, env) = await Loaded(SixtyItems, fontSize);
         await After(recorder, ctx, env, $"List1.TopIndex = {top}\r\n");
         recorder.List!.Focus();
         Dispatcher.UIThread.RunJobs();
