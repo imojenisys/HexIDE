@@ -31,19 +31,34 @@ public class FormSwitchOrderTests
             Debug.Print Me.Name & " deactivate"
         End Sub
         Private Sub Text1_GotFocus()
-            Debug.Print Me.Name & " gotfocus"
+            Debug.Print Me.Name & " Text1 gotfocus"
         End Sub
         Private Sub Text1_LostFocus()
-            Debug.Print Me.Name & " lostfocus"
+            Debug.Print Me.Name & " Text1 lostfocus"
         End Sub
         Private Sub Form_GotFocus()
-            Debug.Print Me.Name & " gotfocus"
+            Debug.Print Me.Name & " form gotfocus"
         End Sub
         Private Sub Form_LostFocus()
-            Debug.Print Me.Name & " lostfocus"
+            Debug.Print Me.Name & " form lostfocus"
         End Sub
         Private Sub Form_Load()
             Debug.Print "loaded"
+        End Sub
+        Private Sub Command1_GotFocus()
+            Debug.Print "Command1 gotfocus"
+        End Sub
+        Public Sub HideText()
+            Text1.Visible = False
+            Debug.Print "after hide"
+        End Sub
+        Public Sub DisableText()
+            Text1.Enabled = False
+            Debug.Print "after disable"
+        End Sub
+        Public Sub FocusButton()
+            Command1.SetFocus
+            Debug.Print "after setfocus"
         End Sub
         Public Sub ShowOther()
             Form2.Show
@@ -140,6 +155,32 @@ public class FormSwitchOrderTests
             Dispatcher.UIThread.RunJobs();
     }
 
+    [AvaloniaFact]
+    public void Next_control_flushes_previous_controls_pending_lostfocus()
+    {
+        using var run = Start(Form(TextAndButton));
+        run.Window.FocusManager!.Focus(null);
+        Pump();
+        var before = run.Printed.Count;
+        run.Call("FocusButton");
+        run.Printed.Skip(before).Where(text => text.Contains("focus")).Should().Equal(
+            "after setfocus", "Form1 Text1 lostfocus", "Command1 gotfocus");
+        run.Errors.Should().BeEmpty();
+    }
+
+    // #3932 second-round regression: preserve main's hide/disable timing, independently of form switches.
+    [AvaloniaTheory]
+    [InlineData("HideText", "after hide")]
+    [InlineData("DisableText", "after disable")]
+    public void Unavailable_focused_control_loses_focus_before_next_control(string action, string after)
+    {
+        using var run = Start(Form(TextAndButton));
+        run.Printed.Should().Contain("Form1 Text1 gotfocus");
+        run.Call(action).Should().Equal("Form1 Text1 lostfocus", after);
+        run.Call("FocusButton").Should().Equal("after setfocus", "Command1 gotfocus");
+        run.Errors.Should().BeEmpty();
+    }
+
     [AvaloniaTheory]
     [InlineData("show")]
     [InlineData("reshow")]
@@ -166,7 +207,7 @@ public class FormSwitchOrderTests
         var expected = new List<string>();
         if (action == "show") expected.Add("loaded");
         if (action != "window") expected.Add("after");
-        expected.AddRange([from + " lostfocus", from + " deactivate", to + " activate", to + " gotfocus"]);
+        expected.AddRange([from + " Text1 lostfocus", from + " deactivate", to + " activate", to + " Text1 gotfocus"]);
         run.Printed.Skip(before).Should().Equal(expected);
         run.Errors.Should().BeEmpty();
     }

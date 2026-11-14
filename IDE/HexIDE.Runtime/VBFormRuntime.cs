@@ -35,6 +35,7 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         if (!ReferenceEquals(windowContext.Program?.ActiveForm, windowContext.FormInstance)
             || ReferenceEquals(focusedControl, control))
             return;
+        BlurControl();
         focusedControl = control;
         control.ExecuteSub(ComponentBaseClass.GotFocusEvent);
     }

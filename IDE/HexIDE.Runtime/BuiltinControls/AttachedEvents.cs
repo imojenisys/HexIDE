@@ -38,8 +38,10 @@ public static class AttachedEvents
             {
                 if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
                 {
-                    // Leaving the window belongs to the activation switch, even if the platform reports it first.
-                    if (VBFormRuntime.FindControl(form, moved.NewFocusedElement as ILogical) is not null)
+                    // Leaving the window belongs to the activation switch; hiding or disabling a control does not.
+                    if (VBFormRuntime.FindControl(form, moved.NewFocusedElement as ILogical) is not null
+                        || form.IsEffectivelyVisible && form.IsEffectivelyEnabled
+                        && (!control.IsEffectivelyVisible || !control.IsEffectivelyEnabled))
                         form.BlurControl();
                 }
                 else

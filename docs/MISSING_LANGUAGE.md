@@ -1280,7 +1280,7 @@ These preparatory binding entries are outside the language-name inventory; its c
 | Event | Detail |
 |---|---|
 | `Form_GotFocus` | A shown form with no focusable control raises its own GotFocus after Activate. **#3932:** switching forms by Show, SetFocus, active-form Hide or window activation raises the old control’s LostFocus, Deactivate, Activate, then the new control’s GotFocus, posted behind the running handler; Show inside Load retains its measured exception. UserControl-specific intrinsic focus sequencing across forms is not measured by #3932 and retains its separate path. Measured: [run 1, Form4.Show](vb6-fidelity-oracle/a-forms-resize-activate-and-deactivate.md); [#2579](https://github.com/hexide-io/HexIDE/issues/2579). |
-| `Form_LostFocus` | When focus leaves that form for another of the program's forms, its LostFocus precedes Deactivate (#2579; **#3932** also orders control LostFocus before Deactivate). Switching to another application and back to the same form keeps the existing silent activation behaviour. |
+| `Form_LostFocus` | When focus leaves that form for another of the program's forms, its LostFocus precedes Deactivate (#2579; **#3932** also orders control LostFocus before Deactivate). Hiding or disabling a focused control within a visible, enabled form retains its LostFocus before the next control’s GotFocus (#3932 second-round regression); its existing statement timing is unchanged. Switching to another application and back to the same form keeps the existing silent activation behaviour. |
 
 These event details are outside the language-name inventory; its counts have not moved.
 
