@@ -185,6 +185,52 @@ public class ListBoxScrollTests : WindowTestFixture
     }
 
     [AvaloniaTheory]
+    [InlineData(Key.Down, 27, 17, 28, 18)]
+    [InlineData(Key.PageDown, 27, 18, 37, 27)]
+    [InlineData(Key.Home, 37, 27, 0, 0)]
+    [InlineData(Key.End, 0, 0, 59, 49)]
+    [InlineData(Key.Up, 27, 17, 26, 17)]
+    [InlineData(Key.Down, 59, 49, 59, 49)]
+    public async Task Key_source_with_item_focus_matches_oracle(Key key, int selection, int top, int expectedSelection, int expectedTop)
+    {
+        var (recorder, ctx, env) = await Loaded(SixtyItems);
+        await After(recorder, ctx, env, $"List1.ListIndex = {selection}\r\nList1.TopIndex = {top}\r\n");
+        var list = recorder.List!;
+        list.ContainerFromIndex(selection)!.Focus(NavigationMethod.Pointer).Should().BeTrue();
+        Dispatcher.UIThread.RunJobs();
+        recorder.Calls.Clear();
+        ((Window)TopLevel.GetTopLevel(list)!).KeyPress(key, RawInputModifiers.None, PhysicalKey.None, null);
+        Dispatcher.UIThread.RunJobs();
+        list.SelectedIndex.Should().Be(expectedSelection);
+        var expected = new List<string>();
+        if (selection != expectedSelection)
+            expected.Add($"List1_Click top={expectedTop}");
+        if (top != expectedTop)
+            expected.Add($"List1_Scroll top={expectedTop}");
+        recorder.Calls.Where(c => c.StartsWith("List1_Click", System.StringComparison.Ordinal)
+            || c.StartsWith("List1_Scroll", System.StringComparison.Ordinal)).Should().Equal(expected);
+    }
+
+    // This pins existing HexIDE behavior, not a VB6 measurement: Page Up remains Avalonia's to handle.
+    [AvaloniaFact]
+    public async Task Unmeasured_PageUp_with_item_focus_keeps_existing_Avalonia_behavior()
+    {
+        var (recorder, ctx, env) = await Loaded(SixtyItems);
+        await After(recorder, ctx, env, "List1.ListIndex = 37\r\nList1.TopIndex = 27\r\n");
+        var list = recorder.List!;
+        list.ContainerFromIndex(37)!.Focus(NavigationMethod.Pointer).Should().BeTrue();
+        Dispatcher.UIThread.RunJobs();
+        var offset = list.Scroll!.Offset.Y;
+        recorder.Calls.Clear();
+        ((Window)TopLevel.GetTopLevel(list)!).KeyPress(Key.PageUp, RawInputModifiers.None, PhysicalKey.None, null);
+        Dispatcher.UIThread.RunJobs();
+        list.SelectedIndex.Should().Be(37);
+        list.Scroll.Offset.Y.Should().BeLessThan(offset);
+        recorder.Calls.Where(c => c.StartsWith("List1_Click", System.StringComparison.Ordinal)
+            || c.StartsWith("List1_Scroll", System.StringComparison.Ordinal)).Should().BeEmpty();
+    }
+
+    [AvaloniaTheory]
     [InlineData(-1)]
     [InlineData(60)]
     public async Task TopIndex_assignment_source_outside_the_list_raises_380_without_Scroll(int target)

@@ -66,7 +66,7 @@ public class VBListBox : ListBox
                 e.Handled = true;
             }
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        // A multi-select list's keys, on the way down: its focused item would take Space first.
+        // Take keys on the way down: a focused item takes Space, and its ScrollViewer takes paging first.
         KeyDownEvent.AddClassHandler<VBListBox>((list, e) =>
         {
             // What it takes raises Click, changed or not (measured).
@@ -74,6 +74,12 @@ public class VBListBox : ListBox
             {
                 e.Handled = true;
                 list.ExecuteSub(ComponentBaseClass.ClickEvent);
+            }
+            else if (!list.IsMultiSelect && e.Key is Key.Down or Key.Up or Key.PageDown or Key.Home or Key.End)
+            {
+                // An item keeps the focus after a click. Take navigation before its ScrollViewer takes paging.
+                list.OnKeyDown(e);
+                e.Handled = true;
             }
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         // Only scroll-bar pointer input participates; wheel and code scrolling must stay silent (#3275).
@@ -279,7 +285,7 @@ public class VBListBox : ListBox
     protected override void OnKeyDown(KeyEventArgs e)
     {
         // A multi-select list's keys are taken on the way down; Avalonia's own would select as Avalonia does.
-        if (IsMultiSelect)
+        if (IsMultiSelect || e.Handled)
             return;
         var before = SelectedIndex;
         var scrollKey = e.Key is Key.Down or Key.Up or Key.PageDown or Key.Home or Key.End;
