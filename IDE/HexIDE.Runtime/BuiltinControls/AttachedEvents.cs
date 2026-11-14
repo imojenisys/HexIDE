@@ -24,13 +24,27 @@ public static class AttachedEvents
         {
             if (e is FocusChangedEventArgs moved
                 && OwnsThePointerEvent(control, moved.NewFocusedElement) && !OwnsThePointerEvent(control, moved.OldFocusedElement))
-                control.ExecuteSub(ComponentBaseClass.GotFocusEvent);
+            {
+                if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
+                    form.ControlFocused(control);
+                else
+                    control.ExecuteSub(ComponentBaseClass.GotFocusEvent);
+            }
         }, handledEventsToo: true);
         InputElement.LostFocusEvent.AddClassHandler<T>((control, e) =>
         {
             if (e is FocusChangedEventArgs moved
                 && OwnsThePointerEvent(control, moved.OldFocusedElement) && !OwnsThePointerEvent(control, moved.NewFocusedElement))
-                control.ExecuteSub(ComponentBaseClass.LostFocusEvent);
+            {
+                if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
+                {
+                    // Leaving the window belongs to the activation switch, even if the platform reports it first.
+                    if (VBFormRuntime.FindControl(form, moved.NewFocusedElement as ILogical) is not null)
+                        form.BlurControl();
+                }
+                else
+                    control.ExecuteSub(ComponentBaseClass.LostFocusEvent);
+            }
         }, handledEventsToo: true);
     }
 
