@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
+using Avalonia.Layout;
 
 namespace HexIDE.Automation;
 
@@ -44,7 +45,21 @@ public static class WindowChange
             if (width is not null) window.Width = width.Value;
             if (height is not null) window.Height = height.Value;
             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
-            return await WaitAsync(() => window.WindowState == target && moved && resized, ct);
+            var applied = await WaitAsync(() => window.WindowState == target && moved && resized, ct);
+            if (applied && (width is not null || height is not null))
+            {
+                // A repeated native size can leave explicit layout dimensions at an oversized request (#4000).
+                var actual = window.ClientSize;
+                if (window.Width != actual.Width || window.Height != actual.Height)
+                {
+                    window.Width = actual.Width;
+                    window.Height = actual.Height;
+                    LayoutHelper.InvalidateSelfAndChildrenMeasure(window);
+                    window.UpdateLayout();
+                    await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+                }
+            }
+            return applied;
         }
         finally
         {

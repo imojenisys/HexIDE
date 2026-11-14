@@ -1497,7 +1497,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             (acted, actedName) = (resolved, name);
             var applied = await HexIDE.Automation.WindowChange.ApplyAsync(resolved, target.Value, x, y, width, height, ct);
             if (applied)
-                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), null);
+                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), WindowSizeNote(resolved, width, height));
             var (error, note) = Unconfirmed(target.Value, X11WindowManager.IsRunning());
             return new WindowStateChangeResult(false, error, WindowStateOf(resolved, name!), note);
         });
@@ -1514,6 +1514,13 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             Note = result.Note is null ? programNote : programNote is null ? result.Note : result.Note + " " + programNote,
         };
     }
+
+    private static string? WindowSizeNote(Avalonia.Controls.Window window, int? width, int? height) =>
+        width is not null && width != window.ClientSize.Width || height is not null && height != window.ClientSize.Height
+            ? $"Requested client size {width?.ToString() ?? "unchanged"}×{height?.ToString() ?? "unchanged"}; "
+              + $"the screen allowed {window.ClientSize.Width}×{window.ClientSize.Height}. "
+              + "x/y/width/height can't exceed the screen's working area. Ask for a size that fits the working area."
+            : null;
 
     // The program wait's parenthesised addition to a reply, as a sentence of its own for a note.
     internal static string ProgramNote(string detail)

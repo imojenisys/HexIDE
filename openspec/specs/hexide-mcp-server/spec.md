@@ -1038,6 +1038,17 @@ restored position.
 - **WHEN** a Minimized or Maximized request goes unconfirmed on an X11 display with no window manager
 - **THEN** the reply says no window manager is running, so nothing will apply it, and does not direct the caller to re-read
 
+### Requirement: Window layout follows the allowed client size
+After a confirmed resize, `set_window_state` SHALL reconcile its layout dimensions with the actual
+client size before replying. When a requested dimension differs from the resulting size, its note
+SHALL report the requested and allowed sizes and explain that x/y/width/height cannot exceed the
+screen's working area, without refusing the change.
+
+#### Scenario: The platform clamps an oversized request
+- **WHEN** the platform returns a smaller client size than requested
+- **THEN** the root and a bottom-docked pane are arranged inside the reported client size
+- **AND** the note explains the size change and a later user resize still controls layout
+
 ### Requirement: The window-state tools SHALL reach any window
 `get_window_state` and `set_window_state` SHALL take an optional `window`, resolved as the tree tools resolve it, and
 SHALL act on the IDE's own window when it is omitted. The reply SHALL name the window by what reaches it again, and an
