@@ -1264,16 +1264,21 @@ public partial class ProjectService : IProjectService
                 destinations.Remove(destination);
                 continue;
             }
-            var conflict = new FileConflictViewModel { CanCancel = true };
-            conflict.Add(Path.GetFileName(destination.Path));
-            if (!await windowManager.ShowDialog(conflict))
-                throw new OperationCanceledException();
-            if (conflict.ReloadChosen)
+            if (await ChooseProjectFileReload(destination.Path))
             {
                 await ReopenFromDisk(project, destination.Path);
                 throw new OperationCanceledException();
             }
         }
+    }
+
+    private async Task<bool> ChooseProjectFileReload(string path)
+    {
+        var conflict = new FileConflictViewModel { CanCancel = true };
+        conflict.Add(Path.GetFileName(path));
+        if (!await windowManager.ShowDialog(conflict))
+            throw new OperationCanceledException();
+        return conflict.ReloadChosen;
     }
 
     // Unknown counts as changed: without the bytes HexIDE last saw, it can't tell.
@@ -1291,7 +1296,7 @@ public partial class ProjectService : IProjectService
 
     // Reload, for a project file: its members' unsaved edits are asked about as closing asks, and the project's own changes,
     // which the user chose to lose, aren't. Then it's opened again from the file as it now is.
-    private async Task ReopenFromDisk(ProjectDefinition project, string path)
+    private async Task ReopenFromDisk(ProjectDefinition project, string path, Action? beforeReopen = null)
     {
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
         var changed = new SaveChangesViewModel();
@@ -1307,6 +1312,7 @@ public partial class ProjectService : IProjectService
             if (changed.SaveChanges)
                 await SaveSelected(changed);
         }
+        beforeReopen?.Invoke();
         projectManager.UnloadProject(project);
         await OpenProject(path);
     }

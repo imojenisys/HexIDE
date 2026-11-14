@@ -14,8 +14,6 @@ that arrangement leaves the developer unable to see the shape of their own proje
 Every loaded project with a chosen home SHALL show its own file as its first child, named by filename,
 including contributed types and a group's `.vbg`. Activating it SHALL read the file directly, without
 an add-in reader, into a read-only text tab that refreshes after saves. Editing remains in #3915.
-The VB6 loader can read proposed text without writing the project file as groundwork for that work;
-this does not yet enable editing in the tab.
 
 #### Scenario: Reading a saved project file
 - **WHEN** the developer activates `Example.vbp` under its project
@@ -29,6 +27,18 @@ this does not yet enable editing in the tab.
 #### Scenario: Archive projects keep their existing tree
 - **WHEN** an archive project is open
 - **THEN** its existing archive tree remains unchanged
+
+### Requirement: Proposed VB6 project text is applied before reload
+The project-text save service SHALL validate proposed text before writing, refuse reader errors, resolve
+disk conflicts, confirm replacement of an unsaved model, and ask about unsaved members through the
+existing reload path. Accepted text SHALL be written in the project encoding and reopened from disk.
+Tabs remain read-only until tab-save, project-save and close protections are connected (Refs #3915).
+
+#### Scenario: Applying proposed project text through the service
+- **WHEN** proposed VB6 project text has no reader errors and all replacement questions are accepted
+- **THEN** the service writes the exact encoded text and reopens the project through the existing reload path
+- **AND** cancelling a disk-conflict, model-replacement or unsaved-member question leaves the project file untouched
+- **AND** the project-file tab remains read-only until its save and close protections are connected
 
 ### Requirement: Explorer names SHALL follow the loaded group or project
 The group root SHALL notify its display name when the group's name changes. The pane title SHALL use
