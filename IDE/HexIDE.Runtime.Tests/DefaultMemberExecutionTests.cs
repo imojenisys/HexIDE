@@ -25,7 +25,6 @@ public class DefaultMemberExecutionTests : BaseVBTestFixture
     [InlineData("Debug.Print w \\ 5", "8")]
     [InlineData("Debug.Print w = 42", "True")]
     [InlineData("Debug.Print w > 41", "True")]
-    [InlineData("Debug.Print w = \"42\"", "True")]
     [InlineData("Debug.Print \"v=\" & w", "v=42")]
     [InlineData("Debug.Print CStr(w)", "42")]
     [InlineData("Debug.Print CDbl(w)", "42")]
@@ -59,6 +58,46 @@ public class DefaultMemberExecutionTests : BaseVBTestFixture
         // CStr of captured results avoids pinning the inferred Debug.Print object output.
         await Probe(code.Replace("Debug.Print ", "c = ").ReplaceLineEndings("\n") + "\nDebug.Print CStr(c)\n");
         AssertDebugLog([new Vb6Value(expected)]);
+    }
+
+    // Pinned divergence: #174's round-four measurements distinguish early/late binding here.
+    // Until #211 handles mixed String comparisons, refuse rather than return a wrong value or trappable 13.
+    [Theory]
+    [InlineData("Long", "w", "=", "42")]
+    [InlineData("Long", "w", ">", "5")]
+    [InlineData("Long", "w", "=", "42.0")]
+    [InlineData("Long", "w", "=", "abc")]
+    [InlineData("Integer", "w", "=", "42")]
+    [InlineData("Integer", "w", ">", "5")]
+    [InlineData("Double", "w", ">", "5")]
+    [InlineData("Property", "w", ">", "5")]
+    [InlineData("Property", "w", "=", "abc")]
+    [InlineData("Variant", "w", ">", "5")]
+    [InlineData("Variant", "w", "=", "abc")]
+    [InlineData("Long", "o", ">", "5")]
+    [InlineData("Long", "o", "=", "abc")]
+    [InlineData("String", "w", "=", "42")]
+    [InlineData("String", "w", ">", "5")]
+    public async Task Mixed_String_default_comparisons_refuse_in_both_orders(
+        string type, string variable, string comparison, string operand)
+    {
+        var source = type == "Property" ? Property : Widget.Replace("As Long", "As " + type);
+        if (type == "String")
+            source = source.Replace("Value = 42", "Value = \"42\"");
+        var other = type == "String" ? operand : "\"" + operand + "\"";
+        foreach (var expression in new[] { $"{variable} {comparison} {other}", $"{other} {comparison} {variable}" })
+        {
+            var run = () => Probe($"On Error Resume Next\nc = {expression}\n", source);
+            (await run.Should().ThrowAsync<NotImplementedException>()).WithMessage("*#211*#174*");
+        }
+    }
+
+    [Fact]
+    public async Task String_default_compares_with_a_String()
+    {
+        // #174, round four: both String operands compare lexically.
+        await Probe("c = w > \"5\"\nDebug.Print c\n", Widget.Replace("As Long", "As String").Replace("Value = 42", "Value = \"42\""));
+        AssertDebugLog([new Vb6Value(false)]);
     }
 
     [Theory]
