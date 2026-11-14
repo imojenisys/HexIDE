@@ -8,3 +8,10 @@ its lines count from the top of that header. So a line number read before then i
 it. **Workaround:** read the content again after any designer change or save before using a line number from it.
 Where a created form's first header should come from, so that it holds one from the start, is
 [#885](https://github.com/hexide-io/HexIDE/issues/885).
+
+**Implementation resolved (#885); supervisor live verification pending.** Add Form and the Standard EXE
+project template now store the first save's rendered header at creation. Linux headless regressions check
+the initial code window, byte-for-byte first-save header and pre-save marks after save/reopen. The tool and
+add-in descriptions now describe that header. A live check should create an unsaved Standard EXE, read
+`Form1`, then save and reopen with a breakpoint and bookmark on a statement and confirm both stay there.
+The symptom above records the earlier implementation, rather than current behaviour.

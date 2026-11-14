@@ -2040,7 +2040,7 @@ public partial class ProjectService : IProjectService
             EnsureNewMemberEncodable(project, form, name + ".frm");
             // No file until the project is saved, as in VB6 (#489, #500). The header its first save will write is
             // rendered now and held, so the code window shows what the file will say, and the next refresh has the
-            // header it replaces to compare against (#885).
+            // header it replaces to compare against, as the project template does (#885).
             form.RecordDesignerText(FormCodeText.DesignerHalfOf(RenderForm(form, name + ".frm").Text, form.Code));
             project.AddForm(form);
             return Task.FromResult(form);
@@ -2087,7 +2087,7 @@ public partial class ProjectService : IProjectService
         var fileName = module.Name + "." + ModuleExtension(module.Kind);
         EnsureNewMemberEncodable(project, module, fileName);
         // The header the code window will show, rendered as the first save will write it and held from now, as a
-        // new form's is (#885). Without it a brand-new UserControl or PropertyPage opens with no designer block.
+        // new form's and a template member's are (#885).
         DesignerPartOf(module)?.RecordDesignerText(
             FormCodeText.DesignerHalfOf(RenderModule(module, fileName).Text, module.Code));
         project.AddModule(module);

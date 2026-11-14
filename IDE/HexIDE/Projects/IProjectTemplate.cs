@@ -2,6 +2,7 @@ using Avalonia.Media;
 using HexIDE.Addins;
 using HexIDE.Runtime.Components;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 
 namespace HexIDE.Projects;
 
@@ -16,7 +17,11 @@ public interface IProjectTemplate : IAddinProjectTemplate
     {
         var project = new ProjectDefinition(VBProjectType.EXE, name);
 
-        project.AddForm(FormDefinition.NewForm(project, FormComponentClass.Instance, "Form1"));
+        var form = FormDefinition.NewForm(project, FormComponentClass.Instance, "Form1");
+        // Hold the first save's header from creation, as AddNewFormCore does (#885).
+        form.RecordDesignerText(FormCodeText.DesignerHalfOf(
+            new Vb6ProjectFileFormat().RenderForm(form, "Form1.frm").Text, form.Code));
+        project.AddForm(form);
 
         // OLE Automation — always present in a new VB6 Standard EXE
         project.AddReference(new VbReference(
