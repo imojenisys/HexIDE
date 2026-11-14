@@ -14,6 +14,8 @@ that arrangement leaves the developer unable to see the shape of their own proje
 Every loaded project with a chosen home SHALL show its own file as its first child, named by filename,
 including contributed types and a group's `.vbg`. Activating it SHALL read the file directly, without
 an add-in reader, into a read-only text tab that refreshes after saves. Editing remains in #3915.
+The VB6 loader can read proposed text without writing the project file as groundwork for that work;
+this does not yet enable editing in the tab.
 
 #### Scenario: Reading a saved project file
 - **WHEN** the developer activates `Example.vbp` under its project

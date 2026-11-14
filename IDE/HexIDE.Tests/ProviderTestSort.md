@@ -105,6 +105,7 @@ A test that reaches the provider only at run time, through the application's com
 | `Projects/ProjectFileFormatSeamTests.cs` | split |
 | `Projects/ProjectLoadWarningTests.cs` | split |
 | `Projects/ProjectOffersTests.cs` | split |
+| `Projects/ProjectTextReadTests.cs` | provider |
 | `Projects/RemoveDocumentTests.cs` | split |
 | `Projects/SaveRecordsTheHeaderTests.cs` | split |
 | `Projects/SourceEncodingPersistenceTests.cs` | split |
