@@ -80,11 +80,13 @@ public static class VbLocale
     /// <c>DateTimeFormat.Calendar</c>.
     /// </para>
     /// </remarks>
-    public static CultureInfo ForProgram(CultureInfo culture) =>
+    public static CultureInfo ForProgram(CultureInfo culture) => ForProgram(culture, WindowsDateLocale.AppliesTo);
+
+    internal static CultureInfo ForProgram(CultureInfo culture, Func<CultureInfo, bool> appliesTo) =>
         culture.DateTimeFormat.Calendar is GregorianCalendar
         && culture.NumberFormat.NegativeSign == "-" && culture.NumberFormat.PositiveSign == "+"
         && !HasNonbreakingSpaces(culture.DateTimeFormat)
-        && !WindowsDateLocale.AppliesTo(culture)
+        && !appliesTo(culture)
             ? culture
             : Adapted.GetValue(culture, Adapt);
 

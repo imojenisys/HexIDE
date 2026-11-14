@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace HexIDE.Runtime.Interpreter;
@@ -7,19 +8,44 @@ namespace HexIDE.Runtime.Interpreter;
 // VB6 reads NLS date data, whereas .NET normally reads ICU, even on Windows (#2041).
 internal static partial class WindowsDateLocale
 {
+    private static readonly CalendarCache Calendars = new(Read);
+
+    internal sealed class CalendarCache(Func<string, uint, string> read)
+    {
+        private readonly Dictionary<string, bool> gregorian = new(StringComparer.OrdinalIgnoreCase);
+
+        internal bool AppliesTo(CultureInfo culture)
+        {
+            if (culture.Name.Length == 0 || culture.Calendar is not GregorianCalendar)
+                return false;
+            lock (gregorian)
+            {
+                if (!gregorian.TryGetValue(culture.Name, out var applies))
+                {
+                    // ICU and Windows can disagree even about the default calendar (ar-SA on newer ICU).
+                    applies = Enum.TryParse<GregorianCalendarTypes>(read(culture.Name, 0x80001009), out var calendar)
+                        && Enum.IsDefined(calendar); // LOCALE_ICALENDARTYPE | LOCALE_NOUSEROVERRIDE
+                    gregorian.Add(culture.Name, applies);
+                }
+                return applies;
+            }
+        }
+    }
+
     internal static bool AppliesTo(CultureInfo culture) =>
-        OperatingSystem.IsWindows() && culture.Name.Length != 0 && culture.Calendar is GregorianCalendar
-        // ICU and Windows can disagree even about the default calendar (ar-SA on newer ICU).
-        && Enum.TryParse<GregorianCalendarTypes>(Read(culture.Name, 0x80001009), out var calendar)
-        && Enum.IsDefined(calendar); // LOCALE_ICALENDARTYPE | LOCALE_NOUSEROVERRIDE
+        OperatingSystem.IsWindows() && Calendars.AppliesTo(culture);
 
     internal static void Apply(CultureInfo culture)
     {
         var userName = new char[85];
         var length = GetUserDefaultLocaleName(userName, userName.Length);
-        var isUser = length > 0 && string.Equals(culture.Name, new string(userName, 0, length - 1),
-            StringComparison.OrdinalIgnoreCase);
-        Apply(culture.DateTimeFormat, type => Read(culture.Name, type | (isUser ? 0u : 0x80000000u)));
+        Apply(culture, length > 0 ? new string(userName, 0, length - 1) : "", Read);
+    }
+
+    internal static void Apply(CultureInfo culture, string userName, Func<string, uint, string> read)
+    {
+        var isUser = culture.UseUserOverride && string.Equals(culture.Name, userName, StringComparison.OrdinalIgnoreCase);
+        Apply(culture.DateTimeFormat, type => read(culture.Name, type | (isUser ? 0u : 0x80000000u)));
     }
 
     // The reader seam also lets Linux exercise the mapping without pretending to measure Windows or VB6.

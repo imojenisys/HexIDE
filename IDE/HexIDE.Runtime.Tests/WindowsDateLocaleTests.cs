@@ -7,6 +7,40 @@ namespace HexIDE.Runtime.Tests;
 public partial class WindowsDateLocaleTests : BaseVBTestFixture
 {
     [Fact]
+    public void ForProgram_reads_the_calendar_once_per_culture()
+    {
+        var reads = 0;
+        var calendars = new WindowsDateLocale.CalendarCache((name, type) =>
+        {
+            name.Should().Be("en-GB");
+            type.Should().Be(0x80001009);
+            reads++;
+            return "23"; // A non-Gregorian fixture keeps this test independent of native date data.
+        });
+        var culture = CultureInfo.GetCultureInfo("en-GB");
+        for (var i = 0; i < 100; i++)
+            VbLocale.ForProgram(culture, calendars.AppliesTo);
+        reads.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Only_a_culture_carrying_user_overrides_reads_user_settings(bool useUserOverride)
+    {
+        var culture = new CultureInfo("en-GB", useUserOverride);
+        var reads = new List<uint>();
+        WindowsDateLocale.Apply(culture, "en-gb", (name, type) =>
+        {
+            name.Should().Be("en-GB");
+            reads.Add(type);
+            return "'fixture'";
+        });
+        reads.Should().NotBeEmpty();
+        reads.Should().OnlyContain(type => (type & 0x80000000u) == (useUserOverride ? 0u : 0x80000000u));
+    }
+
+    [Fact]
     public void Nls_fields_map_to_the_date_format_without_changing_time_or_calendar()
     {
         var dates = (DateTimeFormatInfo)CultureInfo.InvariantCulture.DateTimeFormat.Clone();

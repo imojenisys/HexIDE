@@ -1734,8 +1734,8 @@ until a precision model matches every measured row for the function.
 On Windows, for a locale whose default calendar is Gregorian, the interpreter SHALL take
 short and long date patterns, date separators, month names (including genitive and abbreviated
 forms), and day names (including abbreviated forms) from Windows NLS for the program locale.
-It SHALL permit user overrides for the Windows user's locale and request no user overrides
-for other locales. Other hosts, non-Gregorian default calendars and time formats SHALL retain
+It SHALL permit user overrides only when the culture's UseUserOverride is true and its name
+matches the Windows user's locale, and request no user overrides otherwise. Other hosts, non-Gregorian default calendars and time formats SHALL retain
 their existing behaviour (#2041; portable Windows date data is deferred to #3928).
 
 #### Scenario: Measured en-GB long date
