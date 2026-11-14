@@ -242,19 +242,29 @@ public class LoadResourceTests : BaseVBTestFixture
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task LoadPictureSharesTypedProperties(bool icon)
+    // Measured shapes: docs/vb6-fidelity-oracle/an-icon-pictures-size-and-the-image-it-draws.md (#3969).
+    [InlineData(0, 53L)]
+    [InlineData(1, 423L)]
+    [InlineData(2, 847L)]
+    public async Task LoadPictureSharesTypedProperties(int imageCount, long extent)
     {
         byte[] file;
+        var icon = imageCount != 0;
         if (icon)
         {
             using var stream = new MemoryStream();
             using var writer = new BinaryWriter(stream);
-            var image = IconImage(32);
-            writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)1);
-            writer.Write((byte)32); writer.Write((byte)32); writer.Write((ushort)0);
-            writer.Write((ushort)1); writer.Write((ushort)32); writer.Write(image.Length); writer.Write(22); writer.Write(image);
+            writer.Write((ushort)0); writer.Write((ushort)1); writer.Write((ushort)imageCount);
+            var offset = 6 + imageCount * 16;
+            for (var i = 0; i < imageCount; i++)
+            {
+                var size = i == 0 ? 16 : 32;
+                var image = IconImage(size);
+                writer.Write((byte)size); writer.Write((byte)size); writer.Write((ushort)0);
+                writer.Write((ushort)1); writer.Write((ushort)32); writer.Write(image.Length); writer.Write(offset);
+                offset += image.Length;
+            }
+            for (var i = 0; i < imageCount; i++) writer.Write(IconImage(i == 0 ? 16 : 32));
             file = stream.ToArray();
         }
         else file = PanelPicture.FromResourceBitmap(Dib).FileBytes;
@@ -264,10 +274,22 @@ public class LoadResourceTests : BaseVBTestFixture
         {
             File.WriteAllBytes(path, file);
             await Run($"Dim p As StdPicture\nSet p = LoadPicture(\"{path}\")\nDebug.Print p.Type\nDebug.Print p.Width\nDebug.Print p.Height");
-            AssertDebugLog([new Vb6Value((short)(icon ? 3 : 1)), new Vb6Value(icon ? 847L : 53L), new Vb6Value(icon ? 847L : 53L)]);
+            AssertDebugLog([new Vb6Value((short)(icon ? 3 : 1)), new Vb6Value(extent), new Vb6Value(extent)]);
             debug.Select(v => v.Type).Should().Equal(Vb6Value.ValueType.Integer, Vb6Value.ValueType.Long, Vb6Value.ValueType.Long);
         }
         finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task IconGroupSelects32PixelImage()
+    {
+        // #3969 measured group 401 drawing its 32-pixel image, rather than stretching its 16-pixel one.
+        var vb = await ResourceRun("Set p = LoadResPicture(401, vbResIcon)");
+        var result = await vb.BuiltIns.EvaluateBuiltInFunction("LoadResPicture", [new Vb6Value(401), new Vb6Value(1)]);
+        var picture = result!.Value.Value.Should().BeOfType<PanelPicture>().Subject;
+        picture.Bitmap!.PixelSize.Should().Be(new Avalonia.PixelSize(32, 32));
+        // Decode the selected source without resource scaling, so a stretched 16-pixel choice cannot pass.
+        PanelPicture.FromFile(picture.FileBytes).Bitmap!.PixelSize.Should().Be(new Avalonia.PixelSize(32, 32));
     }
 
     [Theory]

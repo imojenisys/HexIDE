@@ -158,16 +158,3 @@ and its remembered control; hiding the last visible form retains both.
 
 The #173 brief's measured chained writes are recorded in
 [Chained writes: through a module qualifier, with Set, and through a member that returns a UDT](vb6-fidelity-oracle/chained-writes-qualified-set-and-udt-returning-members.md).
-
-The [#2626 supervisor measurement comment dated 2026-11-14](https://github.com/hexide-io/HexIDE/issues/2626)
-records matching SP6 native and p-code runs with an en-GB user locale, en-US UI and 96 DPI.
-Icon groups containing 16/32-pixel images or only a 16-pixel image, and the measured cursor group,
-return Picture with Integer Type 3 and Long Width/Height 847; the 2×2 bitmap is Integer Type 1,
-Long Width/Height 53. Raw data exposes the groups and images unchanged, including cursor hotspots.
-String IDs passed to LoadResPicture stay names, and image IDs do not substitute for group IDs (326).
-Resource parameters are required: id for LoadResString, id/type for LoadResData, id/restype for
-LoadResPicture; wrong names and omitted required parameters are rejected. Under en-GB, the en-US
-string block wins over de-DE regardless of file order, even when its slot is empty (326); a block
-available only in de-DE is read. These are supplied measurements, not measurements by this run;
-the measuring author's oracle page remains theirs. Group image selection beyond the measured
-32-pixel size and ambiguous unmatched language choices were not measured.

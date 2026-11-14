@@ -96,7 +96,11 @@ Empty strings, absent resources and string tables requested as raw data SHALL ra
 326 for absent/wrong-kind resources and 485 for invalid kinds. Per [the later #2626 measurements](https://github.com/hexide-io/HexIDE/issues/2626),
 icon/cursor groups SHALL return 32×32 Pictures, Type Integer 3 and Width/Height Long 847 HiMetric;
 the measured 2×2 bitmap SHALL return Type Integer 1 and Width/Height Long 53. These property types
-SHALL also apply to LoadPicture objects. Native/default handles and other bitmap layouts SHALL refuse.
+SHALL also apply to LoadPicture objects. Per [the icon-size measurements](https://github.com/hexide-io/HexIDE/pull/3969),
+a 16/32 resource icon group SHALL select its 32-pixel image; a 16-only group SHALL stretch to 32.
+LoadPicture SHALL preserve a 16-only icon at 423 HiMetric and select the 32-pixel image from a
+16/32 file at 847 HiMetric. Selection without a 32-pixel image but with a larger one remains unmeasured.
+Native/default handles and other bitmap layouts SHALL refuse.
 The intrinsics SHALL accept required named parameters id, id/type and id/restype respectively.
 Resource lookup SHALL prefer the program locale's exact language, then primary language, then a
 sole other language; ambiguous unmatched languages SHALL refuse as not implemented. An empty

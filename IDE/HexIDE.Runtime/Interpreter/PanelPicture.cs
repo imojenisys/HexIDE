@@ -62,7 +62,8 @@ internal sealed class PanelPicture : ICSharpProxy, ICSharpPropertyBag
 
     internal static PanelPicture FromResourceGroup(byte[] group, bool cursor, Func<ushort, byte[]?> image)
     {
-        // #2626 measures the 32-pixel result, not the image selection. Prefer 32, otherwise the largest.
+        // #3969: 16/32 groups select 32; 16-only groups stretch to 32 (an-icon-pictures-size-and-the-image-it-draws.md).
+        // Without 32 but with a larger image, selecting the largest remains unmeasured.
         static NotImplementedException Unsupported() => new("This resource icon/cursor layout is not implemented (#2626)");
         if (group.Length < 6 || BitConverter.ToUInt16(group, 0) != 0
             || BitConverter.ToUInt16(group, 2) != (cursor ? 2 : 1)) throw Unsupported();
