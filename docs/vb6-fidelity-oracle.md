@@ -158,3 +158,10 @@ and its remembered control; hiding the last visible form retains both.
 
 The #173 brief's measured chained writes are recorded in
 [Chained writes: through a module qualifier, with Set, and through a member that returns a UDT](vb6-fidelity-oracle/chained-writes-qualified-set-and-udt-returning-members.md).
+
+The latest [#3014 comment](https://github.com/hexide-io/HexIDE/issues/3014) supplies
+hexide-int's VB6 SP6 native and p-code layout measurements from [#3958](https://github.com/hexide-io/HexIDE/pull/3958),
+at 96 DPI. With style 35, Right right-aligns only the text; RtlReading mirrors the dialog
+(icon right, Cancel/No/Yes, title right and close box left). With both flags, the prompt
+sits beside the icon on the right. The measuring author's oracle-page update belongs to
+that PR; this is provenance supplied to the implementation, not a new measurement.
