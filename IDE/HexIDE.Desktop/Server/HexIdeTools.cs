@@ -1516,9 +1516,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     private static string? WindowSizeNote(Avalonia.Controls.Window window, int? width, int? height) =>
-        width is not null && width != window.ClientSize.Width || height is not null && height != window.ClientSize.Height
+        width is not null && Math.Abs(width.Value - window.ClientSize.Width) > 1 / window.RenderScaling
+        || height is not null && Math.Abs(height.Value - window.ClientSize.Height) > 1 / window.RenderScaling
             ? $"Requested client size {width?.ToString() ?? "unchanged"}×{height?.ToString() ?? "unchanged"}; "
-              + $"the screen allowed {window.ClientSize.Width}×{window.ClientSize.Height}. "
+              + $"the screen allowed {window.ClientSize.Width:0.#}×{window.ClientSize.Height:0.#}. "
               + "x/y/width/height can't exceed the screen's working area. Ask for a size that fits the working area."
             : null;
 
