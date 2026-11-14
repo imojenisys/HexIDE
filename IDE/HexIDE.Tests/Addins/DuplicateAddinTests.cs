@@ -66,10 +66,10 @@ public sealed class DuplicateAddinTests
             registry.SetEnabled(folders[loser], true);
             registry.GetStatus(folders[loser]).Should().Be(AddinStatus.Error);
         }
-        finally { Directory.Delete(root, true); }
+        finally { try { Directory.Delete(root, true); } catch { /* best effort: Windows may still hold the loaded probe */ } }
     }
 
-    private static void WriteProbe(string path, string label)
+    internal static void WriteProbe(string path, string label)
     {
         var source = $$"""
             using System;
@@ -81,7 +81,7 @@ public sealed class DuplicateAddinTests
                 public void Initialize(IHexIdeHost host)
                 {
                     host.RegisterCommand("initialized", "{{label}}", () => { });
-                    tool = host.ToolWindows.Register("probe", "{{label}}", null, () => new object());
+                    tool = host.ToolWindows.Register("probe", "{{label}}", null, () => { host.RegisterCommand("factory", "{{label}}", () => { }); return new object(); });
                     menu = host.Menus.Add("Tools", "{{label}}", null, () => { });
                 }
                 public void Dispose() { tool?.Dispose(); menu?.Dispose(); }

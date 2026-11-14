@@ -235,16 +235,30 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
 
         var ctx = new AddinContext(info) { PackageDirectory = packageDir, Manifest = manifest };
         _contexts.Add(ctx);
-        LoadEntry(ctx, manifest, status, host);
+        LoadEntry(ctx, result, status, host);
     }
 
     /// <summary>Loads + initializes the entry assembly into <paramref name="ctx"/> (used both at startup
     /// for consented add-ins and later, after consent is granted).</summary>
-    private void LoadEntry(AddinContext ctx, AddinManifest manifest, AddinStatus status, IHexIdeHost host)
+    private void LoadEntry(AddinContext ctx, PackageVerificationResult result, AddinStatus status, IHexIdeHost host)
     {
-        var entryPath = Path.Combine(ctx.PackageDirectory, manifest.Entry);
         try
         {
+            // Both startup and post-consent loads must still match the discovery verification.
+            var fresh = _verifier.Verify(ctx.PackageDirectory);
+            if (fresh.Verdict != result.Verdict
+                || !string.Equals(fresh.ManifestHash, result.ManifestHash, StringComparison.Ordinal)
+                || fresh.Manifest is not { } manifest)
+            {
+                var message = _localization.GetString("Str.Addins.ChangedAfterVerification");
+                ctx.Status = AddinStatus.Error;
+                ctx.ErrorMessage = message;
+                ctx.Info = ctx.Info with { LoadError = message };
+                Log.Warning("AddinRegistry: {Title}: {Message}", ctx.Info.Title, message);
+                return;
+            }
+
+            var entryPath = Path.Combine(ctx.PackageDirectory, manifest.Entry);
             var alc = new AddinLoadContext(ctx.PackageDirectory, manifest);
             ctx.LoadContext = alc;
             var assembly = alc.LoadFromAssemblyPath(entryPath);
@@ -348,22 +362,7 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
                 continue;
             }
 
-            // TOCTOU guard: the dialog may have been open for a long time. Re-verify and load only if
-            // the package on disk is still EXACTLY what the user consented to (same verdict + same hash).
-            // A swapped signed file fails re-verification; a changed manifest changes the hash.
-            var fresh = _verifier.Verify(ctx.PackageDirectory);
-            if (fresh.IsVerified == result.IsVerified
-                && string.Equals(fresh.ManifestHash, result.ManifestHash, StringComparison.Ordinal)
-                && fresh.Manifest is { } manifest)
-            {
-                LoadEntry(ctx, manifest, result.IsVerified ? AddinStatus.Loaded : AddinStatus.DeveloperUnsigned, host);
-            }
-            else
-            {
-                ctx.Status = AddinStatus.Error;
-                ctx.ErrorMessage = "package changed on disk after the consent prompt";
-                Log.Warning("AddinRegistry: {Title} changed on disk after the consent prompt — not loaded", ctx.Info.Title);
-            }
+            LoadEntry(ctx, result, result.IsVerified ? AddinStatus.Loaded : AddinStatus.DeveloperUnsigned, host);
         }
     }
 

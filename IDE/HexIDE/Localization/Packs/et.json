@@ -1091,6 +1091,7 @@
     "Str.Addins.DebugLaunchRefused": "Lisandmooduli „{0}” silumisadapteri käivitamine keelati.",
     "Str.Addins.Incompatible": "Lisandmoodulit ei saa laadida: nõutud skeem {0}, minimaalne HexIDE {1}; see versioon toetab skeemi {2}, HexIDE {3}. Skeemi- või versiooninõue on toetamata või vigane.",
     "Str.Addins.DuplicateId": "Lisandmoodulit ei saa laadida: tunnust „{0}” kasutab juba paketikaust „{1}”.",
+    "Str.Addins.ChangedAfterVerification": "Lisandmoodulit ei saa laadida: pakett muutus kettal pärast kontrollimist.",
     "Str.MakeProject.NoStartup": "Käivitusprojekti ei leitud.",
     "Str.MakeProject.Browser": "Programmi ehitamine pole brauseris saadaval. Kasuta HexIDE töölauaversiooni.",
     "Str.MakeProject.UnsupportedPlatform": "Programmi ehitamine pole selles operatsioonisüsteemis toetatud. Kasuta HexIDE-d Windowsis, macOS-is või Linuxis.",
