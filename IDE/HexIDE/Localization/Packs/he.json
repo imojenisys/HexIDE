@@ -2,6 +2,7 @@
   "name": "Hebrew",
   "direction": "rtl",
   "strings": {
+    "Str.Addins.InvalidTitle": "כותרת תוסף לא תקינה: נדרשים 1–128 תווים ללא רווחים בקצוות, תווי בקרה, מפרידי שורה/פסקה או תווי עיצוב מלבד U+200C ו-U+200D.",
     "Str.AIChat.Title": "צ׳אט בינה מלאכותית",
     "Str.AIChat.Menu": "צ׳אט בינה מלאכותית",
     "Str.AIChat.Approved": "✔ אושר",

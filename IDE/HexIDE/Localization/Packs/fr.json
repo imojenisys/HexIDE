@@ -2,6 +2,7 @@
   "name": "French",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Titre de complément non valide : 1 à 128 caractères attendus, sans espaces aux extrémités, caractères de contrôle, séparateurs de ligne/paragraphe ou caractères de format sauf U+200C et U+200D.",
     "Str.AIChat.Title": "Chat IA",
     "Str.AIChat.Menu": "_Chat IA",
     "Str.AIChat.Approved": "✔ Approuvé",

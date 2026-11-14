@@ -2,6 +2,7 @@
   "name": "Vietnamese",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Tiêu đề phần bổ trợ không hợp lệ: cần 1–128 ký tự không có khoảng trắng đầu/cuối, ký tự điều khiển, dấu phân cách dòng/đoạn hoặc ký tự định dạng ngoại trừ U+200C và U+200D.",
     "Str.MemberOrigin.HexIde": "Phần mở rộng HexIDE; không có trong VB6.",
     "Str.Dock.Host": "Vùng chứa neo",
     "Str.Dock.Root": "Vùng neo gốc",

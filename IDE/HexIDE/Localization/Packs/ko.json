@@ -2,6 +2,7 @@
   "name": "Korean",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "추가 기능 제목이 잘못되었습니다. 앞뒤 공백 없이 1–128자여야 하며 제어 문자, 줄/단락 구분자 또는 U+200C와 U+200D 이외의 서식 문자를 포함할 수 없습니다.",
     "Str.MemberOrigin.HexIde": "HexIDE 확장 기능이며 VB6에서는 사용할 수 없습니다.",
     "Str.Dock.Host": "도킹 호스트",
     "Str.Dock.Root": "루트 도크",

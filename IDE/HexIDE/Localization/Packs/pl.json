@@ -2,6 +2,7 @@
   "name": "Polish",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Nieprawidłowy tytuł dodatku: wymagane 1–128 znaków bez skrajnych spacji, znaków sterujących, separatorów wierszy/akapitów lub znaków formatowania z wyjątkiem U+200C i U+200D.",
     "Str.MemberOrigin.HexIde": "Rozszerzenie HexIDE; niedostępne w VB6.",
     "Str.Dock.Host": "Host dokowania",
     "Str.Dock.Root": "Główny obszar dokowania",

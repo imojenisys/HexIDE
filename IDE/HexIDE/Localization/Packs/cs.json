@@ -2,6 +2,7 @@
   "name": "Czech",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Neplatný název doplňku: očekáváno 1–128 znaků bez krajních mezer, řídicích znaků, oddělovačů řádků/odstavců a formátovacích znaků kromě U+200C a U+200D.",
     "Str.AIChat.Title": "Chat AI",
     "Str.AIChat.Menu": "_Chat AI",
     "Str.AIChat.Approved": "✔ Schváleno",

@@ -2,6 +2,7 @@
   "name": "Swedish",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Ogiltig tilläggstitel: förväntade 1–128 tecken utan inledande/avslutande blanksteg, kontrolltecken, rad-/styckeavgränsare eller formattecken utom U+200C och U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE-tillägg; inte tillgängligt i VB6.",
     "Str.Dock.Host": "Dockningsvärd",
     "Str.Dock.Root": "Rotdocka",

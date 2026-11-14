@@ -2,6 +2,7 @@
   "name": "Catalan",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Títol de complement no vàlid: calen 1–128 caràcters sense espais als extrems, controls, separadors de línia/paràgraf ni caràcters de format excepte U+200C i U+200D.",
     "Str.AIChat.Title": "Xat d’IA",
     "Str.AIChat.Menu": "_Xat d’IA",
     "Str.AIChat.Approved": "✔ Aprovat",

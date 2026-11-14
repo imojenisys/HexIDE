@@ -2,6 +2,7 @@
   "name": "Croatian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Nevaljan naslov dodatka: očekuje se 1–128 znakova bez rubnih razmaka, kontrolnih znakova, razdjelnika redaka/odlomaka ili znakova oblikovanja osim U+200C i U+200D.",
     "Str.AIChat.Title": "AI chat",
     "Str.AIChat.Menu": "AI _chat",
     "Str.AIChat.Approved": "✔ Odobreno",

@@ -27,7 +27,7 @@ public sealed class AddinToolWindowService(ILocalizationService? localization = 
     internal IToolWindowContributor ForOwner(AddinOrigin origin) => new OwnedContributor(this, origin);
 
     private IToolWindowHandle RegisterLocalized(AddinOrigin origin, string id, AddinTitle title, object? icon, Func<object> factory) =>
-        RegisterOwned(origin.Id ?? "", id, new RegisteredAddinTitle(title, origin), icon, factory);
+        RegisterOwned(origin.Id ?? "", id, new RegisteredAddinTitle(title, origin, _localization), icon, factory);
 
     private IToolWindowHandle RegisterOwned(string addinId, string id, RegisteredAddinTitle title, object? icon, Func<object> factory)
     {

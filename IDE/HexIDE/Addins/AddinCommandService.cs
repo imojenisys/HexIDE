@@ -35,7 +35,7 @@ public sealed class AddinCommandService(ILocalizationService? localization = nul
 
     internal IDisposable RegisterOwned(AddinOrigin origin, string id, AddinTitle label, Action onInvoke, string? gesture, Func<bool>? canExecute)
     {
-        var text = new RegisteredAddinTitle(label, origin);
+        var text = new RegisteredAddinTitle(label, origin, _localization);
         var cmd = new AddinCommand(id, text.Resolve(_localization), onInvoke, gesture, canExecute);
         void Refresh() => cmd.Label = text.Resolve(_localization);
         _localization.LanguageChanged += Refresh;

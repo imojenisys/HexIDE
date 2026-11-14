@@ -2,6 +2,7 @@
   "name": "Romanian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Titlu de extensie nevalid: se așteaptă 1–128 de caractere fără spații la capete, caractere de control, separatori de linie/paragraf sau caractere de formatare, cu excepția U+200C și U+200D.",
     "Str.MemberOrigin.HexIde": "Extensie HexIDE; indisponibilă în VB6.",
     "Str.Dock.Host": "Gazdă de andocare",
     "Str.Dock.Root": "Andocare rădăcină",

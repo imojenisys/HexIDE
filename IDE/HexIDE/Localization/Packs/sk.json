@@ -2,6 +2,7 @@
   "name": "Slovak",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Neplatný názov doplnku: očakáva sa 1–128 znakov bez krajných medzier, riadiacich znakov, oddeľovačov riadkov/odsekov a formátovacích znakov okrem U+200C a U+200D.",
     "Str.MemberOrigin.HexIde": "Rozšírenie HexIDE; vo VB6 nie je dostupné.",
     "Str.Dock.Host": "Hostiteľ dokovania",
     "Str.Dock.Root": "Koreňové dokovanie",

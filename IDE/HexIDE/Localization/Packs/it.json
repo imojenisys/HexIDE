@@ -2,6 +2,7 @@
   "name": "Italian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Titolo del componente aggiuntivo non valido: previsti 1–128 caratteri senza spazi alle estremità, controlli, separatori di riga/paragrafo o caratteri di formato tranne U+200C e U+200D.",
     "Str.MemberOrigin.HexIde": "Estensione di HexIDE; non disponibile in VB6.",
     "Str.Dock.Host": "Contenitore di ancoraggio",
     "Str.Dock.Root": "Ancoraggio radice",

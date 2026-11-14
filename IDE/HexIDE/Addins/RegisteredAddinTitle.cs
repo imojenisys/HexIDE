@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using HexIDE.IDE;
 using HexIDE.Localization;
 
@@ -17,7 +18,7 @@ internal sealed class RegisteredAddinTitle
             ["Str.AIChat."] = "com.hexide.aichat",
         });
 
-    internal RegisteredAddinTitle(AddinTitle title, AddinOrigin origin = default)
+    internal RegisteredAddinTitle(AddinTitle title, AddinOrigin origin = default, ILocalizationService? localization = null)
     {
         ArgumentNullException.ThrowIfNull(title);
         _key = title.Key;
@@ -35,11 +36,9 @@ internal sealed class RegisteredAddinTitle
             {
                 if (string.IsNullOrEmpty(language) || !IsCulture(language))
                     throw new ArgumentException($"Malformed translation language '{language}'.", nameof(title));
-                if (string.IsNullOrWhiteSpace(text))
-                    throw new ArgumentException($"Empty translation for '{language}'.", nameof(title));
-                translations.Add(language, PrepareText(text));
+                translations.Add(language, PrepareText(text, localization ?? Canonical.Value));
             }
-        _text = new DistributionText(PrepareText(title.Text), translations);
+        _text = new DistributionText(_key is null ? PrepareText(title.Text, localization ?? Canonical.Value) : title.Text, translations);
     }
 
     private static bool IsCulture(string language)
@@ -51,7 +50,15 @@ internal sealed class RegisteredAddinTitle
     }
 
     // Plain text and translations share this display boundary (#3925).
-    private static string PrepareText(string text) => text;
+    private static string PrepareText(string text, ILocalizationService localization)
+    {
+        if (string.IsNullOrWhiteSpace(text) || text != text.Trim() || text.Length > 128
+            || text.EnumerateRunes().Any(c => Rune.IsControl(c) || (c.Value is not 0x200c and not 0x200d
+                && Rune.GetUnicodeCategory(c) is UnicodeCategory.Format
+                    or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)))
+            throw new ArgumentException(localization.GetString("Str.Addins.InvalidTitle"), nameof(text));
+        return text;
+    }
 
     internal string Resolve(ILocalizationService localization) => _key is null
         ? _text.Resolve(BrandText.LanguageChain(localization)) : localization.GetString(_key);

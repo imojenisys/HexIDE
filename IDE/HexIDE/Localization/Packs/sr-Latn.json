@@ -2,6 +2,7 @@
   "name": "Serbian (Latin)",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Nevažeći naslov dodatka: očekuje se 1–128 znakova bez razmaka na krajevima, kontrolnih znakova, separatora redova/pasusa ili znakova formatiranja osim U+200C i U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE proširenje; nije dostupno u VB6.",
     "Str.Dock.Host": "Domaćin usidravanja",
     "Str.Dock.Root": "Korensko sidrište",

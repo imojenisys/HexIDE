@@ -2,6 +2,7 @@
   "name": "Arabic",
   "direction": "rtl",
   "strings": {
+    "Str.Addins.InvalidTitle": "عنوان إضافة غير صالح: يُتوقع من 1 إلى 128 محرفًا دون مسافات طرفية أو محارف تحكم أو فواصل أسطر وفقرات أو محارف تنسيق باستثناء U+200C وU+200D.",
     "Str.AIChat.Title": "دردشة الذكاء الاصطناعي",
     "Str.AIChat.Menu": "دردشة الذكاء الاصطناعي",
     "Str.AIChat.Approved": "✔ تمت الموافقة",

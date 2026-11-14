@@ -2,6 +2,7 @@
   "name": "Estonian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Vigane lisandmooduli pealkiri: oodatud on 1–128 märki ilma ääretühikute, juhtmärkide, rea-/lõigueraldajate ja vormindusmärkideta, välja arvatud U+200C ja U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE laiendus; pole VB6-s saadaval.",
     "Str.Dock.Host": "Doki host",
     "Str.Dock.Root": "Juurdokk",

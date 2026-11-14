@@ -2,6 +2,7 @@
   "name": "Indonesian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Judul add-in tidak valid: harus 1–128 karakter tanpa spasi di awal/akhir, karakter kontrol, pemisah baris/paragraf, atau karakter format kecuali U+200C dan U+200D.",
     "Str.MemberOrigin.HexIde": "Ekstensi HexIDE; tidak tersedia di VB6.",
     "Str.Dock.Host": "Host penambatan",
     "Str.Dock.Root": "Tambatan akar",

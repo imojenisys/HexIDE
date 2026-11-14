@@ -2,6 +2,7 @@
   "name": "Norwegian Bokmål",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Ugyldig tilleggstittel: forventet 1–128 tegn uten innledende/avsluttende mellomrom, kontrolltegn, linje-/avsnittsskilletegn eller formattegn unntatt U+200C og U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE-utvidelse; ikke tilgjengelig i VB6.",
     "Str.Dock.Host": "Forankringsvert",
     "Str.Dock.Root": "Rotforankring",

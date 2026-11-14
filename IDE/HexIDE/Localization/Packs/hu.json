@@ -2,6 +2,7 @@
   "name": "Hungarian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Érvénytelen bővítménycím: 1–128 karakter szükséges, szélső szóközök, vezérlőkarakterek, sor-/bekezdéselválasztók és formázókarakterek nélkül, kivéve U+200C és U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE-bővítmény; a VB6-ban nem érhető el.",
     "Str.Dock.Host": "Dokkolási gazda",
     "Str.Dock.Root": "Gyökérdokk",

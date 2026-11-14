@@ -2,6 +2,7 @@
   "name": "Chinese (Traditional)",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "增益集標題無效：應為 1–128 個字元，首尾不能有空白，不能包含控制字元、行/段落分隔符或 U+200C 和 U+200D 以外的格式字元。",
     "Str.AIChat.Title": "AI 聊天",
     "Str.AIChat.Menu": "AI 聊天(_C)",
     "Str.AIChat.Approved": "✔ 已核准",

@@ -2,6 +2,7 @@
   "name": "Slovenian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Neveljaven naslov dodatka: pričakovanih je 1–128 znakov brez robnih presledkov, kontrolnih znakov, ločil vrstic/odstavkov ali oblikovnih znakov razen U+200C in U+200D.",
     "Str.MemberOrigin.HexIde": "Razširitev HexIDE; ni na voljo v VB6.",
     "Str.Dock.Host": "Gostitelj sidranja",
     "Str.Dock.Root": "Korensko sidrišče",

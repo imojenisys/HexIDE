@@ -2,6 +2,7 @@
   "name": "Basque",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Gehigarriaren izenburu baliogabea: 1–128 karaktere behar dira, ertzeko zuriunerik, kontrol-karaktererik, lerro/paragrafo bereizlerik edo formatu-karaktererik gabe, U+200C eta U+200D izan ezik.",
     "Str.MemberOrigin.HexIde": "HexIDE hedapena; ez dago erabilgarri VB6n.",
     "Str.Dock.Host": "Atrakatzeko ostalaria",
     "Str.Dock.Root": "Erroko atrakalekua",

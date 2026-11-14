@@ -2,6 +2,7 @@
   "name": "English",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Invalid add-in title: expected 1–128 trimmed characters, without control, line/paragraph separator or format characters except U+200C and U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE extension; not available in VB6.",
     "Str.Dock.Host": "Dock host",
     "Str.Dock.Root": "Root dock",

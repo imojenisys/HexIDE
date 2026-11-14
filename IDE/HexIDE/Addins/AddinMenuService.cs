@@ -22,7 +22,7 @@ public sealed class AddinMenuService(ILocalizationService? localization = null) 
 
     internal IDisposable AddOwned(AddinOrigin origin, string parentPath, AddinTitle label, object? icon, Action onInvoke, Func<bool>? canExecute, Assembly? caller = null)
     {
-        var text = new RegisteredAddinTitle(label, origin);
+        var text = new RegisteredAddinTitle(label, origin, _localization);
         AddinMenuItemViewModel? item = null;
         var handle = AddCore(parentPath, text.Resolve(_localization), icon, onInvoke, canExecute, vm => item = vm, caller);
         if (item is null) return handle;

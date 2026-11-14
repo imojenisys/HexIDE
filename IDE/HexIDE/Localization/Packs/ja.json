@@ -2,6 +2,7 @@
   "name": "Japanese",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "アドインのタイトルが無効です。前後に空白のない1～128文字で、制御文字、行・段落区切り、U+200CとU+200D以外の書式文字を含めないでください。",
     "Str.AIChat.Title": "AI チャット",
     "Str.AIChat.Menu": "AI チャット(_C)",
     "Str.AIChat.Approved": "✔ 承認済み",

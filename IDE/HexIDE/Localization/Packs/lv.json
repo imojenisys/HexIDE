@@ -2,6 +2,7 @@
   "name": "Latvian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Nederīgs pievienojumprogrammas virsraksts: nepieciešamas 1–128 rakstzīmes bez atstarpēm malās, vadības rakstzīmēm, rindu/rindkopu atdalītājiem vai formatēšanas rakstzīmēm, izņemot U+200C un U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE paplašinājums; nav pieejams VB6.",
     "Str.Dock.Host": "Dokošanas resursdators",
     "Str.Dock.Root": "Saknes doks",

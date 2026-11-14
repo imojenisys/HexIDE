@@ -2,6 +2,7 @@
   "name": "Lithuanian",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Netinkamas priedo pavadinimas: tikimasi 1–128 ženklų be tarpų kraštuose, valdymo ženklų, eilučių / pastraipų skirtukų ar formatavimo ženklų, išskyrus U+200C ir U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE plėtinys; VB6 nepasiekiamas.",
     "Str.Dock.Host": "Prijungimo pagrindinis elementas",
     "Str.Dock.Root": "Šakninis prijungimas",

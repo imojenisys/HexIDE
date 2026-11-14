@@ -2,6 +2,7 @@
   "name": "Finnish",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Virheellinen lisäosan otsikko: odotettiin 1–128 merkkiä ilman reunavälilyöntejä, ohjausmerkkejä, rivi-/kappale-erottimia tai muotoilumerkkejä paitsi U+200C ja U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE-laajennus; ei käytettävissä VB6:ssa.",
     "Str.Dock.Host": "Telakointi-isäntä",
     "Str.Dock.Root": "Juuritelakka",

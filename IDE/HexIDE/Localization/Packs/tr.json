@@ -2,6 +2,7 @@
   "name": "Turkish",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Geçersiz eklenti başlığı: başında/sonunda boşluk, denetim karakteri, satır/paragraf ayırıcı veya U+200C ve U+200D dışındaki biçim karakterleri içermeyen 1–128 karakter bekleniyor.",
     "Str.MemberOrigin.HexIde": "HexIDE uzantısı; VB6 içinde kullanılamaz.",
     "Str.Dock.Host": "Yerleştirme konağı",
     "Str.Dock.Root": "Kök yerleştirme alanı",

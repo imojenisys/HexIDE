@@ -2,6 +2,7 @@
   "name": "Danish",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Ugyldig tilføjelsestitel: forventede 1–128 tegn uden indledende/afsluttende mellemrum, kontroltegn, linje-/afsnitsseparatorer eller formattegn undtagen U+200C og U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE-udvidelse; ikke tilgængelig i VB6.",
     "Str.Dock.Host": "Forankringsvært",
     "Str.Dock.Root": "Rodforankring",

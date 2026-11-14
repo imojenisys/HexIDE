@@ -2,6 +2,7 @@
   "name": "Dutch",
   "direction": "ltr",
   "strings": {
+    "Str.Addins.InvalidTitle": "Ongeldige invoegtoepassingstitel: verwacht 1–128 tekens zonder spaties aan de randen, besturingstekens, regel-/alineascheidingstekens of opmaaktekens behalve U+200C en U+200D.",
     "Str.MemberOrigin.HexIde": "HexIDE-uitbreiding; niet beschikbaar in VB6.",
     "Str.Dock.Host": "Dockhost",
     "Str.Dock.Root": "Hoofddock",

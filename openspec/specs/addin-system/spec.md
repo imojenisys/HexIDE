@@ -395,3 +395,27 @@ retain existing access-key treatment. The title API SHALL expose only inert data
 #### Scenario: Other titles and menu paths
 - **WHEN** an add-in contributes a debug launch, project type, or menu parent path such as `Tools` or `AddIns/name`
 - **THEN** these retain their existing plain titles or path identifiers without translation
+
+### Requirement: Add-in chrome text is validated before registration
+Tool-window titles, menu-item labels and command labels SHALL pass one shared check for both string and
+`AddinTitle` overloads, including every translation regardless of active language. Text MUST be trimmed,
+nonempty and at most 128 UTF-16 code units, without control, Format, LineSeparator or ParagraphSeparator
+characters except U+200C/U+200D. Invalid text SHALL throw a descriptive `ArgumentException` before registration
+or any content factory runs.
+
+#### Scenario: Unsafe literal or translation
+- **WHEN** any of the three registration calls receives empty, whitespace-only, untrimmed or 129-character
+  text, or text containing a tab, U+202E, U+2066, U+200B, U+FEFF, U+2028, U+2029 or supplementary Format character U+E0001
+- **THEN** registration refuses it through either overload, including when it occurs only in a translation
+- **AND** nothing is registered and no factory runs
+- **AND** an uncaught refusal during initialization makes the add-in fail to initialize
+
+#### Scenario: Ordinary international text and access keys
+- **WHEN** text is exactly 128 code units, ordinary Arabic or Hebrew, a Persian word with U+200C,
+  an emoji sequence with U+200D, or text containing an access-key underscore
+- **THEN** registration accepts it and retains the supplied text
+
+#### Scenario: Owned key has no literal text
+- **WHEN** an authorized add-in registers `AddinTitle.FromKey` with a valid owned IDE key
+- **THEN** the empty `Text` field does not undergo the display-text check
+- **AND** the title resolves from the IDE's packs under the existing key-ownership rules
