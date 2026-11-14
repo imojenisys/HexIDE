@@ -101,6 +101,20 @@ public class CarriedFileCompletionTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void EnterWithNoSelectedCompletionClosesListAndStartsNewLine()
+    {
+        var (window, _, editor) = Show("v");
+        window.KeyTextInput("l");
+        Pump();
+        List(editor).Should().NotBeNull();
+        List(editor)!.CompletionList.CompletionData.Should().NotBeEmpty();
+        List(editor)!.CompletionList.SelectedItem.Should().BeNull();
+        Press(window, Key.Return);
+        editor.Text.ReplaceLineEndings("\n").Should().Be("vl\n");
+        List(editor).Should().BeNull();
+    }
+
+    [AvaloniaFact]
     public void SnippetSelectsStopAndTabLeavesIt()
     {
         client.RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>())

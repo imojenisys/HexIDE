@@ -108,9 +108,10 @@ internal sealed class EditorLanguageFeatures : IDisposable
         if (_completionWindow is not { } completion || !rules.Commits(e.Key)) return;
         if (e.Key == Key.Tab && completion.CompletionList.SelectedItem is null)
             completion.CompletionList.SelectedItem = completion.CompletionList.CompletionData.FirstOrDefault();
-        if (completion.CompletionList.SelectedItem is not null) completion.CompletionList.RequestInsertion(e);
+        var hasSelection = completion.CompletionList.SelectedItem is not null;
+        if (hasSelection) completion.CompletionList.RequestInsertion(e);
         else completion.Close();
-        if (e.Key == Key.Tab || (e.Key == Key.Return && rules.HandlesReturn)) e.Handled = true;
+        if (e.Key == Key.Tab || (e.Key == Key.Return && rules.HandlesReturn && hasSelection)) e.Handled = true;
     }
 
     public void Dispose()

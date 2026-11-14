@@ -478,7 +478,8 @@ requests, closes popups and ends snippet navigation when detached, including a d
 A carried file asks its claiming servers only for advertised capabilities. Completion opens on a
 letter, an advertised completion trigger or the Complete Word command (the platform command key
 plus Space), with Auto List Members enabled. Requests use the caret position. Enter accepts without
-a line break, and Tab also accepts; Space and other non-word input close the list without accepting.
+a line break, and Tab also accepts. With nothing selected, Enter closes the list and starts a new
+line, while Tab accepts the first item. Space and other non-word input close the list without accepting.
 Snippets select their first stop whether accepted with Enter or Tab, and Tab advances through them.
 Signature help opens on the server's advertised signature triggers.
 The code window keeps its word-start position, VB6 free-text/read-only rules, Space commit and fixed

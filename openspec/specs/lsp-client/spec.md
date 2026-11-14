@@ -24,6 +24,7 @@ retaining its own completion position, commit keys and editing rules.
 - **WHEN** Auto List Members is enabled and the developer types a letter, types an advertised completion trigger, or invokes Complete Word
 - **THEN** an advertising server's completion items appear
 - **AND** Enter accepts an item without a line break, Tab also accepts, and Space closes the list without accepting
+- **AND** with nothing selected, Enter closes the list and starts a new line, while Tab accepts the first item
 - **AND** accepting a snippet selects its first stop and Tab advances through its stops
 
 #### Scenario: Signature help in a carried file
