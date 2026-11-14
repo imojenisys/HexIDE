@@ -151,3 +151,13 @@ The #3774 loaded-name change uses the same [module-name measurement](vb6-fidelit
 ([#3777](https://github.com/hexide-io/HexIDE/pull/3777)): a `.bas` or `.cls` takes its identity from
 `VB_Name`, silently overriding the `.vbp` name; without that attribute the project line wins. The IDE's
 Save Project writes the chosen name into the `.vbp`. Name collisions were not measured.
+
+Issue [#173](https://github.com/hexide-io/HexIDE/issues/173)'s 2026-11-14 supervisor comment
+records vb6.exe SP6 native and p-code chained-write measurements. Qualified record stores reach their
+module's variable: scalar 7, nested 42, increment 43, array element 9, foreign module 5 then 6.
+Chained Set stores Leaf values 5/6, preserves object identity and accepts Nothing. A store through a
+UDT-returning getter or function changes only its returned copy: backing Z stays 3, getter count 1,
+Let count 0 (getter-only backing Z stays 0). A With block keeps its returned copy, reading 5 inside
+while backing Z stays 3. The measuring PR owns
+`docs/vb6-fidelity-oracle/chained-writes-qualified-set-and-udt-returning-members.md`;
+this change does not duplicate its page.
