@@ -1695,7 +1695,11 @@ A laid-out, single-select ListBox SHALL expose TopIndex and coerce assignments t
 synchronously, only if the resulting top row changes. The handler SHALL read the new TopIndex.
 An index below zero or at or above ListCount SHALL raise error 380 without Scroll.
 MultiSelect access and access before row layout SHALL refuse as not implemented.
-Scrollbar, keyboard and native-message Scroll delivery remains pending.
+Vertical scroll-bar pointer input SHALL raise Scroll once per changed top row, including each thumb move,
+but not on release without movement. Navigation by Down, Up, Page Down, Home or End SHALL raise Click
+then Scroll when the top row changes, with the new TopIndex readable in both handlers. A key that
+changes only selection SHALL raise Click alone. Wheel input and ListIndex assignments SHALL NOT raise Scroll.
+Native-message Scroll delivery remains pending.
 
 #### Scenario: Move and repeat the top row
 - **WHEN** TopIndex changes from 0 to 5 and is then assigned 5 again
