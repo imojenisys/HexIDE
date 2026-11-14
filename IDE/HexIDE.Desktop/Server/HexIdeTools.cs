@@ -3297,6 +3297,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             program = UiAutomationDriver.WatchProgram(TopLevel.GetTopLevel(found) as Window, () => ctx.DebugController.CurrentStop);
             var outcome = UiAutomationDriver.Hover(found, x, y, target, out var landed);
             landing = landed;
+            // Protect the tooltip dwell too: opening its popup can restate the resting real mouse (#2666).
+            if (stay && outcome.Success && landed is { ThroughWindowInput: true } protectedAt)
+                UiAutomationDriver.StayHover(protectedAt.Receiver);
             return outcome;
         });
 
@@ -3381,10 +3384,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // state is read a moment later, with the watch still running, so the reply says what settled and what took it.
             var staying = stay && at.ThroughWindowInput && !ct.IsCancellationRequested;
             if (staying)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.StayHover(hovered));
                 await Task.Delay(UiAutomationDriver.StaySettle, CancellationToken.None);
-            }
             var settled = watch is null ? null : await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var what = watch.Moved;
@@ -3396,7 +3396,12 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 stayed = await Dispatcher.UIThread.InvokeAsync(() =>
                     UiAutomationDriver.StayedNote(hovered, settled, saidAlready: tip is null && enabled && settled == moved));
             else if (at.ThroughWindowInput)
-                await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.EndHover(hovered));
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (stay && TopLevel.GetTopLevel(hovered) is { } top)
+                        UiAutomationDriver.EndStayingHover(top);
+                    UiAutomationDriver.EndHover(hovered);
+                });
             else if (stay)
                 stayed = "; 'stay' left nothing under the pointer: the move was raised on the control, which sets nothing "
                          + "as under it";
