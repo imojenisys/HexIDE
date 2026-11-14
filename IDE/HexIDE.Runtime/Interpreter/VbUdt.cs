@@ -105,7 +105,7 @@ public sealed class VbUdt
         if (typedFields.TryGetValue(field, out var declared))
             value = VbNumeric.CoerceOnStore(value, declared, ctx);
         if (objectFields.TryGetValue(field, out var declaredClass))
-            ModuleExecutionContext.CheckObjectStore(value, declaredClass, ctx);
+            ModuleExecutionContext.CheckObjectStore(value, declaredClass.Equals("Object", StringComparison.OrdinalIgnoreCase) ? null : declaredClass, ctx);
         fields[field] = value;
         return true;
     }

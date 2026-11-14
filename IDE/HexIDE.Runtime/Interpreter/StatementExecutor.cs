@@ -2420,6 +2420,9 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
                 && await TryStoreModuleMember(propertyTarget, value, false, context, propertiesOnly: true))
                 return default;
         }
+        // A fresh object field is the Let target, before the right-hand object's default is read (E7, #3924).
+        if (IsNothingObjectField(context.implicitCallStmt_InStmt()))
+            throw new VBRunTimeException(context, VBStandardError.ObjectVariableOrWithBlockVariableNotSet);
         value = await LetValue(context, IntoArray(context), value);
 
         if (context.implicitCallStmt_InStmt().iCS_S_VariableOrProcedureCall() is { } varOrProcCall)
@@ -2555,7 +2558,7 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             // UDT field assignment (`e.City = x`, nested `e.Address.City = x`) — navigate to the innermost owned
             // bag and set the field in place (the slot holds the same VbUdt reference, so the write persists).
             // The owned bag is shared with its slot; a returned UDT instead owns a disposable copy.
-            if (variable.Value is VbUdt)
+            if (variable.Value is VbUdt && membersCall.iCS_S_MemberCall().Length == 1)
             {
                 await SetUdtField(variable, membersCall.iCS_S_MemberCall(), value, context);
                 return default;
@@ -3791,30 +3794,6 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
                 return default;
             if (!interpreter.TryReadNow(currentEnv, leadPart.GetText(), out var setLead, out var target, out var setLeadNeed))
                 (setLead, target) = await interpreter.ReadVariableAfter(currentEnv, leadPart.GetText(), setLeadNeed!);
-            if (setLead && target.Value is VbUdt)
-            {
-                var members = membersCall.iCS_S_MemberCall();
-                var receiver = await expressionExecutor.ResolveMemberChain(target, members[..^1], 0, context);
-                if (receiver.Value is not VbUdt bag || MemberHasArgs(members[^1]))
-                    throw new NotImplementedException("Set through this Type field is not implemented (#3924)");
-                var name = UdtFieldName(members[^1]);
-                if (!bag.IsObjectField(name))
-                    throw new NotImplementedException("Set on this Type field is not implemented (#3924)");
-                if (!bag.TryInspect(name, out var old))
-                    throw new VBRunTimeException(context, VBStandardError.MethodOrDataMemberNotFound, name);
-                interpreter.AddRef(value);
-                try
-                {
-                    bag.TrySet(name, value, context);
-                }
-                catch
-                {
-                    await interpreter.ReleaseRef(value);
-                    throw;
-                }
-                await interpreter.ReleaseRef(old);
-                return default;
-            }
             if (setLead && target.Value is VBListView or ListViewItem or ListViewTextObject
                 && membersCall.iCS_S_MemberCall().Length == 1
                 && !MemberHasArgs(membersCall.iCS_S_MemberCall()[0])
@@ -3920,6 +3899,29 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             }
             else if (setLead && chainMembers.Length > 1)
                 target = await expressionExecutor.ResolveMemberChain(target, chainMembers[..^1], 0, context);
+            if (setLead && target.Value is VbUdt udtBag)
+            {
+                var member = chainMembers[^1];
+                if (MemberHasArgs(member))
+                    throw new NotImplementedException("Set through this Type field is not implemented (#3924)");
+                var name = UdtFieldName(member);
+                if (!udtBag.IsObjectField(name))
+                    throw new NotImplementedException("Set on this Type field is not implemented (#3924)");
+                if (!udtBag.TryInspect(name, out var old))
+                    throw new VBRunTimeException(context, VBStandardError.MethodOrDataMemberNotFound, name);
+                interpreter.AddRef(value);
+                try
+                {
+                    udtBag.TrySet(name, value, context);
+                }
+                catch
+                {
+                    await interpreter.ReleaseRef(value);
+                    throw;
+                }
+                await interpreter.ReleaseRef(old);
+                return default;
+            }
             if (!setLead || target.Value is not VbObject targetObj)
                 throw new VBRunTimeException(context, VBStandardError.ObjectVariableOrWithBlockVariableNotSet);
             var setMember = chainMembers[^1];
@@ -4801,6 +4803,8 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
                         throw new VBRunTimeException(ctx, VBStandardError.ThisArrayIsFixedOrTemporarilyLocked);
                     value = ArrayStore(field.Type, value, ctx);
                 }
+                if (bag.IsObjectField(fieldName))
+                    RefuseLetIntoObject(field, fieldName, ctx);
                 bag.TrySet(fieldName, interpreter.CopyForStore(value), ctx);
                 await interpreter.ReleaseRef(field);
                 return;
@@ -4808,6 +4812,23 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             else
                 current = field;
         }
+    }
+
+    private bool IsNothingObjectField(VB6Parser.ImplicitCallStmt_InStmtContext target)
+    {
+        if (target.iCS_S_MembersCall() is not { } chain || chain.iCS_S_VariableOrProcedureCall() is not { } lead
+            || !interpreter.ExecutionContext.TryInspectVariable(currentEnv, lead.GetText(), out var current))
+            return false;
+        var members = chain.iCS_S_MemberCall();
+        for (var i = 0; i < members.Length; i++)
+        {
+            var name = UdtFieldName(members[i]);
+            if (MemberHasArgs(members[i]) || current.Value is not VbUdt bag || !bag.TryInspect(name, out current))
+                return false;
+            if (i == members.Length - 1)
+                return bag.IsObjectField(name) && current.Value is null;
+        }
+        return false;
     }
 
     // Inspect only: deciding whether a Let reads an object's default must not evaluate its target twice.

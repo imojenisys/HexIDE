@@ -2144,7 +2144,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         var current = root;
         foreach (var m in members)
         {
-            if (current.Value is not VbUdt && current.Type == Vb6Value.ValueType.Object)
+            if (current.Value is not VbUdt && (current.Type == Vb6Value.ValueType.Object || current.Value is VbCollection))
             {
                 current = await ResolveMemberIndexed(current, m, ctx);
                 continue;

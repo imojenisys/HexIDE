@@ -386,6 +386,13 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                 objectFields[f.Name] = projectClass.Name;
                 continue;
             }
+            if (f.UdtTypeName is { } slotType
+                && (slotType.Equals("Object", StringComparison.OrdinalIgnoreCase) || ExpressionExecutor.IsCollectionType(slotType)))
+            {
+                fields[f.Name] = Vb6Value.Nothing;
+                objectFields[f.Name] = ExpressionExecutor.IsCollectionType(slotType) ? "Collection" : "Object";
+                continue;
+            }
             if (f.UdtTypeName is { } objectName && !Types.ContainsKey(objectName) && !Enums.ContainsKey(objectName))
             {
                 var dot = objectName.LastIndexOf('.');
