@@ -2832,6 +2832,7 @@ public partial class CodeEditorView : UserControl
         public bool MayOpenCompletion() => vm.Settings.AutoListMembers && !view.CaretIsInFreeText();
         public bool RefusesTyping(int offset, int length) => vm.RefusesTyping(offset, length);
         public bool Commits(Key key) => key is Key.Return or Key.Tab or Key.Space;
+        public bool HandlesReturn => false;
         public bool CompletionAtWordStart => true;
         public IReadOnlyList<string>? FixedSignatureTriggers => ["(", ","];
     }

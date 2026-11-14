@@ -31,6 +31,7 @@ internal interface IEditorCompletionRules
     bool MayOpenCompletion();
     bool RefusesTyping(int offset, int length);
     bool Commits(Key key);
+    bool HandlesReturn { get; }
     bool CompletionAtWordStart { get; }
     IReadOnlyList<string>? FixedSignatureTriggers { get; }
 }
@@ -109,7 +110,7 @@ internal sealed class EditorLanguageFeatures : IDisposable
             completion.CompletionList.SelectedItem = completion.CompletionList.CompletionData.FirstOrDefault();
         if (completion.CompletionList.SelectedItem is not null) completion.CompletionList.RequestInsertion(e);
         else completion.Close();
-        if (e.Key == Key.Tab) e.Handled = true;
+        if (e.Key == Key.Tab || (e.Key == Key.Return && rules.HandlesReturn)) e.Handled = true;
     }
 
     public void Dispose()

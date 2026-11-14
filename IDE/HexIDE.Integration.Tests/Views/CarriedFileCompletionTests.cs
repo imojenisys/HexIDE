@@ -96,7 +96,7 @@ public class CarriedFileCompletionTests : IDisposable
         List(editor).Should().NotBeNull();
         await client.Received(1).RequestCompletionAsync(Arg.Any<string>(), new Position(0, 3), Arg.Any<CancellationToken>());
         Press(window, Key.Return);
-        editor.Text.Should().StartWith("chosen");
+        editor.Text.Should().Be("chosen");
         List(editor).Should().BeNull();
     }
 
@@ -112,6 +112,24 @@ public class CarriedFileCompletionTests : IDisposable
         Press(window, Key.Tab);
         editor.Text.Should().Be("chosen");
         editor.SelectedText.Should().Be("chosen");
+        Press(window, Key.Tab);
+        editor.SelectionLength.Should().Be(0);
+        editor.CaretOffset.Should().Be(6);
+    }
+
+    [AvaloniaFact]
+    public void EnterOnSnippetSelectsFirstStopWithoutLineBreak()
+    {
+        client.RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>())
+            .Returns(new[] { new CompletionItem("chosen", CompletionItemKind.Snippet, InsertText: "${1:chosen}$0", InsertTextFormat: 2) });
+        var (window, _, editor) = Show();
+        window.KeyTextInput("c");
+        Pump();
+        List(editor).Should().NotBeNull();
+        Press(window, Key.Return);
+        editor.Text.Should().Be("chosen");
+        editor.SelectedText.Should().Be("chosen");
+        List(editor).Should().BeNull();
         Press(window, Key.Tab);
         editor.SelectionLength.Should().Be(0);
         editor.CaretOffset.Should().Be(6);
