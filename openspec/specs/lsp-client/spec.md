@@ -12,6 +12,29 @@ later without the editor noticing.
 
 ## Requirements
 
+### Requirement: Carried-file completion and signature help
+
+A carried-file editor SHALL offer completion and signature help from its claiming language servers,
+only for capabilities each server advertises. It SHALL flush pending document edits before each
+request, use the caret position, and detach its completion, snippet and signature-help handlers
+without stacking them when the view is reattached. The code window SHALL share that component while
+retaining its own completion position, commit keys and editing rules.
+
+#### Scenario: Completion in a carried file
+- **WHEN** Auto List Members is enabled and the developer types a letter, types an advertised completion trigger, or invokes Complete Word
+- **THEN** an advertising server's completion items appear
+- **AND** Enter or Tab accepts an item, while Space closes the list without accepting
+- **AND** accepting a snippet selects its first stop and Tab advances through its stops
+
+#### Scenario: Signature help in a carried file
+- **WHEN** the developer types a claiming server's advertised signature-help trigger
+- **THEN** the editor displays that server's signature help
+
+#### Scenario: Neither capability advertised
+- **WHEN** the claiming server advertises neither completion nor signature help
+- **THEN** the editor sends neither request and opens neither popup
+
+
 ### Requirement: Registered watched-file notifications
 The client SHALL advertise dynamic registration only for `workspace/didChangeWatchedFiles`, including relative-pattern support. It SHALL honour registration and unregistration per connection, discard registrations on disconnect, and log and refuse unsupported methods. String globs and relative patterns with URI or WorkspaceFolder bases SHALL honour create/change/delete masks. Workspace-relative string globs SHALL follow additions and removals of workspace folders; relative patterns SHALL retain their own base. A registration that would recursively watch a filesystem root, including through the existing ancestor of a missing base, SHALL be logged and refused with `InvalidParams` without installing any part of the request. Matching disk changes and completed IDE writes SHALL be coalesced before notification, and SHALL reach only connections with matching registrations.
 
