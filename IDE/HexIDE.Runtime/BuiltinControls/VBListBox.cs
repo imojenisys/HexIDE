@@ -301,6 +301,8 @@ public class VBListBox : ListBox
         {
             ScrollIntoView(SelectedIndex);
             UpdateLayout();
+            if (e.Key == Key.PageDown)
+                ContainerFromIndex(SelectedIndex)?.Focus(NavigationMethod.Unspecified);
         }
         var scrolled = top is not null && TopIndex != top;
         // An arrow that moves the selection raises Click; one that can go no further does not.

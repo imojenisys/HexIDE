@@ -211,6 +211,32 @@ public class ListBoxScrollTests : WindowTestFixture
             || c.StartsWith("List1_Scroll", System.StringComparison.Ordinal)).Should().Equal(expected);
     }
 
+    // #3275's third-round review: the next arrow starts from Page Down's selection.
+    [AvaloniaTheory]
+    [InlineData(3)]
+    [InlineData(27)]
+    public async Task PageDown_source_with_item_focus_moves_focus_so_Up_follows_selection(int selection)
+    {
+        var (recorder, ctx, env) = await Loaded(SixtyItems);
+        await After(recorder, ctx, env, $"List1.ListIndex = {selection}\r\n");
+        var list = recorder.List!;
+        list.ContainerFromIndex(selection)!.Focus(NavigationMethod.Pointer).Should().BeTrue();
+        Dispatcher.UIThread.RunJobs();
+        var window = (Window)TopLevel.GetTopLevel(list)!;
+        window.KeyPress(Key.PageDown, RawInputModifiers.None, PhysicalKey.None, null);
+        Dispatcher.UIThread.RunJobs();
+        var pagedSelection = list.SelectedIndex;
+        pagedSelection.Should().BeGreaterThan(selection);
+        window.FocusManager!.GetFocusedElement().Should().BeSameAs(list.ContainerFromIndex(pagedSelection));
+        recorder.Calls.Clear();
+        window.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.None, null);
+        Dispatcher.UIThread.RunJobs();
+        list.SelectedIndex.Should().Be(pagedSelection - 1);
+        window.FocusManager.GetFocusedElement().Should().BeSameAs(list.ContainerFromIndex(pagedSelection - 1));
+        recorder.Calls.Where(c => c.StartsWith("List1_Click", System.StringComparison.Ordinal))
+            .Should().Equal($"List1_Click top={list.TopIndex}");
+    }
+
     // This pins existing HexIDE behavior, not a VB6 measurement: Page Up remains Avalonia's to handle.
     [AvaloniaFact]
     public async Task Unmeasured_PageUp_with_item_focus_keeps_existing_Avalonia_behavior()
