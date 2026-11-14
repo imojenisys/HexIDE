@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Automatikus elrejtés",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Dokkolás lapfüles dokumentumként",
     "Str.Dock.ToolTabStripItemClose": "_Bezárás",
+    "Str.AIChat.Title": "AI-csevegés",
+    "Str.AIChat.Menu": "AI-_csevegés",
     "Str.AIChat.Refusal": "A szolgáltató elutasította ezt a kérést.",
     "Str.AIChat.TokenLimit": "A válasz elérte a tokenkorlátot, és nem teljes.",
     "Str.Startup.PlatformSummary": "Csak Linux. Megjelenítő: x11 (alapértelmezett), auto vagy wayland.",

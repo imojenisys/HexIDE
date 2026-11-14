@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Dokumentväljare",
     "Str.Dock.DocumentTabs": "Dokumentflikar",
     "Str.Dock.ToolTabs": "Verktygsflikar",
+    "Str.AIChat.Title": "AI-chatt",
+    "Str.AIChat.Menu": "AI-_chatt",
     "Str.AIChat.Refusal": "Leverantören avböjde denna begäran.",
     "Str.AIChat.TokenLimit": "Svaret nådde tokengränsen och är ofullständigt.",
     "Str.Startup.PlatformSummary": "Endast Linux. Visningsmotor: x11 (standard), auto eller wayland.",

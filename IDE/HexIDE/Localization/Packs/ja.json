@@ -2,6 +2,8 @@
   "name": "Japanese",
   "direction": "ltr",
   "strings": {
+    "Str.AIChat.Title": "AI チャット",
+    "Str.AIChat.Menu": "AI チャット(_C)",
     "Str.AIChat.Approved": "✔ 承認済み",
     "Str.AIChat.Rejected": "✗ 拒否済み",
     "Str.AIChat.Error": "エラー: {0}",

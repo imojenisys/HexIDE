@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Dokumentu-hautatzailea",
     "Str.Dock.DocumentTabs": "Dokumentuen fitxak",
     "Str.Dock.ToolTabs": "Tresnen fitxak",
+    "Str.AIChat.Title": "AA txata",
+    "Str.AIChat.Menu": "AA _txata",
     "Str.AIChat.Refusal": "Hornitzaileak eskaera hau baztertu du.",
     "Str.AIChat.TokenLimit": "Erantzuna tokenen mugara iritsi da eta osatu gabe dago.",
     "Str.Startup.PlatformSummary": "Linux soilik. Pantaila-motorra: x11 (lehenetsia), auto edo wayland.",

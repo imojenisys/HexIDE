@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Belge seçici",
     "Str.Dock.DocumentTabs": "Belge sekmeleri",
     "Str.Dock.ToolTabs": "Araç sekmeleri",
+    "Str.AIChat.Title": "AI Sohbet",
+    "Str.AIChat.Menu": "AI _Sohbet",
     "Str.AIChat.Refusal": "Sağlayıcı bu isteği reddetti.",
     "Str.AIChat.TokenLimit": "Yanıt belirteç sınırına ulaştı ve tamamlanamadı.",
     "Str.Startup.PlatformSummary": "Yalnızca Linux. Görüntü altyapısı: x11 (varsayılan), auto veya wayland.",

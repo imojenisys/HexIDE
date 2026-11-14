@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Documents selector",
     "Str.Dock.DocumentTabs": "Document tabs",
     "Str.Dock.ToolTabs": "Tool tabs",
+    "Str.AIChat.Title": "AI Chat",
+    "Str.AIChat.Menu": "AI _Chat",
     "Str.AIChat.Approved": "✔ Approved",
     "Str.AIChat.Rejected": "✗ Rejected",
     "Str.AIChat.Error": "Error: {0}",

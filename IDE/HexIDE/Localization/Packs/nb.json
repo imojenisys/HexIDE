@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Skjul automatisk",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Forankre som dokument med fane",
     "Str.Dock.ToolTabStripItemClose": "_Lukk",
+    "Str.AIChat.Title": "KI-chat",
+    "Str.AIChat.Menu": "KI-_chat",
     "Str.AIChat.Refusal": "Leverandøren avslo denne forespørselen.",
     "Str.AIChat.TokenLimit": "Svaret nådde tokengrensen og er ufullstendig.",
     "Str.Startup.PlatformSummary": "Kun Linux. Visningsmotor: x11 (standard), auto eller wayland.",

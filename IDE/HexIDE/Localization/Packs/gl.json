@@ -2,6 +2,8 @@
   "name": "Galician",
   "direction": "ltr",
   "strings": {
+    "Str.AIChat.Title": "Chat de IA",
+    "Str.AIChat.Menu": "_Chat de IA",
     "Str.AIChat.Approved": "✔ Aprobado",
     "Str.AIChat.Rejected": "✗ Rexeitado",
     "Str.AIChat.Error": "Erro: {0}",

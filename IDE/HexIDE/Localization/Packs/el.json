@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Επιλογέας εγγράφων",
     "Str.Dock.DocumentTabs": "Καρτέλες εγγράφων",
     "Str.Dock.ToolTabs": "Καρτέλες εργαλείων",
+    "Str.AIChat.Title": "Συνομιλία AI",
+    "Str.AIChat.Menu": "Συνομιλία AI",
     "Str.AIChat.Refusal": "Ο πάροχος απέρριψε αυτό το αίτημα.",
     "Str.AIChat.TokenLimit": "Η απάντηση έφτασε το όριο διακριτικών και είναι ελλιπής.",
     "Str.Startup.PlatformSummary": "Μόνο Linux. Σύστημα προβολής: x11 (προεπιλογή), auto ή wayland.",

@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Вибір документів",
     "Str.Dock.DocumentTabs": "Вкладки документів",
     "Str.Dock.ToolTabs": "Вкладки інструментів",
+    "Str.AIChat.Title": "ШІ-чат",
+    "Str.AIChat.Menu": "ШІ-чат",
     "Str.AIChat.Refusal": "Постачальник відхилив цей запит.",
     "Str.AIChat.TokenLimit": "Відповідь досягла ліміту токенів і є неповною.",
     "Str.Startup.PlatformSummary": "Лише Linux. Система виведення: x11 (типово), auto або wayland.",

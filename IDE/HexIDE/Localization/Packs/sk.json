@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Výber dokumentov",
     "Str.Dock.DocumentTabs": "Karty dokumentov",
     "Str.Dock.ToolTabs": "Karty nástrojov",
+    "Str.AIChat.Title": "Chat AI",
+    "Str.AIChat.Menu": "_Chat AI",
     "Str.AIChat.Refusal": "Poskytovateľ túto požiadavku odmietol.",
     "Str.AIChat.TokenLimit": "Odpoveď dosiahla limit tokenov a nie je úplná.",
     "Str.Startup.PlatformSummary": "Iba Linux. Grafický backend: x11 (predvolený), auto alebo wayland.",

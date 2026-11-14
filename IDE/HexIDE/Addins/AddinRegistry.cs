@@ -251,8 +251,9 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
         {
             using var contributions = new AddinInitializationScope();
             ctx.Instance = addin;
+            var origin = new AddinOrigin(ctx.Info.Id, ctx.Info.Title, ctx.Info.Chain?.IsFirstParty == true);
             addin.Initialize(host.ToolWindows is AddinToolWindowService tools
-                ? new AddinOwnedHost(host, tools.ForOwner(ctx.Info.Id), new AddinOrigin(ctx.Info.Id, ctx.Info.Title))
+                ? new AddinOwnedHost(host, tools.ForOwner(origin), origin)
                 : host);
             contributions.Complete();
             ctx.Status = status;

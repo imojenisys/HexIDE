@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "ตัวเลือกเอกสาร",
     "Str.Dock.DocumentTabs": "แท็บเอกสาร",
     "Str.Dock.ToolTabs": "แท็บเครื่องมือ",
+    "Str.AIChat.Title": "แชต AI",
+    "Str.AIChat.Menu": "แชต AI",
     "Str.AIChat.Refusal": "ผู้ให้บริการปฏิเสธคำขอนี้",
     "Str.AIChat.TokenLimit": "คำตอบถึงขีดจำกัดโทเค็นและยังไม่สมบูรณ์",
     "Str.Startup.PlatformSummary": "Linux เท่านั้น ระบบแสดงผล: x11 (ค่าเริ่มต้น), auto หรือ wayland",

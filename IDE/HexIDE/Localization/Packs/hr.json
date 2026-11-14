@@ -2,6 +2,8 @@
   "name": "Croatian",
   "direction": "ltr",
   "strings": {
+    "Str.AIChat.Title": "AI chat",
+    "Str.AIChat.Menu": "AI _chat",
     "Str.AIChat.Approved": "✔ Odobreno",
     "Str.AIChat.Rejected": "✗ Odbijeno",
     "Str.AIChat.Error": "Pogreška: {0}",

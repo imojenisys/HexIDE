@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "자동 숨기기",
     "Str.Dock.ToolTabStripItemDockAsDocument": "탭 문서로 도킹",
     "Str.Dock.ToolTabStripItemClose": "닫기",
+    "Str.AIChat.Title": "AI 채팅",
+    "Str.AIChat.Menu": "AI 채팅",
     "Str.AIChat.Refusal": "공급자가 이 요청을 거부했습니다.",
     "Str.AIChat.TokenLimit": "응답이 토큰 한도에 도달하여 완전하지 않습니다.",
     "Str.Startup.PlatformSummary": "Linux 전용. 표시 백엔드: x11 (기본값), auto 또는 wayland.",

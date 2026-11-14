@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Выбор документов",
     "Str.Dock.DocumentTabs": "Вкладки документов",
     "Str.Dock.ToolTabs": "Вкладки инструментов",
+    "Str.AIChat.Title": "ИИ-чат",
+    "Str.AIChat.Menu": "ИИ-чат",
     "Str.AIChat.Refusal": "Провайдер отклонил этот запрос.",
     "Str.AIChat.TokenLimit": "Ответ достиг лимита токенов и не завершён.",
     "Str.Startup.PlatformSummary": "Только Linux. Система вывода: x11 (по умолчанию), auto или wayland.",

@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Selector de documente",
     "Str.Dock.DocumentTabs": "File de documente",
     "Str.Dock.ToolTabs": "File de instrumente",
+    "Str.AIChat.Title": "Chat AI",
+    "Str.AIChat.Menu": "_Chat AI",
     "Str.AIChat.Refusal": "Furnizorul a refuzat această cerere.",
     "Str.AIChat.TokenLimit": "Răspunsul a atins limita de tokenuri și este incomplet.",
     "Str.Startup.PlatformSummary": "Doar Linux. Backend de afișare: x11 (implicit), auto sau wayland.",

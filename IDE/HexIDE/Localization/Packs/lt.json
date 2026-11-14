@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Automatiškai slėpti",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Prijungti kaip dokumentą su kortele",
     "Str.Dock.ToolTabStripItemClose": "_Užverti",
+    "Str.AIChat.Title": "DI pokalbis",
+    "Str.AIChat.Menu": "DI _pokalbis",
     "Str.AIChat.Refusal": "Teikėjas atmetė šią užklausą.",
     "Str.AIChat.TokenLimit": "Atsakymas pasiekė žetonų ribą ir yra neišsamus.",
     "Str.Startup.PlatformSummary": "Tik Linux. Vaizdavimo posistemė: x11 (numatytoji), auto arba wayland.",

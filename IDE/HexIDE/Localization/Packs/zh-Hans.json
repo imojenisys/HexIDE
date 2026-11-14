@@ -2,6 +2,8 @@
   "name": "Chinese (Simplified)",
   "direction": "ltr",
   "strings": {
+    "Str.AIChat.Title": "AI 聊天",
+    "Str.AIChat.Menu": "AI 聊天(_C)",
     "Str.AIChat.Approved": "✔ 已批准",
     "Str.AIChat.Rejected": "✗ 已拒绝",
     "Str.AIChat.Error": "错误：{0}",

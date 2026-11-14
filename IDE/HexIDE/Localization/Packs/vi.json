@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Bộ chọn tài liệu",
     "Str.Dock.DocumentTabs": "Thẻ tài liệu",
     "Str.Dock.ToolTabs": "Thẻ công cụ",
+    "Str.AIChat.Title": "Trò chuyện AI",
+    "Str.AIChat.Menu": "_Trò chuyện AI",
     "Str.AIChat.Refusal": "Nhà cung cấp đã từ chối yêu cầu này.",
     "Str.AIChat.TokenLimit": "Phản hồi đã đạt giới hạn token và chưa hoàn tất.",
     "Str.Startup.PlatformSummary": "Chỉ Linux. Hệ thống hiển thị: x11 (mặc định), auto hoặc wayland.",

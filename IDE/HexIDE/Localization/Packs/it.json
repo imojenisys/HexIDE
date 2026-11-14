@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Nascondi automaticamente",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Ancora come documento a schede",
     "Str.Dock.ToolTabStripItemClose": "_Chiudi",
+    "Str.AIChat.Title": "Chat IA",
+    "Str.AIChat.Menu": "_Chat IA",
     "Str.AIChat.Refusal": "Il fornitore ha rifiutato questa richiesta.",
     "Str.AIChat.TokenLimit": "La risposta ha raggiunto il limite di token ed è incompleta.",
     "Str.Startup.PlatformSummary": "Solo Linux. Backend grafico: x11 (predefinito), auto o wayland.",

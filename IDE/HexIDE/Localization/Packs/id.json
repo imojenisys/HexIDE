@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Sembunyikan Otomatis",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Tambatkan sebagai Dokumen Bertab",
     "Str.Dock.ToolTabStripItemClose": "T_utup",
+    "Str.AIChat.Title": "Obrolan AI",
+    "Str.AIChat.Menu": "_Obrolan AI",
     "Str.AIChat.Refusal": "Penyedia menolak permintaan ini.",
     "Str.AIChat.TokenLimit": "Balasan mencapai batas token dan belum lengkap.",
     "Str.Startup.PlatformSummary": "Khusus Linux. Backend tampilan: x11 (bawaan), auto atau wayland.",

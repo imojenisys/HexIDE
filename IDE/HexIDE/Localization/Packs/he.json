@@ -2,6 +2,8 @@
   "name": "Hebrew",
   "direction": "rtl",
   "strings": {
+    "Str.AIChat.Title": "צ׳אט בינה מלאכותית",
+    "Str.AIChat.Menu": "צ׳אט בינה מלאכותית",
     "Str.AIChat.Approved": "✔ אושר",
     "Str.AIChat.Rejected": "✗ נדחה",
     "Str.AIChat.Error": "שגיאה: {0}",

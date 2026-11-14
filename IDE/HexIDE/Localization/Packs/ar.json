@@ -2,6 +2,8 @@
   "name": "Arabic",
   "direction": "rtl",
   "strings": {
+    "Str.AIChat.Title": "دردشة الذكاء الاصطناعي",
+    "Str.AIChat.Menu": "دردشة الذكاء الاصطناعي",
     "Str.AIChat.Approved": "✔ تمت الموافقة",
     "Str.AIChat.Rejected": "✗ تم الرفض",
     "Str.AIChat.Error": "خطأ: {0}",

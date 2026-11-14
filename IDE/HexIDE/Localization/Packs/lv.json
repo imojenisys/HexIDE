@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Automātiski paslēpt",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Dokot kā dokumentu ar cilni",
     "Str.Dock.ToolTabStripItemClose": "A_izvērt",
+    "Str.AIChat.Title": "MI tērzēšana",
+    "Str.AIChat.Menu": "MI _tērzēšana",
     "Str.AIChat.Refusal": "Pakalpojuma sniedzējs noraidīja šo pieprasījumu.",
     "Str.AIChat.TokenLimit": "Atbilde sasniedza tokenu ierobežojumu un ir nepilnīga.",
     "Str.Startup.PlatformSummary": "Tikai Linux. Attēlošanas sistēma: x11 (noklusējums), auto vai wayland.",

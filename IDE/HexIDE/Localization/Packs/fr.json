@@ -2,6 +2,8 @@
   "name": "French",
   "direction": "ltr",
   "strings": {
+    "Str.AIChat.Title": "Chat IA",
+    "Str.AIChat.Menu": "_Chat IA",
     "Str.AIChat.Approved": "✔ Approuvé",
     "Str.AIChat.Rejected": "✗ Rejeté",
     "Str.AIChat.Error": "Erreur : {0}",

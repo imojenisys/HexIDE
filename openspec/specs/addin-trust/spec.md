@@ -309,3 +309,12 @@ SHALL be staged; build or installation failure SHALL preserve the earlier packag
 #### Scenario: Failure before installation
 - **WHEN** copying or signing the staged package fails
 - **THEN** the earlier package remains in place unchanged
+
+### Requirement: Add-in identity in trust surfaces remains the signed manifest name
+The consent prompt and Options → Add-Ins SHALL identify a signed add-in by the verified manifest's title.
+Localized chrome titles SHALL NOT replace that identity. `AddinTitle` and the packer's `--title` SHALL
+retain their separate roles as chrome text and signed package metadata respectively.
+
+#### Scenario: A package supplies a translated chrome title
+- **WHEN** an add-in registers a translated menu, tool window or command label and the language changes
+- **THEN** the consent prompt and Options → Add-Ins retain its signed manifest title

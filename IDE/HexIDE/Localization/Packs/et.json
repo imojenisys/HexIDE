@@ -10,6 +10,8 @@
     "Str.Dock.DocumentsSelector": "Dokumendivalija",
     "Str.Dock.DocumentTabs": "Dokumentide vahekaardid",
     "Str.Dock.ToolTabs": "Tööriistade vahekaardid",
+    "Str.AIChat.Title": "AI-vestlus",
+    "Str.AIChat.Menu": "AI-_vestlus",
     "Str.AIChat.Refusal": "Teenusepakkuja keeldus sellest päringust.",
     "Str.AIChat.TokenLimit": "Vastus jõudis tokenite piiranguni ja on mittetäielik.",
     "Str.Startup.PlatformSummary": "Ainult Linux. Kuvamootor: x11 (vaikimisi), auto või wayland.",

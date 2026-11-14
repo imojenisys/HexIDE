@@ -2,6 +2,8 @@
   "name": "Spanish",
   "direction": "ltr",
   "strings": {
+    "Str.AIChat.Title": "Chat de IA",
+    "Str.AIChat.Menu": "_Chat de IA",
     "Str.AIChat.Approved": "✔ Aprobado",
     "Str.AIChat.Rejected": "✗ Rechazado",
     "Str.AIChat.Error": "Error: {0}",

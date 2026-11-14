@@ -44,6 +44,8 @@
     "Str.Dock.ToolTabStripItemAutoHide": "_Ukryj automatycznie",
     "Str.Dock.ToolTabStripItemDockAsDocument": "Zadokuj jako dokument z kartą",
     "Str.Dock.ToolTabStripItemClose": "Z_amknij",
+    "Str.AIChat.Title": "Czat AI",
+    "Str.AIChat.Menu": "_Czat AI",
     "Str.AIChat.Refusal": "Dostawca odrzucił to żądanie.",
     "Str.AIChat.TokenLimit": "Odpowiedź osiągnęła limit tokenów i jest niepełna.",
     "Str.Startup.PlatformSummary": "Tylko Linux. Mechanizm wyświetlania: x11 (domyślny), auto lub wayland.",
