@@ -11,6 +11,12 @@ internal sealed class RegisteredAddinTitle
     private readonly DistributionText _text;
     private static readonly Lazy<LocalizationService> Canonical = new(() => new LocalizationService());
 
+    private static readonly IReadOnlyDictionary<string, string> KeyOwners =
+        new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(new Dictionary<string, string>
+        {
+            ["Str.AIChat."] = "com.hexide.aichat",
+        });
+
     internal RegisteredAddinTitle(AddinTitle title, AddinOrigin origin = default)
     {
         ArgumentNullException.ThrowIfNull(title);
@@ -19,7 +25,8 @@ internal sealed class RegisteredAddinTitle
         {
             if (!Canonical.Value.HasCanonicalKey(_key))
                 throw new ArgumentException($"Unknown canonical localization key '{_key}'.", nameof(title));
-            if (!(origin.IsFirstParty && origin.Id == "com.hexide.aichat" && _key.StartsWith("Str.AIChat.", StringComparison.Ordinal)))
+            if (!((origin.IsFirstParty || origin.IsDeveloperUnsigned) && KeyOwners.Any(owner =>
+                origin.Id == owner.Value && _key.StartsWith(owner.Key, StringComparison.Ordinal))))
                 throw new ArgumentException($"Localization key '{_key}' is outside this add-in's owned area.", nameof(title));
         }
         var translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

@@ -1122,6 +1122,7 @@
     "Str.Addins.ServerLaunchRefused": "A(z) „{0}” bővítmény nyelvi kiszolgálójának indítása megtagadva.",
     "Str.Addins.DebugLaunchRefused": "A(z) „{0}” bővítmény hibakeresési adapterének indítása megtagadva.",
     "Str.Addins.Incompatible": "A bővítmény nem tölthető be: szükséges séma: {0}, minimális HexIDE: {1}; ez a fordítás a(z) {2} sémát és a(z) {3} HexIDE-verziót támogatja. A séma- vagy verziókövetelmény nem támogatott vagy érvénytelen.",
+    "Str.Addins.DuplicateId": "A bővítmény nem tölthető be: a(z) „{0}” azonosítót már a(z) „{1}” csomagmappa használja.",
     "Str.MakeProject.NoStartup": "Nem található indítási projekt.",
     "Str.MakeProject.Browser": "Böngészőben nem érhető el programkészítés. Használja a HexIDE asztali verzióját.",
     "Str.MakeProject.UnsupportedPlatform": "Ezen az operációs rendszeren a programkészítés nem támogatott. Használja a HexIDE-t Windowson, macOS-en vagy Linuxon.",

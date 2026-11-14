@@ -364,10 +364,19 @@ retain existing access-key treatment. The title API SHALL expose only inert data
 
 #### Scenario: Key ownership is closed by default
 - **WHEN** any add-in requests an IDE key
-- **THEN** the only allowed area is `Str.AIChat.`, owned jointly by the id `com.hexide.aichat` and verified
-  `IsFirstParty` status; every other area, including consent and signing, is refused
-- **AND** a third-party package claiming that id gains no key access
-- **AND** a keyless Debug build bundles no AI Chat and gains no unsigned first-party exception
+- **THEN** the only allowed area is `Str.AIChat.`, owned by the id `com.hexide.aichat` with either verified
+  `IsFirstParty` status or `DeveloperUnsigned` status; every other area, including consent and signing, is refused
+- **AND** a signed third-party package claiming that id gains no key access
+- **AND** an unsigned AI Chat loaded under `com.hexide.aichat` in Debug developer mode with unsigned loading enabled
+  owns that area; an unsigned package with any other id gains no key access
+
+#### Scenario: Two packages declare one id
+- **WHEN** multiple package folders declare the same add-in id
+- **THEN** the IDE SHALL select one before initializing any of them: a verified package wins over an unsigned
+  package regardless of folder order; between packages of the same kind, the first in folder order wins
+- **AND** the other packages are never initialized and contribute nothing
+- **AND** Options → Add-Ins lists each loser with status `Error` and a message naming the id and winning folder
+- **AND** the key-area owner allow-list is pinned by a test, with an owner for every area and no overlapping areas
 
 #### Scenario: Add-in data changes after registration
 - **WHEN** an add-in mutates its translations dictionary and the IDE switches languages several times

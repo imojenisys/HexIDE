@@ -200,10 +200,12 @@ public sealed class AddinTitleTests
     }
 
     [AvaloniaTheory]
-    [InlineData(true, "com.hexide.aichat", true)]
-    [InlineData(false, "com.hexide.aichat", false)]
-    [InlineData(true, "com.example.other", false)]
-    public void RegistryFacade_UsesVerifiedOwnerRatherThanClaimedId(bool firstParty, string id, bool accepted)
+    [InlineData(true, "com.hexide.aichat", AddinStatus.Loaded, true)]
+    [InlineData(false, "com.hexide.aichat", AddinStatus.Loaded, false)]
+    [InlineData(false, "com.hexide.aichat", AddinStatus.DeveloperUnsigned, true)]
+    [InlineData(false, "com.example.other", AddinStatus.DeveloperUnsigned, false)]
+    [InlineData(true, "com.example.other", AddinStatus.Loaded, false)]
+    public void RegistryFacade_UsesVerifiedOwnerRatherThanClaimedId(bool firstParty, string id, AddinStatus status, bool accepted)
     {
         var localization = new LocalizationService();
         localization.Apply("de");
@@ -235,8 +237,8 @@ public sealed class AddinTitleTests
                 handles.Add(owned.ToolWindows.Register("chat", AddinTitle.FromKey("Str.AIChat.Title"), null, () => new object()));
                 handles.Add(owned.Menus.Add("Tools", AddinTitle.FromKey("Str.AIChat.Menu"), null, () => { }));
             });
-            registry.InitializeAddin(context, addin, firstParty ? AddinStatus.Loaded : AddinStatus.DeveloperUnsigned, host);
-            context.Status.Should().Be(accepted ? AddinStatus.Loaded : AddinStatus.Error);
+            registry.InitializeAddin(context, addin, status, host);
+            context.Status.Should().Be(accepted ? status : AddinStatus.Error);
             info.Title.Should().Be("Signed name");
             if (accepted)
             {
@@ -251,6 +253,20 @@ public sealed class AddinTitleTests
             foreach (var handle in handles) handle.Dispose();
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void KeyAreas_HaveExactlyTheReviewedOwnersAndNeverOverlap()
+    {
+        var field = typeof(RegisteredAddinTitle).GetField("KeyOwners", BindingFlags.Static | BindingFlags.NonPublic);
+        field.Should().NotBeNull();
+        var owners = (IReadOnlyDictionary<string, string>)field!.GetValue(null)!;
+        owners.Should().BeEquivalentTo(new Dictionary<string, string> { ["Str.AIChat."] = "com.hexide.aichat" });
+        foreach (var (area, owner) in owners)
+        {
+            owner.Should().NotBeNullOrWhiteSpace();
+            owners.Keys.Where(other => other != area).Should().NotContain(other => other.StartsWith(area, StringComparison.Ordinal));
+        }
     }
 
     private sealed class CountingTranslations : IReadOnlyDictionary<string, string>

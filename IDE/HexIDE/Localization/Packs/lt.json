@@ -1122,6 +1122,7 @@
     "Str.Addins.ServerLaunchRefused": "Priedo „{0}“ kalbos serverio paleidimas atmestas.",
     "Str.Addins.DebugLaunchRefused": "Priedo „{0}“ derinimo adapterio paleidimas atmestas.",
     "Str.Addins.Incompatible": "Nepavyko įkelti priedo: reikia schemos {0}, bent HexIDE {1}; ši versija palaiko schemą {2}, HexIDE {3}. Schemos arba versijos reikalavimas nepalaikomas arba netinkamas.",
+    "Str.Addins.DuplicateId": "Nepavyko įkelti priedo: identifikatorių „{0}“ jau naudoja paketo aplankas „{1}“.",
     "Str.MakeProject.NoStartup": "Nerastas pradinis projektas.",
     "Str.MakeProject.Browser": "Naršyklėje programos kurti negalima. Naudokite darbalaukiui skirtą HexIDE versiją.",
     "Str.MakeProject.UnsupportedPlatform": "Šioje operacinėje sistemoje programos kūrimas nepalaikomas. Naudokite HexIDE sistemoje Windows, macOS arba Linux.",

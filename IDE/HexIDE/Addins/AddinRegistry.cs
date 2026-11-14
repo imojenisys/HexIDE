@@ -106,14 +106,36 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
             Log.Error(ex, "AddinRegistry: cannot enumerate {Dir} — no add-ins loaded", dir);
             return;
         }
-        // Guard EACH package: a third-party package that can't be read/verified/loaded (a locked .sig held by AV on
-        // first launch, an inaccessible subdir, a MAX_PATH path, a malformed load) must be skipped — never abort the
-        // rest of the add-ins nor unwind through IDE startup. Startup robustness beats loading one broken add-in.
+        // Verify every folder before loading any code, so a verified package wins over an unsigned copy.
+        Array.Sort(packageDirs, StringComparer.Ordinal);
+        var packages = new List<(string Directory, PackageVerificationResult Result)>();
         foreach (var packageDir in packageDirs)
         {
             try
             {
-                LoadPackage(Path.GetFullPath(packageDir), allowUnsigned, host);
+                var fullPath = Path.GetFullPath(packageDir);
+                if (_disabled.Contains(fullPath))
+                {
+                    _contexts.Add(new AddinContext(ShallowInfo(fullPath)) { Status = AddinStatus.Disabled, PackageDirectory = fullPath });
+                    Log.Debug("AddinRegistry: {Dir} is disabled — skipped", fullPath);
+                    continue;
+                }
+                packages.Add((fullPath, _verifier.Verify(fullPath)));
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "AddinRegistry: failed to verify package {Dir} — skipped", packageDir);
+            }
+        }
+        var owners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Guard EACH package: a third-party package that can't be read/verified/loaded (a locked .sig held by AV on
+        // first launch, an inaccessible subdir, a MAX_PATH path, a malformed load) must be skipped — never abort the
+        // rest of the add-ins nor unwind through IDE startup. Startup robustness beats loading one broken add-in.
+        foreach (var (packageDir, result) in packages.OrderByDescending(package => package.Result.IsVerified))
+        {
+            try
+            {
+                LoadPackage(packageDir, result, allowUnsigned, host, owners);
             }
             catch (Exception ex)
             {
@@ -122,17 +144,9 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
         }
     }
 
-    private void LoadPackage(string packageDir, bool allowUnsigned, IHexIdeHost host)
+    private void LoadPackage(string packageDir, PackageVerificationResult result, bool allowUnsigned, IHexIdeHost host,
+        Dictionary<string, string> owners)
     {
-        if (_disabled.Contains(packageDir))
-        {
-            _contexts.Add(new AddinContext(ShallowInfo(packageDir)) { Status = AddinStatus.Disabled, PackageDirectory = packageDir });
-            Log.Debug("AddinRegistry: {Dir} is disabled — skipped", packageDir);
-            return;
-        }
-
-        var result = _verifier.Verify(packageDir);
-
         // A directory without a manifest is simply not an add-in package — ignore it silently.
         if (result.Manifest is null && result.Error == "addin.json not found")
             return;
@@ -150,6 +164,15 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
             return;
         }
 
+        if (result.Manifest is { } duplicateManifest && owners.TryGetValue(duplicateManifest.Id, out var ownerDirectory))
+        {
+            var message = string.Format(_localization.GetString("Str.Addins.DuplicateId"), duplicateManifest.Id, ownerDirectory);
+            info = info with { LoadError = message };
+            _contexts.Add(new AddinContext(info) { Status = AddinStatus.Error, ErrorMessage = message, PackageDirectory = packageDir });
+            Log.Warning("AddinRegistry: {Message}", message);
+            return;
+        }
+
         if (!result.IsVerified && !allowUnsigned)
         {
             _contexts.Add(new AddinContext(info) { Status = AddinStatus.Untrusted, ErrorMessage = result.Error, PackageDirectory = packageDir });
@@ -164,6 +187,8 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
             Log.Warning("AddinRegistry: {Dir} has no usable manifest ({Reason}) — skipped", packageDir, result.Error);
             return;
         }
+
+        owners.Add(manifest.Id, packageDir);
 
         var status = result.IsVerified ? AddinStatus.Loaded : AddinStatus.DeveloperUnsigned;
 
@@ -251,7 +276,8 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
         {
             using var contributions = new AddinInitializationScope();
             ctx.Instance = addin;
-            var origin = new AddinOrigin(ctx.Info.Id, ctx.Info.Title, ctx.Info.Chain?.IsFirstParty == true);
+            var origin = new AddinOrigin(ctx.Info.Id, ctx.Info.Title, ctx.Info.Chain?.IsFirstParty == true,
+                status == AddinStatus.DeveloperUnsigned);
             addin.Initialize(host.ToolWindows is AddinToolWindowService tools
                 ? new AddinOwnedHost(host, tools.ForOwner(origin), origin)
                 : host);
@@ -392,7 +418,8 @@ internal sealed class AddinRegistry : IAddinRegistry, IAddinLoader
                 string.Equals(c.Info.AssemblyPath, norm, StringComparison.OrdinalIgnoreCase));
             if (ctx is not null)
                 ctx.Status = !enabled ? AddinStatus.Disabled
-                    : ctx.Info.CompatibilityError is not null ? AddinStatus.Incompatible : AddinStatus.Loaded;
+                    : ctx.Info.CompatibilityError is not null ? AddinStatus.Incompatible
+                    : ctx.Info.LoadError is not null ? AddinStatus.Error : AddinStatus.Loaded;
         }
     }
 

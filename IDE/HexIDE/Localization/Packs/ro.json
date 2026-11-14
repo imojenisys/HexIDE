@@ -1088,6 +1088,7 @@
     "Str.Addins.ServerLaunchRefused": "Pornirea serverului de limbaj pentru programul de completare „{0}” a fost refuzată.",
     "Str.Addins.DebugLaunchRefused": "Pornirea adaptorului de depanare pentru programul de completare „{0}” a fost refuzată.",
     "Str.Addins.Incompatible": "Nu se poate încărca programul de completare: necesită schema {0}, minimum HexIDE {1}; această versiune acceptă schema {2}, HexIDE {3}. Cerința de schemă sau versiune nu este acceptată ori este nevalidă.",
+    "Str.Addins.DuplicateId": "Programul de completare nu poate fi încărcat: ID-ul „{0}” este deja utilizat de folderul pachetului „{1}”.",
     "Str.MakeProject.NoStartup": "Nu s-a găsit un proiect de pornire.",
     "Str.MakeProject.Browser": "Generarea unui program nu este disponibilă într-un browser. Folosește versiunea desktop de HexIDE.",
     "Str.MakeProject.UnsupportedPlatform": "Generarea unui program nu este acceptată pe acest sistem de operare. Folosește HexIDE pe Windows, macOS sau Linux.",

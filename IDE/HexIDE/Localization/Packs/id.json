@@ -1121,6 +1121,7 @@
     "Str.Addins.ServerLaunchRefused": "Peluncuran server bahasa untuk add-in '{0}' ditolak.",
     "Str.Addins.DebugLaunchRefused": "Peluncuran adaptor debug untuk add-in '{0}' ditolak.",
     "Str.Addins.Incompatible": "Tidak dapat memuat add-in: skema yang diperlukan {0}, minimum HexIDE {1}; build ini mendukung skema {2}, HexIDE {3}. Persyaratan skema atau versi tidak didukung atau tidak valid.",
+    "Str.Addins.DuplicateId": "Tidak dapat memuat add-in: ID '{0}' sudah digunakan oleh folder paket '{1}'.",
     "Str.MakeProject.NoStartup": "Proyek awal tidak ditemukan.",
     "Str.MakeProject.Browser": "Pembuatan program tidak tersedia di peramban. Gunakan HexIDE versi desktop.",
     "Str.MakeProject.UnsupportedPlatform": "Pembuatan program tidak didukung pada sistem operasi ini. Gunakan HexIDE di Windows, macOS, atau Linux.",

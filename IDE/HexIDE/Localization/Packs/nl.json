@@ -1121,6 +1121,7 @@
     "Str.Addins.ServerLaunchRefused": "Het starten van de taalserver voor invoegtoepassing '{0}' is geweigerd.",
     "Str.Addins.DebugLaunchRefused": "Het starten van de debugadapter voor invoegtoepassing '{0}' is geweigerd.",
     "Str.Addins.Incompatible": "Invoegtoepassing kan niet worden geladen: vereist schema {0}, minimaal HexIDE {1}; deze build ondersteunt schema {2}, HexIDE {3}. De schema- of versievereiste wordt niet ondersteund of is ongeldig.",
+    "Str.Addins.DuplicateId": "Kan invoegtoepassing niet laden: id '{0}' wordt al gebruikt door pakketmap '{1}'.",
     "Str.MakeProject.NoStartup": "Geen opstartproject gevonden.",
     "Str.MakeProject.Browser": "Een programma maken is niet beschikbaar in een browser. Gebruik de desktopversie van HexIDE.",
     "Str.MakeProject.UnsupportedPlatform": "Een programma maken wordt niet ondersteund op dit besturingssysteem. Gebruik HexIDE op Windows, macOS of Linux.",

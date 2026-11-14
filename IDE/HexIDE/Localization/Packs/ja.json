@@ -1147,6 +1147,7 @@
     "Str.Addins.ServerLaunchRefused": "アドイン「{0}」の言語サーバーの起動が拒否されました。",
     "Str.Addins.DebugLaunchRefused": "アドイン「{0}」のデバッグ アダプターの起動が拒否されました。",
     "Str.Addins.Incompatible": "アドインを読み込めません。必要なスキーマは {0}、HexIDE の最低バージョンは {1} です。このビルドはスキーマ {2}、HexIDE {3} に対応しています。スキーマまたはバージョンの要件が未対応または無効です。",
+    "Str.Addins.DuplicateId": "アドインを読み込めません: ID「{0}」はパッケージフォルダー「{1}」で既に使用されています。",
     "Str.MakeProject.NoStartup": "スタートアッププロジェクトが見つかりません。",
     "Str.MakeProject.Browser": "ブラウザーではプログラムを作成できません。デスクトップ版の HexIDE を使用してください。",
     "Str.MakeProject.UnsupportedPlatform": "このオペレーティングシステムではプログラムの作成はサポートされていません。Windows、macOS、Linux のいずれかで HexIDE を使用してください。",
