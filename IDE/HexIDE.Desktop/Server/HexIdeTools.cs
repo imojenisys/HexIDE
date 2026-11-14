@@ -124,8 +124,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                + "server sent one, 'code' (the rule that fired) and 'href' (where that rule is documented). "
                + "'uri' is the name the language server knows the document by: its file: URI, or "
                + "untitled:<project>/<name>.<ext> while it has no file. 'project' and 'document' name it as the IDE "
-               + "does, and are absent when the uri names no loaded form, module, class or carried file, or a file two loaded "
-               + "projects share, since nothing then says which project's copy it is about. 'severity' is Error, Warning, "
+               + "does, and are absent when the uri names no loaded form, module, class or carried file. In a group, the owner is "
+               + "the startup project if it lists the file, else the first loaded project that does. "
+               + "A shared file appears under that owner only; switching startup recomputes it. 'severity' is Error, Warning, "
                + "Information or Hint, as the server reported it, or Unknown when the server sent none. "
                + "'line' and 'column' are 1-based, and the line is counted from the top of the file with its header "
                + "included, as the code window numbers it; a VB6 compiler error is converted to that numbering. "
@@ -142,7 +143,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var named = await Dispatcher.UIThread.InvokeAsync(() => published
             .Select(p => p.Uri)
             .Distinct(StringComparer.Ordinal)
-            .ToDictionary(uri => uri, uri => NamedDocuments.ForUri(ctx.ProjectManager.LoadedProjects, uri),
+            .ToDictionary(uri => uri, uri => NamedDocuments.ForDiagnostic(ctx.ProjectManager.LoadedProjects, ctx.ProjectManager.StartupProject, uri),
                 StringComparer.Ordinal));
 
         var items = published
@@ -1496,7 +1497,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             (acted, actedName) = (resolved, name);
             var applied = await HexIDE.Automation.WindowChange.ApplyAsync(resolved, target.Value, x, y, width, height, ct);
             if (applied)
-                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), null);
+                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), WindowSizeNote(resolved, width, height));
             var (error, note) = Unconfirmed(target.Value, X11WindowManager.IsRunning());
             return new WindowStateChangeResult(false, error, WindowStateOf(resolved, name!), note);
         });
@@ -1513,6 +1514,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             Note = result.Note is null ? programNote : programNote is null ? result.Note : result.Note + " " + programNote,
         };
     }
+
+    private static string? WindowSizeNote(Avalonia.Controls.Window window, int? width, int? height) =>
+        width is not null && Math.Abs(width.Value - window.ClientSize.Width) > 1 / window.RenderScaling
+        || height is not null && Math.Abs(height.Value - window.ClientSize.Height) > 1 / window.RenderScaling
+            ? $"Requested client size {width?.ToString() ?? "unchanged"}×{height?.ToString() ?? "unchanged"}; "
+              + $"the screen allowed {window.ClientSize.Width:0.#}×{window.ClientSize.Height:0.#}. "
+              + "x/y/width/height can't exceed the screen's working area. Ask for a size that fits the working area."
+            : null;
 
     // The program wait's parenthesised addition to a reply, as a sentence of its own for a note.
     internal static string ProgramNote(string detail)

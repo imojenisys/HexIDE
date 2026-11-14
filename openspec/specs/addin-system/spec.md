@@ -419,3 +419,14 @@ or any content factory runs.
 - **WHEN** an authorized add-in registers `AddinTitle.FromKey` with a valid owned IDE key
 - **THEN** the empty `Text` field does not undergo the display-text check
 - **AND** the title resolves from the IDE's packs under the existing key-ownership rules
+
+### Requirement: Add-in Options details SHALL follow the active IDE language
+The add-in Options page SHALL localize publisher, fallback metadata, toggle, consent, trust reasons
+and status text. It SHALL refresh these properties and load messages when the IDE language changes and
+unsubscribe when Options closes. Manifest metadata SHALL remain unchanged. Load messages SHALL retain
+their key and arguments; `AddinInfo.CompatibilityError` SHALL remain the original load-time string.
+
+#### Scenario: Switching language with an add-in page open
+- **WHEN** the developer changes the IDE language while inspecting an add-in
+- **THEN** the page's host-owned details and load message use the new language
+- **AND** the signed manifest metadata is unchanged
