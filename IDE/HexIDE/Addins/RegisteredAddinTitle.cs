@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using HexIDE.IDE;
@@ -18,7 +19,7 @@ internal sealed class RegisteredAddinTitle
             ["Str.AIChat."] = "com.hexide.aichat",
         });
 
-    internal RegisteredAddinTitle(AddinTitle title, AddinOrigin origin = default, ILocalizationService? localization = null)
+    internal RegisteredAddinTitle(AddinTitle title, AddinOrigin origin = default)
     {
         ArgumentNullException.ThrowIfNull(title);
         _key = title.Key;
@@ -36,9 +37,9 @@ internal sealed class RegisteredAddinTitle
             {
                 if (string.IsNullOrEmpty(language) || !IsCulture(language))
                     throw new ArgumentException($"Malformed translation language '{language}'.", nameof(title));
-                translations.Add(language, PrepareText(text, localization ?? Canonical.Value));
+                translations.Add(language, PrepareText(text, language));
             }
-        _text = new DistributionText(_key is null ? PrepareText(title.Text, localization ?? Canonical.Value) : title.Text, translations);
+        _text = new DistributionText(_key is null ? PrepareText(title.Text) : title.Text, translations);
     }
 
     private static bool IsCulture(string language)
@@ -50,13 +51,25 @@ internal sealed class RegisteredAddinTitle
     }
 
     // Plain text and translations share this display boundary (#3925).
-    private static string PrepareText(string text, ILocalizationService localization)
+    private static string PrepareText(string text, string? language = null)
     {
-        if (string.IsNullOrWhiteSpace(text) || text != text.Trim() || text.Length > 128
-            || text.EnumerateRunes().Any(c => Rune.IsControl(c) || (c.Value is not 0x200c and not 0x200d
-                && Rune.GetUnicodeCategory(c) is UnicodeCategory.Format
-                    or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator)))
-            throw new ArgumentException(localization.GetString("Str.Addins.InvalidTitle"), nameof(text));
+        var subject = language is null ? "Invalid add-in title" : $"Invalid translation for '{language}'";
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException($"{subject}: empty or only whitespace.", nameof(text));
+        if (text != text.Trim())
+            throw new ArgumentException($"{subject}: leading or trailing whitespace.", nameof(text));
+        if (text.Length > 128)
+            throw new ArgumentException($"{subject}: length {text.Length} exceeds the limit of 128.", nameof(text));
+        for (var index = 0; index < text.Length;)
+        {
+            if (Rune.DecodeFromUtf16(text.AsSpan(index), out var rune, out var consumed) != OperationStatus.Done)
+                throw new ArgumentException($"{subject}: invalid UTF-16 at index {index}.", nameof(text));
+            if (Rune.IsControl(rune) || (rune.Value is not 0x200c and not 0x200d
+                && Rune.GetUnicodeCategory(rune) is UnicodeCategory.Format
+                    or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator))
+                throw new ArgumentException($"{subject}: refused character U+{rune.Value:X4} at UTF-16 index {index}.", nameof(text));
+            index += consumed;
+        }
         return text;
     }
 
