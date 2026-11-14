@@ -151,3 +151,12 @@ The #3774 loaded-name change uses the same [module-name measurement](vb6-fidelit
 ([#3777](https://github.com/hexide-io/HexIDE/pull/3777)): a `.bas` or `.cls` takes its identity from
 `VB_Name`, silently overriding the `.vbp` name; without that attribute the project line wins. The IDE's
 Save Project writes the chosen name into the `.vbp`. Name collisions were not measured.
+
+Issue [#2041](https://github.com/hexide-io/HexIDE/issues/2041) records the Windows date-data
+comparison (Windows Server 2025, .NET 10 ICU versus GetDateFormatEx, 596 Gregorian cultures):
+1 January 2000 differs in 133 long dates and 106 short dates; 31 December 2000 has a different
+day/month/year order in 36 cultures. Its examples are es-US short dates (`31/12/2000` in ICU,
+`12/31/2000` in Windows) and vi-VN January (`tháng 1` in ICU, `Tháng Giêng` in Windows).
+These are platform-data measurements, not new vb6.exe probes. The VB6 en-GB long-date measurement
+is in [A Date's fraction of a second](vb6-fidelity-oracle/a-dates-fraction-of-a-second.md);
+#2041 implements Windows data only, with the portable table deferred to #3928.
