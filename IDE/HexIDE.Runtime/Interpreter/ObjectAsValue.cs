@@ -21,10 +21,11 @@ namespace HexIDE.Runtime.Interpreter;
 /// statement's start and length.</item>
 /// </list>
 /// <para>One exception, measured: where the default member is a <b>Function</b>, <c>Format</c>, <c>Abs</c> and
-/// <c>Not</c> of a Variant holding it raise 450, and so does a Case value compared with an Empty selector in the IDE. A
+/// <c>Not</c> of a Variant holding it raise 450, and so does a Case value compared with an Empty or Null selector in the IDE. A
 /// Property Get default member gives 42 on those uses. The rows say which uses give 450, not why.</para>
 /// <para>A ByVal Variant argument takes the object itself. The pre-pass retains a class's default member name and kind,
-/// but HexIDE does not call it yet (#174). This synchronous helper refuses, untrappably: a trappable error would let
+/// and BasicInterpreter resolves it at async value boundaries (#174). Any object still reaching this synchronous
+/// helper refuses, untrappably: a trappable error would let
 /// <c>On Error Resume Next</c> carry on without VB6's value. An object with no default member raises VB6's 438,
 /// which a program may trap.</para>
 /// <para>The in-box objects, measured the same way: Err stands for its Number; App, Screen and Clipboard have no default
