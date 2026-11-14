@@ -24,8 +24,8 @@ concurrency:
 env:
   MIN_TESTS_RUNTIME: 8191  # 8623 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
   MIN_TESTS_TWINBASIC: 332  # 350 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
-  MIN_TESTS_IDE: 7684  # 8089 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
-  MIN_TESTS_INTEGRATION: 3408  # 3588 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_IDE: 7723  # 8130 measured (WSL Linux, #1118, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_INTEGRATION: 3421  # 3602 measured (WSL Linux, #1118, 2026-11-14); raise to 95% of a new full total.
   MIN_TESTS_RUNTIME_INTEGRATION: 2612  # 2750 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
   MIN_TESTS_LSP_SERVER: 704  # 742 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
 
