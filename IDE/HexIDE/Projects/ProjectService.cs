@@ -197,7 +197,7 @@ public partial class ProjectService : IProjectService
 
         var name = ProjectNaming.NextFreeProjectName(projectManager.LoadedProjects);
         Log.Debug("ProjectService: Creating project '{ProjectName}' from template {Template}", name, template.Name);
-        projectManager.NewProject(template, name);
+        projectManager.NewProject(template, name, RecordTemplateHeaders);
         EnsureGroupIfMultiple();
     }
 
@@ -211,8 +211,18 @@ public partial class ProjectService : IProjectService
 
         var name = ProjectNaming.NextFreeProjectName(projectManager.LoadedProjects);
 
-        projectManager.NewProject(template, name);
+        projectManager.NewProject(template, name, RecordTemplateHeaders);
         EnsureGroupIfMultiple();
+    }
+
+    private void RecordTemplateHeaders(ProjectDefinition project)
+    {
+        foreach (var form in project.Forms)
+            form.RecordDesignerText(FormCodeText.DesignerHalfOf(
+                RenderForm(form, form.Name + ".frm").Text, form.Code));
+        foreach (var module in project.Modules)
+            DesignerPartOf(module)?.RecordDesignerText(FormCodeText.DesignerHalfOf(
+                RenderModule(module, module.Name + "." + ModuleExtension(module.Kind)).Text, module.Code));
     }
 
     private void EnsureGroupIfMultiple()
@@ -2087,7 +2097,8 @@ public partial class ProjectService : IProjectService
         var fileName = module.Name + "." + ModuleExtension(module.Kind);
         EnsureNewMemberEncodable(project, module, fileName);
         // The header the code window will show, rendered as the first save will write it and held from now, as a
-        // new form's and a template member's are (#885).
+        // new form's and a template member's are (#885). Without it a brand-new UserControl or PropertyPage opens
+        // with no designer block.
         DesignerPartOf(module)?.RecordDesignerText(
             FormCodeText.DesignerHalfOf(RenderModule(module, fileName).Text, module.Code));
         project.AddModule(module);

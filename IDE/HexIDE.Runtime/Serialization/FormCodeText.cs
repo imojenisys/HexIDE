@@ -174,7 +174,7 @@ public static class FormCodeText
     /// included. Both halves are slices of the text that was read.
     ///
     /// <para>
-    /// Forms created by the project template or Add Form hold their first save's designer text from creation
+    /// ProjectService holds a template's or Add Form's first-save designer text from creation
     /// (#885), before a code window can open or marks can be set. Later designer changes and saves compare
     /// against that stored header when moving marks. Sidecar version 3 anchors code marks after the header,
     /// so saving and reopening preserves their statements without another numbering record.

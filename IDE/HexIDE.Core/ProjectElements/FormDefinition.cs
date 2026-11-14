@@ -257,7 +257,7 @@ public partial class FormDefinition : INotifyPropertyChanged
 
     /// <summary>
     /// This form's designer half as its file has it: the first line of the file through the root <c>End</c>
-    /// inclusive, as read, or as last rendered — at creation by the template or Add Form (#885), a committed
+    /// inclusive, as read, or as last rendered — at creation by ProjectService for a template or Add Form (#885), a committed
     /// designer change, or a save. Null when no caller has read or rendered a designer half.
     /// </summary>
     /// <remarks>

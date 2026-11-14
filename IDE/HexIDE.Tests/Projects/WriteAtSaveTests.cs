@@ -41,10 +41,11 @@ public class WriteAtSaveTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private ProjectService MakeService(IUserSidecarService? realSidecar = null, IHeaderRefresher? refresher = null)
+    private ProjectService MakeService(IUserSidecarService? realSidecar = null, IHeaderRefresher? refresher = null, IProjectManager? manager = null)
     {
-        var projectManager = Substitute.For<IProjectManager>();
-        projectManager.LoadedProjects.Returns(_ => loaded);
+        var projectManager = manager ?? Substitute.For<IProjectManager>();
+        if (manager is null)
+            projectManager.LoadedProjects.Returns(_ => loaded);
         // Every picker is answered with the chosen folder and the name it suggests, as a developer accepting
         // each suggestion there would.
         windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
@@ -280,9 +281,10 @@ public class WriteAtSaveTests : IDisposable
     [AvaloniaFact]
     public async Task A_template_form_opens_with_the_header_its_first_save_writes()
     {
-        var service = MakeService();
-        var project = IProjectTemplate.StandardEXE.Create("Project1");
-        loaded.Add(project);
+        var manager = new ProjectManager(Substitute.For<IEditorService>(), new EventBus());
+        var service = MakeService(manager: manager);
+        await service.CreateNewProject(IProjectTemplate.StandardEXE);
+        var project = manager.LoadedProjects.Single();
         var form = project.Forms.Single();
         using var editor = TemplateEditor(form, new BookmarkService(), new BreakpointService());
         var header = form.DesignerText;
@@ -299,8 +301,9 @@ public class WriteAtSaveTests : IDisposable
     [AvaloniaFact]
     public async Task Template_marks_set_before_first_save_reopen_on_the_same_statement()
     {
-        var project = IProjectTemplate.StandardEXE.Create("Project1");
-        loaded.Add(project);
+        var projects = new ProjectManager(Substitute.For<IEditorService>(), new EventBus());
+        await MakeService(manager: projects).CreateNewProject(IProjectTemplate.StandardEXE);
+        var project = projects.LoadedProjects.Single();
         var form = project.Forms.Single();
         form.UpdateCode("Private Sub Form_Load()\r\n    Debug.Print 885\r\nEnd Sub\r\n");
         var bookmarks = new BookmarkService();
@@ -334,6 +337,31 @@ public class WriteAtSaveTests : IDisposable
         bookmarks.GetBookmarks(reopenedDocument).Should().Equal(line);
         var statement = reopenedEditor.Document.GetLineByNumber(line);
         reopenedEditor.Document.GetText(statement).Should().Be("    Debug.Print 885");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(ModuleKind.UserControl)]
+    [InlineData(ModuleKind.PropertyPage)]
+    public async Task Template_designer_modules_hold_their_header_before_the_project_is_added(ModuleKind kind)
+    {
+        var manager = new ProjectManager(Substitute.For<IEditorService>(), new EventBus());
+        var template = new ProjectTemplate("Designer", "generic", true, name =>
+        {
+            var project = new ProjectDefinition(VBProjectType.EXE, name);
+            project.AddModule(ModuleDefinition.NewDesigner(project, "Designer1", kind,
+                HexIDE.Runtime.Components.FormComponentClass.ForRoot(
+                    kind == ModuleKind.UserControl ? "VB.UserControl" : "VB.PropertyPage")));
+            return project;
+        });
+        string? headerAtAdd = null;
+        manager.ProjectLoaded += project => headerAtAdd = project.Modules.Single().FormPart!.DesignerText;
+        var service = MakeService(manager: manager);
+
+        await service.CreateNewProject(template);
+
+        headerAtAdd.Should().NotBeNullOrEmpty();
+        var module = manager.LoadedProjects.Single().Modules.Single();
+        module.FormPart!.DesignerText.Should().Be(headerAtAdd);
     }
 
     private static CodeEditorViewModel TemplateEditor(FormDefinition form,
