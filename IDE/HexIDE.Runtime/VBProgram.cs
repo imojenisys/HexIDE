@@ -335,19 +335,23 @@ public sealed class VBProgram : IFormProgram
     {
         if (modals.Count > 0 && !ReferenceEquals(modals[^1], view.Context))
             throw new VBRunTimeException(VBStandardError.CodeMustCloseTopmostModalFormFirst);
-        var wasActive = ReferenceEquals(active, view.Context);
-        var next = wasActive
-            ? activationOrder.LastOrDefault(context => !ReferenceEquals(context, view.Context)
-                && context.FormInstance is { FormLoaded: true } && context.Window is IFormView { IsShown: true })
-            : null;
+        var next = ReferenceEquals(active, view.Context) ? NextShown(view.Context) : null;
         view.HideForm();
-        if (next is not null)
-        {
-            // Own the transition even without a window manager; its activation notification is then harmless.
-            Activated(next);
-            if (next.Window is IFormView { HeldBy: null } nextView)
-                nextView.ActivateForm();
-        }
+        ActivateNext(next);
+    }
+
+    private VBWindowContext? NextShown(VBWindowContext leaving) =>
+        activationOrder.LastOrDefault(context => !ReferenceEquals(context, leaving)
+            && context.FormInstance is { FormLoaded: true } && context.Window is IFormView { IsShown: true });
+
+    private void ActivateNext(VBWindowContext? next)
+    {
+        if (next is null)
+            return;
+        // Own the transition even without a window manager; its activation notification is then harmless.
+        Activated(next);
+        if (next.Window is IFormView { HeldBy: null } nextView)
+            nextView.ActivateForm();
     }
 
     /// <summary>
@@ -455,7 +459,10 @@ public sealed class VBProgram : IFormProgram
     {
         // The active form unloaded is given no Deactivate, and the form Windows activates next its Activate (measured, #994).
         if (ReferenceEquals(active, context))
+        {
             active = null;
+            ActivateNext(NextShown(context));
+        }
         activationOrder.Remove(context);
         var instance = context.FormInstance!;
         var at = loaded.FindIndex(form => ReferenceEquals(form, instance));
