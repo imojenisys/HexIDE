@@ -1,0 +1,4 @@
+Type=Exe
+Module=MainModule; Main.bas
+Startup="Sub Main"
+Name="Smoke"
