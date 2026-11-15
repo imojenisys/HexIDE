@@ -52,6 +52,14 @@ before opening anything.
 - **AND WHEN** the caller repeats the request with one container path as `project`
 - **THEN** that archive's entry opens read-only and the reply names it
 
+### Requirement: Carried file tab identities
+`get_document_tabs` SHALL report a carried file tab's owner project name as `project` and its
+carried document name as `document`, matching the identity returned by `open_file`.
+
+#### Scenario: Two projects carry files of one name
+- **WHEN** tabs are open for carried files of one name in two loaded projects
+- **THEN** each tab reports that document name and its distinct project name
+
 ### Requirement: Archive tab identities and type
 `get_document_tabs` SHALL report an archive entry tab with `type: archive`, `project` equal to its
 container path and `document` equal to the entry path returned by `open_file`. It SHALL omit
@@ -1037,6 +1045,23 @@ restored position.
 #### Scenario: An X11 display with no window manager
 - **WHEN** a Minimized or Maximized request goes unconfirmed on an X11 display with no window manager
 - **THEN** the reply says no window manager is running, so nothing will apply it, and does not direct the caller to re-read
+
+### Requirement: Window layout follows the allowed client size
+Before assigning layout dimensions, `set_window_state` SHALL clamp requested client dimensions to
+the working area of the screen at the requested position, allowing for the window frame. After a
+confirmed resize it SHALL reconcile any further native adjustment with the actual client size before
+replying. When a requested dimension differs from the resulting size by more than one device pixel,
+its note SHALL report the requested and allowed sizes in the reply's `0.#` format and explain that
+x/y/width/height cannot exceed the screen's working area, without refusing the change.
+
+#### Scenario: The platform clamps an oversized request
+- **WHEN** the platform returns a smaller client size than requested
+- **THEN** layout never sees the oversized dimensions, and the root and each stacked bottom-docked pane are arranged inside the reported client size
+- **AND** the note explains the size change and a later user resize still controls layout
+
+#### Scenario: A fitting size rounds to a device pixel
+- **WHEN** a fitting requested size rounds by at most one device pixel at the window's scale
+- **THEN** the reply carries no size-change note
 
 ### Requirement: The window-state tools SHALL reach any window
 `get_window_state` and `set_window_state` SHALL take an optional `window`, resolved as the tree tools resolve it, and
