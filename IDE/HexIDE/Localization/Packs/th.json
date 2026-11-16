@@ -1313,8 +1313,9 @@
     "Str.AIChat.NewTip": "แชตใหม่ (ประวัติจะถูกเก็บไว้)",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "โครงการ {0} ใช้โฟลเดอร์ {1} ร่วมกัน จะเขียนหรือนำเข้าเฉพาะ {2} เท่านั้น",
     "Str.PropDesc.Index": "ดัชนีของสมาชิกอาร์เรย์ตัวควบคุม หรือเว้นว่างสำหรับตัวควบคุมเดี่ยว",
-    "Str.ControlArray.InvalidIndex": "ค่าคุณสมบัติไม่ถูกต้อง Index ต้องเป็นจำนวนเต็มตั้งแต่ 0 ถึง 32767 หรือว่าง VB6 ไม่โหลด Index ที่อยู่นอกช่วง",
-    "Str.ControlArray.DuplicateIndex": "ค่าคุณสมบัติไม่ถูกต้อง '{0}' มี Index นี้แล้วหรือไม่มี Index VB6 ปฏิเสธดัชนีซ้ำ การผสมตัวควบคุมที่มีและไม่มีดัชนีจะบันทึกว่า Index หายไป",
-    "Str.ControlArray.ClearRefused": "ล้าง Index ไม่ได้: '{0}' ใช้ชื่อเดียวกัน อนุมานจากการวัดที่ตัวควบคุมมีดัชนีอยู่ก่อน: VB6 บันทึกว่า Index หายไปและโหลดตัวควบคุมเดี่ยวนอกอาร์เรย์ (Index เกิดข้อผิดพลาด 343) ยังไม่ได้วัดลำดับย้อนกลับและข้อความของ IDE"
+    "Str.ControlArray.InvalidIndex": "Index ต้องเป็นจำนวนเต็มตั้งแต่ 0 ถึง 32767 หรือว่าง",
+    "Str.ControlArray.DuplicateIndex": "'{0}' มี Index {1} อยู่แล้ว เลือก Index อื่น",
+    "Str.ControlArray.ClearRefused": "ล้าง Index ไม่ได้ขณะที่ '{0}' มีชื่อเดียวกัน",
+    "Str.ControlArray.UnindexedSibling": "'{0}' มีชื่อเดียวกันและไม่มี Index ตั้งค่า Index ของตัวควบคุมนั้นก่อน"
   }
 }

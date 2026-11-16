@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Проектите {0} споделят папка {1}; записва се или се импортира само {2}.",
     "Str.MemberOrigin.HexIde": "Разширение на HexIDE; не е налично във VB6.",
     "Str.PropDesc.Index": "Индексът на елемента в масива от контроли или празно за самостоятелна контрола.",
-    "Str.ControlArray.InvalidIndex": "Невалидна стойност на свойство. Index трябва да е цяло число от 0 до 32767 или празно. VB6 не зарежда Index извън диапазона.",
-    "Str.ControlArray.DuplicateIndex": "Невалидна стойност на свойство. „{0}“ вече има този Index или няма Index. VB6 отказва дублирани индекси; смесването на контроли със и без индекс записва липсващ Index.",
-    "Str.ControlArray.ClearRefused": "Index не може да се изчисти: „{0}“ споделя името. Извод от измерването с индексирана контрола първа: VB6 записва липсващ Index и зарежда самостоятелната контрола извън масива (Index дава 343). Обратният ред и съобщенията на IDE не са измерени."
+    "Str.ControlArray.InvalidIndex": "Index трябва да е цяло число от 0 до 32767 или празно.",
+    "Str.ControlArray.DuplicateIndex": "„{0}“ вече има Index {1}. Изберете друг Index.",
+    "Str.ControlArray.ClearRefused": "Index не може да се изчисти, докато „{0}“ има същото име.",
+    "Str.ControlArray.UnindexedSibling": "„{0}“ има същото име и няма Index. Първо задайте неговия Index."
   }
 }

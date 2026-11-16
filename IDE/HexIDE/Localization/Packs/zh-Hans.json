@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "项目 {0} 共用文件夹 {1}；仅写入或导入 {2}。",
     "Str.MemberOrigin.HexIde": "HexIDE 扩展；VB6 中不可用。",
     "Str.PropDesc.Index": "控件数组元素的索引；独立控件则为空。",
-    "Str.ControlArray.InvalidIndex": "属性值无效。Index 必须是 0 到 32767 的整数或空值。VB6 无法加载超出范围的 Index。",
-    "Str.ControlArray.DuplicateIndex": "属性值无效。“{0}”已具有此 Index 或没有 Index。VB6 拒绝重复索引；混合有索引和无索引的控件会记录缺少 Index。",
-    "Str.ControlArray.ClearRefused": "无法清空 Index：“{0}”使用相同名称。此拒绝根据有索引控件在前的测量推断：VB6 记录缺少 Index，并将独立控件加载到数组之外（Index 引发 343）。反向顺序和 IDE 提示尚未测量。"
+    "Str.ControlArray.InvalidIndex": "Index 必须是 0 到 32767 的整数，或留空。",
+    "Str.ControlArray.DuplicateIndex": "“{0}”已有 Index {1}。请选择其他 Index。",
+    "Str.ControlArray.ClearRefused": "“{0}”具有相同名称时，无法清空 Index。",
+    "Str.ControlArray.UnindexedSibling": "“{0}”具有相同名称且没有 Index。请先设置其 Index。"
   }
 }

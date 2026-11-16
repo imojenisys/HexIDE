@@ -32,6 +32,8 @@ public class ControlArrayIndexTests : IDisposable
     [InlineData(true, "-1")]
     [InlineData(true, "32768")]
     [InlineData(true, "x")]
+    [InlineData(false, "unindexed")]
+    [InlineData(true, "unindexed")]
     [InlineData(false, "duplicate")]
     [InlineData(true, "duplicate")]
     [InlineData(false, "move")]
@@ -54,12 +56,13 @@ public class ControlArrayIndexTests : IDisposable
         project.AddForm(form);
         form.AbsolutePath = Path.Combine(project.WorkingDirectory, "hexide-2701-" + Guid.NewGuid() + ".frm");
         var control = form.Components.Single(c => c.BaseClass is TimerComponentClass);
-        if (check is "move" or "clear" or "siblings" or "duplicate")
+        if (check is "move" or "clear" or "siblings" or "duplicate" or "unindexed")
             control.UnknownRawProperties.Add(new("Index", ["Index = 0"]));
-        if (check is "siblings" or "duplicate")
+        if (check is "siblings" or "duplicate" or "unindexed")
         {
             var sibling = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
-            sibling.UnknownRawProperties.Add(new("Index", ["Index = 3"]));
+            if (check != "unindexed")
+                sibling.UnknownRawProperties.Add(new("Index", ["Index = 3"]));
             form.UpdateComponents([.. form.Components, sibling]);
         }
         var projects = Substitute.For<IProjectManager>();
@@ -79,15 +82,17 @@ public class ControlArrayIndexTests : IDisposable
             new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader());
         var tools = new HexIdeTools(context);
         var before = new FormSerializer().Serialize(form, "Form1.frm").frmText;
-        var value = check switch { "move" => "7", "duplicate" => "3", "clear" or "siblings" => "", _ => check };
+        var value = check switch { "move" => "7", "duplicate" or "unindexed" => "3", "clear" or "siblings" => "", _ => check };
         var reply = await tools.SetControlPropertyAsync("Form1", PropertyText.AddressedName(control), "Index", value);
         var saved = File.Exists(form.AbsolutePath) ? File.ReadAllText(form.AbsolutePath) : null;
-        var refused = check is "-1" or "32768" or "x" or "duplicate" or "siblings";
+        var refused = check is "-1" or "32768" or "x" or "duplicate" or "unindexed" or "siblings";
         if (refused)
         {
             reply.Success.Should().BeFalse();
             reply.Error.Should().Contain(check == "duplicate" ? "Timer1(3)" : check == "siblings" ? "Timer1" : "Invalid property value");
             reply.Error.Should().Contain("control-arrays.md");
+            if (check == "duplicate") reply.Error.Should().Contain("'Timer1(3)' already has Index 3").And.NotContain("or has no Index");
+            if (check == "unindexed") reply.Error.Should().Contain("'Timer1' has the same name and no Index");
             new FormSerializer().Serialize(form, "Form1.frm").frmText.Should().Be(before);
             saved.Should().BeNull();
         }
@@ -100,12 +105,12 @@ public class ControlArrayIndexTests : IDisposable
             if (index is { } n)
             {
                 reply.Note.Should().Contain($"element {n} of array 'Timer1'");
-                saved.Should().Contain($"Index = {n}");
+                saved.Should().Contain($"      Index           =   {n}");
             }
             else
             {
                 reply.Note.Should().Contain("plain control");
-                saved.Should().NotContain("Index =");
+                saved.Should().NotContain("Index");
             }
             var loaded = new FormDeserializer().Deserialize(project, saved!, Substitute.For<IDeserializeErrorSink>())!;
             PropertyText.ArrayIndexOf(loaded.Components.Single(c => c.BaseClass is TimerComponentClass)).Should().Be(index);
@@ -164,6 +169,7 @@ public class ControlArrayIndexTests : IDisposable
     [InlineData("-1")]
     [InlineData("32768")]
     [InlineData("x")]
+    [InlineData("unindexed")]
     [InlineData("duplicate")]
     [InlineData("move")]
     [InlineData("clear")]
@@ -173,13 +179,14 @@ public class ControlArrayIndexTests : IDisposable
         var project = TestHelpers.CreateProjectWithForm("P", "Form1");
         var form = project.Forms[0];
         var control = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
-        if (check is "move" or "clear" or "siblings" or "duplicate")
+        if (check is "move" or "clear" or "siblings" or "duplicate" or "unindexed")
             control.UnknownRawProperties.Add(new("Index", ["Index = 0"]));
         form.UpdateComponents([.. form.Components, control]);
-        if (check is "siblings" or "duplicate")
+        if (check is "siblings" or "duplicate" or "unindexed")
         {
             var sibling = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
-            sibling.UnknownRawProperties.Add(new("Index", ["Index = 3"]));
+            if (check != "unindexed")
+                sibling.UnknownRawProperties.Add(new("Index", ["Index = 3"]));
             form.UpdateComponents([.. form.Components, sibling]);
         }
         var dock = Substitute.For<IDocumentDockService>();
@@ -196,13 +203,13 @@ public class ControlArrayIndexTests : IDisposable
         designer.SelectedComponent = designer.AllComponents.Single(c => c.Instance == control);
         properties.Properties.Where(p => p.Name == "Index").Should().ContainSingle();
         var row = properties.Properties.OfType<PropertyViewModel>().Single(p => p.Name == "Index");
-        var value = check switch { "move" => "7", "duplicate" => "3", "clear" or "siblings" => "", _ => check };
+        var value = check switch { "move" => "7", "duplicate" or "unindexed" => "3", "clear" or "siblings" => "", _ => check };
         var before = new FormSerializer().Serialize(form, "Form1.frm").frmText;
         row.Value = check == "3" ? " \n3\n " : value;
-        if (check is "-1" or "32768" or "x" or "duplicate" or "siblings")
+        if (check is "-1" or "32768" or "x" or "duplicate" or "unindexed" or "siblings")
         {
             new FormSerializer().Serialize(form, "Form1.frm").frmText.Should().Be(before);
-            var key = check switch { "duplicate" => "DuplicateIndex", "siblings" => "ClearRefused", _ => "InvalidIndex" };
+            var key = check switch { "duplicate" => "DuplicateIndex", "unindexed" => "UnindexedSibling", "siblings" => "ClearRefused", _ => "InvalidIndex" };
             loc.Received().GetString("Str.ControlArray." + key);
             designer.UndoCommand.CanExecute(null).Should().BeFalse();
         }
@@ -214,6 +221,82 @@ public class ControlArrayIndexTests : IDisposable
                 control.UnknownRawProperties.Single(p => p.Name == "Index").Lines.Should().Equal("Index = 3");
             designer.UndoCommand.CanExecute(null).Should().BeTrue();
         }
+    }
+
+    // Index layout measured by hexide-mcp on Windows, #2701 round-2 review.
+    [Theory]
+    [InlineData("new")]
+    [InlineData("move")]
+    [InlineData("untouched")]
+    public void Saved_Index_uses_VB6_property_columns(string edit)
+    {
+        const string source = "VERSION 5.00\r\n"
+            + "Begin VB.Form Form1 \r\n"
+            + "   Begin VB.Timer Timer1 \r\n"
+            + "      Index           =   1\r\n"
+            + "   End\r\n"
+            + "End\r\n"
+            + "Attribute VB_Name = \"Form1\"\r\n";
+        var project = new ProjectDefinition(VBProjectType.EXE, "P");
+        var input = source;
+        if (edit == "new") input = input.Replace("      Index           =   1\r\n", "");
+        var form = new FormDeserializer().Deserialize(project, input, Substitute.For<IDeserializeErrorSink>())!;
+        var control = form.Components.Single(c => c.BaseClass is TimerComponentClass);
+        if (edit != "untouched") control.SetUntypedProperty(VBProperties.DesignIndexProperty, "5");
+        var output = new FormSerializer().Serialize(form, "Form1.frm").frmText;
+        const string edited = "VERSION 5.00\r\n"
+            + "Begin VB.Form Form1 \r\n"
+            + "   Begin VB.Timer Timer1 \r\n"
+            + "      Index           =   5\r\n"
+            + "   End\r\n"
+            + "End\r\n"
+            + "Attribute VB_Name = \"Form1\"\r\n";
+        output.Should().Be(edit == "untouched" ? source : edited);
+    }
+
+    [Theory]
+    [InlineData("x", "Index must be a whole number from 0 to 32767, or empty.")]
+    [InlineData("", "Index can't be cleared while 'Timer1(3)' has the same name.")]
+    [InlineData("3", "'Timer1(3)' already has Index 3. Choose another Index.")]
+    [InlineData("unindexed", "'Timer1' has the same name and no Index. Set its Index first.")]
+    public void Properties_refusals_are_plain_localized_instructions(string value, string expected)
+    {
+        var target = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
+        var sibling = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
+        if (value != "unindexed") sibling.UnknownRawProperties.Add(new("Index", ["      Index           =   3"]));
+        var loc = Substitute.For<ILocalizationService>();
+        var pack = System.Text.Json.JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            FindHexIdeProjectDir(), "Localization", "Packs", "en.json")));
+        using (pack)
+        {
+            loc.GetString(Arg.Any<string>()).Returns(c => pack.RootElement.GetProperty("strings").GetProperty(c.Arg<string>()).GetString()!);
+            var refusal = ControlArrayIndex.RefusalFor(target, value == "unindexed" ? "3" : value, [target, sibling]);
+            refusal.Should().NotBeNull();
+            refusal!.Localized(loc).Should().Be(expected);
+        }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("3", "'Timer1(3)' já tem Index 3. Escolha outro Index.")]
+    [InlineData("", "Não é possível limpar Index enquanto 'Timer1(3)' tiver o mesmo nome.")]
+    public void Brazilian_Portuguese_refusals_use_the_updated_embedded_region_pack(string value, string expected)
+    {
+        var target = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
+        var sibling = new ComponentInstance(TimerComponentClass.Instance, "Timer1");
+        sibling.UnknownRawProperties.Add(new("Index", ["      Index           =   3"]));
+        var localization = new LocalizationService();
+        localization.Apply("pt-BR");
+        var refusal = ControlArrayIndex.RefusalFor(target, value, [target, sibling]);
+        refusal.Should().NotBeNull();
+        refusal!.Localized(localization).Should().Be(expected);
+    }
+
+    private static string FindHexIdeProjectDir()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+            if (File.Exists(Path.Combine(dir.FullName, "IDE", "HexIDE", "HexIDE.csproj")))
+                return Path.Combine(dir.FullName, "IDE", "HexIDE");
+        throw new DirectoryNotFoundException("Could not locate IDE/HexIDE");
     }
 
 }

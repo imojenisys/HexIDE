@@ -1313,8 +1313,9 @@
     "Str.AIChat.NewTip": "새 채팅(기록은 보존됨)",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "프로젝트 {0}이(가) 폴더 {1}을(를) 공유합니다. {2}만 쓰거나 가져옵니다.",
     "Str.PropDesc.Index": "컨트롤 배열 요소의 인덱스이며, 단독 컨트롤은 비워 둡니다.",
-    "Str.ControlArray.InvalidIndex": "잘못된 속성 값입니다. Index는 0~32767의 정수 또는 빈 값이어야 합니다. VB6는 범위를 벗어난 Index를 로드하지 않습니다.",
-    "Str.ControlArray.DuplicateIndex": "잘못된 속성 값입니다. '{0}'에 이미 이 Index가 있거나 Index가 없습니다. VB6는 중복 인덱스를 거부하며, 인덱스 유무가 혼합되면 Index 누락을 기록합니다.",
-    "Str.ControlArray.ClearRefused": "Index를 지울 수 없습니다. '{0}'의 이름이 같습니다. 인덱스가 있는 컨트롤이 먼저인 측정에서 추론했습니다. VB6는 Index 누락을 기록하고 단독 컨트롤을 배열 밖에 로드합니다(Index에서 343 발생). 역순과 IDE 메시지는 측정되지 않았습니다."
+    "Str.ControlArray.InvalidIndex": "Index는 0~32767의 정수 또는 빈 값이어야 합니다.",
+    "Str.ControlArray.DuplicateIndex": "'{0}'에 이미 Index {1}이(가) 있습니다. 다른 Index를 선택하세요.",
+    "Str.ControlArray.ClearRefused": "'{0}'의 이름이 같은 동안에는 Index를 지울 수 없습니다.",
+    "Str.ControlArray.UnindexedSibling": "'{0}'의 이름이 같고 Index가 없습니다. 먼저 해당 Index를 설정하세요."
   }
 }

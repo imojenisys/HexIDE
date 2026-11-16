@@ -138,3 +138,31 @@ Files changed:
   docs/mcp-gaps/closed/no-tool-reads-back-a-control-property-beyond-eight-though.md
   openspec/specs/form-designer/spec.md
   scripts/probes/2701-validation.txt
+
+Round 2 validation — 2026-11-16 (final)
+
+Environment: WSL Ubuntu; Windows PATH entries removed; UseSharedCompilation=false and MSBUILDDISABLENODEREUSE=1.
+The final runs use writable XDG runtime and NuGet HTTP cache directories under artifacts/.
+No VB6 measurement was made here; the authority remains issue #2701 / measuring PR #4074.
+
+Regression teeth: 19 cases failed against round 1 before the code/message fixes. Two more cases failed against the old embedded pt-BR pack in a test-only build before rebuilding the corrected resources: 21 fail-before cases altogether.
+Final ControlArrayIndexTests: 43 passed, zero failures or skips. The untouched serialized array fixture passed before and after; no teeth are claimed for that case.
+Index serialization compares complete literal CRLF output for a newly indexed control, a moved loaded element and an untouched loaded fixture. Tool tests also check the saved property line and project save/load.
+The two regional regressions load the actual embedded pt-BR pack. Its stale duplicate/clear overrides were removed so it inherits the updated Portuguese messages.
+
+Final Infrastructure: 925 passed / 2 skipped, 927 total.
+Final LocalizationCoverage: 13 passed; ShippedPackParity: 31 passed; LocalizationService: 157 passed; no skips.
+Final Desktop Debug build: zero warnings and errors.
+Integration (full): 3662 passed / 4 skipped, 3666 total; xUnit report has zero errors. Its skip methods/reasons match the round-1 inventory above.
+The initial Integration attempt exited before tests because HangDump's named mutex could not write to the sandbox's default runtime directory; the completed run used a writable XDG_RUNTIME_DIR.
+
+The first full HexIDE.Tests run completed: 8558 passed / 1 failed / 68 skipped, 8627 total, zero xUnit errors, in 30m 45s. The failure was the existing region-placeholder guard finding the old embedded pt-BR override. After the resource rebuild, that guard passes in the full LocalizationService class and both added embedded-region regressions pass.
+Final full HexIDE.Tests: 8561 passed / 0 failed / 68 skipped, 8629 total, zero xUnit errors, in 32m 49s.
+Both full runs’ skip methods/case counts match the round-1 inventory above (68 cases across 57 methods); these are not coverage. The two Infrastructure skips are ProjectWriteSafetyTests.A_copy_that_cannot_be_removed_is_kept_and_named and WindowStateUnconfirmedTests.On_Windows_the_probe_does_not_guess, both Windows-only.
+
+MISSING_LANGUAGE inventory and counts: unchanged (design-time serialization/messages only).
+VB6 IDE prompts and reverse mixed indexed/unindexed file order remain unmeasured. Existing handler signatures and new handler stubs remain unchanged, tracked by #4205; renaming into an array remains #1397.
+Round-2 live check pending (hexide-mcp): new/moved Index indentation/value columns, untouched VB6-written file bytes, and invalid/duplicate/unindexed-sibling/clear refusals in English and another shipped language. Human-facing messages must omit measurement notes; automation replies retain their English source note.
+Possible drift: none.
+
+Final tree hygiene: passed, with the same 9 pre-existing non-blocking warnings. No product warnings or errors; no test-floor changes. All run changes remain uncommitted for supervisor review.

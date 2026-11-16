@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekty {0} sdílejí složku {1}; zapisuje nebo importuje se pouze {2}.",
     "Str.MemberOrigin.HexIde": "Rozšíření HexIDE; ve VB6 není dostupné.",
     "Str.PropDesc.Index": "Index prvku pole ovládacích prvků, nebo prázdný pro samostatný prvek.",
-    "Str.ControlArray.InvalidIndex": "Neplatná hodnota vlastnosti. Index musí být celé číslo od 0 do 32767 nebo prázdný. VB6 nenačte Index mimo rozsah.",
-    "Str.ControlArray.DuplicateIndex": "Neplatná hodnota vlastnosti. '{0}' už má tento Index nebo nemá Index. VB6 odmítá duplicitní indexy; směs prvků s indexem a bez něj zaznamená chybějící Index.",
-    "Str.ControlArray.ClearRefused": "Index nelze vymazat: '{0}' má stejný název. Odvozeno z měření s indexovaným prvkem jako prvním: VB6 zaznamená chybějící Index a načte samostatný prvek mimo pole (Index vyvolá 343). Obrácené pořadí a výzvy IDE nejsou změřeny."
+    "Str.ControlArray.InvalidIndex": "Index musí být celé číslo od 0 do 32767 nebo prázdný.",
+    "Str.ControlArray.DuplicateIndex": "'{0}' už má Index {1}. Zvolte jiný Index.",
+    "Str.ControlArray.ClearRefused": "Index nelze vymazat, dokud má '{0}' stejný název.",
+    "Str.ControlArray.UnindexedSibling": "'{0}' má stejný název a nemá Index. Nejprve nastavte jeho Index."
   }
 }

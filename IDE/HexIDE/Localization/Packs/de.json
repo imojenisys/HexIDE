@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Die Projekte {0} teilen den Ordner {1}; nur {2} wird geschrieben oder importiert.",
     "Str.MemberOrigin.HexIde": "HexIDE-Erweiterung; in VB6 nicht verfügbar.",
     "Str.PropDesc.Index": "Index des Steuerelementfeld-Elements, oder leer für ein einzelnes Steuerelement.",
-    "Str.ControlArray.InvalidIndex": "Ungültiger Eigenschaftswert. Index muss eine ganze Zahl von 0 bis 32767 oder leer sein. VB6 lädt keinen Index außerhalb dieses Bereichs.",
-    "Str.ControlArray.DuplicateIndex": "Ungültiger Eigenschaftswert. „{0}“ hat diesen Index bereits oder keinen Index. VB6 verweigert doppelte Indizes; gemischte indizierte und nicht indizierte Steuerelemente melden einen fehlenden Index.",
-    "Str.ControlArray.ClearRefused": "Index kann nicht geleert werden: „{0}“ hat denselben Namen. Aus der Messung mit indiziertem Element zuerst abgeleitet: VB6 meldet einen fehlenden Index und lädt das einzelne Steuerelement außerhalb des Feldes (Index löst 343 aus). Umgekehrte Reihenfolge und IDE-Meldungen sind nicht gemessen."
+    "Str.ControlArray.InvalidIndex": "Index muss eine ganze Zahl von 0 bis 32767 oder leer sein.",
+    "Str.ControlArray.DuplicateIndex": "„{0}“ hat bereits Index {1}. Wählen Sie einen anderen Index.",
+    "Str.ControlArray.ClearRefused": "Index kann nicht geleert werden, solange „{0}“ denselben Namen hat.",
+    "Str.ControlArray.UnindexedSibling": "„{0}“ hat denselben Namen und keinen Index. Legen Sie zuerst dessen Index fest."
   }
 }

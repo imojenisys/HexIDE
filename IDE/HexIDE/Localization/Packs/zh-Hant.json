@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "專案 {0} 共用資料夾 {1}；僅寫入或匯入 {2}。",
     "Str.MemberOrigin.HexIde": "HexIDE 擴充功能；VB6 中無法使用。",
     "Str.PropDesc.Index": "控制項陣列元素的索引；獨立控制項則為空。",
-    "Str.ControlArray.InvalidIndex": "屬性值無效。Index 必須是 0 到 32767 的整數或空值。VB6 無法載入超出範圍的 Index。",
-    "Str.ControlArray.DuplicateIndex": "屬性值無效。「{0}」已有此 Index 或沒有 Index。VB6 拒絕重複索引；混合有索引和無索引的控制項會記錄缺少 Index。",
-    "Str.ControlArray.ClearRefused": "無法清空 Index：「{0}」使用相同名稱。此拒絕根據有索引控制項在前的測量推論：VB6 記錄缺少 Index，並將獨立控制項載入陣列之外（Index 引發 343）。反向順序和 IDE 提示尚未測量。"
+    "Str.ControlArray.InvalidIndex": "Index 必須是 0 到 32767 的整數，或留空。",
+    "Str.ControlArray.DuplicateIndex": "「{0}」已有 Index {1}。請選擇其他 Index。",
+    "Str.ControlArray.ClearRefused": "「{0}」具有相同名稱時，無法清空 Index。",
+    "Str.ControlArray.UnindexedSibling": "「{0}」具有相同名稱且沒有 Index。請先設定其 Index。"
   }
 }

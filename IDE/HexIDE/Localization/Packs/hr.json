@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekti {0} dijele mapu {1}; zapisuje se ili uvozi samo {2}.",
     "Str.MemberOrigin.HexIde": "Proširenje HexIDE-a; nije dostupno u VB6.",
     "Str.PropDesc.Index": "Indeks elementa polja kontrola ili prazno za samostalnu kontrolu.",
-    "Str.ControlArray.InvalidIndex": "Nevaljana vrijednost svojstva. Index mora biti cijeli broj od 0 do 32767 ili prazan. VB6 ne učitava Index izvan raspona.",
-    "Str.ControlArray.DuplicateIndex": "Nevaljana vrijednost svojstva. '{0}' već ima ovaj Index ili nema Index. VB6 odbija dvostruke indekse; miješanje kontrola s indeksom i bez njega bilježi nedostajući Index.",
-    "Str.ControlArray.ClearRefused": "Index se ne može izbrisati: '{0}' dijeli naziv. Zaključeno iz mjerenja s indeksiranom kontrolom na prvom mjestu: VB6 bilježi nedostajući Index i učitava samostalnu kontrolu izvan polja (Index izaziva 343). Obrnuti redoslijed i upiti IDE-a nisu izmjereni."
+    "Str.ControlArray.InvalidIndex": "Index mora biti cijeli broj od 0 do 32767 ili prazan.",
+    "Str.ControlArray.DuplicateIndex": "'{0}' već ima Index {1}. Odaberite drugi Index.",
+    "Str.ControlArray.ClearRefused": "Index se ne može izbrisati dok '{0}' ima isti naziv.",
+    "Str.ControlArray.UnindexedSibling": "'{0}' ima isti naziv i nema Index. Najprije postavite njegov Index."
   }
 }

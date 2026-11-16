@@ -1313,8 +1313,9 @@
     "Str.AIChat.NewTip": "Nový chat (história sa zachová)",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekty {0} zdieľajú priečinok {1}; zapisuje alebo importuje sa iba {2}.",
     "Str.PropDesc.Index": "Index prvku poľa ovládacích prvkov alebo prázdny pre samostatný prvok.",
-    "Str.ControlArray.InvalidIndex": "Neplatná hodnota vlastnosti. Index musí byť celé číslo od 0 do 32767 alebo prázdny. VB6 nenačíta Index mimo rozsahu.",
-    "Str.ControlArray.DuplicateIndex": "Neplatná hodnota vlastnosti. '{0}' už má tento Index alebo nemá Index. VB6 odmieta duplicitné indexy; zmes prvkov s indexom a bez neho zaznamená chýbajúci Index.",
-    "Str.ControlArray.ClearRefused": "Index nemožno vymazať: '{0}' má rovnaký názov. Odvodené z merania s indexovaným prvkom ako prvým: VB6 zaznamená chýbajúci Index a načíta samostatný prvok mimo poľa (Index vyvolá 343). Opačné poradie a výzvy IDE nie sú zmerané."
+    "Str.ControlArray.InvalidIndex": "Index musí byť celé číslo od 0 do 32767 alebo prázdny.",
+    "Str.ControlArray.DuplicateIndex": "'{0}' už má Index {1}. Vyberte iný Index.",
+    "Str.ControlArray.ClearRefused": "Index nemožno vymazať, kým má '{0}' rovnaký názov.",
+    "Str.ControlArray.UnindexedSibling": "'{0}' má rovnaký názov a nemá Index. Najprv nastavte jeho Index."
   }
 }

@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Los proyectos {0} comparten la carpeta {1}; solo se escribe o importa {2}.",
     "Str.MemberOrigin.HexIde": "Extensión de HexIDE; no disponible en VB6.",
     "Str.PropDesc.Index": "Índice del elemento de la matriz de controles, o vacío para un control simple.",
-    "Str.ControlArray.InvalidIndex": "Valor de propiedad no válido. Index debe ser un entero de 0 a 32767, o vacío. VB6 no carga un Index fuera de ese intervalo.",
-    "Str.ControlArray.DuplicateIndex": "Valor de propiedad no válido. '{0}' ya tiene este Index o no tiene Index. VB6 rechaza índices duplicados; mezclar controles con y sin índice registra un Index ausente.",
-    "Str.ControlArray.ClearRefused": "No se puede vaciar Index: '{0}' comparte el nombre. Deducido de la medición con el control indexado primero: VB6 registra un Index ausente y carga el control simple fuera de la matriz (Index genera 343). El orden inverso y los mensajes del IDE no se han medido."
+    "Str.ControlArray.InvalidIndex": "Index debe ser un número entero de 0 a 32767, o estar vacío.",
+    "Str.ControlArray.DuplicateIndex": "'{0}' ya tiene Index {1}. Elija otro Index.",
+    "Str.ControlArray.ClearRefused": "No se puede vaciar Index mientras '{0}' tenga el mismo nombre.",
+    "Str.ControlArray.UnindexedSibling": "'{0}' tiene el mismo nombre y no tiene Index. Establezca primero su Index."
   }
 }

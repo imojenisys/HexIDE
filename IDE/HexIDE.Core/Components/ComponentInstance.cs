@@ -118,7 +118,11 @@ public partial class ComponentInstance
     /// <paramref name="Records"/> is as on <see cref="PreservedSubtree"/>: the companion records the lines cite.
     /// </summary>
     public readonly record struct UnknownRawProperty(
-        string Name, IReadOnlyList<string> Lines, IReadOnlyDictionary<int, byte[]>? Records = null);
+        string Name, IReadOnlyList<string> Lines, IReadOnlyDictionary<int, byte[]>? Records = null)
+    {
+        // An edited scalar uses the serializer’s normal property columns at its current nesting depth.
+        public string? EditedValue { get; init; }
+    }
 
     private readonly List<PreservedSubtree> preservedChildSubtrees = [];
 
@@ -174,7 +178,7 @@ public partial class ComponentInstance
             OnComponentPropertyChanging(this, propertyClass, before, text);
             UnknownRawProperties.RemoveAll(p => p.Name.Equals("Index", StringComparison.OrdinalIgnoreCase));
             if (text.Length > 0)
-                UnknownRawProperties.Add(new UnknownRawProperty("Index", ["Index = " + text]));
+                UnknownRawProperties.Add(new UnknownRawProperty("Index", ["Index = " + text]) { EditedValue = text });
             OnComponentPropertyChanged(this, propertyClass);
             return;
         }

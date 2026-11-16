@@ -1313,8 +1313,9 @@
     "Str.AIChat.NewTip": "Új csevegés (az előzmények megmaradnak)",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "A(z) {0} projektek közös mappája {1}; csak a(z) {2} lesz kiírva vagy importálva.",
     "Str.PropDesc.Index": "A vezérlőtömb elemének indexe, vagy üres önálló vezérlő esetén.",
-    "Str.ControlArray.InvalidIndex": "Érvénytelen tulajdonságérték. Az Index 0 és 32767 közötti egész szám vagy üres lehet. A VB6 nem tölt be tartományon kívüli Index értéket.",
-    "Str.ControlArray.DuplicateIndex": "Érvénytelen tulajdonságérték. A(z) '{0}' már ezt az Index értéket használja vagy nincs Index értéke. A VB6 elutasítja az ismétlődő indexeket; az indexelt és nem indexelt vezérlők keverése hiányzó Index bejegyzést eredményez.",
-    "Str.ControlArray.ClearRefused": "Az Index nem törölhető: a(z) '{0}' neve azonos. Következtetés az indexelt vezérlőt elsőként tartalmazó mérésből: a VB6 naplózza a hiányzó Index értéket, és az önálló vezérlőt a tömbön kívül tölti be (Index: 343-as hiba). A fordított sorrend és az IDE üzenetei nem mértek."
+    "Str.ControlArray.InvalidIndex": "Az Index 0 és 32767 közötti egész szám vagy üres lehet.",
+    "Str.ControlArray.DuplicateIndex": "A(z) '{0}' Index értéke már {1}. Válasszon másik Index értéket.",
+    "Str.ControlArray.ClearRefused": "Az Index nem törölhető, amíg a(z) '{0}' neve azonos.",
+    "Str.ControlArray.UnindexedSibling": "A(z) '{0}' neve azonos, és nincs Index értéke. Először állítsa be az Index értékét."
   }
 }

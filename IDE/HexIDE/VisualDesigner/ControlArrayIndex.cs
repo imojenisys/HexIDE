@@ -7,14 +7,14 @@ using HexIDE.Runtime.Components;
 
 namespace HexIDE.VisualDesigner;
 
-// Measured file-load rules: #2701 / PR #4074. These are HexIDE's design-time refusals, not VB6 IDE prompts.
+// File-load measurements: docs/vb6-fidelity-oracle/control-arrays.md (#2701 / PR #4074).
+// These are HexIDE's design-time refusals, not measured VB6 IDE prompts.
 public static class ControlArrayIndex
 {
-    public sealed record Refusal(string Key, string English, string? Control = null)
+    public sealed record Refusal(string Key, string English, string? Control = null, int? Index = null)
     {
         public string Localized(ILocalizationService localization) =>
-            string.Format(localization.GetString(Key), Control)
-            + " (docs/vb6-fidelity-oracle/control-arrays.md; #2701 / PR #4074)";
+            string.Format(localization.GetString(Key), Control, Index);
     }
 
     public static Refusal? RefusalFor(ComponentInstance target, string value, IEnumerable<ComponentInstance> controls)
@@ -32,10 +32,16 @@ public static class ControlArrayIndex
             return new("Str.ControlArray.InvalidIndex",
                 "Invalid property value. Index takes an integer from 0 to 32767, or empty. VB6 will not load a .frm with an out-of-range Index." + source);
         if (siblings.FirstOrDefault(c => PropertyText.ArrayIndexOf(c) == index || PropertyText.ArrayIndexOf(c) is null) is { } other)
-            return new("Str.ControlArray.DuplicateIndex",
-                $"Invalid property value. '{PropertyText.AddressedName(other)}' already holds this Index or has no Index. "
-                + "VB6 will not load duplicate indexes; mixing indexed and unindexed controls of the same name loads them separately with a missing-Index log." + source,
-                PropertyText.AddressedName(other));
+        {
+            var name = PropertyText.AddressedName(other);
+            return PropertyText.ArrayIndexOf(other) is null
+                ? new("Str.ControlArray.UnindexedSibling",
+                    $"Invalid property value. '{name}' has the same name and no Index. Set its Index first. "
+                    + "Mixing indexed and unindexed controls of the same name loads them separately with a missing-Index log." + source, name)
+                : new("Str.ControlArray.DuplicateIndex",
+                    $"Invalid property value. '{name}' already has Index {index}. Choose another Index. "
+                    + "VB6 will not load duplicate indexes." + source, name, index);
+        }
         return null;
     }
 }

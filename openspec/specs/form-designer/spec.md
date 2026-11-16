@@ -513,11 +513,15 @@ or saving. Automation replies SHALL name the resulting element or plain control.
 - **THEN** it becomes that element of the array bearing its name
 - **AND WHEN** Index is changed to another free value in that range
 - **THEN** the element moves and the saved form reloads with its new Index
+- **AND** new and moved Index lines use the serializer’s normal property indentation and value columns;
+  untouched VB6-written array lines are preserved verbatim
 
 #### Scenario: Refuse an invalid array edit
 - **WHEN** Index is set to -1, 32768, non-integer text, or an index a same-name sibling holds
 - **THEN** the edit is refused without changing the model or saving
-- **AND** the refusal explains the VB6 file-load rule measured in
+- **AND** the Properties window gives localized instructions without measurement notes, distinguishing
+  a sibling holding the same Index from a same-name sibling with no Index
+- **AND** automation refusals explain the VB6 file-load rule measured in
   [#2701 / measuring PR #4074](https://github.com/hexide-io/HexIDE/issues/2701), for the
   [control-array oracle](../../../docs/vb6-fidelity-oracle/control-arrays.md)
 
@@ -525,7 +529,9 @@ or saving. Automation replies SHALL name the resulting element or plain control.
 - **WHEN** a lone element's Index is cleared
 - **THEN** it becomes a plain control and undo restores its Index
 - **BUT WHEN** same-name siblings remain
-- **THEN** clearing is refused, explaining that this is reasoned from the indexed-first mixed form
-  measurement (missing-Index log, plain control outside the array, Index raises 343), not measured VB6
-  IDE behaviour; reverse file order and IDE prompts remain unmeasured
-- **AND** event procedure signatures remain unchanged; renaming to join an array remains #1397
+- **THEN** clearing is refused with a localized instruction naming the sibling
+- **AND** this rule is reasoned from the indexed-first mixed form measurement (missing-Index log, plain
+  control outside the array, Index raises 343), not measured VB6 IDE behaviour; reverse file order and
+  IDE prompts remain unmeasured
+- **AND** existing event signatures and new handler stubs remain unchanged, tracked by
+  [#4205](https://github.com/hexide-io/HexIDE/issues/4205); renaming to join an array remains #1397

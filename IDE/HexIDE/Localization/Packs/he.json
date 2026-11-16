@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "הפרויקטים {0} חולקים את התיקייה {1}; רק {2} נכתב או מיובא.",
     "Str.MemberOrigin.HexIde": "הרחבה של HexIDE; אינה זמינה ב-VB6.",
     "Str.PropDesc.Index": "האינדקס של איבר במערך פקדים, או ריק עבור פקד יחיד.",
-    "Str.ControlArray.InvalidIndex": "ערך מאפיין לא חוקי. Index חייב להיות מספר שלם בין 0 ל־32767, או ריק. VB6 אינו טוען Index מחוץ לטווח.",
-    "Str.ControlArray.DuplicateIndex": "ערך מאפיין לא חוקי. ל־'{0}' כבר יש Index זה או שאין לו Index. VB6 מסרב לאינדקסים כפולים; ערבוב פקדים עם ובלי אינדקס רושם Index חסר.",
-    "Str.ControlArray.ClearRefused": "לא ניתן לנקות את Index: ל־'{0}' יש אותו שם. מסקנה מהמדידה שבה הפקד המאונדקס ראשון: VB6 רושם Index חסר וטוען את הפקד היחיד מחוץ למערך (Index מעלה 343). הסדר ההפוך והודעות IDE לא נמדדו."
+    "Str.ControlArray.InvalidIndex": "Index חייב להיות מספר שלם בין 0 ל־32767, או ריק.",
+    "Str.ControlArray.DuplicateIndex": "ל־'{0}' כבר יש Index {1}. יש לבחור Index אחר.",
+    "Str.ControlArray.ClearRefused": "לא ניתן לנקות את Index כל עוד ל־'{0}' יש אותו שם.",
+    "Str.ControlArray.UnindexedSibling": "ל־'{0}' יש אותו שם ואין לו Index. יש להגדיר תחילה את ה־Index שלו."
   }
 }

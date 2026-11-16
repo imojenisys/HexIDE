@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Os proxectos {0} comparten o cartafol {1}; só se escribe ou importa {2}.",
     "Str.MemberOrigin.HexIde": "Extensión de HexIDE; non dispoñible en VB6.",
     "Str.PropDesc.Index": "Índice do elemento da matriz de controis, ou baleiro para un control simple.",
-    "Str.ControlArray.InvalidIndex": "Valor de propiedade non válido. Index debe ser un enteiro de 0 a 32767, ou baleiro. VB6 non carga un Index fóra do intervalo.",
-    "Str.ControlArray.DuplicateIndex": "Valor de propiedade non válido. '{0}' xa ten este Index ou non ten Index. VB6 rexeita índices duplicados; mesturar controis con e sen índice rexistra un Index ausente.",
-    "Str.ControlArray.ClearRefused": "Non se pode baleirar Index: '{0}' comparte o nome. Deducido da medición co control indexado primeiro: VB6 rexistra un Index ausente e carga o control simple fóra da matriz (Index xera 343). A orde inversa e as mensaxes do IDE non se mediron."
+    "Str.ControlArray.InvalidIndex": "Index debe ser un número enteiro de 0 a 32767, ou estar baleiro.",
+    "Str.ControlArray.DuplicateIndex": "'{0}' xa ten Index {1}. Escolla outro Index.",
+    "Str.ControlArray.ClearRefused": "Non se pode baleirar Index mentres '{0}' teña o mesmo nome.",
+    "Str.ControlArray.UnindexedSibling": "'{0}' ten o mesmo nome e non ten Index. Estableza primeiro o seu Index."
   }
 }

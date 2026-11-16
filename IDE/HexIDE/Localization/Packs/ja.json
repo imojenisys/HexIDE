@@ -1313,8 +1313,9 @@
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "プロジェクト {0} はフォルダー {1} を共有しています。{2} のみが書き込みまたはインポートされます。",
     "Str.MemberOrigin.HexIde": "HexIDE の拡張機能。VB6 では使用できません。",
     "Str.PropDesc.Index": "コントロール配列要素のインデックス。単独のコントロールは空欄です。",
-    "Str.ControlArray.InvalidIndex": "プロパティ値が無効です。Index は 0～32767 の整数、または空欄にしてください。VB6 は範囲外の Index を読み込めません。",
-    "Str.ControlArray.DuplicateIndex": "プロパティ値が無効です。'{0}' は既にこの Index を持つか、Index がありません。VB6 は重複インデックスを拒否します。インデックスの有無が混在すると Index 不足が記録されます。",
-    "Str.ControlArray.ClearRefused": "Index を空欄にできません。'{0}' が同じ名前です。インデックス付きコントロールが先の場合の測定に基づく判断です。VB6 は Index 不足を記録し、単独のコントロールを配列の外に読み込みます（Index は 343 を発生）。逆順と IDE のメッセージは未測定です。"
+    "Str.ControlArray.InvalidIndex": "Index は 0～32767 の整数、または空欄にしてください。",
+    "Str.ControlArray.DuplicateIndex": "'{0}' には既に Index {1} が設定されています。別の Index を選んでください。",
+    "Str.ControlArray.ClearRefused": "'{0}' が同じ名前である間は Index を空欄にできません。",
+    "Str.ControlArray.UnindexedSibling": "'{0}' は同じ名前で、Index がありません。先にその Index を設定してください。"
   }
 }

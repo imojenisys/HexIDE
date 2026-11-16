@@ -1313,8 +1313,9 @@
     "Str.AIChat.NewTip": "Uusi keskustelu (historia säilytetään)",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projektit {0} jakavat kansion {1}; vain {2} kirjoitetaan tai tuodaan.",
     "Str.PropDesc.Index": "Ohjausobjektitaulukon alkion indeksi tai tyhjä yksittäiselle ohjausobjektille.",
-    "Str.ControlArray.InvalidIndex": "Virheellinen ominaisuuden arvo. Index on kokonaisluku väliltä 0–32767 tai tyhjä. VB6 ei lataa alueen ulkopuolista Index-arvoa.",
-    "Str.ControlArray.DuplicateIndex": "Virheellinen ominaisuuden arvo. Kohteella '{0}' on jo tämä Index tai ei Index-arvoa. VB6 hylkää kaksoisindeksit; indeksoitujen ja indeksoimattomien kohteiden sekoitus kirjaa puuttuvan Index-arvon.",
-    "Str.ControlArray.ClearRefused": "Index-arvoa ei voi tyhjentää: '{0}' käyttää samaa nimeä. Päätelty mittauksesta, jossa indeksoitu kohde on ensin: VB6 kirjaa puuttuvan Index-arvon ja lataa yksittäisen kohteen taulukon ulkopuolelle (Index aiheuttaa virheen 343). Käänteistä järjestystä ja IDE-kehotteita ei ole mitattu."
+    "Str.ControlArray.InvalidIndex": "Index-arvon on oltava kokonaisluku väliltä 0–32767 tai tyhjä.",
+    "Str.ControlArray.DuplicateIndex": "Kohteella '{0}' on jo Index {1}. Valitse toinen Index.",
+    "Str.ControlArray.ClearRefused": "Index-arvoa ei voi tyhjentää, kun kohteella '{0}' on sama nimi.",
+    "Str.ControlArray.UnindexedSibling": "Kohteella '{0}' on sama nimi eikä Index-arvoa. Aseta ensin sen Index."
   }
 }

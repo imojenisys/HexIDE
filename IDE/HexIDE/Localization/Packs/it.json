@@ -1313,8 +1313,9 @@
     "Str.AIChat.NewTip": "Nuova chat (la cronologia viene conservata)",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "I progetti {0} condividono la cartella {1}; viene scritto o importato solo {2}.",
     "Str.PropDesc.Index": "Indice dell’elemento della matrice di controlli, o vuoto per un controllo semplice.",
-    "Str.ControlArray.InvalidIndex": "Valore di proprietà non valido. Index deve essere un intero da 0 a 32767, oppure vuoto. VB6 non carica un Index fuori intervallo.",
-    "Str.ControlArray.DuplicateIndex": "Valore di proprietà non valido. '{0}' ha già questo Index o non ha Index. VB6 rifiuta gli indici duplicati; mescolare controlli con e senza indice segnala un Index mancante.",
-    "Str.ControlArray.ClearRefused": "Impossibile svuotare Index: '{0}' ha lo stesso nome. Dedotto dalla misura con il controllo indicizzato per primo: VB6 segnala un Index mancante e carica il controllo semplice fuori dalla matrice (Index genera 343). Ordine inverso e messaggi dell’IDE non misurati."
+    "Str.ControlArray.InvalidIndex": "Index deve essere un numero intero da 0 a 32767, oppure vuoto.",
+    "Str.ControlArray.DuplicateIndex": "'{0}' ha già Index {1}. Scegliere un altro Index.",
+    "Str.ControlArray.ClearRefused": "Impossibile svuotare Index mentre '{0}' ha lo stesso nome.",
+    "Str.ControlArray.UnindexedSibling": "'{0}' ha lo stesso nome e non ha Index. Impostare prima il suo Index."
   }
 }
