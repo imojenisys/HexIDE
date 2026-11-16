@@ -16,12 +16,11 @@ sealed partial class Program
         StringMarshalling = System.Runtime.InteropServices.StringMarshalling.Utf16)]
     private static partial int ShowNativeMessageBox(nint owner, string text, string caption, uint type);
 
-    private static string? EstablishDistribution(string installationDirectory)
+    private static string? EstablishDistribution(string installationDirectory, Action<HexIDE.IDE.DistributionIdentity> establish)
     {
         try
         {
-            HexIDE.IDE.Distribution.Establish(HexIDE.IDE.DistributionDescriptor.Resolve(installationDirectory));
-            WindowsTaskbarIdentity.Apply(HexIDE.IDE.Distribution.Current);
+            establish(HexIDE.IDE.DistributionDescriptor.Resolve(installationDirectory));
             return null;
         }
         catch (HexIDE.IDE.DistributionDescriptorException ex)
@@ -52,7 +51,28 @@ sealed partial class Program
         var invocationDirectory = Environment.CurrentDirectory;
         FixCurrentWorkingDictionary();
 
-        if (RunDistributionGate(args, invocationDirectory, AppContext.BaseDirectory))
+        var gateExitCode = RunDistributionGate(args, invocationDirectory, AppContext.BaseDirectory, identity =>
+        {
+            HexIDE.IDE.Distribution.Establish(identity);
+            WindowsTaskbarIdentity.Apply(identity);
+        }, message => { ConsoleOutput.Write(message); }, ReportDistributionError, () => Start(args, invocationDirectory));
+        if (gateExitCode is { } exitCode)
+        {
+            Environment.ExitCode = exitCode;
+        }
+    }
+
+    private static void Start(string[] args, string invocationDirectory)
+    {
+        if (ServerOptions.ProfileArgumentError is { } profileError)
+        {
+            var localization = new HexIDE.Localization.LocalizationService();
+            ConsoleOutput.Write(localization.GetStringFrom("system", profileError) + Environment.NewLine);
+            Environment.ExitCode = 2;
+            return;
+        }
+
+        if (RefuseInvalidArguments(text => ConsoleOutput.Write(text)))
             return;
 
         // Before anything else starts: UserDataPath refuses a redirect once any per-user file has been looked up.
@@ -87,15 +107,13 @@ sealed partial class Program
         Environment.ExitCode = HexIDE.Runtime.UiThread.Run(() => builder.StartWithClassicDesktopLifetime(args));
     }
 
-    internal static bool RunDistributionGate(string[] args, string invocationDirectory, string installationDirectory,
-        Action<string>? write = null, Action<string>? reportError = null)
+    internal static int? RunDistributionGate(string[] args, string invocationDirectory, string installationDirectory,
+        Action<HexIDE.IDE.DistributionIdentity> establish, Action<Func<ConsoleTarget, string>> write, Action<string> reportError,
+        Action start)
     {
-        var useConsole = write == null;
-        write ??= text => ConsoleOutput.Write(text);
-        reportError ??= ReportDistributionError;
         // First of all: every per-user path, log and caption is derived from this (#2042). A failure is held until
         // the arguments are read, so that --help still answers on a broken installation.
-        var distributionError = EstablishDistribution(installationDirectory);
+        var distributionError = EstablishDistribution(installationDirectory, establish);
 
         ServerOptions.ParseArgs(args, invocationDirectory);
 
@@ -105,34 +123,22 @@ sealed partial class Program
         {
             if (distributionError != null)
             {
-                write(distributionError + Environment.NewLine);
-                Environment.ExitCode = 2;
+                write(_ => distributionError + Environment.NewLine);
             }
 
-            if (useConsole)
-                ConsoleOutput.Write(ServerOptions.HelpText);
-            else
-                write(ServerOptions.HelpText(new ConsoleTarget(false, int.MaxValue)));
-            return true;
+            write(ServerOptions.HelpText);
+            return distributionError is null ? 0 : 2;
         }
 
         // Refused rather than started as stock: stock would open HexIDE's own settings and recovery files.
         if (distributionError != null)
         {
             reportError(distributionError);
-            Environment.ExitCode = 2;
-            return true;
+            return 2;
         }
 
-        if (ServerOptions.ProfileArgumentError is { } profileError)
-        {
-            var localization = new HexIDE.Localization.LocalizationService();
-            write(localization.GetStringFrom("system", profileError) + Environment.NewLine);
-            Environment.ExitCode = 2;
-            return true;
-        }
-
-        return RefuseInvalidArguments(write);
+        start();
+        return null;
     }
 
     internal static bool RefuseInvalidArguments(Action<string> write)
