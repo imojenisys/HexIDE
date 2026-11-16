@@ -12,6 +12,19 @@ public partial class FontDialogViewModel
     [Notify] private string _selectedFamily;
     [Notify] private string _selectedStyle;
     [Notify] private double _selectedSize;
+    [Notify] private bool _underline;
+    [Notify] private bool _strikethrough;
+
+    public TextDecorationCollection PreviewTextDecorations
+    {
+        get
+        {
+            var decorations = new TextDecorationCollection();
+            if (Underline) decorations.AddRange(TextDecorations.Underline);
+            if (Strikethrough) decorations.AddRange(TextDecorations.Strikethrough);
+            return decorations;
+        }
+    }
 
     // The previews read the generated properties, never their fields: the generator raises a dependent property's
     // change only for a read of the property, so a preview reading `_selectedSize` was never redrawn.
@@ -22,6 +35,9 @@ public partial class FontDialogViewModel
     /// <summary>The sample's face. Bound straight to the name, the sample drew in the default face: the compiled binding
     /// does not make a FontFamily of a string (#1353).</summary>
     public FontFamily PreviewFontFamily => new(SelectedFamily);
+
+    // Runtime CommonDialog's choice contract does not yet carry effects (#1084).
+    public bool CanEditEffects { get; }
 
     public IReadOnlyList<string> FontFamilies { get; }
     public IReadOnlyList<string> FontStyles { get; } = ["Regular", "Bold", "Italic", "Bold Italic"];
@@ -41,6 +57,9 @@ public partial class FontDialogViewModel
 
     public FontDialogViewModel(FontDialogResult? initial)
     {
+        CanEditEffects = initial?.Underline != null && initial.Strikethrough != null;
+        _underline = initial?.Underline ?? false;
+        _strikethrough = initial?.Strikethrough ?? false;
         _selectedFamily = initial?.Family.Name ?? "Arial";
         var families = FontManager.Current.SystemFonts
             .Select(f => f.Name)
@@ -59,7 +78,7 @@ public partial class FontDialogViewModel
             new FontFamily(_selectedFamily),
             _selectedStyle.Contains("Italic") ? FontStyle.Italic : FontStyle.Normal,
             _selectedStyle.Contains("Bold")   ? FontWeight.Bold   : FontWeight.Normal,
-            _selectedSize);
+            _selectedSize, _underline, _strikethrough);
         AcceptRequested?.Invoke(result);
     }
 

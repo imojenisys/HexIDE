@@ -7,7 +7,7 @@
              x:DataType="vm:FontDialogViewModel"
              x:Class="HexIDE.Forms.Views.FontDialog"
              Width="460">
-    <Grid Margin="8" RowDefinitions="Auto,*,Auto,Auto">
+    <Grid Margin="8" RowDefinitions="Auto,*,Auto,Auto,Auto">
 
         <!-- Column header labels -->
         <Grid Grid.Row="0" ColumnDefinitions="*,160,80" Margin="0,0,0,4">
@@ -29,22 +29,34 @@
                      Margin="4,0" />
         </Grid>
 
+        <!-- Effects -->
+        <StackPanel Grid.Row="2" Margin="4,0,4,8" Spacing="4" IsVisible="{CompiledBinding CanEditEffects}">
+            <TextBlock Text="{DynamicResource Str.Dialog.Font.Effects}" />
+            <CheckBox x:Name="StrikeoutBox" IsChecked="{CompiledBinding Strikethrough}">
+                <AccessText Text="{DynamicResource Str.Dialog.Font.Strikeout}" />
+            </CheckBox>
+            <CheckBox x:Name="UnderlineBox" IsChecked="{CompiledBinding Underline}">
+                <AccessText Text="{DynamicResource Str.Dialog.Font.Underline}" />
+            </CheckBox>
+        </StackPanel>
+
         <!-- Preview panel -->
-        <Border Grid.Row="2" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+        <Border Grid.Row="3" BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                 BorderThickness="1" Height="60" Margin="4,0,4,8" Padding="6">
-            <TextBlock Text="AaBbCcDdEe 0123"
+            <TextBlock x:Name="SamplePreview" Text="AaBbCcDdEe 0123"
                        FontFamily="{CompiledBinding PreviewFontFamily}"
                        FontStyle="{CompiledBinding PreviewFontStyle}"
                        FontWeight="{CompiledBinding PreviewFontWeight}"
                        FontSize="{CompiledBinding PreviewFontSize}"
+                       TextDecorations="{CompiledBinding PreviewTextDecorations}"
                        VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" />
         </Border>
 
         <!-- Buttons -->
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right"
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right"
                     Spacing="8" Margin="0,0,4,4">
-            <Button Content="{DynamicResource Str.Dialog.Font.Button.Ok}" MinWidth="75" Click="OkClick" />
+            <Button x:Name="OkButton" Content="{DynamicResource Str.Dialog.Font.Button.Ok}" MinWidth="75" Click="OkClick" />
             <Button Content="{DynamicResource Str.Dialog.Font.Button.Cancel}" MinWidth="75" Click="CancelClick" IsCancel="True" />
         </StackPanel>
     </Grid>
