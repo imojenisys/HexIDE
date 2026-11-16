@@ -305,15 +305,57 @@ public class SingleViewFormsTests
         run.Click();
         Pump();
 
-        ((IFormView)run.Shown!).HeldBy.Should().NotBeNull();
+        (FormRoot.View(run.Shown)!).HeldBy.Should().NotBeNull();
         run.Shown!.IsEnabled.Should().BeTrue("held, not disabled");
-        ((IFormView)run.Beside["Form2"]).HeldBy.Should().BeNull();
+        (FormRoot.View(run.Beside["Form2"])!).HeldBy.Should().BeNull();
 
         Run.Click(run.Beside["Form2"]);
         Pump();
 
         run.Failed.Should().BeEmpty();
         run.Printed.Should().Equal("f2 initialize", "f2 load", "f2 click", "after the modal, enabled True");
-        ((IFormView)run.Shown).HeldBy.Should().BeNull();
+        (FormRoot.View(run.Shown)!).HeldBy.Should().BeNull();
+    }
+
+    [AvaloniaFact]
+    public void A_WithEvents_variable_hears_a_single_view_forms_control()
+    {
+        // The event order is measured in docs/vb6-fidelity-oracle/controls-add-and-controls-remove.md (#1556).
+        using var run = Start("""
+            Private WithEvents held As VB.CommandButton
+            Private Sub Form_Load()
+                Set held = Command1
+            End Sub
+            Private Sub Command1_Click()
+                Debug.Print "own"
+            End Sub
+            Private Sub held_Click()
+                Debug.Print "held"
+            End Sub
+            """);
+        run.Failed.Should().BeEmpty();
+        run.Click();
+        Pump();
+        run.Failed.Should().BeEmpty();
+        run.Printed.Should().Equal("own", "held");
+    }
+
+    [AvaloniaFact]
+    public void Unload_Me_finds_the_runtime_root_inside_the_single_view_window()
+    {
+        // QueryUnload/Unload from code: docs/vb6-fidelity-oracle/several-forms-load-show-hide-modal-and-when-the-run-ends.md.
+        using var run = Start("""
+            Private Sub Command1_Click()
+                Unload Me
+            End Sub
+            Private Sub Form_Unload(Cancel As Integer)
+                Debug.Print "unloaded"
+            End Sub
+            """);
+        run.Click();
+        Pump();
+        run.Failed.Should().BeEmpty();
+        run.Printed.Should().Equal("unloaded");
+        run.Runner.IsRunning.Should().BeFalse();
     }
 }

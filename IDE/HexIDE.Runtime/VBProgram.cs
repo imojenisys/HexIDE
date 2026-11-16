@@ -244,7 +244,7 @@ public sealed class VBProgram : IFormProgram
         {
             if (active?.Window is not { } window)
                 return null;
-            if (window is IFormView { IsShown: false })
+            if (FormRoot.View(window) is { IsShown: false })
                 return (window as VBFormRuntime)?.ActiveControl;
             if (Avalonia.Controls.TopLevel.GetTopLevel(window)?.FocusManager?.GetFocusedElement() is not Avalonia.LogicalTree.ILogical focused)
                 return null;
@@ -338,14 +338,14 @@ public sealed class VBProgram : IFormProgram
         var wasActive = ReferenceEquals(active, view.Context);
         var next = wasActive
             ? activationOrder.LastOrDefault(context => !ReferenceEquals(context, view.Context)
-                && context.FormInstance is { FormLoaded: true } && context.Window is IFormView { IsShown: true })
+                && context.FormInstance is { FormLoaded: true } && FormRoot.View(context.Window) is { IsShown: true })
             : null;
         view.HideForm();
         if (next is not null)
         {
             // Own the transition even without a window manager; its activation notification is then harmless.
             Activated(next);
-            if (next.Window is IFormView { HeldBy: null } nextView)
+            if (FormRoot.View(next.Window) is { HeldBy: null } nextView)
                 nextView.ActivateForm();
         }
     }
@@ -372,7 +372,7 @@ public sealed class VBProgram : IFormProgram
         // form was held by undoes this one exactly.
         var held = new List<(IFormView View, IFormView? Before)>();
         foreach (var other in contexts.Values)
-            if (other.Window is IFormView otherView)
+            if (FormRoot.View(other.Window) is { } otherView)
             {
                 held.Add((otherView, otherView.HeldBy));
                 otherView.HeldBy = ReferenceEquals(other, context) ? null : view;
