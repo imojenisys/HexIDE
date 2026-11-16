@@ -651,7 +651,12 @@ public partial class ObjectBrowserToolViewModel : Document
                         else if (component != null)
                         {
                             foreach (var prop in component.Properties)
-                                classVm.Members.Add(new OBMemberViewModel(prop.Name, OBMemberKind.Property, $"Property {prop.Name}"));
+                            {
+                                var propertyName = prop == VBProperties.NameProperty ? "Name" : prop.Name;
+                                if (prop.Category == PropertyCategory.Internal || propertyName.Contains('(') || propertyName.Contains(')'))
+                                    continue;
+                                classVm.Members.Add(new OBMemberViewModel(propertyName, OBMemberKind.Property, $"Property {propertyName}"));
+                            }
                             foreach (var evt in component.Events)
                                 classVm.Members.Add(new OBMemberViewModel(evt.Name, OBMemberKind.Event, $"Event {evt.Name}"));
                         }

@@ -66,11 +66,8 @@ public sealed class RuntimeLibrary
     public ComponentBaseClass? FindComponentClass(string name)
     {
         if (!Controls.ContainsKey(name)) return null;
-        if (name.Equals("TreeView", StringComparison.OrdinalIgnoreCase)) return TreeViewComponentClass.Instance;
-        return InBoxComponentClass.Implemented.Concat(
-                [TabStripComponentClass.Instance, ToolbarComponentClass.Instance, DTPickerComponentClass.Instance,
-                    MonthViewComponentClass.Instance, MaskedEdBoxComponentClass.Instance])
-            .FirstOrDefault(c => c.ControlClassName.Equals(name, StringComparison.OrdinalIgnoreCase));
+        return InBoxComponentClass.Modelled
+            .FirstOrDefault(c => c.ClassName.Equals(name, StringComparison.OrdinalIgnoreCase));
     }
 
     public bool IsNamedBy(VbReference reference) =>

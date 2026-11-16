@@ -155,6 +155,33 @@ public class ObjectBrowserComponentLibraryTests
             .And.Contain(m => m.Name == "NodeClick" && m.Kind == OBMemberKind.Event);
     }
 
+    [Fact]
+    public void TreeView_properties_use_code_names_without_designer_rows()
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "P");
+        project.AddObjectLine(ControlLibraries.MSComctlLib.ProjectLine);
+        var (browser, _) = Create(project);
+        browser.SelectedLibrary = browser.Libraries.Single(l => l.Name == "MSComctlLib");
+        browser.SelectedClass = browser.SelectedLibrary.Classes.Single(c => c.Name == "TreeView");
+        browser.FilteredMembers.Should().ContainSingle(m => m.Name == "Name" && m.Signature == "Property Name");
+        browser.FilteredMembers.Should().NotContain(m => m.Name.Contains('(') || m.Name.Contains(')'));
+    }
+
+    [Fact]
+    public void Every_declared_control_has_a_component_model_or_an_explicit_gap()
+    {
+        string[] notYetModelled = ["Slider", "ImageCombo", "Animation"];
+        foreach (var library in ControlLibraries.All)
+        foreach (var name in library.Controls.Keys)
+        {
+            var component = library.FindComponentClass(name);
+            if (notYetModelled.Contains(name))
+                component.Should().BeNull($"{library.Name}.{name} has no component model yet");
+            else
+                component.Should().NotBeNull($"{library.Name}.{name} needs a component model or an explicit gap");
+        }
+    }
+
     [Theory]
     [InlineData("TabStrip", "Tabs")]
     [InlineData("Toolbar", "Buttons")]
