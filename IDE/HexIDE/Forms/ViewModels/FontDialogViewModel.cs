@@ -11,6 +11,8 @@ public partial class FontDialogViewModel
 {
     [Notify] private string _selectedFamily;
     [Notify] private string _selectedStyle;
+    [Notify] private string _familyText;
+    [Notify] private string _styleText;
     [Notify] private double _selectedSize;
     [Notify] private bool _underline;
     [Notify] private bool _strikethrough;
@@ -70,7 +72,24 @@ public partial class FontDialogViewModel
         _selectedSize   = initial?.Size ?? 12;
         FontSizes = StandardSizes.Contains(_selectedSize) ? StandardSizes : [.. StandardSizes.Append(_selectedSize).Order()];
         _selectedStyle  = initial != null ? ToStyleName(initial.Style, initial.Weight) : "Regular";
+        _familyText = _selectedFamily;
+        _styleText = _selectedStyle;
     }
+
+    private void OnFamilyTextChanged()
+    {
+        var match = FontFamilies.FirstOrDefault(f => string.Equals(f, FamilyText, StringComparison.OrdinalIgnoreCase));
+        if (match != null) SelectedFamily = match;
+    }
+
+    private void OnStyleTextChanged()
+    {
+        var match = FontStyles.FirstOrDefault(s => string.Equals(s, StyleText, StringComparison.OrdinalIgnoreCase));
+        if (match != null) SelectedStyle = match;
+    }
+
+    private void OnSelectedFamilyChanged() => FamilyText = SelectedFamily;
+    private void OnSelectedStyleChanged() => StyleText = SelectedStyle;
 
     public void Accept()
     {
