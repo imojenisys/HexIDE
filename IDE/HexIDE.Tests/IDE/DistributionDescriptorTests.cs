@@ -12,12 +12,9 @@ public sealed class DistributionDescriptorTests
 {
     private const string Minimal = """{"schemaVersion":1,"id":"acme-ide","name":"Acme IDE"}""";
 
-    private static byte[] Png(uint width = 64, uint height = 64)
+    private static byte[] Png(uint width = 1, uint height = 1)
     {
-        var bytes = new byte[32];
-        new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }.CopyTo(bytes, 0);
-        bytes[11] = 13;
-        Encoding.ASCII.GetBytes("IHDR").CopyTo(bytes, 12);
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=");
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(16), width);
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes.AsSpan(20), height);
         return bytes;
@@ -243,6 +240,60 @@ public sealed class DistributionDescriptorTests
         var parse = () => Parse("""{"schemaVersion":1,"id":"a","name":"A","logo":"l.png"}""", _ => new byte[64]);
 
         parse.Should().Throw<DistributionDescriptorException>().WithMessage("*not a PNG*");
+    }
+
+    [Theory]
+    [InlineData("truncated")]
+    [InlineData("crc")]
+    [InlineData("empty")]
+    public void A_corrupt_logo_is_refused_with_both_file_names(string corruption)
+    {
+        var bytes = Png();
+        if (corruption == "truncated") bytes = bytes[..33];
+        if (corruption == "crc") bytes[29] ^= 1;
+        if (corruption == "empty") bytes = [];
+        var parse = () => Parse("""{"schemaVersion":1,"id":"a","name":"A","logo":"art/logo.png"}""", _ => bytes);
+
+        parse.Should().Throw<DistributionDescriptorException>().WithMessage("*brand.json*art/logo.png*");
+    }
+
+    // Complete chunks with recalculated CRCs isolate header and inflation validation (#4063).
+    [Theory]
+    [InlineData("illegal depth", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAwYAAABoxfWYAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=")]
+    [InlineData("illegal colour", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAEAAACCwvwwAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=")]
+    [InlineData("illegal interlace", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAALxG6WlAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=")]
+    [InlineData("short inflation", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC")]
+    [InlineData("long inflation", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAEAAAYAAf6MZ8gAAAAASUVORK5CYII=")]
+    [InlineData("bad deflate", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAB0lEQVRpbnZhbGlkL6N+2gAAAABJRU5ErkJggg==")]
+    [InlineData("missing trailer", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACUlEQVR4nGNgAAIAAAX6rRQGAAAAAElFTkSuQmCC")]
+    [InlineData("bad filter", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNlAAIAAB4ABrypfGkAAAAASUVORK5CYII=")]
+    [InlineData("missing IDAT", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAElFTkSuQmCC")]
+    [InlineData("missing IEND", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8=")]
+    [InlineData("trailing bytes", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYIJ4")]
+    [InlineData("oversized chunk", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ/////0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=")]
+    public void Malformed_PNG_structure_and_image_data_are_refused(string reason, string encoded)
+    {
+        var parse = () => Parse("""{"schemaVersion":1,"id":"a","name":"A","logo":"art/logo.png"}""",
+            _ => Convert.FromBase64String(encoded));
+
+        parse.Should().Throw<DistributionDescriptorException>(reason).WithMessage("*brand.json*art/logo.png*");
+    }
+
+    [Theory]
+    [InlineData("rgba", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=")]
+    [InlineData("Adam7", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAFoEvQfAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=")]
+    [InlineData("packed grayscale", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA3bvkkAAAACklEQVR4nGNgAAAAAgABSK+kcQAAAABJRU5ErkJggg==")]
+    [InlineData("16 bit RGB", "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABEAIAAADA54+dAAAAC0lEQVR4nGNgAAMAAAcAAbKGrPQAAAAASUVORK5CYII=")]
+    public void Complete_logos_are_captured_without_a_UI_toolkit(string format, string encoded)
+    {
+        var bytes = Convert.FromBase64String(encoded);
+        var identity = Parse("""{"schemaVersion":1,"id":"a","name":"A","logo":"art/logo.png"}""", _ => bytes);
+
+        using var captured = identity.OpenLogo();
+        using var copy = new MemoryStream();
+        captured.Should().NotBeNull(format);
+        captured!.CopyTo(copy);
+        copy.ToArray().Should().Equal(bytes);
     }
 
     [Theory]
