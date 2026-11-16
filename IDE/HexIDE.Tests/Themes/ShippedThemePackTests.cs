@@ -129,6 +129,42 @@ public class ShippedThemePackTests
             .Should().BeGreaterThanOrEqualTo(3);
     }
 
+    [Theory]
+    [MemberData(nameof(Packs))]
+    public void ShippedDarkPacksDeclareTheirBaseBackground(string pack)
+    {
+        var record = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(ThemesDirectory(), "Packs", pack + ".json")),
+            ThemeJsonContext.Default.ThemePackRecord)!;
+        if (record.ThemeVariant == "Dark")
+            record.Colors.Should().ContainKey("ThemeBackgroundBrush", $"{pack} must not inherit Simple's grey");
+    }
+
+    [Theory]
+    [InlineData("Abyss")]
+    [InlineData("Dark")]
+    public void DarkChromeTextAndIndicatorsMeetContrastThresholds(string pack)
+    {
+        var colours = ColoursOf(pack);
+        string[] backgrounds = ["ThemeBackgroundBrush", "ThemeControlMidBrush",
+            "ThemeControlHighlightMidBrush", "ThemeAccentBrush2", "ThemeAccentBrush3", "ThemeAccentBrush4",
+            "DockThemeBackgroundBrush", "DockThemeControlBackgroundBrush", "DockDocumentTabStripBackgroundBrush",
+            "DockSurfacePanelBrush", "DockSurfaceHeaderBrush", "DockSurfaceSidebarBrush",
+            "DockTabBackgroundBrush", "DockTabActiveBackgroundBrush"];
+        foreach (var background in backgrounds)
+        foreach (var text in new[] { "ThemeForegroundBrush", "ThemeForegroundLowBrush", "DockTabForegroundBrush",
+                     "DockTabSelectedForegroundBrush", "DockTabActiveForegroundBrush" })
+        {
+            colours.Should().ContainKey(background, pack);
+            colours.Should().ContainKey(text, pack);
+            SyntaxHighlightingTheme.ContrastRatio(Color.Parse(colours[text]), Color.Parse(colours[background]))
+                .Should().BeGreaterThanOrEqualTo(Legible, $"{pack}: {text} on {background}");
+        }
+        foreach (var background in backgrounds)
+            SyntaxHighlightingTheme.ContrastRatio(Color.Parse(colours["ThemeControlMidHighBrush"]), Color.Parse(colours[background]))
+                .Should().BeGreaterThanOrEqualTo(3, $"{pack}: borders and scrollbar thumbs on {background}");
+    }
+
     [Fact]
     public void TheClassicReferencePackMatchesTheDefault()
     {

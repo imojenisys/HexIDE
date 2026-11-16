@@ -281,6 +281,17 @@ against the pack's Window background.
 - **WHEN** Dark or Abyss is selected
 - **THEN** warning banners and validation text use that pack's explicit colours rather than Classic's defaults
 
+### Requirement: Shipped dark chrome SHALL use each pack's palette
+Every shipped `themeVariant: "Dark"` pack SHALL set `ThemeBackgroundBrush`.
+Abyss SHALL set all mapped SimpleTheme and Dock brushes from its navy palette; Dark SHALL override
+visibly differing base-theme and Dock surfaces from its grey palette. Their chrome text, including
+placeholders after opacity, SHALL meet 4.5:1 contrast; borders and scrollbar thumbs SHALL meet 3:1
+against adjacent backgrounds.
+
+#### Scenario: Abyss panes and dialogs
+- **WHEN** Abyss is selected
+- **THEN** Project Explorer, Properties, Toolbox, dialogs and grid rows use its navy family rather than SimpleTheme's grey defaults
+
 ### Requirement: Hidden controls SHALL be dimmed in the designer
 The designer SHALL dim a modelled control whose own Visible property or a containing control's Visible
 property is False using the theme's `DesignerHiddenControlMask` colour (the `DesignerHiddenControlMaskBrush` resource). Only the preview SHALL
