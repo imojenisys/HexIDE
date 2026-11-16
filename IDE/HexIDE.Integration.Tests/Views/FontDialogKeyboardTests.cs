@@ -73,6 +73,8 @@ public class FontDialogKeyboardTests
         {
             var lists = view.GetLogicalDescendants().OfType<ListBox>().ToArray();
             lists.Select(l => ControlAutomationPeer.CreatePeerForElement(l)!.GetName()).Should().BeEquivalentTo("Font:", "Font style:", "Size:");
+            var checkBoxes = view.GetLogicalDescendants().OfType<CheckBox>().ToArray();
+            checkBoxes.Select(c => ControlAutomationPeer.CreatePeerForElement(c)!.GetName()).Should().BeEquivalentTo("Strikeout", "Underline");
             foreach (var (key, target) in new[] { ("F", "FontNameBox"), ("Y", "FontStyleBox"), ("S", "SizeList") })
             {
                 UiAutomationDriver.PressKey(view.FindControl<Button>("OkButton")!, key, "Alt").Success.Should().BeTrue();

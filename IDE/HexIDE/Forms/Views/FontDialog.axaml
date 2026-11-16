@@ -49,11 +49,13 @@
         <!-- Effects -->
         <StackPanel Grid.Row="3" Margin="4,0,4,8" Spacing="4" IsVisible="{CompiledBinding CanEditEffects}">
             <TextBlock Text="{DynamicResource Str.Dialog.Font.Effects}" />
-            <CheckBox x:Name="StrikeoutBox" IsChecked="{CompiledBinding Strikethrough}">
-                <AccessText Text="{DynamicResource Str.Dialog.Font.Strikeout}" />
+            <CheckBox x:Name="StrikeoutBox" IsChecked="{CompiledBinding Strikethrough}"
+                      AutomationProperties.Name="{CompiledBinding #StrikeoutCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}">
+                <AccessText x:Name="StrikeoutCaption" Text="{DynamicResource Str.Dialog.Font.Strikeout}" />
             </CheckBox>
-            <CheckBox x:Name="UnderlineBox" IsChecked="{CompiledBinding Underline}">
-                <AccessText Text="{DynamicResource Str.Dialog.Font.Underline}" />
+            <CheckBox x:Name="UnderlineBox" IsChecked="{CompiledBinding Underline}"
+                      AutomationProperties.Name="{CompiledBinding #UnderlineCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}">
+                <AccessText x:Name="UnderlineCaption" Text="{DynamicResource Str.Dialog.Font.Underline}" />
             </CheckBox>
         </StackPanel>
 
