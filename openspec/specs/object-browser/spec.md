@@ -55,7 +55,8 @@ The browser SHALL list in-box component libraries from project lines and form he
 alongside matching references, using each library's own name and existing alphabetical ordering. It SHALL
 follow component, form and project removals. Loading SHALL use the type-library service, falling back to
 the library's declared class names (including its control catalogue), each once, and existing component or
-library-class member tables. Fallback properties SHALL use their code names and omit designer-only rows.
+library-class member tables. Fallback properties SHALL use their code names and omit designer-only rows. Component lookup SHALL use
+the runtime's shared catalogue of modelled in-box controls, including those outside the toolbox.
 A class with no member list SHALL remain listed and show a localized message
 in its members pane explaining that its type library is required. Both paths SHALL label HexIDE-only
 members with the localized origin description.
