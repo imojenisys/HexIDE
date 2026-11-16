@@ -20,6 +20,13 @@ public partial class InputBox : UserControl
         Loaded += OnLoaded;
     }
 
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
+    {
+        base.OnAttachedToVisualTree(e);
+        if (IsProgramDialog && TopLevel.GetTopLevel(this) is Window window)
+            ProgramDialogChrome.Apply(window);
+    }
+
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
         // The IDE installs Str.* resources; the standalone runner keeps the English fallback.
