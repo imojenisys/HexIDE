@@ -118,7 +118,11 @@ public sealed class LanguageServerContributions(
                 if (client is VBLspClient lsp)
                 {
                     if (claimed.Count > 0) lsp.Claim(claimed);
-                    if (commands.Count > 0) lsp.ClaimCommands(commands);
+                    if (commands.Count > 0)
+                    {
+                        lsp.ClaimCommands(commands);
+                        lsp.SetCommandLifetime(() => connection.Task.GetAwaiter().GetResult().Lifetime);
+                    }
                     // On the pool, not after a yield: a yield returns to the context of the start, and a document opened
                     // from the code window starts its server on the UI thread.
                     if (afterStart is not null)
@@ -289,6 +293,13 @@ public sealed class AddinServerConnection : IAddinServerConnection, IAsyncDispos
 
     public Task NotifyAsync(string method, JsonElement? parameters = null, CancellationToken cancellationToken = default) =>
         Running(method).SendCustomNotificationAsync(method, parameters, cancellationToken);
+
+    public Task<HexIDE.Lsp.Messages.ApplyWorkspaceEditResult> ApplyEditAsync(
+        HexIDE.Lsp.Messages.WorkspaceEdit edit, CancellationToken cancellationToken) =>
+        _contribution.Client is VBLspClient client
+            ? client.ApplyClaimedEditAsync(edit, cancellationToken)
+            : Task.FromResult(new HexIDE.Lsp.Messages.ApplyWorkspaceEditResult(false,
+                HexIDE.IDE.Distribution.DisplayName + " applies a server's edits only while a command the user started is running."));
 
     private VBLspClient Running(string method)
     {
