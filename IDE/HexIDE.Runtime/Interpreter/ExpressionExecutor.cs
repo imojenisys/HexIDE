@@ -104,7 +104,15 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     public async Task<(Vb6Value, Vb6Value)> GetTwoValuesSameTypesOrNull(VB6Parser.ValueStmtContext[] context)
     {
-        var (leftValue, rightValue) = await GetTwoValues(context);
+        var leftRaw = await EvaluateValue(context[0]);
+        var leftValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(leftRaw, callerFrames: stmtFrames), context[0]);
+        var rightRaw = await EvaluateValue(context[1]);
+        var rightValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(rightRaw, callerFrames: stmtFrames), context[1]);
+        // #174's round-four measurements distinguish typed defaults from late-bound values.
+        // Mixed String comparisons need #211; a guessed value or trappable 13 would let execution continue.
+        if ((leftRaw.Value is VbObject || rightRaw.Value is VbObject)
+            && (leftValue.Type == Vb6Value.ValueType.String) != (rightValue.Type == Vb6Value.ValueType.String))
+            throw new NotImplementedException("Mixed String comparison after a class default-member read requires #211 (#174).");
         if ((leftValue.Type == Vb6Value.ValueType.Error || rightValue.Type == Vb6Value.ValueType.Error)
             && leftValue.Type != rightValue.Type)
             throw new VBRunTimeException(context[0], VBStandardError.TypeMismatch);
@@ -271,7 +279,15 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// </summary>
     public async Task<Vb6Value> EvaluateScalar(IParseTree arg)
     {
-        return ObjectAsValue.Scalar(await EvaluateValue(arg), arg as Antlr4.Runtime.ParserRuleContext);
+        return ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(await EvaluateValue(arg), callerFrames: stmtFrames), arg as Antlr4.Runtime.ParserRuleContext);
+    }
+
+    internal async Task<List<int>> ResolveSubscripts(IReadOnlyList<Vb6Value> values)
+    {
+        var resolved = new List<Vb6Value>();
+        foreach (var value in values)
+            resolved.Add(await interpreter.ResolveDefaultMember(value, callerFrames: stmtFrames));
+        return Subscripts(resolved);
     }
 
     /// <summary>
@@ -673,7 +689,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 return null;
             RefuseMismatchedVariableCharacter(arrayLocation, holder, hint);
         }
-        var index = Subscripts(await EvaluateCallArgs(call.argsCall(0)));
+        var index = await ResolveSubscripts(await EvaluateCallArgs(call.argsCall(0)));
         try
         {
             return (ElementAsRead(holder, array, array.GetValue(index)), new ArrayElementRef(array, index, holder.HeldAsVariant));
@@ -1553,7 +1569,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             var indices = await EvaluateCallArgs(argsCtx, beforeLast);
             try
             {
-                return ElementAsRead(variable, array, array.GetValue(Subscripts(indices)));
+                return ElementAsRead(variable, array, array.GetValue(await ResolveSubscripts(indices)));
             }
             catch (IndexOutOfRangeException)
             {
@@ -2144,6 +2160,11 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         var current = root;
         foreach (var m in members)
         {
+            if (current.Value is not VbUdt && (current.Type == Vb6Value.ValueType.Object || current.Value is VbCollection))
+            {
+                current = await ResolveMemberIndexed(current, m, ctx);
+                continue;
+            }
             if (current.Value is not VbUdt bag)
                 throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch, "Member access on a non-UDT value");
             var fieldName = MemberName(m);
@@ -2443,7 +2464,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     public override async Task<object?> VisitVsNot(VB6Parser.VsNotContext context)
     {
-        return Not(await EvaluateScalar(context.valueStmt()), context);
+        return Not(ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(await EvaluateValue(context.valueStmt()), "Not", stmtFrames), context), context);
     }
 
     internal static Vb6Value Not(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
@@ -2556,14 +2577,13 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         // A Collection is a Collection, a VBA.Collection and an Object (measured, #1471).
         if (operand.Value is VbCollection)
             return new Vb6Value(IsCollectionType(targetName) || string.Equals(targetName, "Object", StringComparison.OrdinalIgnoreCase));
+        if (interpreter.ControlClassFor(targetName) is { } controlClass)
+            return new Vb6Value(controlClass.Equals(ControlObjectType.Of(operand.Value), StringComparison.OrdinalIgnoreCase));
         // A control is its class, with its library or without, a Control and an Object: a TextBox is TextBox, VB.TextBox,
         // Control and Object, and a CommonDialog MSComDlg.CommonDialog (measured, #1060). A control array and a form's
         // Controls are an Object, and Controls is not a Collection.
         if (operand.Value is Avalonia.Controls.Control control)
         {
-            if (interpreter.ControlClassFor(targetName) is { } controlClass)
-                return new Vb6Value(control is VBProgressBar progress
-                    && controlClass.Equals(progress.Library.TypeName("ProgressBar"), StringComparison.OrdinalIgnoreCase));
             var className = VB6BuiltIns.ControlTypeName(control);
             // An in-box control's library is the one it was read under: MSComctlLib's ProgressBar or ComctlLib's (#1082).
             var library = control switch

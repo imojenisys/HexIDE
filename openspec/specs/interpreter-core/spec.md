@@ -30,6 +30,32 @@ worse than one that is obviously incomplete.
 
 ## Requirements
 
+### Requirement: Source-class default members SHALL resolve at async value boundaries
+
+The engine SHALL collect the name and kind of a source class's default member and read its Function,
+Property Get or module-level variable without arguments where async execution needs a value (#174).
+This includes scalar expressions, builtin value arguments, Let, ByVal scalar parameters, conditions,
+Select Case, For bounds, Print and async array subscripts. CVar, TypeName, IsObject and ByVal Variant
+SHALL keep the object itself. Measurements are recorded in
+`docs/vb6-fidelity-oracle/an-object-used-as-a-value.md`, `cvar.md`,
+`attribute-lines-inside-a-procedure.md` and `subscripts-bounds-and-a-method-called-from-class_initialize.md`.
+
+#### Scenario: Function versus Property Get through a Variant
+- **WHEN** a Variant holds a class whose Function default returns Long 42
+- **THEN** Format, Abs and Not raise 450
+- **AND** the same uses with a Property Get default return "42", Long 42 and Long -43 respectively
+- **AND** typed Not of the Function-default class returns Long -43
+
+#### Scenario: Default value and object identity
+- **WHEN** a Widget default returns Long 42
+- **THEN** Let into a scalar or Variant reads 42 and a ByVal Variant retains the Widget object
+- **AND** a Function Case value against Empty or Null raises the IDE's 450
+
+#### Scenario: Unmeasured default-member uses
+- **WHEN** a default is a Sub, requires arguments, returns an object, a typed Function default reaches Format or Abs, or a default reaches a later Format argument
+- **THEN** execution refuses untrappably naming #174
+- **AND** default writes, array bounds, control-array indexes and synchronous helper reads retain their refusals
+
 ### Requirement: Trailing argument and declared array type refusals
 
 The interpreter SHALL raise `VBCompileErrorException` with "Syntax error" when executing a call
@@ -73,8 +99,8 @@ The interpreter SHALL load the project's `ResFile32` file read-only when configu
 resolving its Windows-format path against the project folder. Its resource reader SHALL support
 ordinal and case-insensitive string type/name identifiers, DWORD-aligned headers and payloads,
 raw resource bytes and sixteen-slot counted UTF-16 string blocks. Missing, unreadable or malformed
-files SHALL supply no lookup results. A lookup matching more than one language SHALL refuse with
-not-implemented rather than select an unmeasured locale-dependent value (#2625).
+files SHALL supply no lookup results. Language selection SHALL follow the resource intrinsic
+lookup rules below; ambiguous unmatched languages SHALL refuse as not implemented (#2626).
 
 #### Scenario: A run reads the project's resource file
 
@@ -93,9 +119,18 @@ not-implemented rather than select an unmeasured locale-dependent value (#2625).
 from the resource snapshot, following the [#2626 measurements](../../../docs/vb6-fidelity-oracle/loadresstring-loadresdata-and-loadrespicture.md).
 Empty strings, absent resources and string tables requested as raw data SHALL raise 326.
 `LoadResPicture` SHALL load the measured 24-bit bitmap layout into the shared Picture object, report
-326 for absent/wrong-kind resources and 485 for invalid kinds. Present icon/cursor groups, other bitmap
-layouts, named arguments and multi-language selection SHALL refuse as not implemented. Picture properties without measured
-return subtypes and native/default handles SHALL remain explicitly unimplemented.
+326 for absent/wrong-kind resources and 485 for invalid kinds. Per [the later #2626 measurements](https://github.com/hexide-io/HexIDE/issues/2626),
+icon/cursor groups SHALL return 32×32 Pictures, Type Integer 3 and Width/Height Long 847 HiMetric;
+the measured 2×2 bitmap SHALL return Type Integer 1 and Width/Height Long 53. These property types
+SHALL also apply to LoadPicture objects. Per [the icon-size measurements](https://github.com/hexide-io/HexIDE/pull/3969),
+a 16/32 resource icon group SHALL select its 32-pixel image; a 16-only group SHALL stretch to 32.
+LoadPicture SHALL preserve a 16-only icon at 423 HiMetric and select the 32-pixel image from a
+16/32 file at 847 HiMetric. Selection without a 32-pixel image but with a larger one remains unmeasured.
+Native/default handles and other bitmap layouts SHALL refuse.
+The intrinsics SHALL accept required named parameters id, id/type and id/restype respectively.
+Resource lookup SHALL prefer the program locale's exact language, then primary language, then a
+sole other language; ambiguous unmatched languages SHALL refuse as not implemented. An empty
+string slot in the selected block SHALL raise 326 without trying another language.
 
 #### Scenario: Resource text and data
 
@@ -107,6 +142,13 @@ return subtypes and native/default handles SHALL remain explicitly unimplemented
 - **WHEN** the program uses Set with `LoadResPicture(301, vbResBitmap)`
 - **THEN** it receives the shared picture object whose TypeName is `Picture`
 - **AND** native Handle access refuses rather than inventing a handle
+
+#### Scenario: Resource language block selection
+
+- **WHEN** an en-GB program reads string 101 from en-US and de-DE versions of block 7
+- **THEN** it receives the en-US value, regardless of resource order
+- **AND** an empty en-US slot raises 326 even if de-DE fills it
+- **AND** a block available only in de-DE is read
 
 ### Requirement: ObjPtr SHALL preserve object identity
 `ObjPtr` SHALL return Long identities satisfying the relations measured in
@@ -493,6 +535,17 @@ program that never fails.
 - **WHEN** an interpreter diagnostic formats a value's type
 - **THEN** it SHALL print the inner type name and array suffixes without an internal `Left` or `Right` wrapper
 - **AND** member-not-found diagnostics SHALL omit the receiver type, retaining the member and, for assignment, variable name
+
+### Requirement: Parse-time compile errors carry their file location
+A compile error leaving `BasicInterpreter.Parse` with a `Line` SHALL carry an `ErrorLocation` with the module
+being parsed and that line, counted from the top of the whole file as the code window numbers it (#3960).
+The exception type and message SHALL remain unchanged. A compile error without a line SHALL remain unlocated.
+
+#### Scenario: A project fails to start while parsing
+- **WHEN** a syntax error or classic-dialect refusal is found while parsing a standard module, class or form
+- **THEN** the failed start exposes that module and whole-file line through `FailureLocation` while reporting
+- **AND** `get_last_runtime_error` returns them in its `module` and `line` fields
+- **AND** the compile-error dialog still offers only End
 
 ### Requirement: Unimplemented language surface SHALL fail clearly
 Where the engine does not implement part of the language, it SHALL fail in a way that identifies what is
@@ -1349,7 +1402,7 @@ A form's `ActiveControl` SHALL return its last focused control while active, ina
 and Nothing when loaded but never shown or when no control has taken focus. Reading an unloaded
 form's member SHALL load it again with no remembered control. Measured in
 [#2437](https://github.com/hexide-io/HexIDE/issues/2437), oracle measurement #2279.
-This first slice does not restore focus or raise GotFocus on reactivation. A form's initial focus is specified below.
+Reactivation raises GotFocus for the remembered control after Activate, as specified below.
 
 #### Scenario: A hidden form remembers focus
 - **WHEN** a control takes focus and its form is hidden
@@ -1403,7 +1456,16 @@ NamedFormat SHALL convert as CInt does and reject formats outside 0–4 with err
 A shown form with no focusable control SHALL raise Form_GotFocus after Form_Activate.
 When another form in the program becomes active, the form losing focus SHALL raise Form_LostFocus before
 Form_Deactivate (#2579; [measured activation rows](../../../docs/vb6-fidelity-oracle/a-forms-resize-activate-and-deactivate.md)).
-Forms with focusable controls SHALL retain their existing event order.
+Switching between forms by Show, SetFocus, Hide of the active form or a window-system activation SHALL
+raise the old control's LostFocus, the old form's Deactivate, the new form's Activate, then the new
+control's GotFocus (#3932, the same measured rows). These events SHALL wait until the running handler
+returns, except for Show inside Form_Load's measured inline activation and initial focus (#2436).
+
+#### Scenario: Show another form and return by Hide
+- **WHEN** Form1's handler shows Form2 and prints a line after Show
+- **THEN** the line precedes Form1's control LostFocus, Form1 Deactivate, Form2 Activate and Form2's control GotFocus
+- **WHEN** Form2 is hidden while active
+- **THEN** the reverse switch raises those four events in the same order
 
 #### Scenario: Show an empty form and switch back
 - **WHEN** an empty form is shown and then another of the program's forms is activated
@@ -1532,9 +1594,9 @@ SHALL follow Form_Activate (#2436, measured on vb6.exe, native and p-code agreei
 - **WHEN** Form_Load instead calls Me.Show then Text2.SetFocus
 - **THEN** Form_Activate, the first control's GotFocus and Text2_GotFocus occur inside Form_Load in that order
 
-### Requirement: Project library order determines bare ProgressBar binding
-The runtime SHALL resolve a bare ProgressBar type using the first matching library in the combined
-`Reference=` and `Object=` read order of the project. Form-header libraries SHALL be fallbacks after
+### Requirement: Project library order determines measured bare common-control class binding
+The runtime SHALL resolve the measured MSComctlLib and ComctlLib class names using the first library declaring
+the name in the combined `Reference=` and `Object=` read order of the project. Form-header libraries SHALL be fallbacks after
 project libraries. Qualified types SHALL select their named library. This follows the measured
 [bare-name binding](../../../docs/vb6-fidelity-oracle/in-box-classes-a-bare-name-binds-to-the-first-library.md).
 
@@ -1544,6 +1606,18 @@ project libraries. Qualified types SHALL select their named library. This follow
 - **THEN** it holds Nothing until assigned and accepts an MSComctlLib ProgressBar
 - **AND** assigning a ComctlLib ProgressBar raises 13 and `TypeOf` follows the same binding
 - **AND** reversing the lines reverses the binding, regardless of form-header order
+
+#### Scenario: A control object retains its declared class
+- **GIVEN** MSCOMCTL.OCX referenced and a Node obtained from its TreeView
+- **WHEN** code assigns it to a bare Node or qualified MSComctlLib.Node variable
+- **THEN** TypeName returns INode and TypeOf matches either name
+- **AND** assigning another class raises 13 without replacing the previous object
+
+#### Scenario: Only a library declaring the name can bind it
+- **GIVEN** ComctlLib before MSComctlLib in project read order
+- **WHEN** code declares a bare ButtonMenu
+- **THEN** it binds to MSComctlLib, since ComctlLib does not declare that class
+- **AND** Tab remains qualified only, while project classes retain their existing precedence
 
 ### Requirement: CommonDialog uses the shared control library
 The runtime SHALL resolve CommonDialog constants through the referenced MSComDlg library record and take its
@@ -1695,7 +1769,17 @@ A laid-out, single-select ListBox SHALL expose TopIndex and coerce assignments t
 synchronously, only if the resulting top row changes. The handler SHALL read the new TopIndex.
 An index below zero or at or above ListCount SHALL raise error 380 without Scroll.
 MultiSelect access and access before row layout SHALL refuse as not implemented.
-Scrollbar, keyboard and native-message Scroll delivery remains pending.
+Vertical scroll-bar pointer input SHALL raise Scroll once per changed top row, including each thumb move,
+but not on release without movement. Navigation by Down, Up, Page Down, Home or End SHALL raise Click
+then Scroll when the top row changes, with the new TopIndex readable in both handlers. A key that
+changes only selection SHALL raise Click alone. Wheel input and ListIndex assignments SHALL NOT raise Scroll.
+Page Down SHALL move keyboard focus to the selected item so subsequent arrow navigation continues
+from it (#3275). Native-message Scroll delivery remains pending (#3986).
+
+#### Scenario: Page Down followed by Up with item focus
+- **WHEN** an item has keyboard focus and Page Down changes the selection, followed by Up
+- **THEN** Page Down gives its selected item keyboard focus
+- **AND** Up selects and focuses the preceding item, raising Click
 
 #### Scenario: Move and repeat the top row
 - **WHEN** TopIndex changes from 0 to 5 and is then assigned 5 again
@@ -1738,6 +1822,34 @@ It SHALL permit user overrides only when the culture's UseUserOverride is true a
 matches the Windows user's locale, and request no user overrides otherwise. Other hosts, non-Gregorian default calendars and time formats SHALL retain
 their existing behaviour (#2041; portable Windows date data is deferred to #3928).
 
+For an unquoted era token in these NLS patterns, the interpreter SHALL write Windows' era
+text as a literal. This deliberately diverges from vb6.exe, which writes literal `gg`:
+HexIDE honours the locale rather than reproducing an unexpanded token (#3946;
+[measurement in #3979](https://github.com/hexide-io/HexIDE/pull/3979), oracle page
+`docs/vb6-fidelity-oracle/a-long-date-pattern-with-an-era.md`).
+
+#### Scenario: Windows long date with an era
+- **WHEN** a Windows program in byn-ER formats 31 December 2000 as Long Date
+- **THEN** the era is the text returned by GetDateFormatEx for `gg`, rather than .NET's era name or VB6's literal `gg`
+
 #### Scenario: Measured en-GB long date
 - **WHEN** a Windows program in en-GB formats 1 January 2000 as Long Date
 - **THEN** it writes `01 January 2000`, as measured on vb6.exe native and p-code in #783
+
+### Requirement: ProgressBar code-only Increment extension
+The runtime SHALL expose `Increment` on both ProgressBar libraries with one required argument,
+`MemberOrigin.HexIde` and `IsFrmProperty` false. It SHALL convert through Value's assignment path and
+clamp the sum to Min/Max. The Object Browser SHALL list it with a localized HexIDE extension description.
+Strict-mode filtering remains deferred.
+
+#### Scenario: Increment clamps and accepts either library
+Contract: [#1116](https://github.com/hexide-io/HexIDE/issues/1116); Value conversions:
+[ProgressBar oracle](../../../docs/vb6-fidelity-oracle/in-box-controls-the-progressbar.md).
+
+- **WHEN** either library's ProgressBar receives `Increment n`
+- **THEN** Value becomes Value plus the converted Single argument, clamped to Min and Max
+- **AND** a failed conversion leaves Value unchanged with the existing Value conversion error
+
+#### Scenario: Required argument is missing
+- **WHEN** code calls `ProgressBar1.Increment` without an argument
+- **THEN** the runtime raises Argument not optional and leaves Value unchanged

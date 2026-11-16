@@ -66,6 +66,34 @@ public class MainViewViewModelTests
         _sut.SaveProjectAsCommand.CanExecute(null).Should().BeFalse();
     }
 
+    [Avalonia.Headless.XUnit.AvaloniaFact]
+    public void LogFolderCommand_OpensTheDistributionDirectory()
+    {
+        var paths = new List<string>();
+        var opener = Substitute.For<ILogFolderOpener>();
+        opener.OpenAsync(Arg.Do<System.IO.DirectoryInfo>(directory => paths.Add(directory.FullName))).Returns(Task.FromResult(true));
+        var sut = Build(_runnerService, logFolderOpener: opener);
+        _windowManager.ClearReceivedCalls();
+        sut.OpenLogFolderCommand.Execute(null);
+        paths.Should().Equal(Distribution.LogsDirectory);
+        _windowManager.ReceivedCalls().Should().BeEmpty();
+    }
+
+    [Avalonia.Headless.XUnit.AvaloniaFact]
+    public void LogFolderCommand_WhenOpeningFails_ShowsThePathWithoutRetrying()
+    {
+        var paths = new List<string>();
+        _localization.GetString("Str.Help.LogFolder.OpenFailed").Returns("Cannot open log folder: {0}");
+        var opener = Substitute.For<ILogFolderOpener>();
+        opener.OpenAsync(Arg.Do<System.IO.DirectoryInfo>(directory => paths.Add(directory.FullName))).Returns(Task.FromResult(false));
+        var sut = Build(_runnerService, logFolderOpener: opener);
+        _windowManager.ClearReceivedCalls();
+        sut.OpenLogFolderCommand.Execute(null);
+        paths.Should().Equal(Distribution.LogsDirectory);
+        _windowManager.ReceivedCalls().Should().ContainSingle().Which.GetArguments()[0]
+            .Should().Be("Cannot open log folder: " + Distribution.LogsDirectory);
+    }
+
     private static System.IDisposable MenuTheme()
     {
         var theme = new Avalonia.Themes.Simple.SimpleTheme();
@@ -170,12 +198,12 @@ public class MainViewViewModelTests
             loaded.Should().ContainSingle().Which.Should().BeSameAs(project);
             module.Should().BeSameAs(project.Modules.Single());
             module.Code.Should().Contain("Edited");
-            _projectManager.DidNotReceive().NewProject(Arg.Any<HexIDE.Addins.IAddinProjectTemplate>(), Arg.Any<string>());
+            _projectManager.DidNotReceive().NewProject(Arg.Any<HexIDE.Addins.IAddinProjectTemplate>(), Arg.Any<string>(), Arg.Any<Action<ProjectDefinition>>());
         }
         else
         {
             loaded.Should().BeEmpty();
-            _projectManager.Received(1).NewProject(IProjectTemplate.StandardEXE, "Project1");
+            _projectManager.Received(1).NewProject(IProjectTemplate.StandardEXE, "Project1", Arg.Any<Action<ProjectDefinition>>());
         }
     }
 
@@ -301,7 +329,8 @@ public class MainViewViewModelTests
         HexIDE.Debugging.ExternalDebugService? external = null, IEditorService? editor = null,
         FindReferencesToolViewModel? references = null, CallHierarchyToolViewModel? hierarchy = null,
         IWindowStateService? windowState = null, AddinToolWindowService? tools = null,
-        HexIDE.Runtime.Debugging.IDebugController? debug = null, IFocusedProjectUtil? focus = null)
+        HexIDE.Runtime.Debugging.IDebugController? debug = null, IFocusedProjectUtil? focus = null,
+        ILogFolderOpener? logFolderOpener = null)
     {
         projects ??= _projectService;
         var mockDocDock = dock ?? Substitute.For<IDocumentDockService>();
@@ -401,7 +430,7 @@ public class MainViewViewModelTests
             breakpoints ?? Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             debug ?? _debugController,
             new RecentEditsToolViewModel(new RecentEditHistory(_eventBus), () => editorService, loc),
-            recoveryOffers: recoveryOffers, externalDebugger: external, findReferences: references, callHierarchy: hierarchy);
+            logFolderOpener: logFolderOpener, recoveryOffers: recoveryOffers, externalDebugger: external, findReferences: references, callHierarchy: hierarchy);
     }
 
     private sealed class RequeryProbe : IDisposable
@@ -1768,6 +1797,22 @@ public class MainViewViewModelTests
         Avalonia.Threading.Dispatcher.UIThread.RunJobs();
 
         _runnerService.DidNotReceive().EndProject();
+    }
+
+    [AvaloniaFact]
+    public void A_compile_error_at_start_with_a_location_still_offers_only_End()
+    {
+        // #3960 adds metadata, not a debugger halt; #833 owns the unmeasured dialog decision.
+        const string text = "Compile error:\n\n+= isn't part of VB6, VBA or VBScript, so this interpreter doesn't run it.";
+        var at = new ErrorLocation("Module1", 3);
+        _runnerService.FailureLocation.Returns(at);
+
+        _runnerService.StartFailed += Raise.Event<System.Action<string>>(text);
+
+        _sut.RuntimeErrors.Last!.Value.Where.Should().Be(at);
+        _windowManager.Received(1).ShowDialog(
+            Arg.Is<HexIDE.Forms.ViewModels.RuntimeErrorViewModel>(vm => vm.ErrorText == text
+                && vm.CanEnd(null) && !vm.CanContinue(null) && !vm.CanDebug(null) && !vm.CanHelp(null)));
     }
 
     [AvaloniaFact]

@@ -124,8 +124,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                + "server sent one, 'code' (the rule that fired) and 'href' (where that rule is documented). "
                + "'uri' is the name the language server knows the document by: its file: URI, or "
                + "untitled:<project>/<name>.<ext> while it has no file. 'project' and 'document' name it as the IDE "
-               + "does, and are absent when the uri names no loaded form, module, class or carried file, or a file two loaded "
-               + "projects share, since nothing then says which project's copy it is about. 'severity' is Error, Warning, "
+               + "does, and are absent when the uri names no loaded form, module, class or carried file. In a group, the owner is "
+               + "the startup project if it lists the file, else the first loaded project that does. "
+               + "A shared file appears under that owner only; switching startup recomputes it. 'severity' is Error, Warning, "
                + "Information or Hint, as the server reported it, or Unknown when the server sent none. "
                + "'line' and 'column' are 1-based, and the line is counted from the top of the file with its header "
                + "included, as the code window numbers it; a VB6 compiler error is converted to that numbering. "
@@ -142,7 +143,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var named = await Dispatcher.UIThread.InvokeAsync(() => published
             .Select(p => p.Uri)
             .Distinct(StringComparer.Ordinal)
-            .ToDictionary(uri => uri, uri => NamedDocuments.ForUri(ctx.ProjectManager.LoadedProjects, uri),
+            .ToDictionary(uri => uri, uri => NamedDocuments.ForDiagnostic(ctx.ProjectManager.LoadedProjects, ctx.ProjectManager.StartupProject, uri),
                 StringComparer.Ordinal));
 
         var items = published
@@ -196,7 +197,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "get_file_content")]
-    [Description("Returns the current text of a named form, module or carried file: the open editor's text if it is open, otherwise the IDE's copy (for a carried file, the file on disk). For a form, module or class that is its WHOLE FILE, open or not: a form's VERSION line and designer block, a class's header and the leading Attribute lines come first, then the code. So line 1 is the file's first line, as set_breakpoints, set_bookmarks, get_diagnostics and the debugger tools count it, and an editor offset (interact set_property CaretOffset, or the offset a type_text or press_key refusal gives) indexes this text. set_file_content takes it back as it is, or the code alone. A form created in this session and not yet saved or changed in the designer has no header yet, so its text is its code alone. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was read, as the IDE spells them. hasUnsavedChanges means the document has edits not yet saved, including code and designer changes. A save can still normalise a file the IDE did not write, for example by adding a missing module name line. A document with no file yet always has unsaved changes.")]
+    [Description("Returns the current text of a named form, module or carried file: the open editor's text if it is open, otherwise the IDE's copy (for a carried file, the file on disk). For a form, module or class that is its WHOLE FILE, open or not: a form's VERSION line and designer block, a class's header and the leading Attribute lines come first, then the code. So line 1 is the file's first line, as set_breakpoints, set_bookmarks, get_diagnostics and the debugger tools count it, and an editor offset (interact set_property CaretOffset, or the offset a type_text or press_key refusal gives) indexes this text. set_file_content takes it back as it is, or the code alone. New forms hold their header from creation, before their first save. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was read, as the IDE spells them. hasUnsavedChanges means the document has edits not yet saved, including code and designer changes. A save can still normalise a file the IDE did not write, for example by adding a missing module name line. A document with no file yet always has unsaved changes.")]
     public async Task<FileContentResult> GetFileContentAsync(string name, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -393,9 +394,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     /// </para>
     /// <para>
     /// Read AFTER the save, and the order matters. A form's save re-renders its designer block and adopts the
-    /// result as the header: a form that had no header yet gains one there, and one VB6 wrote can change
-    /// height. A range taken before the save would disagree with the next get_file_content in exactly the case
-    /// a caller cannot predict. The path is read afterwards for the same reason: a first save through an armed
+    /// result as the header, which can change height for a file VB6 wrote. A range taken before the save would
+    /// disagree with the next get_file_content in exactly the case a caller cannot predict. The path is read afterwards for the same reason: a first save through an armed
     /// file dialog is where a document gets one.
     /// </para>
     /// </remarks>
@@ -896,7 +896,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "open_file")]
-    [Description("Opens a form, module or carried file by name in the IDE code editor. Use get_project_info to list available names. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was opened, as the IDE spells them. A carried file is also found by its filename, which differs from its name when VB6 carried it on a code line (`Module=Notes; Notes.md` is named Notes). The editor gets keyboard focus, as opening it by hand gives it; in a split code window that is the pane last used, which is the one 'line' moves. The reply's 'area' is the document area (0 for the first, 1 for the next, in layout order). New tabs open in the area last used; an existing tab stays in its area. The reply's 'note' names the tab now active and how many are open. Pass 'line', and 'column' if wanted, to put the caret there, as the code window numbers them, so type_text and press_key act at that point with no offset to work out; the note always gives the caret's line, column and offset, even without 'line'. In the header or an Attribute line it also names the nearest editable place. Also opens archive entries by the exact paths get_project_info lists: /-separated, percent-escaped segments. Pass project as the container path, filename or stored project name. Archive entries open read-only without a language server; a line needs an available text preview.")]
+    [Description("Opens a form, module or carried file by name in the IDE code editor. Use get_project_info to list available names. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was opened, as the IDE spells them. A carried file is also found by its filename (`Module=Notes; Notes.md` is named Notes). The editor gets keyboard focus, as opening it by hand gives it; in a split code window that is the pane last used, which is the one 'line' moves. The reply's 'area' is the document area (0 for the first, 1 for the next, in layout order). New tabs open in the area last used; an existing tab stays in its area. The reply's 'note' names the tab now active and how many are open. Pass 'line', and 'column' if wanted, to put the caret there, as the code window numbers them, so type_text and press_key act at that point with no offset to work out; the note always gives the caret's line, column and offset, even without 'line'. In the header or an Attribute line it also names the nearest editable place. Also opens archive entries by the exact paths get_project_info lists: /-separated, percent-escaped segments. Pass project as the container path, filename or stored project name. Archive entries open read-only without a language server; a line needs an available text preview. Also opens a project file by filename, including a group's .vbg, read-only; project selects its owner by name or path.")]
     public async Task<MutateResult> OpenFileAsync(
         string name, string? project = null,
         [Description("Where to put the caret: a 1-based line, counted from the top of the file with its header included, "
@@ -913,12 +913,15 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         DocumentIdentity? placedIn = null;
         RelatedDocumentDefinition? placedInCarried = null;
         ArchiveDocumentViewModel? placedInArchive = null;
+        ProjectFileDocumentViewModel? placedInProjectFile = null;
         var opened = await Dispatcher.UIThread.InvokeAsync(() =>
         {
             // Carried files are the only project members with no other route in: the Project Explorer opens
             // one on a DOUBLE-CLICK, which no interaction tool could produce when this was written, and Add
             // File goes through a native dialog. Without them here a whole editor type is undrivable, which is
             // what blocked verifying #255 against the running IDE. See docs/mcp-server-gaps.md.
+            var projectFile = OpenProjectFile(name, project, line, column, out placedInProjectFile);
+            if (projectFile != null) return projectFile;
             var archive = OpenArchive(name, project, line, column, out placedInArchive);
             if (archive != null) return archive;
             var archives = ctx.Archives?.Projects ?? [];
@@ -970,11 +973,11 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     && !ctx.ProjectManager.LoadedProjects.Any(p => string.Equals(p.Name, project, StringComparison.OrdinalIgnoreCase))));
             return new MutateResult(false,
                 (archiveOnly ? "No matching archive entry." : found.Error)
-                + inventory + " Use get_project_info to list available names and archive entries.");
+                + inventory + ProjectFileInventory() + " Use get_project_info to list available names and archive entries.");
         });
 
         var focused = await FocusingTheActiveTabAsync(opened);
-        if ((placedIn is null && placedInCarried is null && placedInArchive is null) || !focused.Success)
+        if ((placedIn is null && placedInCarried is null && placedInArchive is null && placedInProjectFile is null) || !focused.Success)
             return focused;
         // Read back, not echoed (#700 review): once focus and the view's first layout have run, as the view opens a fold
         // around a caret navigated into it and the editor moves one it could not show.
@@ -982,15 +985,69 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             () =>
             {
                 var editor = placedIn is { } placed ? CodeEditorOf(placed)
-                    : placedInArchive ?? (ISearchableDocument?)CarriedEditorOf(placedInCarried!);
+                    : placedInArchive ?? (ISearchableDocument?)placedInProjectFile ?? (ISearchableDocument?)CarriedEditorOf(placedInCarried!);
                 if (editor is null) return null;
                 var at = editor.Document.GetLocation(editor.CaretOffset);
-                return placedInArchive != null
+                return placedInArchive != null || placedInProjectFile != null
                     ? $"The caret is at line {at.Line}, column {at.Column}: offset {editor.CaretOffset} in the read-only preview."
                     : HexIDE.Automation.CaretPlacement.Where(editor, line ?? at.Line, line is null ? at.Column : column ?? 1);
             },
             DispatcherPriority.Background);
         return where is null ? focused : focused with { Note = $"{focused.Note} {where}" };
+    }
+
+    private IEnumerable<HexIDE.IDE.ProjectFileSource> ProjectFiles()
+    {
+        foreach (var project in ctx.ProjectManager.LoadedProjects)
+            if (HexIDE.IDE.ProjectFileSource.ChosenPath(project) != null)
+                yield return new HexIDE.IDE.ProjectFileSource(project);
+        if (ctx.ProjectManager.CurrentGroup is { AbsolutePath: not null } group)
+            yield return new HexIDE.IDE.ProjectFileSource(group);
+    }
+
+    private static string ProjectFileOwnerName(HexIDE.IDE.ProjectFileSource file) => file.Owner switch
+    {
+        ProjectDefinition project => project.Name,
+        ProjectGroupDefinition group => group.Name,
+        _ => "",
+    };
+
+    private string ProjectFileInventory()
+    {
+        var paths = ProjectFiles().Select(f => f.Path).ToArray();
+        return paths.Length == 0 ? " No chosen project files are available."
+            : " Project files: " + string.Join(", ", paths) + ".";
+    }
+
+    private MutateResult? OpenProjectFile(string name, string? project, int? line, int? column,
+        out ProjectFileDocumentViewModel? opened)
+    {
+        opened = null;
+        var matches = ProjectFiles().Where(f =>
+            string.Equals(Path.GetFileName(f.Path), name, StringComparison.OrdinalIgnoreCase)
+            && (project == null || new[] { ProjectFileOwnerName(f), f.Path, Path.GetFileName(f.Path) }
+                .Any(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))).ToArray();
+        if (matches.Length == 0) return null;
+        if (matches.Length > 1)
+            return new MutateResult(false, "Ambiguous project file; pass project as its path: "
+                + string.Join(", ", matches.Select(f => f.Path)));
+        var source = matches[0];
+        if (line is { } wanted)
+        {
+            using var preview = new ProjectFileDocumentViewModel(source, null);
+            if (preview.LoadError is { } error) return new MutateResult(false, "Nothing was opened: " + error);
+            if (HexIDE.Automation.CaretPlacement.Refusal(preview.Document.Text, wanted, column ?? 1) is { } refusal)
+                return new MutateResult(false, "Nothing was opened: " + refusal);
+        }
+        ctx.EditorService.EditProjectFile(source);
+        var editor = ctx.DocumentDockService.OpenDocuments.OfType<ProjectFileDocumentViewModel>()
+            .FirstOrDefault(vm => vm.Source.Owner == source.Owner);
+        opened = editor;
+        if (line is { } at && editor != null) HexIDE.Automation.CaretPlacement.Place(editor, at, column ?? 1);
+        return new MutateResult(true, null, TabStateNote() + " Project file opened read-only."
+            + (editor?.LoadError is { } loadError ? " Could not read the file: " + loadError : ""),
+            Project: ProjectFileOwnerName(source), Document: Path.GetFileName(source.Path),
+            Area: ctx.DocumentDockService.ActiveTab is { } tab ? ctx.DocumentDockService.AreaOf(tab) : null);
     }
 
     private MutateResult? OpenArchive(string name, string? project, int? line, int? column,
@@ -1201,7 +1258,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     private string NothingRunning(string refusal) => NoEngineNote() is { } none ? $"{refusal}. {none}" : refusal;
 
     [McpServerTool(Name = "get_last_runtime_error")]
-    [Description("Returns the last runtime error the running program raised, WITH ITS TEXT, and keeps it after the error dialog has been dismissed. That includes a compile error met while it ran, and the reason a start never became a run; a line such an error names counts from the top of the file, header included, as the code window numbers it. Use it after any run that might raise: stop_project and shutdown_ide both close open dialogs, so a run whose form silently did nothing is otherwise indistinguishable from a run whose error dialog was dismissed a moment earlier. run_project clears the message first, so a result here belongs to the most recent run. 'sequence' only ever increases and is not cleared — compare it across runs to tell 'no error' from 'the same error again', which message text cannot do. 'module' and 'line' say where it was raised, the line counted as the code window numbers it, when a statement of the program raised it; a start that never became a run has neither. 'at' is when it was raised, in UTC like every other stamp the tools return. Returns raised:false when the current run has raised nothing.")]
+    [Description("Returns the last runtime error the running program raised, WITH ITS TEXT, and keeps it after the error dialog has been dismissed. That includes a compile error met while it ran, and the reason a start never became a run; a line such an error names counts from the top of the file, header included, as the code window numbers it. Use it after any run that might raise: stop_project and shutdown_ide both close open dialogs, so a run whose form silently did nothing is otherwise indistinguishable from a run whose error dialog was dismissed a moment earlier. run_project clears the message first, so a result here belongs to the most recent run. 'sequence' only ever increases and is not cleared — compare it across runs to tell 'no error' from 'the same error again', which message text cannot do. 'module' and 'line' say where it was raised, the line counted as the code window numbers it, when a statement raised it or parsing found a compile error with a line before the run began; errors without a location have neither. 'at' is when it was raised, in UTC like every other stamp the tools return. Returns raised:false when the current run has raised nothing.")]
     public async Task<RuntimeErrorResult> GetLastRuntimeErrorAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1440,7 +1497,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             (acted, actedName) = (resolved, name);
             var applied = await HexIDE.Automation.WindowChange.ApplyAsync(resolved, target.Value, x, y, width, height, ct);
             if (applied)
-                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), null);
+                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), WindowSizeNote(resolved, width, height));
             var (error, note) = Unconfirmed(target.Value, X11WindowManager.IsRunning());
             return new WindowStateChangeResult(false, error, WindowStateOf(resolved, name!), note);
         });
@@ -1457,6 +1514,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             Note = result.Note is null ? programNote : programNote is null ? result.Note : result.Note + " " + programNote,
         };
     }
+
+    private static string? WindowSizeNote(Avalonia.Controls.Window window, int? width, int? height) =>
+        width is not null && Math.Abs(width.Value - window.ClientSize.Width) > 1 / window.RenderScaling
+        || height is not null && Math.Abs(height.Value - window.ClientSize.Height) > 1 / window.RenderScaling
+            ? $"Requested client size {width?.ToString() ?? "unchanged"}×{height?.ToString() ?? "unchanged"}; "
+              + $"the screen allowed {window.ClientSize.Width:0.#}×{window.ClientSize.Height:0.#}. "
+              + "x/y/width/height can't exceed the screen's working area. Ask for a size that fits the working area."
+            : null;
 
     // The program wait's parenthesised addition to a reply, as a sentence of its own for a note.
     internal static string ProgramNote(string detail)
@@ -3307,7 +3372,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "hover")]
-    [Description("Moves the pointer onto the control at 'target' (a path from dump_visual_tree) through the window's input, watches for a tip, and reports its text: a declared ToolTip.Tip, such as a toolbar button's, and a tip a control raises from its own pointer handler, such as LSP quick-info and the debugger's Auto Data Tips in the code editor. A tip that is a control reads as its visible text blocks, joined with ' / '. The move is hit-tested as a real one is: when something else is drawn at the point the reply says what it landed on, and reports its tip; a disabled target shows a tip only with ToolTip.ShowOnDisabled, and the reply says it is disabled. When nothing is drawn at the point, or Avalonia's input cannot be reached, the move is raised on the control instead, which opens only the second kind, and the reply says so. Without 'x' and 'y' a code editor is hovered at its CARET, to hover an identifier; see 'x'. 'dwellMs' is how long to watch, and 'window' picks the window. When no tip opens, the reply adds the 'declared tip' of the control under the hovered point or its nearest ancestor that sets one, as a person would see there. The pointer then leaves the window, closing the tip, unless 'stay' keeps it there for a snapshot: 'tipBounds' places an opened tip in the window as inspect_element's boundingRect does, and 'detail' gives its offset from the point hovered. The cursor and pointer-over stay the hover's until the real mouse next moves. " + ProgramWaitNote + " The reply reports Debug.Print output in 'printed', since the run began or the last reply that reported it, or says nothing was printed.")]
+    [Description("Moves the pointer onto the control at 'target' (a path from dump_visual_tree) through the window's input, watches for a tip, and reports its text: a declared ToolTip.Tip, such as a toolbar button's, and a tip a control raises from its own pointer handler, such as LSP quick-info and the debugger's Auto Data Tips in the code editor. A tip that is a control reads as its visible text blocks, joined with ' / '. The move is hit-tested as a real one is: when something else is drawn at the point the reply says what it landed on, and reports its tip; a disabled target shows a tip only with ToolTip.ShowOnDisabled, and the reply says it is disabled. When nothing is drawn at the point, or Avalonia's input cannot be reached, the move is raised on the control instead, which opens only the second kind, and the reply says so. Without 'x' and 'y' a code editor is hovered at its CARET, to hover an identifier; see 'x'. 'dwellMs' is how long to watch, and 'window' picks the window. When no tip opens, the reply adds the 'declared tip' of the control under the hovered point or its nearest ancestor that sets one, as a person would see there. The pointer then leaves the window, closing the tip, unless 'stay' keeps it there for a snapshot: 'tipBounds' places an opened tip in the window as inspect_element's boundingRect does, and 'detail' gives its offset from the point hovered. The cursor and pointer-over stay the hover's until the real mouse changes position; stay ignores known same-position restatements. " + ProgramWaitNote + " The reply reports Debug.Print output in 'printed', since the run began or the last reply that reported it, or says nothing was printed.")]
     public async Task<InteractOutcome> HoverAsync(
         [Description("A path from dump_visual_tree. A target that is not a code editor but contains one is hovered at "
                      + "that editor, the first showing under it, and the reply then names the editor and gives its path, "
@@ -3360,6 +3425,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             program = UiAutomationDriver.WatchProgram(TopLevel.GetTopLevel(found) as Window, () => ctx.DebugController.CurrentStop);
             var outcome = UiAutomationDriver.Hover(found, x, y, target, out var landed);
             landing = landed;
+            // Protect the tooltip dwell too: opening its popup can restate the resting real mouse (#2666).
+            if (stay && outcome.Success && landed is { ThroughWindowInput: true } protectedAt)
+                UiAutomationDriver.StayHover(protectedAt.Receiver);
             return outcome;
         });
 
@@ -3444,10 +3512,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // state is read a moment later, with the watch still running, so the reply says what settled and what took it.
             var staying = stay && at.ThroughWindowInput && !ct.IsCancellationRequested;
             if (staying)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.StayHover(hovered));
                 await Task.Delay(UiAutomationDriver.StaySettle, CancellationToken.None);
-            }
             var settled = watch is null ? null : await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var what = watch.Moved;
@@ -3459,7 +3524,12 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 stayed = await Dispatcher.UIThread.InvokeAsync(() =>
                     UiAutomationDriver.StayedNote(hovered, settled, saidAlready: tip is null && enabled && settled == moved));
             else if (at.ThroughWindowInput)
-                await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.EndHover(hovered));
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (stay && TopLevel.GetTopLevel(hovered) is { } top)
+                        UiAutomationDriver.EndStayingHover(top);
+                    UiAutomationDriver.EndHover(hovered);
+                });
             else if (stay)
                 stayed = "; 'stay' left nothing under the pointer: the move was raised on the control, which sets nothing "
                          + "as under it";
@@ -3664,6 +3734,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     private static string TabType(object tab) => tab switch
     {
         HexIDE.VisualDesigner.FormEditViewModel => "designer",
+        ArchiveDocumentViewModel => "archive",
         BaseEditorWindowViewModel => "code",
         _ => "tool",
     };
@@ -3672,10 +3743,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     {
         var editor = tab as BaseEditorWindowViewModel;
         var document = editor?.OpenDocument;
+        var carried = (tab as RelatedDocumentEditorViewModel)?.RelatedDocument;
+        var entry = (tab as ArchiveDocumentViewModel)?.Entry;
         // IsModified is what the tab's `*` is drawn from (#1797), and the title leaves the `*` out (#1945). A tool tab
         // or a read-only view holds nothing to save, so it reports nothing rather than a false that reads as "saved".
         return new DocumentTabInfo(tab.Title ?? "", TabType(tab),
-            ReferenceEquals(tab, ctx.DocumentDockService.ActiveTab), document?.Project.Name, document?.Name,
+            ReferenceEquals(tab, ctx.DocumentDockService.ActiveTab),
+            entry?.Identity.ContainerPath ?? document?.Project.Name ?? carried?.Owner.Name,
+            entry is not null ? ArchiveToolPaths.PathOf(entry) : document?.Name ?? carried?.Name,
             editor is { CanHoldUnsavedChanges: true } ? editor.IsModified : null, ctx.DocumentDockService.AreaOf(tab));
     }
 
@@ -3695,7 +3770,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "get_document_tabs")]
-    [Description("Returns EVERY tab across all document areas, including splits, with area (0 for the first area, 1 for the next, in layout order; distinguishes equal titles), title, type, project, document, whether it is the active one, and isModified: whether the tab has unsaved changes. The tab marks those with a `*` that the title leaves out, so the title stays the one activate_document_tab and close_document_tab match. Project and document name a form or module's source, and only such a tab has them. isModified is absent where nothing can be saved: a tool tab, and the read-only project and archive views. It is per tab: a form's designer and code tabs each have one, and they can differ, so the form is unsaved if either is true. 'type' is 'designer' for a form or UserControl designer, 'code' for a source editor, and 'tool' for a document that is not an editor at all — the Object Browser, the language-server connection list, the protocol inspector. Those three are real tabs in the document region and used to be missing from this answer, which made an automation client believe a tab it could see on screen did not exist. get_open_editors answers the narrower question: the editors only, and which of them is active.")]
+    [Description("Returns EVERY tab across all document areas, including splits, with area (0 for the first area, 1 for the next, in layout order; distinguishes equal titles), title, type, project, document, whether it is the active one, and isModified: whether the tab has unsaved changes. The tab marks those with a `*` that the title leaves out, so the title stays the one activate_document_tab and close_document_tab match. Project and document name a form, module or carried file's source; for an archive entry they are the container path and percent-escaped entry path returned by open_file. isModified is absent where nothing can be saved: a tool tab, and the read-only project and archive views. It is per tab: a form's designer and code tabs each have one, and they can differ, so the form is unsaved if either is true. 'type' is 'designer' for a form or UserControl designer, 'code' for a source editor, 'archive' for a read-only archive entry, and 'tool' for a document that is not an editor at all — the Object Browser, the language-server connection list, the protocol inspector. Those three are real tabs in the document region and used to be missing from this answer, which made an automation client believe a tab it could see on screen did not exist. get_open_editors answers the narrower question: the editors only, and which of them is active.")]
     public async Task<DocumentTabsResult> GetDocumentTabsAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -3711,7 +3786,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "activate_document_tab")]
-    [Description("Brings a tab to the front, giving an editor keyboard focus. Pass `name` (a form, module or carried file's name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. The document must already have an open tab. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool); a duplicate title is refused. A trailing unsaved `*` is accepted when no exact title matches; the note explains that the title omits it. A title no tab has is tried as a document name, used when one tab shows it. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
+    [Description("Brings a tab to the front, giving an editor keyboard focus. Pass `name` (a form, module or carried file's name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. The document must already have an open tab. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool) and read-only archive entries (type 'archive'); a duplicate title is refused. A trailing unsaved `*` is accepted when no exact title matches; the note explains that the title omits it. A title no tab has is tried as a document name, used when one tab shows it. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
     public async Task<MutateResult> ActivateDocumentTabAsync(string? title = null, string? name = null,
         string? project = null, string? type = null, CancellationToken ct = default)
     {
@@ -3740,8 +3815,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             return (null, lookup.Error, null);
         if (title is null && lookup.Document is null && lookup.Carried is null)
             return (null, "Pass `name` with optional `project` for a document, or `title` for a tool tab. get_document_tabs lists both.", null);
-        if (type is not null && type is not ("code" or "designer" or "tool"))
-            return (null, "Use `type`: code, designer or tool, as get_document_tabs reports it.", null);
+        if (type is not null && type is not ("code" or "designer" or "archive" or "tool"))
+            return (null, "Use `type`: code, designer, archive or tool, as get_document_tabs reports it.", null);
         var matches = ctx.DocumentDockService.AllTabs.Where(d =>
             (lookup.Document is { } document
                 ? (d as BaseEditorWindowViewModel)?.OpenDocument == document
@@ -3822,7 +3897,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "close_document_tab")]
-    [Description("Closes a tab; a save prompt can leave it open, which the note reports. Pass `name` (the document's VB6 name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool); a duplicate title is refused, and a title no tab has is tried as a document name, used when one tab shows it. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
+    [Description("Closes a tab; a save prompt can leave it open, which the note reports. Pass `name` (the document's VB6 name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool) and read-only archive entries (type 'archive'); a duplicate title is refused, and a title no tab has is tried as a document name, used when one tab shows it. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
     public async Task<MutateResult> CloseDocumentTabAsync(string? title = null, string? name = null,
         string? project = null, string? type = null, CancellationToken ct = default)
     {

@@ -21,6 +21,10 @@ public record AddinInfo(
     /// <summary>Verified build declaration for consent/disclosure consumers, not host-use telemetry.</summary>
     public AddinCapabilityDeclaration? VerifiedDeclaration { get; init; }
 
+    public AddinMessage? LoadError { get; init; }
+
+    public AddinMessage? CompatibilityMessage { get; init; }
+
     public string? CompatibilityError { get; init; }
 }
 
@@ -53,3 +57,6 @@ public enum AddinStatus
     /// <summary>Unsupported manifest schema or host version requirement; never loaded.</summary>
     Incompatible,
 }
+
+/// <summary>A host localization key and its load-time facts, formatted in the display language.</summary>
+public sealed record AddinMessage(string Key, params object[] Arguments);

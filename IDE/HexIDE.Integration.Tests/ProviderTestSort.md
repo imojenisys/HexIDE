@@ -24,6 +24,7 @@ A test that reaches the provider only at run time, through the application's com
 | `Automation/CodeWindowClickTests.cs` | split |
 | `Automation/DesignerOverlayTreeTests.cs` | split |
 | `Automation/HeldButtonTests.cs` | split |
+| `Automation/HoverStayTests.cs` | split |
 | `Automation/HoverThroughWindowInputTests.cs` | split |
 | `Automation/InspectFrameTests.cs` | split |
 | `Automation/InspectItemCountTests.cs` | split |
@@ -48,6 +49,7 @@ A test that reaches the provider only at run time, through the application's com
 | `Controls/DropdownListNameTests.cs` | split |
 | `Controls/MousePointerValuesTests.cs` | split |
 | `Controls/OptionButtonPropertyEditorTests.cs` | split |
+| `Controls/ProjectFileNodeTests.cs` | split |
 | `Controls/ProjectGroupExpansionTests.cs` | split |
 | `Debugging/CallStackReplyTests.cs` | split |
 | `TestRunners.cs` | split |

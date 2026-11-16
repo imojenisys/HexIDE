@@ -21,6 +21,8 @@ public interface IBasicStandardLibrary
     /// <summary>The screen the <c>Screen</c> object describes (#2431): see <see cref="IVbDisplay"/>.</summary>
     IVbDisplay Display => throw new NotImplementedException("This host has no screen for the Screen object to describe (#2431)");
     Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon);
+    Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxLayout layout)
+        => MsgBox(text, caption, buttons, icon);
     Task<string?> InputBox(string prompt, string? title, string defaultText);
 
     /// <summary>
@@ -110,6 +112,49 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     /// </summary>
     public EventPump? Events { get; set; }
 
+    // Measured uses: docs/vb6-fidelity-oracle/an-object-used-as-a-value.md (#174).
+    internal async Task<Vb6Value> ResolveDefaultMember(Vb6Value value, string? use = null,
+        Stack<List<Vb6Value>>? callerFrames = null)
+    {
+        if (value.Value is not VbObject obj || obj.ClassDef.PrePass.DefaultMember is not { } member)
+            return value;
+        if (member.Kind == PrePass.DefaultMemberKind.Sub)
+            throw new NotImplementedException("A Sub default member used as a value is unmeasured (#174)");
+        if (member.Kind == PrePass.DefaultMemberKind.Function)
+        {
+            if (use is "Format" or "Abs")
+            {
+                if (!value.HeldAsVariant)
+                    throw new NotImplementedException("Typed Format/Abs of a Function default member is unmeasured (#174)");
+                throw new VBRunTimeException(VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment);
+            }
+            if (use == "Case" || use == "Not" && value.HeldAsVariant)
+                throw new VBRunTimeException(VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment);
+        }
+        Vb6Value result;
+        if (member.Kind == PrePass.DefaultMemberKind.Variable)
+        {
+            var (found, field) = await ReadVariable(obj.InstanceEnv, member.Name);
+            if (!found)
+                throw new NotImplementedException("Default member storage is unavailable (#174)");
+            result = field;
+        }
+        else
+        {
+            var proc = member.Kind == PrePass.DefaultMemberKind.Function
+                ? obj.ClassDef.PrePass.Procedures.GetValueOrDefault(member.Name)
+                : obj.ClassDef.PrePass.Properties.GetValueOrDefault(member.Name)?.Get;
+            if (proc is null || proc.Parameters.Any(p => !p.Optional && !p.ParamArray))
+                throw new NotImplementedException("A default member requiring arguments is not implemented (#174)");
+            result = await RunProcedure(obj.ClassDef, proc, [], obj.InstanceEnv, value, callerFrames)
+                ?? throw new NotImplementedException("A default member without a value is not implemented (#174)");
+        }
+        if (result.Type == Vb6Value.ValueType.Object || result.Type == Vb6Value.ValueType.Control
+            || result.Type == Vb6Value.ValueType.CSharpProxyObject || result.Type == Vb6Value.ValueType.Nothing)
+            throw new NotImplementedException("Nested default members are unmeasured (#174)");
+        return result;
+    }
+
     /// <summary>
     /// A built-in call. With a pump, a built-in that waits (MsgBox, InputBox) is a suspension the pump is told of, and
     /// <c>DoEvents</c> runs what is waiting, as VB6's does (#766). Without one, DoEvents does nothing, as before.
@@ -131,6 +176,9 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     internal async Task<Vb6Value?> CallProxy(ICSharpProxy proxy, string name, List<Vb6Value> args)
     {
+        if (proxy is VbErr && name.Equals("Raise", StringComparison.OrdinalIgnoreCase))
+            for (var i = 0; i < Math.Min(3, args.Count); i++)
+                args[i] = await ResolveDefaultMember(args[i]);
         if (proxy is not ICSharpAsyncProxy asyncProxy)
         {
             proxy.Call(name, args);
@@ -282,6 +330,40 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     public VbUdt NewUdt(string typeName) => NewUdt(typeName, 0);
 
+    internal ModuleInfo? ProjectClassFor(string typeName) =>
+        Modules.TryGet(typeName, out var module) && module.Kind == InterpreterModuleKind.Class ? module : null;
+
+    /// <summary>
+    /// Whether a type name the interpreter has no class, UDT or enum for is still a type a declaration may name (#822
+    /// review). It is when it is:
+    /// <list type="bullet">
+    /// <item>one of VB's own, read out of the in-box type libraries (<see cref="VB6InBoxTypes"/>);</item>
+    /// <item>a form, this one or another of the project's, none of which is a class;</item>
+    /// <item>qualified by a library the interpreter can't read, such as <c>ADODB.Connection</c>;</item>
+    /// <item>or unqualified, in a project that references such a library, which may well declare it.</item>
+    /// </list>
+    /// The last two are a missing input, not a missing name: without the library there is no telling, and the slot is
+    /// Nothing either way. A typo then runs on until the variable is used. With nothing referenced, a name nobody
+    /// declares stays VB6's "User-defined type not defined".
+    /// </summary>
+    internal bool IsObjectTypeWithoutClass(string? qualifier, string typeName, out Vb6Value.ValueType? aliasScalar)
+    {
+        aliasScalar = null;
+        if (LibraryClassFor(qualifier is null ? typeName : qualifier + "." + typeName) is not null)
+            return true;
+        if (VB6InBoxTypes.TryResolve(qualifier, typeName, out var inbox))
+        {
+            aliasScalar = inbox.Scalar;
+            return true;
+        }
+        if (qualifier is null && (ProjectFormNames.Contains(typeName)
+                                  || Modules.TryGet(typeName, out var m) && m.Kind == InterpreterModuleKind.Form))
+            return true;
+        if (qualifier is not null)
+            return !Modules.Contains(qualifier) && !VB6InBoxLibraries.IsLibrary(qualifier);
+        return ReferencesOtherLibraries;
+    }
+
     /// <summary>Instantiate a UDT resolved from a specific module's point of view — so `Module2.Point`
     /// gets Module2's Point rather than whichever one loaded last into the program-wide table.</summary>
     public VbUdt NewUdt(string typeName, string? qualifier, ModuleInfo? from)
@@ -320,6 +402,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         var typedFields = new Dictionary<string, Vb6Value.ValueType>(StringComparer.OrdinalIgnoreCase);
         var variantFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var autoNewFields = new Dictionary<string, AutoNew>(StringComparer.OrdinalIgnoreCase);
+        var objectFields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in def.Fields)
         {
             if (f.IsArray)
@@ -344,6 +427,29 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                 autoNewFields[f.Name] = new AutoNew(made, f.Name);
                 continue;
             }
+            if (f.UdtTypeName is { } className && !Types.ContainsKey(className) && !Enums.ContainsKey(className)
+                && ProjectClassFor(className) is { } projectClass)
+            {
+                fields[f.Name] = Vb6Value.Nothing;
+                objectFields[f.Name] = projectClass.Name;
+                continue;
+            }
+            if (f.UdtTypeName is { } slotType
+                && (slotType.Equals("Object", StringComparison.OrdinalIgnoreCase) || ExpressionExecutor.IsCollectionType(slotType)))
+            {
+                fields[f.Name] = Vb6Value.Nothing;
+                objectFields[f.Name] = ExpressionExecutor.IsCollectionType(slotType) ? "Collection" : "Object";
+                continue;
+            }
+            if (f.UdtTypeName is { } objectName && !Types.ContainsKey(objectName) && !Enums.ContainsKey(objectName))
+            {
+                var dot = objectName.LastIndexOf('.');
+                var qualifier = dot < 0 ? null : objectName[..dot];
+                var name = objectName[(dot + 1)..];
+                if (ExpressionExecutor.IsCollectionType(objectName)
+                    || IsObjectTypeWithoutClass(qualifier, name, out var aliasScalar) && aliasScalar is null)
+                    throw new NotImplementedException($"Object field '{f.Name}' inside Type '{typeName}' is not implemented (#3924): its VB6 behaviour is unmeasured");
+            }
             // An Enum field is a typed Long, as an Enum variable is (measured, #1005).
             if (f.ScalarType is { } declared && VbNumeric.IsDeclarableScalar(declared))
                 typedFields[f.Name] = declared;
@@ -360,7 +466,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             else
                 fields[f.Name] = Vb6Value.Variant;
         }
-        return new VbUdt(typeName, fields, typedFields, variantFields, autoNewFields);
+        return new VbUdt(typeName, fields, typedFields, variantFields, autoNewFields, objectFields);
     }
 
     /// <summary>
@@ -634,6 +740,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         this.compilationConstants = compilationConstants ?? CompilationConstants.Vb6;
         BuiltIns = new VB6BuiltIns(stdLib)
         {
+            ResolveDefaultForUse = (value, use) => ResolveDefaultMember(value, use),
             AppTitle = () => App.TitleOrNull,
             ProjectResources = () => Resources,
             ErrObject = () => Err,
@@ -801,12 +908,26 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         parsingModule = moduleName;
         try
         {
-            var parser = new VB6Parser(NextCounterList.Tokens(lexer));
+            var tokens = NextCounterList.Tokens(lexer);
+            OtherDialectRefusal.Check(tokens, source);
+            var parser = new VB6Parser(tokens);
             parser.RemoveErrorListeners();
             parser.AddErrorListener(this);
-            var tree = ParseWithFallback(parser, p => p.startRule(), moduleName: moduleName);
-            ModuleParsePredictionMode = parser.Interpreter.PredictionMode;
-            return tree;
+            try
+            {
+                var tree = ParseWithFallback(parser, p => p.startRule(), moduleName: moduleName);
+                ModuleParsePredictionMode = parser.Interpreter.PredictionMode;
+                return tree;
+            }
+            catch (VBCompileErrorException)
+            {
+                OtherDialectRefusal.Check(tokens, source, wordOperators: true);
+                throw;
+            }
+        }
+        catch (VBCompileErrorException e) when (e.Line is { } line && ErrorLocation.Note(e, moduleName, line))
+        {
+            throw;
         }
         finally
         {
@@ -1974,7 +2095,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                     // passed to a declared scalar parameter stands for its default member (ObjectAsValue); a Variant
                     // or object parameter takes the object itself (measured).
                     var passed = p.DeclaredType is { } declared && VbNumeric.IsDeclarableScalar(declared)
-                        ? ObjectAsValue.Scalar(arg.Value, proc.Body as Antlr4.Runtime.ParserRuleContext)
+                        ? ObjectAsValue.Scalar(await ResolveDefaultMember(arg.Value), proc.Body as Antlr4.Runtime.ParserRuleContext)
                         : arg.Value;
                     // Converted as a store into a variable of the type converts, before the procedure runs, so a value
                     // that will not convert raises in the caller (measured, #874: `B "abc"` with `ByVal x As Boolean` is

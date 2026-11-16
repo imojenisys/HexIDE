@@ -337,3 +337,104 @@ represent declarations, not capability grants or observed host use.
 #### Scenario: Verification fails
 - **WHEN** a package is untrusted or incompatible
 - **THEN** it has no verified declaration snapshot
+
+### Requirement: Add-in chrome titles follow the IDE language without callbacks
+Tool window, menu item and command registration SHALL accept `AddinTitle` alongside every existing string
+signature. Labels SHALL follow live IDE language changes using only data copied at registration, without
+add-in callbacks or dictionary rereads. Plain text and translations SHALL share one display boundary and
+retain existing access-key treatment. The title API SHALL expose only inert data.
+
+#### Scenario: Owned IDE key and Pseudo
+- **WHEN** first-party `com.hexide.aichat` registers its pane and Tools item with `Str.AIChat.*` keys
+- **THEN** their text comes from the active pack, changes on a language switch, and is bracketed in Pseudo
+
+#### Scenario: Translated package text
+- **WHEN** a title contains plain text and translations in the brand `text`/`translations` shape
+- **THEN** it resolves through `BrandText.LanguageChain` and `DistributionText.Resolve`: resolved IDE language,
+  its neutral, `en`, then the plain text
+- **WHEN** a title supplies `fr-CA`, `fr` and `en` translations
+- **THEN** `fr-CA` selects the regional text, its absence selects `fr`, then `en`, then the plain text
+- **AND** changing the IDE language re-resolves the title
+
+#### Scenario: Registration refuses invalid data before contributing anything
+- **WHEN** a key is absent from the canonical pack, outside the add-in's owned area, a translation language
+  is malformed, or a translation is empty
+- **THEN** registration throws `ArgumentException` identifying the invalid data and contributes nothing
+- **AND** no tool content factory runs
+
+#### Scenario: Key ownership is closed by default
+- **WHEN** any add-in requests an IDE key
+- **THEN** the only allowed area is `Str.AIChat.`, owned by the id `com.hexide.aichat` with either verified
+  `IsFirstParty` status or `DeveloperUnsigned` status; every other area, including consent and signing, is refused
+- **AND** a signed third-party package claiming that id gains no key access
+- **AND** an unsigned AI Chat loaded under `com.hexide.aichat` in Debug developer mode with unsigned loading enabled
+  owns that area; an unsigned package with any other id gains no key access
+
+#### Scenario: Two packages declare one id
+- **WHEN** multiple package folders declare the same add-in id
+- **THEN** the IDE SHALL select one before initializing any of them: a verified package wins over an unsigned
+  package regardless of folder order; between packages of the same kind, the first in folder order wins
+- **AND** the other packages are never initialized and contribute nothing
+- **AND** Options → Add-Ins lists each loser with status `Error` and a message naming the id and winning folder
+- **AND** the key-area owner allow-list is pinned by a test, with an owner for every area and no overlapping areas
+
+#### Scenario: Add-in data changes after registration
+- **WHEN** an add-in mutates its translations dictionary and the IDE switches languages several times
+- **THEN** only the registration-time copy is read, with no subsequent dictionary member access
+- **AND** no add-in factory, invocation or predicate delegate runs to obtain text
+
+#### Scenario: The public title API remains inert
+- **WHEN** the title type and its registration overloads are inspected
+- **THEN** they expose no text callback, event, or add-in-implemented interface for later invocation
+- **AND** the translations dictionary is accepted solely for copying during registration
+
+#### Scenario: Existing string calls
+- **WHEN** an add-in uses an existing string registration signature
+- **THEN** its label remains literal through language switches and its handle removes the contribution as before
+
+#### Scenario: Other titles and menu paths
+- **WHEN** an add-in contributes a debug launch, project type, or menu parent path such as `Tools` or `AddIns/name`
+- **THEN** these retain their existing plain titles or path identifiers without translation
+
+### Requirement: Add-in chrome text is validated before registration
+Tool-window titles, menu-item labels and command labels SHALL pass one shared check for both string and
+`AddinTitle` overloads, including every translation regardless of active language. Text MUST be trimmed,
+nonempty and at most 128 UTF-16 code units, without control, Format, LineSeparator or ParagraphSeparator
+characters except U+200C/U+200D. Invalid text SHALL throw a descriptive `ArgumentException` before registration
+or any content factory runs. Text MUST be valid UTF-16. Refusals SHALL remain English regardless of the IDE
+language and identify the broken rule without quoting the text; a translation refusal SHALL name its language.
+
+#### Scenario: Unsafe literal or translation
+- **WHEN** any of the three registration calls receives empty, whitespace-only, untrimmed or 129-character
+  text, or text containing a tab, U+202E, U+2066, U+200B, U+FEFF, U+2028, U+2029 or supplementary Format character U+E0001
+- **THEN** registration refuses it through either overload, including when it occurs only in a translation
+- **AND** nothing is registered and no factory runs
+- **AND** an uncaught refusal during initialization makes the add-in fail to initialize
+
+#### Scenario: Specific English refusal in a German IDE
+- **WHEN** the IDE is in German and a title or translation breaks a text rule
+- **THEN** the English exception names empty/whitespace-only text, leading/trailing whitespace, the excessive
+  length and limit, or the refused character's code point and zero-based UTF-16 index, as applicable
+- **AND** an unpaired high or low surrogate is refused as invalid UTF-16 with its index
+- **AND** a translation refusal also identifies its language without quoting the unsafe text
+
+#### Scenario: Ordinary international text and access keys
+- **WHEN** text is exactly 128 code units, ordinary Arabic or Hebrew, a Persian word with U+200C,
+  an emoji sequence with U+200D, or text containing an access-key underscore
+- **THEN** registration accepts it and retains the supplied text
+
+#### Scenario: Owned key has no literal text
+- **WHEN** an authorized add-in registers `AddinTitle.FromKey` with a valid owned IDE key
+- **THEN** the empty `Text` field does not undergo the display-text check
+- **AND** the title resolves from the IDE's packs under the existing key-ownership rules
+
+### Requirement: Add-in Options details SHALL follow the active IDE language
+The add-in Options page SHALL localize publisher, fallback metadata, toggle, consent, trust reasons
+and status text. It SHALL refresh these properties and load messages when the IDE language changes and
+unsubscribe when Options closes. Manifest metadata SHALL remain unchanged. Load messages SHALL retain
+their key and arguments; `AddinInfo.CompatibilityError` SHALL remain the original load-time string.
+
+#### Scenario: Switching language with an add-in page open
+- **WHEN** the developer changes the IDE language while inspecting an add-in
+- **THEN** the page's host-owned details and load message use the new language
+- **AND** the signed manifest metadata is unchanged
