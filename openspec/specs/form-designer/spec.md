@@ -500,3 +500,19 @@ This rendering substitution SHALL NOT change Caption/Text readback or permit set
 - **THEN** the displayed text contains U+1F4A3 followed by U+263A
 - **AND** the access-key underline follows the two-unit U+1F4A3 and marks U+263A
 - **AND** Caption still reads `M&J`
+
+### Requirement: Designer keyboard selection follows measured tab order
+
+For a form with top-level, enabled, visible tab stops and at most one selected control, the designer SHALL
+move selection in TabIndex order with Tab and Shift+Tab, wrapping without selecting the form. From the form,
+Tab SHALL select the lowest index and Shift+Tab the highest. Escape SHALL select the form. Focus SHALL stay
+in the designer; its caption buttons SHALL NOT be focusable. These rows were measured in
+[#3399](https://github.com/hexide-io/HexIDE/issues/3399). TabStop False, hidden or disabled controls,
+nested controls and multiple selection retain their existing behaviour pending measurement.
+
+#### Scenario: Creation order differs from TabIndex
+
+- **GIVEN** Command1, Text1 and Check1 created in that order with TabIndex 2, 0 and 1
+- **WHEN** Tab is pressed from the form and then repeatedly
+- **THEN** selection visits Text1, Check1, Command1 and Text1, with focus in the designer
+- **AND** Shift+Tab reverses that cycle, and Escape selects the form
