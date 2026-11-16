@@ -54,6 +54,9 @@ as `changelog.d/` already does for the changelog.
 `McpGapsDocTests` checks the names, the headings, that no gap is both open and closed, and that no entry is
 written back into this file.
 
+Document-save task completion and armed-answer feedback: [#4047](mcp-gaps/closed/4047.md)
+(closed; live check pending with hexide-mcp).
+
 ## Numbered entries
 
 The earliest entries were numbered, and code comments and other documents still cite them by number: "gap 12",
