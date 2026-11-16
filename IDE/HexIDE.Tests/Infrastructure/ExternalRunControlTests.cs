@@ -122,6 +122,76 @@ public class ExternalRunControlTests : CompositionTestBase
     }
 
     [AvaloniaTheory]
+    [InlineData("cursor", 19)]
+    [InlineData("cursor-first", 19)]
+    [InlineData("cursor-first", 6)]
+    [InlineData("cursor-end", 19)]
+    [InlineData("cursor", 20)]
+    [InlineData("cursor", 10)]
+    [InlineData("resume-refusal", 19)]
+    public async Task Run_to_cursor_preserves_user_conditions_and_cleans_up_on_every_outcome(string mode, int target)
+    {
+        var composition = Composition;
+        var external = composition.ExternalDebugger;
+        var capture = composition.Capture;
+        capture.ArmsEveryConnection = true;
+        var directory = Path.Combine(Path.GetTempPath(), "hexide-cursor-" + Guid.NewGuid());
+        Directory.CreateDirectory(directory);
+        var project = TestHelpers.CreateProjectWithModule("Target", "Callee");
+        var module = project.Modules[0];
+        module.AbsolutePath = Path.Combine(directory, "Callee.bas");
+        module.UpdateCode(string.Join(Environment.NewLine, Enumerable.Repeat("' target", 25)));
+        var document = HexIDE.Runtime.ProjectElements.DocumentIdentity.For(module);
+        composition.BreakpointService.SetDocument(document, [6]);
+        composition.BreakpointService.SetCondition(document, 6, "i = 3");
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns([project]);
+        using var context = new IdeContext(projects, Substitute.For<IDocumentDockService>(), Substitute.For<ILspClient>(),
+            null!, composition.ProjectRunnerService, null!, null!, null!, null!, composition.DebugController,
+            composition.Root, null!, null!, null!, null!, capture, null!, composition.LocalizationService, null!,
+            new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader());
+        var tools = new HexIdeTools(context);
+        var run = external.StartAsync(await ExternalDebugServiceTests.Configuration(directory, mode));
+        try
+        {
+            await ExternalDebugServiceTests.WaitFor(external, () => external.CanEvaluate && external.CanEditBreakpoints);
+            var id = external.Connection!.Id;
+            var reply = await tools.RunToCursorAsync("Callee", target, ct: TestContext.Current.CancellationToken);
+            var refused = target is 10 or 20 || mode == "resume-refusal";
+            reply.Success.Should().Be(!refused);
+            if (target == 20) reply.Error.Should().Contain("no executable statement");
+            else if (target == 10) reply.Error.Should().Contain("11");
+            else if (mode == "resume-refusal") reply.Error.Should().Contain("fixture resume refusal");
+            else if (mode == "cursor-end") reply.Note.Should().Contain("ended");
+            else
+            {
+                reply.Note.Should().Contain("Callee.bas").And.Contain(mode == "cursor-first" ? "line 6" : "line 19");
+                if (mode == "cursor-first" && target != 6) reply.Note.Should().Contain("before reaching");
+            }
+            await capture.DrainAsync();
+            var requests = capture.Snapshot(id).Where(entry => entry.Kind == ConversationEntryKind.Request).ToArray();
+            var sets = requests.Where(entry => entry.Method == "setBreakpoints").Select(entry =>
+                JsonDocument.Parse(capture.Body(id, entry.Sequence)!.Head).RootElement.GetProperty("arguments").Clone()).ToArray();
+            sets.Should().HaveCount(3, "launch, temporary set and restoration must all reach the adapter");
+            sets[1].GetProperty("breakpoints").EnumerateArray().Select(item => item.GetProperty("line").GetInt32()).Should().BeEquivalentTo([6, target]);
+            sets[2].GetProperty("breakpoints").EnumerateArray().Select(item => item.GetProperty("line").GetInt32()).Should().Equal(6);
+            if (mode != "resume-refusal")
+                foreach (var set in sets)
+                    set.GetProperty("breakpoints")[0].GetProperty("condition").GetString().Should().Be("i = 3");
+            sets[1].GetProperty("breakpoints")[1].EnumerateObject().Select(property => property.Name).Should().Equal("line");
+            if (target is 10 or 20) requests.Should().NotContain(entry => entry.Method == "continue");
+            composition.BreakpointService.GetCondition(document, 6).Should().Be("i = 3");
+            composition.BreakpointService.All().Single().Value.Should().Equal(6);
+        }
+        finally
+        {
+            await external.StopAsync();
+            await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [AvaloniaTheory]
     [InlineData("step_into", "stepIn", "run-control")]
     [InlineData("step_into", "stepIn", "run-control-delayed")]
     [InlineData("step_over", "next", "run-control")]
@@ -138,7 +208,6 @@ public class ExternalRunControlTests : CompositionTestBase
     [InlineData("set_next_statement", "goto", "goto-refuse")]
     [InlineData("set_next_statement", "gotoTargets", "goto-empty")]
     [InlineData("set_next_statement", "gotoTargets", "goto-targets-refuse")]
-    [InlineData("run_to_cursor", "", "run-control")]
     [InlineData("set_next_statement_unsaved", "", "goto")]
     [InlineData("step_over", "next", "session")]
     [InlineData("step_into", "", "evaluate-running")]
@@ -184,12 +253,6 @@ public class ExternalRunControlTests : CompositionTestBase
                 "run_to_cursor" => await tools.RunToCursorAsync("Callee", 19, ct: TestContext.Current.CancellationToken),
                 _ => await tools.ContinueProgramAsync(TestContext.Current.CancellationToken),
             };
-            if (tool == "run_to_cursor")
-            {
-                reply.Success.Should().BeFalse();
-                reply.Error.Should().Contain("one-shot breakpoint");
-                return;
-            }
             if (tool == "set_next_statement_unsaved" || mode == "evaluate-running")
             {
                 reply.Success.Should().BeFalse();

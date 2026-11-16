@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using HexIDE.Dap;
 
@@ -24,6 +25,7 @@ public sealed partial class ExternalDebugService
         public IReadOnlyList<ExternalBreakpoint> Rows { get; set; } = [];
         public long Version { get; set; }
         public bool Sending { get; set; }
+        public SemaphoreSlim Gate { get; } = new(1, 1);
     }
 
     private readonly Dictionary<string, BreakpointSource> breakpointSources = new(
@@ -143,10 +145,11 @@ public sealed partial class ExternalDebugService
             while (session == current && CanEditBreakpoints)
             {
                 var version = source.Version;
+                await source.Gate.WaitAsync();
                 var lines = source.Desired.ToArray();
                 try
                 {
-                    var reply = await current.SetBreakpointsAsync(source.Path, lines, conditions: new Dictionary<int, string>(source.Conditions));
+                    var reply = await current.SetBreakpointsAsync(source.Path, lines, conditions: new Dictionary<int, string>(source.Conditions), temporaryLine: CursorLine(source));
                     if (session != current || !CanEditBreakpoints) return;
                     if (source.Version != version) continue;
                     ApplyBreakpointReply(source, lines, reply);
@@ -159,11 +162,106 @@ public sealed partial class ExternalDebugService
                     source.Desired = new(source.Rows.Select(row => row.RequestedLine));
                     Failed?.Invoke(exception.Message);
                 }
+                finally { source.Gate.Release(); }
                 Changed?.Invoke();
                 return;
             }
         }
         finally { source.Sending = false; }
+    }
+
+    private sealed class CursorBreakpoint(DapSession session, BreakpointSource source, int line)
+    {
+        public DapSession Session { get; } = session;
+        public BreakpointSource Source { get; } = source;
+        public int Line { get; } = line;
+        public Task? Cleanup { get; set; }
+    }
+
+    private CursorBreakpoint? cursorBreakpoint;
+    public bool CanRunToCursor => CanEditBreakpoints && !IsBusy && cursorBreakpoint is null &&
+        Stop is { } stop && IsCurrent(stop) && ThreadId is not null;
+
+    private int? CursorLine(BreakpointSource source) => cursorBreakpoint is { } cursor &&
+        cursor.Source == source && cursor.Cleanup is null ? cursor.Line : null;
+
+    public async Task RunToCursorAsync(string uri, int line)
+    {
+        if (!CanRunToCursor || session is not { } current || Stop is not { } stop ||
+            ThreadId is not { } thread || line < 1 || SourcePath(uri) is not { } path) return;
+        if (!breakpointSources.TryGetValue(path, out var source))
+            breakpointSources[path] = source = new(path);
+        var cursor = new CursorBreakpoint(current, source, line);
+        cursorBreakpoint = cursor;
+        IsBusy = true;
+        Changed?.Invoke();
+        try
+        {
+            await source.Gate.WaitAsync();
+            try
+            {
+                if (!current.IsCurrent(stop) || cursor.Cleanup is not null)
+                    throw new InvalidOperationException("The external session moved before Run To Cursor could start.");
+                var lines = source.Desired.ToArray();
+                var reply = await current.SetBreakpointsAsync(path, lines, conditions: new Dictionary<int, string>(source.Conditions), temporaryLine: line);
+                var values = reply.Body!.Value.GetProperty("breakpoints");
+                var index = lines.Length;
+                var breakpoint = index < values.GetArrayLength() ? ReadBreakpoint(line, values[index]) : new ExternalBreakpoint(line, Pending: false);
+                if (!breakpoint.Verified || breakpoint.Line is { } actual && actual != line)
+                    throw new InvalidOperationException($"Run To Cursor refused at {path} line {line}: " +
+                        (breakpoint.Message.Length > 0 ? breakpoint.Message + ". " : "") +
+                        (breakpoint.Line is { } moved && moved != line ? $"The adapter moved the breakpoint to line {moved}." : "The adapter did not verify the breakpoint."));
+            }
+            finally { source.Gate.Release(); }
+            await current.ResumeAsync(stop, "continue", thread);
+        }
+        catch (Exception exception)
+        {
+            await RemoveCursorBreakpointAsync(current);
+            Failed?.Invoke(exception.Message);
+        }
+        finally
+        {
+            if (session == current) { IsBusy = false; Changed?.Invoke(); }
+        }
+    }
+
+    private Task RemoveCursorBreakpointAsync(DapSession current)
+    {
+        if (cursorBreakpoint is not { } cursor || cursor.Session != current) return Task.CompletedTask;
+        return cursor.Cleanup ??= RestoreAsync();
+
+        async Task RestoreAsync()
+        {
+            // Yield before taking the gate so Cleanup is set before any queued editor update reads the set.
+            await Task.Yield();
+            await cursor.Source.Gate.WaitAsync();
+            try
+            {
+                if (current.Snapshot.State != DapSessionState.Faulted)
+                {
+                    var lines = cursor.Source.Desired.ToArray();
+                    var reply = await current.SetBreakpointsAsync(cursor.Source.Path, lines,
+                        conditions: new Dictionary<int, string>(cursor.Source.Conditions));
+                    ApplyBreakpointReply(cursor.Source, lines, reply);
+                }
+            }
+            catch (Exception exception)
+            {
+                Failed?.Invoke("Run To Cursor breakpoint cleanup failed: " + exception.Message);
+                // A backend that refuses restoration cannot be left running with a temporary breakpoint.
+                try { await current.DisconnectAsync(); }
+                catch (Exception disconnectFailure)
+                {
+                    Serilog.Log.Warning(disconnectFailure, "Run To Cursor cleanup could not disconnect the adapter.");
+                }
+            }
+            finally
+            {
+                cursor.Source.Gate.Release();
+                if (cursorBreakpoint == cursor) cursorBreakpoint = null;
+            }
+        }
     }
 
     private static int? Number(JsonElement value, string property) =>

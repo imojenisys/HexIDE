@@ -250,6 +250,9 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
     {
         await foreach (var update in current.Updates.ReadAllAsync())
         {
+            if (update.Event?.Event is "stopped" or "terminated" ||
+                update.Snapshot.State is DapSessionState.Ended or DapSessionState.Faulted)
+                await await Dispatcher.UIThread.InvokeAsync(() => RemoveCursorBreakpointAsync(current));
             // Capture only immutable protocol data across this dispatch.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -435,6 +438,7 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
     {
         cancellation?.Cancel();
         if (session is not { } current) return;
+        await RemoveCursorBreakpointAsync(current);
         endStarted = Stopwatch.GetTimestamp();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         try

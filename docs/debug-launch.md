@@ -93,7 +93,11 @@ not selected expressions or member chains. While the external program runs, hove
 quick info.
 
 This integration inspects one stopped program thread. It does not implement thread selection,
-restart or Run To Cursor. Sources without a saved file path cannot receive external breakpoints.
+or restart. Run To Cursor while stopped adds a temporary breakpoint at the saved source's cursor
+line and continues. The next stop, wherever it occurs, removes that temporary breakpoint, as do
+session end and failures. User breakpoints and conditions stay intact. If the adapter refuses the
+line or moves it, the command reports that reason without continuing. Sources without a saved file
+path cannot receive external breakpoints or Run To Cursor targets.
 
 The adapter determines which operations it can perform. RDCore `84278aea` advertised goto targets and
 conditional breakpoints and applied saved edits in the measurements recorded in [#2914](https://github.com/hexide-io/HexIDE/issues/2914):
@@ -208,7 +212,7 @@ offers a launch for the startup project. F5 Runs is also shown while the project
 If the chosen launch is gone, because its add-in was removed or turned off, or no longer runs the project, F5 runs the
 project in the IDE and the status bar says so. The choice stays, for when the add-in is back, and shows under F5 Runs as
 not available, beside In the IDE, which sets it back. Only F5 and **Run > Start** follow the choice: stepping in from idle
-(F8), Run To Cursor, Restart and Start With Full Compile run in the IDE, whatever F5 runs.
+(F8), Run To Cursor from idle, Restart and Start With Full Compile run in the IDE, whatever F5 runs.
 
 Disposing the handle `RegisterDebugLaunch` returns takes the launch out, as do a failed initialisation of its add-in,
 turning the add-in off and revoking its consent. A run starts only while the add-in may start what it contributed,

@@ -2223,7 +2223,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
     // Subscribe before the menu route starts: an adapter can stop before its command reply arrives.
     private static async Task<MutateResult> AwaitExternalStopAsync(HexIDE.Debugging.ExternalDebugService external,
-        Func<MutateResult?> start, TimeSpan wait, CancellationToken ct)
+        Func<MutateResult?> start, TimeSpan wait, CancellationToken ct, Func<string>? stoppedNote = null)
     {
         var before = external.Stop;
         var inspection = external.Frames;
@@ -2257,7 +2257,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                         ? $"Paused at {location} ({external.Stop.Reason})."
                         : "Paused; the adapter supplied no source location."
                     : $"Running; no pause within {wait.TotalSeconds:0} s.";
-            return failure is null ? new MutateResult(true, null, state)
+            return failure is null ? new MutateResult(true, null, state +
+                (external.Stop is not null && external.Stop != before ? stoppedNote?.Invoke() : ""))
                 : new MutateResult(false, failure, state + (external.Stop is not null && before is not null && ReferenceEquals(external.Frames, inspection)
                     ? " The stopped inspection was kept." : " Inspection follows the adapter's current state."));
         }
@@ -2324,11 +2325,33 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         StepAndReportAsync(() => ctx.ProjectRunnerService.CanStepOutProject, () => ctx.ProjectRunnerService.StepOutProject(), ct);
 
     [McpServerTool(Name = "run_to_cursor")]
-    [Description("Run To Cursor (Ctrl+F8): run until (module, 1-based line, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them) then break — a one-shot temporary breakpoint. While paused it continues to the target; while running it arms the target; from idle it starts the project and runs to the target (a real breakpoint hit first stays paused there; continue proceeds toward the target). The reply's 'note' says where it paused or, within 2 s, that it has not got there yet, and 'project' and 'document' name the target's document as the IDE spells them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. External sessions refuse this command because they lack one-shot breakpoint support; set a breakpoint in the editor and use continue_program instead. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
+    [Description("Run To Cursor (Ctrl+F8): run until (module, 1-based line, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them) then break — a one-shot temporary breakpoint. While paused it continues to the target; while running it arms the target; from idle it starts the project and runs to the target (a real breakpoint hit first stays paused there; continue proceeds toward the target). The reply's 'note' says where it paused or, within 2 s, that it has not got there yet, and 'project' and 'document' name the target's document as the IDE spells them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. A stopped external session requires a saved target document: it adds a temporary adapter breakpoint and continues, removing the temporary line at the next stop (wherever it stops), session end or failure. An unverified or moved target is refused without continuing; the reply gives the adapter reason. External replies report the actual top frame file and line, running or ended, and say when the stop was before the target. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public async Task<MutateResult> RunToCursorAsync(string module, int line, string? project = null, CancellationToken ct = default)
     {
-        if (await Dispatcher.UIThread.InvokeAsync(() => ctx.RootViewModel.ExternalDebugger?.IsActive == true))
-            return new MutateResult(false, "Run To Cursor is unavailable for external sessions: the external route has no one-shot breakpoint support. Set a breakpoint in the editor and use continue_program instead.");
+        DocumentIdentity? externalDocument = null;
+        var externalReply = await Dispatcher.UIThread.InvokeAsync<Task<MutateResult>?>(() =>
+        {
+            if (ctx.RootViewModel.ExternalDebugger is not { IsActive: true } external) return null;
+            return AwaitExternalStopAsync(external, () =>
+            {
+                if (!ctx.ProjectRunnerService.CanRunToCursor)
+                    return new MutateResult(false, "The external session must be paused and the adapter ready before Run To Cursor.");
+                var lookup = ResolveDocument(module, project);
+                if (lookup.Document is not { } document) return new MutateResult(false, lookup.Error);
+                externalDocument = document;
+                if (OutsideDocument(document, [line], first: 1, "line") is { } outside)
+                    return new MutateResult(false, outside);
+                if (document.AbsolutePath is null)
+                    return new MutateResult(false, "The target document must be saved so the adapter can address its source file.");
+                ctx.ProjectRunnerService.RunToCursorProject(document, line);
+                return null;
+            }, StepReplyWait, ct, () => external.CurrentLocation is { } at &&
+                (at.Line != line || !string.Equals(new Uri(at.Uri).LocalPath, externalDocument?.AbsolutePath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    ? $" Stopped before reaching the cursor target ({externalDocument?.Display} line {line}); the temporary breakpoint was removed."
+                    : "");
+        });
+        if (externalReply is not null) return Naming(await externalReply, externalDocument);
         string? target = null;
         DocumentIdentity? named = null;
         var (refused, outcome) = await StartAndAwaitStopAsync(() =>
