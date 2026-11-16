@@ -138,6 +138,83 @@ public class MenuEditorViewModelTests
         Rows(editor, ["File", ""], [0, 0], 1);
     }
 
+    [Fact]
+    public void Unchanged_apply_preserves_the_property_bag_and_emits_no_notifications()
+    {
+        var menu = new ComponentInstance(MenuComponentClass.Instance, "mnuFile")
+            .SetProperty(VBProperties.CaptionProperty, "&File");
+        var before = menu.GetAllSetProperties();
+        var writes = new List<string>();
+        menu.OnComponentPropertyChanged += (_, property) => writes.Add(property.Name);
+
+        new MenuViewModel(menu).Apply(menu);
+
+        menu.GetAllSetProperties().Should().BeEquivalentTo(before);
+        writes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void New_item_writes_only_non_default_properties()
+    {
+        var menu = new ComponentInstance(MenuComponentClass.Instance, "mnuFile");
+        var editor = new MenuViewModel { Name = "mnuFile", Caption = "&File" };
+
+        editor.Apply(menu);
+
+        menu.GetAllSetProperties().Keys.Select(p => p.Name).Should().BeEquivalentTo("(Name)", "Caption");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Accepting_existing_menu_changes_only_the_edited_property(bool checkItem)
+    {
+        var project = TestHelpers.CreateProjectWithForm("P", "Form1");
+        var form = project.Forms.First();
+        var menu = new ComponentInstance(MenuComponentClass.Instance, "mnuFile")
+            .SetProperty(VBProperties.CaptionProperty, "&File");
+        form.UpdateComponents(form.Components.Append(menu).ToList());
+        var windows = Substitute.For<IWindowManager>();
+        var events = new EventBus();
+        using var designer = new FormEditViewModel(null!, events, Substitute.For<IProjectService>(),
+            Substitute.For<IEditorService>(), windows, Substitute.For<ISettingsService>(),
+            Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat()).Initialize(form);
+        // Loading the designer's menu tree is #4140's separate change.
+        designer.TopLevelMenu.Add(designer.AllComponents.Single(c => c.Instance == menu));
+        var serializer = new FormSerializer();
+        var before = serializer.Serialize(form, "Form1.frm").frmText;
+        var writes = new List<string>();
+        menu.OnComponentPropertyChanged += (_, property) => writes.Add(property.Name);
+        var commits = 0;
+        using var subscription = events.Subscribe<FormLayoutChangedEvent>(_ => commits++);
+        windows.ShowDialog(Arg.Any<IDialog>()).Returns(call =>
+        {
+            var editor = (MenuEditorViewModel)call[0];
+            if (checkItem)
+                editor.FlatMenu[0].IsChecked = true;
+            return Task.FromResult(true);
+        });
+
+        await designer.EditMenu();
+
+        var after = serializer.Serialize(form, "Form1.frm").frmText;
+        if (checkItem)
+        {
+            writes.Should().Equal("Checked");
+            after.ReplaceLineEndings("\n").Should().Be(before.ReplaceLineEndings("\n")
+                .Replace("      Caption         =   \"&File\"\n", "      Caption         =   \"&File\"\n      Checked         =   -1  'True\n"));
+            commits.Should().Be(1);
+        }
+        else
+        {
+            after.Should().Be(before);
+            writes.Should().BeEmpty();
+            commits.Should().Be(0);
+            designer.IsModified.Should().BeFalse();
+            designer.CanUndo.Should().BeFalse();
+        }
+    }
+
     private static void Rows(MenuEditorViewModel editor, string[] captions, int[] indents, int selected)
     {
         editor.FlatMenu.Select(m => m.Caption).Should().Equal(captions);

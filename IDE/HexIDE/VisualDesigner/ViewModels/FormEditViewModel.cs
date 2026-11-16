@@ -1683,8 +1683,16 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     public async Task EditMenu()
     {
         var vm = new MenuEditorViewModel(this, localization);
-        if (!await windowManager.ShowDialog(vm))
+        if (!await windowManager.ShowDialog(vm) || !vm.HasChanges)
             return;
+
+        if (!vm.HasLayoutChanges)
+        {
+            foreach (var item in vm.ItemsToApply)
+                item.Apply(item.Menu!);
+            CommitLayout();
+            return;
+        }
 
         foreach (var deleted in vm.Deleted)
         {

@@ -21,6 +21,9 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
     public List<MenuViewModel> Deleted { get; } = new();
 
     private MenuViewModel blankMenu = null!;
+    private readonly List<(MenuViewModel Menu, int Indent)> originalItems = new();
+    internal bool HasLayoutChanges => !ItemsToApply.Select(menu => (menu, menu.Indent)).SequenceEqual(originalItems);
+    internal bool HasChanges => HasLayoutChanges || ItemsToApply.Any(menu => menu.HasChanges);
     internal IEnumerable<MenuViewModel> ItemsToApply => FlatMenu.Where(menu => menu != blankMenu);
 
     public MenuEditorViewModel()
@@ -38,6 +41,7 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
             var vm = new MenuViewModel(menu);
             vm.Indent = level;
             FlatMenu.Add(vm);
+            originalItems.Add((vm, level));
             if (menu.GetPropertyOrDefault(MenuComponentClass.SubItemsProperty) is { } subItems)
             {
                 foreach (var subItem in subItems)
@@ -190,13 +194,27 @@ public partial class MenuViewModel : ObservableObject
         isWindowsList = menu.GetPropertyOrDefault(VBProperties.WindowListProperty);
     }
 
+    internal bool HasChanges => Menu is null
+        || caption != (Menu.GetPropertyOrDefault(VBProperties.CaptionProperty) ?? "")
+        || name != (Menu.GetPropertyOrDefault(VBProperties.NameProperty) ?? "")
+        || isEnable != Menu.GetPropertyOrDefault(VBProperties.EnabledProperty)
+        || isVisible != Menu.GetPropertyOrDefault(VBProperties.VisibleProperty)
+        || isChecked != Menu.GetPropertyOrDefault(VBProperties.CheckedProperty)
+        || isWindowsList != Menu.GetPropertyOrDefault(VBProperties.WindowListProperty);
+
     public void Apply(ComponentInstance menu)
     {
-        menu.SetProperty(VBProperties.CaptionProperty, caption);
-        menu.SetProperty(VBProperties.NameProperty, name);
-        menu.SetProperty(VBProperties.EnabledProperty, isEnable);
-        menu.SetProperty(VBProperties.VisibleProperty, isVisible);
-        menu.SetProperty(VBProperties.CheckedProperty, isChecked);
-        menu.SetProperty(VBProperties.WindowListProperty, isWindowsList);
+        void SetIfChanged<T>(PropertyClass<T> property, T value)
+        {
+            if (!EqualityComparer<T>.Default.Equals(menu.GetPropertyOrDefault(property), value))
+                menu.SetProperty(property, value);
+        }
+
+        SetIfChanged(VBProperties.CaptionProperty, caption);
+        SetIfChanged(VBProperties.NameProperty, name);
+        SetIfChanged(VBProperties.EnabledProperty, isEnable);
+        SetIfChanged(VBProperties.VisibleProperty, isVisible);
+        SetIfChanged(VBProperties.CheckedProperty, isChecked);
+        SetIfChanged(VBProperties.WindowListProperty, isWindowsList);
     }
 }
