@@ -15,6 +15,15 @@ namespace HexIDE.Addins;
 public sealed class AddinOptionsService : IOptionsPageContributor
 {
     private readonly List<Registration> _pages = [];
+    private readonly List<(string Owner, string Name, HexIDE.Lsp.AddinServerConnection Connection)> _servers = [];
+
+    internal void TrackServer(string owner, string name, HexIDE.Lsp.AddinServerConnection connection) =>
+        _servers.Add((owner, name, connection));
+
+    internal IReadOnlyList<(string Name, HexIDE.Lsp.AddinServerConnection Connection)> ServersFor(string owner) =>
+        _servers.Where(server => string.Equals(server.Owner, owner, StringComparison.OrdinalIgnoreCase))
+            .Select(server => (server.Name, server.Connection)).ToList();
+
 
     // NoInlining keeps RegisterOptionsPage a real stack frame so GetCallingAssembly resolves to
     // the add-in that called it (not this assembly).
