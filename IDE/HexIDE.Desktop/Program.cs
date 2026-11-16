@@ -166,7 +166,9 @@ sealed partial class Program
             DisplayBackend.Select(ServerOptions.Platform, Environment.GetEnvironmentVariable("HEXIDE_PLATFORM")),
             () => builder.StartWithClassicDesktopLifetime(args),
             reason => string.Format(new HexIDE.Localization.LocalizationService()
-                .GetStringFrom("system", "Str.Startup.WaylandUnavailable"), reason),
+                .GetStringFrom("system", ServerOptions.Platform != null
+                    ? "Str.Startup.WaylandUnavailableArgument"
+                    : "Str.Startup.WaylandUnavailableEnvironment"), reason),
             message =>
             {
                 // Setup failed before App configured logging; open and flush the normal IDE log here.

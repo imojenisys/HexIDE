@@ -62,11 +62,13 @@ public class DisplayBackendTests
             var exit = DisplayBackend.Run(DisplayBackend.Select(argument, environment),
                 () => throw new Avalonia.Wayland.AvaloniaWaylandException("Unable to connect to Wayland display"),
                 reason => string.Format(new HexIDE.Localization.LocalizationService()
-                    .GetStringFrom("en", "Str.Startup.WaylandUnavailable"), reason), logged.Add);
+                    .GetStringFrom("en", argument != null ? "Str.Startup.WaylandUnavailableArgument" : "Str.Startup.WaylandUnavailableEnvironment"), reason), logged.Add);
 
             exit.Should().Be(2);
             logged.Should().ContainSingle().Which.Should().Be(
-                "wayland was required, but no Wayland display could be reached: Unable to connect to Wayland display. Use --platform x11 or --platform auto on this session.");
+                argument != null
+                    ? "Native Wayland was required by --platform wayland, but no Wayland display could be reached: Unable to connect to Wayland display. Start with --platform x11 or --platform auto instead."
+                    : "Native Wayland was required by HEXIDE_PLATFORM=wayland, but no Wayland display could be reached: Unable to connect to Wayland display. Set HEXIDE_PLATFORM to x11 or auto, or unset it.");
             stderr.ToString().Should().Be(logged.Single() + Environment.NewLine);
         }
         finally { Console.SetError(previous); }

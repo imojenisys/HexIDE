@@ -10,7 +10,7 @@ public class WaylandStartupTests
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Unavailable_display_exits_two_and_writes_the_stderr_line_to_disk(bool standalone, bool environment)
+    public async Task Unavailable_display_reports_selection_source_and_respects_launcher_logging(bool standalone, bool environment)
     {
         var directory = Path.Combine(RepoTree.Root(), "artifacts", "wayland-startup-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -61,13 +61,20 @@ public class WaylandStartupTests
             var error = await stderr;
             process.ExitCode.Should().Be(2, error + await stdout);
             var line = error.TrimEnd('\r', '\n');
-            line.Should().StartWith("wayland was required, but no Wayland display could be reached: ")
-                .And.Contain("Unable to connect to Wayland display")
-                .And.EndWith("Use --platform x11 or --platform auto on this session.");
+            var expected = environment
+                ? "Native Wayland was required by HEXIDE_PLATFORM=wayland, but no Wayland display could be reached: Unable to connect to Wayland display. Set HEXIDE_PLATFORM to x11 or auto, or unset it."
+                : "Native Wayland was required by --platform wayland, but no Wayland display could be reached: Unable to connect to Wayland display. Start with --platform x11 or --platform auto instead.";
+            line.Should().Be(expected);
             error.Should().Be(line + Environment.NewLine);
-            var log = Directory.GetFiles(Path.Combine(directory, "HexIDE", "logs", "ide"), "*.log")
-                .Should().ContainSingle().Subject;
-            File.ReadAllText(log).Should().Contain(line + Environment.NewLine);
+            var logs = Path.Combine(directory, "HexIDE", "logs");
+            if (standalone)
+                Directory.Exists(logs).Should().BeFalse("a made program must not write the IDE's log");
+            else
+            {
+                var log = Directory.GetFiles(Path.Combine(logs, "ide"), "*.log")
+                    .Should().ContainSingle().Subject;
+                File.ReadAllText(log).Should().Contain(line + Environment.NewLine);
+            }
             Directory.GetFiles(directory, "core*").Should().BeEmpty();
         }
         finally { Directory.Delete(directory, recursive: true); }

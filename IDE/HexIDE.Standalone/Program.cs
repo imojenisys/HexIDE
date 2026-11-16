@@ -48,14 +48,8 @@ public class Program
                 BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
                 return 0;
             },
-            reason => string.Format(App.ErrorString("Str.Startup.WaylandUnavailable"), reason),
-            message =>
-            {
-                var directory = Path.Combine(Distribution.LogsDirectory, "ide");
-                Directory.CreateDirectory(directory);
-                File.WriteAllText(Path.Combine(directory, $"ide-{DateTime.Now:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.log"),
-                    message + Environment.NewLine);
-            });
+            reason => string.Format(App.ErrorString("Str.Startup.WaylandUnavailableEnvironment"), reason),
+            _ => { });
     }
 
     private sealed class ConsoleLogSink : Serilog.Core.ILogEventSink

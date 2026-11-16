@@ -48,8 +48,11 @@ Desktop SHALL accept `--platform <name>` in Debug and Release, overriding `HEXID
 Desktop and Standalone SHALL read that variable and use the same backend selection: `x11` (default)
 uses platform detection, `auto` tries Wayland with the detected backend as fallback, and `wayland`
 requires Wayland without fallback. If required Wayland initialization throws Avalonia’s Wayland exception
-on Linux, both launchers SHALL report one localized line on stderr and in the IDE log, including
-Avalonia’s message and the `--platform x11` / `--platform auto` alternatives, and exit 2 without a core dump.
+on Linux, both launchers SHALL report one localized line on stderr, including Avalonia’s message,
+and exit 2 without a core dump. The diagnostic SHALL identify the selection source: `--platform wayland`
+SHALL suggest `--platform x11` or `--platform auto`; `HEXIDE_PLATFORM=wayland` SHALL suggest setting
+`HEXIDE_PLATFORM` to `x11` or `auto`, or unsetting it. Desktop SHALL write the same line to the IDE log.
+Standalone SHALL write only to stderr and SHALL NOT create an IDE log folder.
 Other exceptions SHALL propagate unchanged. Selection SHALL leave Windows and macOS platform detection unchanged.
 Values SHALL be case-insensitive. An absent Desktop selection SHALL use the environment variable;
 an absent environment selection or an unrecognized value SHALL select `x11`. A flag without a value
@@ -69,4 +72,4 @@ SHALL be ignored.
 
 #### Scenario: A made program requires an unavailable Wayland display
 - **WHEN** Standalone starts on Linux with `HEXIDE_PLATFORM=wayland` and Wayland initialization throws Avalonia’s Wayland exception
-- **THEN** startup exits 2 with the same diagnostic on stderr and in the IDE log
+- **THEN** startup exits 2 with the environment-source diagnostic on stderr and creates no IDE log folder
