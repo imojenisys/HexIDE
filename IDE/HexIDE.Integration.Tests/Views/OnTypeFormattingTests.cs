@@ -109,17 +109,60 @@ public class OnTypeFormattingTests
         f.Vm.Document.Text.Should().Be(formatted);
     }
 
-    [AvaloniaFact]
-    public async Task TimeoutCancelsAndKeepsOnlyTheTypedLineBreak()
+    [AvaloniaTheory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task TimeoutIndentsWithoutCloserAndUndoesWithLineBreak(string newline)
+    {
+        await using var f = await Fixture.Open(newline);
+        f.Enter();
+        await f.Request();
+        await f.Server.Cancelled.Task.WaitAsync(Fixture.HangTimeout, TestContext.Current.CancellationToken);
+        await f.Settled();
+        f.Vm.Document.Text.Should().Be(f.Before.Insert(f.Start, newline + "        "));
+        f.Editor.CaretOffset.Should().Be(f.Start + newline.Length + 8);
+        f.Answer(f.Server.Request.Task.Result);
+        await f.Settled();
+        f.Vm.Document.Text.Should().Be(f.Before.Insert(f.Start, newline + "        "));
+        f.Vm.Document.UndoStack.Undo();
+        f.Vm.Document.Text.Should().Be(f.Before);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EmptyAnswerKeepsOnlyPreviousIndent(bool nullAnswer)
     {
         await using var f = await Fixture.Open();
         f.Enter();
         await f.Request();
-        await f.Server.Cancelled.Task.WaitAsync(Fixture.HangTimeout, TestContext.Current.CancellationToken);
-        f.Vm.Document.Text.Should().Be(f.Before.Insert(f.Start, "\n    "));
-        f.Answer(f.Server.Request.Task.Result);
+        f.Server.Answer.TrySetResult(nullAnswer
+            ? JsonSerializer.SerializeToElement<object?>(null)
+            : JsonSerializer.SerializeToElement(Array.Empty<TextEdit>()));
         await f.Settled();
         f.Vm.Document.Text.Should().Be(f.Before.Insert(f.Start, "\n    "));
+    }
+
+    [AvaloniaFact]
+    public async Task FailureIndentsWithoutCloser()
+    {
+        await using var f = await Fixture.Open();
+        f.Enter();
+        await f.Request();
+        f.Server.Answer.TrySetException(new InvalidOperationException("scripted failure"));
+        await f.Settled();
+        f.Vm.Document.Text.Should().Be(f.Before.Insert(f.Start, "\n        "));
+    }
+
+    [AvaloniaFact]
+    public async Task TypingBeforeTimeoutDiscardsFallback()
+    {
+        await using var f = await Fixture.Open();
+        f.Enter();
+        await f.Request();
+        f.Window.KeyTextInput("Z");
+        await f.Settled();
+        f.Vm.Document.Text.Should().Be(f.Before.Insert(f.Start, "\n    Z"));
     }
 
     [AvaloniaFact]

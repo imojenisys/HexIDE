@@ -2141,6 +2141,7 @@ public partial class CodeEditorView : UserControl
             var line = doc.GetLineByOffset(offset);
             var indent = VbAutoCloseProvider.GetIndentation(doc.GetText(line.Offset, line.Length));
             var newline = DocumentNewLines.Of(doc.Text);
+            string? fallbackIndent = null;
             var before = doc.Version;
             using (doc.RunUpdate())
             {
@@ -2150,6 +2151,7 @@ public partial class CodeEditorView : UserControl
                     TextEditor.TextArea.ClearSelection();
                     (offset, length) = EditedSpan() ?? (TextEditor.CaretOffset, 0);
                 }
+                fallbackIndent = EnterFallbackIndent(owner, offset, length);
                 if (owner.InsertLineBreakPastRun(offset, length, "\n" + indent) is { } placed)
                 {
                     TextEditor.TextArea.ClearSelection();
@@ -2161,7 +2163,7 @@ public partial class CodeEditorView : UserControl
                 }
             }
             if (!ReferenceEquals(before, doc.Version))
-                PendingOnTypeFormatting = FormatTypedCharacterAsync(owner, "\n");
+                PendingOnTypeFormatting = FormatTypedCharacterAsync(owner, "\n", fallbackIndent);
             return;
         }
         // Enter = auto-close block + auto-indent
@@ -2221,7 +2223,41 @@ public partial class CodeEditorView : UserControl
         }
     }
 
-    private async Task FormatTypedCharacterAsync(CodeEditorViewModel vm, string trigger)
+    private string EnterFallbackIndent(CodeEditorViewModel vm, int offset, int length)
+    {
+        var doc = TextEditor.Document;
+        var line = doc.GetLineByOffset(offset);
+        var endLine = doc.GetLineByOffset(offset + length);
+        var prefix = doc.GetText(line.Offset, offset - line.Offset);
+        var suffix = doc.GetText(offset + length, endLine.EndOffset - offset - length);
+        var text = prefix + suffix;
+        var indent = VbAutoCloseProvider.GetIndentation(text);
+        var run = vm.ReadOnlySections.RunHangingFrom(offset);
+        if (!string.IsNullOrWhiteSpace(suffix)
+            || (run is null && VbAutoCloseProvider.IsContinuationLine(text))) return indent;
+
+        var startLine = run is null ? line.LineNumber : doc.GetLineByOffset(run.LineStart).LineNumber;
+        if (run is null)
+            while (startLine > 1)
+            {
+                var previous = doc.GetLineByNumber(startLine - 1);
+                if (!VbAutoCloseProvider.IsContinuationLine(doc.GetText(previous.Offset, previous.Length))) break;
+                startLine--;
+            }
+        var logicalLine = VbAutoCloseProvider.AssembleLogicalLine(index =>
+        {
+            if (index + 1 < startLine) return string.Empty;
+            if (index + 1 == line.LineNumber) return text;
+            var physical = doc.GetLineByNumber(index + 1);
+            return doc.GetText(physical.Offset, physical.Length);
+        }, line.LineNumber - 1);
+        var closer = VbAutoCloseProvider.GetClosingStatement(logicalLine);
+        var lastLine = run is null ? endLine.LineNumber : doc.GetLineByOffset(run.LastContentEnd).LineNumber;
+        return closer is not null && !HasMatchingCloser(doc, lastLine, closer)
+            ? VbAutoCloseProvider.GetBodyIndent(indent, TextEditor.Options.IndentationSize) : indent;
+    }
+
+    private async Task FormatTypedCharacterAsync(CodeEditorViewModel vm, string trigger, string? fallbackIndent = null)
     {
         var generation = ++_onTypeGeneration;
         var doc = TextEditor.Document;
@@ -2237,8 +2273,16 @@ public partial class CodeEditorView : UserControl
             var edits = await vm.RequestOnTypeFormattingAsync(new Position(location.Line - 1, location.Column - 1), trigger);
             if (generation != _onTypeGeneration || DataContext != vm || TextEditor.Document != doc
                 || vm.LiveDocumentUri != uri || !ReferenceEquals(version, doc.Version)
-                || !doc.UndoStack.CanUndo || !ReferenceEquals(group, doc.UndoStack.LastGroupDescriptor)
-                || edits.Length == 0) return;
+                || !doc.UndoStack.CanUndo || !ReferenceEquals(group, doc.UndoStack.LastGroupDescriptor)) return;
+
+            if (edits is null && trigger == "\n" && fallbackIndent is not null)
+            {
+                var line = doc.GetLineByNumber(location.Line);
+                if (doc.GetText(line.Offset, location.Column - 1) == fallbackIndent) return;
+                edits = [new TextEdit(new(new(location.Line - 1, 0),
+                    new(location.Line - 1, location.Column - 1)), fallbackIndent)];
+            }
+            if (edits is not { Length: > 0 }) return;
 
             // No group spans an await: typing, undo and unrelated edits stay usable while the server answers.
             doc.UndoStack.StartContinuedUndoGroup();
