@@ -282,6 +282,11 @@ public static class AvaloniaInteroperability
             && !pictureBox.AutoSize && ReferenceEquals(property, VBProperties.AutoSizeProperty)
             && ConvertForAssignment(property, value) is true)
             throw UnmeasuredAssignment(property, value);
+        if (control is VBImage image && ReferenceEquals(property, VBProperties.PictureProperty) && value.Value is PanelPicture imagePicture)
+        {
+            image.Picture = imagePicture.FileBytes;
+            return true;
+        }
         if (control is VBPictureBox box && ReferenceEquals(property, VBProperties.PictureProperty))
         {
             if (value.Value is not PanelPicture picture)
@@ -533,6 +538,11 @@ public static class AvaloniaInteroperability
         if (ReferenceEquals(property, VBProperties.FontProperty) && ControlFont.AppliesTo(c))
         {
             value = new Vb6Value(ControlFont.Get(c));
+            return true;
+        }
+        if (ReferenceEquals(property, VBProperties.PictureProperty) && c is VBPictureBox or VBImage)
+        {
+            value = new Vb6Value(SSTabMembers.ControlPicture(c is VBPictureBox box ? box.PictureData : ((VBImage)c).Picture));
             return true;
         }
         // Only the read is measured for Shape (#2070); keep its unmeasured assignment behaviour unchanged.
