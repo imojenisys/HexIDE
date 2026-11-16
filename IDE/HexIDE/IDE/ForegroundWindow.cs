@@ -197,8 +197,12 @@ public static class ForegroundWindow
         return best ?? mainWindow;
     }
 
-    private static bool FailedTool(string error, string key, string? title)
+    private static bool FailedTool(string error, string path, string key, string? title)
     {
+        // A dock wrapper's index can fail before the tool segment after the tool floats (#4046).
+        if (path.Split('/').Any(segment => segment == "#Tool." + key
+            || segment.EndsWith("[Tool." + key + "]", StringComparison.Ordinal)))
+            return true;
         var end = error.IndexOf("' under '", StringComparison.Ordinal);
         if (!error.StartsWith("no child matching '", StringComparison.Ordinal) || end < 0) return false;
         var segment = error["no child matching '".Length..end];
@@ -235,7 +239,7 @@ public static class ForegroundWindow
                 Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime lifetime)
         {
             var floating = lifetime.Windows.Where(w => w.IsVisible && MainViewViewModel.DockFactory.IsToolHostWindow(w)
-                && MainViewViewModel.DockFactory.FloatingTools(w).Any(t => FailedTool(error, t.Key, t.Title)));
+                && MainViewViewModel.DockFactory.FloatingTools(w).Any(t => FailedTool(error, path, t.Key, t.Title)));
             var hints = floating.Select(w => $"window: \"{w.Title}\"" + FloatingKeys(w)).ToList();
             if (hints.Count > 0)
                 return (null, $"{error}. Tools are floating in separate IDE windows: {string.Join(", ", hints)}. "

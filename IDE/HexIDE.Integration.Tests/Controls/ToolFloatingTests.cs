@@ -550,8 +550,9 @@ public class ToolFloatingTests
     {
         static System.Collections.Generic.IEnumerable<HexIDE.Automation.UiNode> Flatten(HexIDE.Automation.UiNode node) =>
             node.Children.SelectMany(Flatten).Prepend(node);
+        // Named dock wrappers also inherit the tool VM; address the tool surface rather than its layout wrapper.
         var path = Flatten(HexIDE.Automation.UiAutomationDriver.Dump(window, "Window", 30, interactiveOnly: false))
-            .First(n => n.DataContextType == nameof(ImmediateToolViewModel)).Path;
+            .First(n => n.DataContextType == nameof(ImmediateToolViewModel) && n.ControlType != "None").Path;
         HexIDE.IDE.ForegroundWindow.Resolve(path, "ide", window, window, window.Title!).Control.Should().NotBeNull();
         factory.FloatDockable(vm.Immediate);
         Dispatcher.UIThread.RunJobs();
@@ -570,7 +571,7 @@ public class ToolFloatingTests
             result.Control.Should().BeNull();
             result.Error.Should().Contain("floating").And.Contain($"window: \"{host.Title}\"").And.Contain("dump_visual_tree");
             var fresh = Flatten(HexIDE.Automation.UiAutomationDriver.Dump(host, "Window", 30, interactiveOnly: false))
-                .First(n => n.DataContextType == nameof(ImmediateToolViewModel)).Path;
+                .First(n => n.DataContextType == nameof(ImmediateToolViewModel) && n.ControlType != "None").Path;
             HexIDE.IDE.ForegroundWindow.Resolve(fresh, host.Title, host, window, host.Title!).Control.Should().NotBeNull();
             HexIDE.IDE.ForegroundWindow.Resolve("", "ide", window, window, window.Title!).Error.Should().NotContain("floating");
             HexIDE.IDE.ForegroundWindow.Resolve("Immediate/x", "ide", window, window, window.Title!).Error.Should().NotContain("floating");
