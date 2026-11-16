@@ -25,13 +25,13 @@ It does not exist until you create it or save an entry in the window. **Deleting
 to undo an experiment that went wrong: the bundled server is compiled in, so no edit to this file can
 leave you without VB6 support permanently.
 
-Changes take effect on restart. Data applies live in HexIDE — themes, keymaps, languages — and code does
-not; a language server is a process, so it belongs to the second group.
+Connection changes take effect on IDE restart. Server-owned `settings` apply when entries are saved
+or reloaded by reopening Language & Debug Servers, without restarting the server.
 
 Each server row offers **Restart**, including a stopped or failed server. It stops that entry if
 necessary, starts it with the registration loaded when HexIDE started, and sends it the open documents
 it claims. Other entries keep running. The protocol inspector records that you requested the restart.
-Restart does not reload `lsp-servers.json`; configuration edits still take effect when HexIDE next starts.
+Restart does not reload `lsp-servers.json`; connection edits still take effect when HexIDE next starts.
 
 ## Editing in the window
 
@@ -55,7 +55,7 @@ a field preserves its value. The form shows the full
 command with arguments and environment, resolving pipe placeholders against the current project. Without
 a project folder, workspace placeholders stay visible with an explanation. Nothing starts from the form.
 **Save** is consent to the displayed command and remembers its command identity, including arguments and
-environment. Changes take effect on restart.
+environment. Connection changes take effect on IDE restart; `settings` changes apply on Save.
 
 A bundled entry is read-only. Customize writes only the fields changed from its defaults, plus its id;
 normal layering rules still apply. Saving patches only changed values: other entries, unknown fields,
@@ -120,6 +120,7 @@ and the JSON path. Non-ASCII text before the fault counts as characters, rather 
 | `websocketRole` | for `websocket` | `connect` (default) dials the server; `listen` waits for the server to dial HexIDE. |
 | `displayName` | no | Shown wherever servers are listed. Defaults to the id. |
 | `initializationOptions` | no | Server-specific JSON passed unchanged in the `initialize` request. Omitted or null means the field is absent from the handshake; an empty object is sent as `{}`. |
+| `settings` | no | Server-owned JSON object. `workspace/configuration` resolves sections by dotted path; empty or absent sections return the whole object. Missing paths return `null`; `editor.tabSize` always comes from Tab Width. Saving or reloading entries sends changed settings to that server only. |
 | `trace` | no | How much this server should say about its own work: `off` (default), `messages` or `verbose`. It travels in the handshake, so it sets what the server *starts* at; changing it on a running server is a separate thing the IDE does for you. Misspell it and the server still starts, with tracing off and a warning. |
 | `priority` | no | Breaks ties for features that cannot merge two answers, such as formatting and rename. Higher wins. The bundled server sits *below* the default, so your own server wins without you having to know this field exists. |
 | `enabled` | no | `false` switches an entry off entirely — no process, no registration. |
@@ -617,6 +618,17 @@ its default location, add `"environment": { "DOTNET_ROOT": "<that folder>" }` to
 its own helper processes, which find .NET through `DOTNET_ROOT` or the default location, never through
 PATH. Put it on the entry rather than on HexIDE's own environment: a `DOTNET_ROOT` without the runtime
 HexIDE itself needs stops HexIDE from starting, with .NET's "install .NET" message.
+
+**Server settings.** Put the server's settings section inside `settings`, for example to disable
+RDCore's block-end inlay hints (#4255; verify setting names against the RDCore build in use):
+
+```json
+"settings": { "rdcore": { "SdkInlayHintOptions": { "BlockEnds": false } } }
+```
+
+The Language & Debug Servers entry editor accepts this object as raw JSON. Reloading entries or
+saving an edit sends `workspace/didChangeConfiguration` to this server so it can request the settings again. Reopening Language & Debug Servers reloads entries from disk;
+connection fields still require an IDE restart.
 
 **A VB6 project.** RDCore gives a project VB6's implicit `VBRUN` and `VB` libraries only when it knows the
 project is VB6. Its default language is RD-VBA, so without that a form reports `VBC09311` for VB's own types.
