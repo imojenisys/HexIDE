@@ -140,9 +140,13 @@ public class MessageBoxLayoutTests
             (line.Start > 1).Should().Be(rightAligned, "the laid-out glyphs align within the prompt's available width");
             var buttons = box.GetVisualDescendants().OfType<Button>()
                 .OrderBy(b => b.PointToScreen(default).X).ToArray();
+            // #4250: captions (including access keys) belong to the platform; this test pins their order.
+            var yes = HexIDE.Runtime.Dialogs.ProgramButtonCaptions.Get(MessageBoxResult.Yes, "Yes");
+            var no = HexIDE.Runtime.Dialogs.ProgramButtonCaptions.Get(MessageBoxResult.No, "No");
+            var cancel = HexIDE.Runtime.Dialogs.ProgramButtonCaptions.Get(MessageBoxResult.Cancel, "Cancel");
             buttons.Select(b => b.Content).Should().Equal(mirrored
-                ? new[] { "Cancel", "No", "Yes" } : new[] { "Yes", "No", "Cancel" });
-            buttons.Single(b => Equals(b.Content, "No")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                ? new[] { cancel, no, yes } : new[] { yes, no, cancel });
+            buttons.Single(b => Equals(b.Content, no)).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             (await answer).Should().Be(MessageBoxResult.No);
         }
         finally
