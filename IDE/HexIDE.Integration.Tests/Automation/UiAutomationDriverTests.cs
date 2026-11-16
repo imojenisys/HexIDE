@@ -1064,6 +1064,68 @@ public class UiAutomationDriverTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Dump_ExplicitNameKeepsTypelessBorder_AndItsPathInspectsIt(bool interactiveOnly)
+    {
+        var border = new Border { Child = interactiveOnly ? new Button { Content = "Child" } : null };
+        AutomationProperties.SetName(border, "imlIcons");
+        var window = Show(new Border { Child = border });
+        try
+        {
+            var tree = UiAutomationDriver.Dump(window, "Window", 20, interactiveOnly);
+            var node = UiAutomationDriver.Find(tree, "imlIcons", 10).Matches.Should().ContainSingle().Which;
+            node.ControlType.Should().Be("None");
+            node.Providers.Should().BeEmpty();
+            var (resolved, error) = UiAutomationDriver.Resolve(window, node.Path);
+            error.Should().BeNull();
+            resolved.Should().BeSameAs(border);
+            UiAutomationDriver.Inspect(resolved!, node.Path).Name.Should().Be("imlIcons");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Dump_UnnamedTypelessBorder_StillFoldsAway()
+    {
+        var border = new Border { Child = new Button { Content = "Child" } };
+        var window = Show(border);
+        try
+        {
+            var nodes = Flatten(UiAutomationDriver.Dump(window, "Window", 20, false)).ToList();
+            nodes.Should().NotContain(n => n.ClassName == "Border");
+            nodes.Should().Contain(n => n.Path == "Window/Button[Child]");
+        }
+        finally { window.Close(); }
+    }
+
+    private sealed class ContentNamedWrapper : ContentControl
+    {
+        protected override AutomationPeer OnCreateAutomationPeer() => new ContentNamedPeer(this);
+
+        private sealed class ContentNamedPeer(ContentNamedWrapper owner) : ControlAutomationPeer(owner)
+        {
+            protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.None;
+            protected override string GetNameCore() => owner.Content?.ToString() ?? "";
+        }
+    }
+
+    [AvaloniaFact]
+    public void Dump_NameDerivedOnlyFromContent_StillFoldsAway()
+    {
+        var wrapper = new ContentNamedWrapper { Content = "Derived label" };
+        var window = Show(wrapper);
+        try
+        {
+            wrapper.IsSet(AutomationProperties.NameProperty).Should().BeFalse();
+            ControlAutomationPeer.CreatePeerForElement(wrapper)!.GetName().Should().Be("Derived label");
+            Flatten(UiAutomationDriver.Dump(window, "Window", 20, false))
+                .Should().NotContain(n => n.ClassName == nameof(ContentNamedWrapper));
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public void Dump_EmittedPath_RoundTripsThroughResolve()
     {

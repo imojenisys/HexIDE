@@ -1358,6 +1358,21 @@ leave new documents pathless and explain the null path and how to save them in i
 - **THEN** its initial form and project have no file paths
 - **AND** opening the form's code uses its `untitled:` URI until it is saved
 
+### Requirement: Explicit automation names SHALL keep structural controls in the control view
+The control-view collector shared by discovery and path resolution SHALL keep an element with an explicitly
+set `AutomationProperties.Name` (`IsSet(NameProperty)`), as it keeps an element with an AutomationId.
+A peer name derived only from content SHALL NOT by itself keep a structural wrapper. The existing
+`interactiveOnly` filter SHALL continue to apply.
+
+#### Scenario: Finding a named border
+- **WHEN** a border has explicit automation name `imlIcons`, no control type, provider or keyboard focus
+- **AND** `dump_visual_tree` searches for `imlIcons` with `interactiveOnly: false`
+- **THEN** the border is found and its returned path resolves through `inspect_element`
+
+#### Scenario: A wrapper without an explicit automation name
+- **WHEN** a structural wrapper has no AutomationId and no explicitly set automation name
+- **THEN** it remains folded away even if its peer derives a name from content
+
 ### Requirement: Named controls SHALL expose their visible labels
 The control tree and single-control inspection SHALL retain x:Name as `name` when present and report the
 peer's meaningful label as `label` when it differs. Paths SHALL retain their existing stable discriminators
