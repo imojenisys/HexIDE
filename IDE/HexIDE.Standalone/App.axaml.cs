@@ -57,7 +57,7 @@ public partial class App : Application
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 try
                 {
-                    // Every form with no Icon line runs with the runner's icon; a form's own Icon, or (None), is its own (#1594).
+                    // Every form with no Icon line uses the shared neutral window icon (#4187); own Icon and (None) stay as saved (#1594).
                     VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico")));
                     runner = new StandaloneRun(Program.Project, ShowFatalError, () => Environment.Exit(Environment.ExitCode), ErrorString);
                     desktop.Exit += (_, _) => runner.Dispose();

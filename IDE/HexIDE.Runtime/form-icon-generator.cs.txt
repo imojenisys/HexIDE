@@ -1,0 +1,44 @@
+using SkiaSharp;
+
+// Original window glyph, MIT. From the repository root:
+// dotnet run --project scripts/probes/FormIconGenerator -- IDE/HexIDE.Runtime/form.ico
+var sizes = new[] { 16, 32, 48, 256 };
+var images = sizes.Select(size =>
+{
+    using var bitmap = new SKBitmap(size, size);
+    using var canvas = new SKCanvas(bitmap);
+    canvas.Clear(SKColors.Transparent);
+    canvas.Scale(size / 16f);
+    using var paint = new SKPaint { IsAntialias = false };
+    void Rect(float x, float y, float width, float height, string color)
+    {
+        paint.Color = SKColor.Parse(color);
+        canvas.DrawRect(x, y, width, height, paint);
+    }
+    Rect(1, 2, 14, 12, "#50565C");
+    Rect(2, 3, 12, 10, "#EDF0F2");
+    Rect(2, 3, 12, 3, "#A6ADB4");
+    Rect(3, 4, 5, 1, "#50565C");
+    Rect(12, 4, 1, 1, "#50565C");
+    using var image = SKImage.FromBitmap(bitmap);
+    using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+    return data.ToArray();
+}).ToArray();
+using var output = new BinaryWriter(File.Create(args.Single()));
+output.Write((ushort)0);
+output.Write((ushort)1);
+output.Write((ushort)sizes.Length);
+var offset = 6 + sizes.Length * 16;
+for (var i = 0; i < sizes.Length; i++)
+{
+    output.Write((byte)(sizes[i] == 256 ? 0 : sizes[i]));
+    output.Write((byte)(sizes[i] == 256 ? 0 : sizes[i]));
+    output.Write((ushort)0);
+    output.Write((ushort)1);
+    output.Write((ushort)32);
+    output.Write(images[i].Length);
+    output.Write(offset);
+    offset += images[i].Length;
+}
+foreach (var image in images)
+    output.Write(image);

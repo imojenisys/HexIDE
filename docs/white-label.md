@@ -46,10 +46,10 @@ stream must inflate to exactly the scanline bytes required by the dimensions, in
 Validation runs before the UI toolkit starts, within the existing 1 MiB file and 1024×1024 pixel limits;
 a corrupt logo refuses startup with both the descriptor and logo file named (#4063).
 
-A running program belongs to its author, not to the IDE's brand. In a branded installation, a form with
+A running program belongs to its author, not to the IDE's brand. In every distribution, a form with
 no `Icon` line uses the runner's neutral `form.ico` at F5, with or without a brand logo, just as in its
 made EXE (#4187). This is HexIDE's choice: the default is big only; a form's own icon and `Icon = (None)`
-keep their existing behaviour. Stock F5 keeps the executable's icon. The measured VB6 behaviour is in
+keep their existing behaviour. The IDE keeps its own or the brand's icon. The measured VB6 behaviour is in
 [the form-icon oracle](vb6-fidelity-oracle/a-forms-window-icon-no-icon-line.md).
 
 ## Translating your tagline and credits

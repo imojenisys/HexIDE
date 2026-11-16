@@ -4,6 +4,7 @@ using Avalonia.Platform;
 using HexIDE.IDE;
 using HexIDE.Runtime;
 using HexIDE.Runtime.Debugging;
+using HexIDE.Runtime.Components;
 using HexIDE.Runtime.ProjectElements;
 
 namespace HexIDE.Tests.DebugAdapter;
@@ -12,19 +13,28 @@ namespace HexIDE.Tests.DebugAdapter;
 // docs/vb6-fidelity-oracle/a-forms-window-icon-no-icon-line.md.
 public class RunFormIconTests
 {
-    [AvaloniaTheory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void A_branded_run_prepares_the_neutral_runner_icon_with_or_without_a_logo(bool logo)
+    [AvaloniaFact]
+    public void Every_run_prepares_the_shared_neutral_icon()
     {
-        var identity = new DistributionIdentity("acme", "Acme", logo: logo ? [1] : null);
         var previous = VBLoader.DefaultFormIcon;
         try
         {
             VBLoader.DefaultFormIcon = null;
-            Prepare(identity);
+            var engine = new InterpreterRunEngine(Substitute.For<IWindowManager>(), Substitute.For<IProgramHost>(), new DebugController());
+            var project = new ProjectDefinition(VBProjectType.EXE, "P") { StartsAtSubMain = true };
+            engine.Prepare(project).Failure.Should().NotBeNull();
 
             VBLoader.DefaultFormIcon.Should().NotBeNull();
+            using var actual = new MemoryStream();
+            var form = new FormDefinition(project, FormComponentClass.Instance, "Form1");
+            var root = form.Components.Single(c => c.BaseClass is FormComponentClass);
+            var window = FormComponentClass.Instance.InstantiateWindow(root);
+            window.Icon.Should().BeSameAs(VBLoader.DefaultFormIcon);
+            window.Icon!.Save(actual);
+            using var expected = AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico"));
+            using var bytes = new MemoryStream();
+            new WindowIcon(expected).Save(bytes);
+            actual.ToArray().Should().Equal(bytes.ToArray());
         }
         finally
         {
@@ -32,21 +42,12 @@ public class RunFormIconTests
         }
     }
 
-    [AvaloniaFact]
-    public void A_stock_run_clears_any_hosts_default_icon()
+    [Fact]
+    public void The_program_icon_is_not_the_IDEs_mark()
     {
-        var previous = VBLoader.DefaultFormIcon;
-        try
-        {
-            VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico")));
-            Prepare(DistributionIdentity.Stock);
-
-            VBLoader.DefaultFormIcon.Should().BeNull();
-        }
-        finally
-        {
-            VBLoader.DefaultFormIcon = previous;
-        }
+        var root = RepoRoot();
+        File.ReadAllBytes(Path.Combine(root, "IDE", "HexIDE.Runtime", "form.ico"))
+            .Should().NotEqual(File.ReadAllBytes(Path.Combine(root, "IDE", "HexIDE", "Icons", "AppIcon", "hexide.ico")));
     }
 
     [AvaloniaFact]
@@ -60,8 +61,9 @@ public class RunFormIconTests
         var source = File.ReadAllText(Path.Combine(runner, "App.axaml.cs"));
         source.Should().Contain("avares://HexIDE.Runtime/form.ico");
         source.Should().NotContain("avares://HexIDE.Standalone/form.ico");
-        File.ReadAllText(Path.Combine(root.FullName, "IDE", "HexIDE", "IDE", "InterpreterRunEngine.cs"))
-            .Should().Contain("avares://HexIDE.Runtime/form.ico");
+        var engine = File.ReadAllText(Path.Combine(root.FullName, "IDE", "HexIDE", "IDE", "InterpreterRunEngine.cs"));
+        engine.Should().Contain("avares://HexIDE.Runtime/form.ico");
+        engine.Should().NotContain("Distribution", "stock and brands with or without logos share the same run path");
         using var stream = AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico"));
         new WindowIcon(stream).Should().NotBeNull();
         using var bytes = AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico"));
@@ -74,11 +76,11 @@ public class RunFormIconTests
         actual.ToArray().Should().Equal(File.ReadAllBytes(embedded));
     }
 
-    private static void Prepare(DistributionIdentity distribution)
+    private static string RepoRoot()
     {
-        var engine = new InterpreterRunEngine(Substitute.For<IWindowManager>(), Substitute.For<IProgramHost>(), new DebugController());
-        // Even a refused Sub Main start must prepare the host before any form can be loaded.
-        var project = new ProjectDefinition(VBProjectType.EXE, "P") { StartsAtSubMain = true };
-        engine.Prepare(project, distribution).Failure.Should().NotBeNull();
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !Directory.Exists(Path.Combine(root.FullName, "LspServer")))
+            root = root.Parent;
+        return root!.FullName;
     }
 }

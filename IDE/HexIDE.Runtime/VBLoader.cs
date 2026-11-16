@@ -26,7 +26,7 @@ namespace HexIDE.Runtime;
 public class VBLoader
 {
     /// <summary>
-    /// The icon a form with no Icon line runs with: the runner and branded IDE give the neutral form icon. Null
+    /// The icon a form with no Icon line runs with: the runner and IDE give the neutral window icon (#4187). Null
     /// leaves Avalonia's, the executable's icon on Windows (#1594).
     /// </summary>
     public static Avalonia.Controls.WindowIcon? DefaultFormIcon { get; set; }
