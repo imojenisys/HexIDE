@@ -13,6 +13,8 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="HexIDE.Tests" />
+        <InternalsVisibleTo Include="HexIDE.Integration.Tests" />
+        <InternalsVisibleTo Include="HexIDE.Runtime.Integration.Tests" />
     </ItemGroup>
 
     <ItemGroup>

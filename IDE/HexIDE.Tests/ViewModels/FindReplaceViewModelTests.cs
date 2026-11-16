@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.Collections.Generic;
 using AvaloniaEdit.Document;
 using HexIDE.Bookmarks;
@@ -33,8 +34,8 @@ public partial class FindReplaceViewModelTests
         localization.GetString("Str.FindReplace.Msg.ScopeAllOpenDocuments").Returns("All Open Documents");
         localization.GetString("Str.FindReplace.Msg.NotFound").Returns("The search text '{0}' was not found.");
         localization.GetString("Str.FindReplace.Msg.ReplacementsMade").Returns("{0} replacement(s) made.");
-        localization.GetString("Str.FindReplace.Msg.ProtectedOnly").Returns("Protected only: {0}");
-        localization.GetString("Str.FindReplace.Msg.ReplacementsWithSkipped").Returns("{0} replaced; {1} skipped.");
+        localization.GetString("Str.FindReplace.Msg.ReadOnlyTextOnly").Returns("Protected only: {0}");
+        localization.GetString("Str.FindReplace.Msg.ReplacementsSkippingReadOnlyText").Returns("{0} replaced; {1} skipped.");
         localization.GetString("Str.FindReplace.Msg.InvalidRegex").Returns("Invalid regular expression pattern.");
         localization.GetString("Str.FindReplace.Msg.NothingToSearch")
             .Returns("There is nothing here for Find to search.");
@@ -53,7 +54,7 @@ public partial class FindReplaceViewModelTests
     /// </remarks>
     private static RelatedDocumentEditorViewModel CreateCarriedFileEditor(string text)
     {
-        var vm = new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>());
+        var vm = new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
         vm.Document.Text = text;
         return vm;
     }
@@ -72,7 +73,7 @@ public partial class FindReplaceViewModelTests
             Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
             Substitute.For<HexIDE.Debugging.IRunScope>(),
-            Substitute.For<ILocalizationService>());
+            Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat(), new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader());
         vm.Document.Text = text;
         vm.CaretOffset = 0;
         return vm;
@@ -1070,6 +1071,32 @@ public partial class FindReplaceViewModelTests
             Arg.Any<MessageBoxIcon>());
     }
 
+    [AvaloniaFact]
+    public async Task ReplaceAllUndoesAllReplacementsInEachWindowTogether()
+    {
+        using var active = CreateMockEditor("alpha alpha");
+        using var other = CreateMockEditor("alpha there alpha");
+        SetOpenDocuments(active, other);
+        active.Document.UndoStack.ClearAll();
+        other.Document.UndoStack.ClearAll();
+        var sut = CreateSut();
+        sut.Scope = FindScope.AllOpenDocuments;
+        sut.SearchText = "alpha";
+        sut.ReplaceText = "beta";
+
+        await sut.ReplaceAllAsync();
+
+        active.Document.Text.Should().Be("beta beta");
+        other.Document.Text.Should().Be("beta there beta");
+        active.Document.UndoStack.Undo();
+        active.Document.Text.Should().Be("alpha alpha");
+        other.Document.Text.Should().Be("beta there beta");
+        other.Document.UndoStack.Undo();
+        other.Document.Text.Should().Be("alpha there alpha");
+        active.Document.UndoStack.CanUndo.Should().BeFalse();
+        other.Document.UndoStack.CanUndo.Should().BeFalse();
+    }
+
     // --- Not found ---
 
     [AvaloniaFact]
@@ -1181,7 +1208,7 @@ public partial class FindReplaceViewModelTests
         var eventBus = Substitute.For<IEventBus>();
         var loc = Substitute.For<ILocalizationService>();
         loc.ActiveLanguage.Returns("en");
-        var properties = new PropertiesToolViewModel(mockDocDock, eventBus, windowManager, loc);
+        var properties = new PropertiesToolViewModel(mockDocDock, eventBus, windowManager, loc, new Vb6ProjectFileFormat());
         var immediate = new ImmediateToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
         var formLayout = new FormLayoutToolViewModel(mockDocDock, eventBus, loc);
         var locals = new LocalsToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
@@ -1190,7 +1217,7 @@ public partial class FindReplaceViewModelTests
         var editorService = Substitute.For<IEditorService>();
         var projectService = Substitute.For<IProjectService>();
         var projectExplorer = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, loc);
-        var colorPalette = new ColorPaletteToolViewModel(mockDocDock);
+        var colorPalette = new ColorPaletteToolViewModel(mockDocDock, loc);
         var objectBrowser = new ObjectBrowserToolViewModel(projectManager, Substitute.For<ILspClient>(), editorService, Substitute.For<IComponentRegistry>(), Substitute.For<ITypeLibraryService>(), Substitute.For<IFocusedProjectUtil>(), loc,
             Substitute.For<ILanguageConnectionRegistry>());
         var translationEditor = new TranslationEditorViewModel(loc, Substitute.For<IUserTranslationsService>(), windowManager);
@@ -1213,7 +1240,7 @@ public partial class FindReplaceViewModelTests
             languageServers,
             protocolInspector,
             windowStateService, new DockFactoryReference(), new HexIDE.Tools.OutlineToolViewModel(
-                Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IDocumentDockService>()));
+                Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IDocumentDockService>()), loc);
 
         return new MainViewViewModel(
             windowManager,

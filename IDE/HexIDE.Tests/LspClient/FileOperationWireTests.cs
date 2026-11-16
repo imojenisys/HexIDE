@@ -75,13 +75,13 @@ public class FileOperationWireTests : IAsyncDisposable
                 AbsolutePath = directory // Replacing a directory fails on both Windows and Linux.
             };
             project.AddModule(module);
-            var service = new ProjectService(
+            var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
                 () => throw new InvalidOperationException("No dialog expected"),
                 Substitute.For<IWindowManager>(), Substitute.For<IEventBus>(),
                 Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
                 Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(),
                 new FileBaselineStore(), Substitute.For<HexIDE.Localization.ILocalizationService>(),
-                Substitute.For<IHeaderRefresher>(), lspClient: () => client);
+                Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry(), lspClient: () => client);
 
             var save = () => service.SaveModule(module, false);
             (await save.Should().ThrowAsync<Exception>()).Which.Should()

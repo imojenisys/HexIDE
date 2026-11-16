@@ -74,7 +74,7 @@ public sealed class LanguageServerRegistrationFactory(
                         (request, token) => showDocument(string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName, request, token),
                     showMessageRequest: showMessageRequest is null ? null :
                         (request, token) => showMessageRequest(string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName, request, token),
-                    applyEdit: applyEdit),
+                    applyEdit: applyEdit, initializationOptions: entry.InitializationOptions),
                 Priority: entry.Priority ?? 0,
                 Transport: transport.Kind,
                 Endpoint: transport.Endpoint,
@@ -87,7 +87,8 @@ public sealed class LanguageServerRegistrationFactory(
                         ? artifact
                         : null,
                 WorkspaceArtifactRefused: entry.WorkspaceArtifact is not null && artifact is null,
-                ProjectImport: ProjectImportSpecReader.TryRead(id, entry.ProjectImport, out var import, out _) ? import : null));
+                ProjectImport: ProjectImportSpecReader.TryRead(id, entry.ProjectImport, out var import, out _) ? import : null,
+                RestartOnProjectChange: entry.RestartOnProjectChange == true));
         }
 
         return registrations;
@@ -125,6 +126,9 @@ public sealed class LanguageServerRegistrationFactory(
             "stdio" => new TransportChoice(create, LanguageConnectionTransport.Stdio,
                 string.Join(' ', new[] { entry.Command?.Trim(), entry.Arguments?.ToString() }
                     .Where(part => !string.IsNullOrWhiteSpace(part)))),
+
+            "tcp" => new TransportChoice(create, LanguageConnectionTransport.Tcp,
+                $"{entry.Endpoint?.Trim()} ({(string.Equals(entry.TcpRole?.Trim(), "listen", StringComparison.OrdinalIgnoreCase) ? "listen" : "connect")})"),
 
             "websocket" => new TransportChoice(create, LanguageConnectionTransport.WebSocket,
                 entry.Endpoint?.Trim()),
@@ -181,6 +185,12 @@ public sealed class LanguageServerRegistrationFactory(
                 loggerFactory.CreateLogger<StdioProcessLspTransport>(),
                 workspace,
                 serverId: entry.Id),
+
+            "tcp" when !string.IsNullOrWhiteSpace(entry.Endpoint) => () => new TcpLspTransport(
+                entry.Endpoint!.Trim(),
+                string.Equals(entry.TcpRole?.Trim(), "listen", StringComparison.OrdinalIgnoreCase)
+                    ? TcpRole.Listen : TcpRole.Connect,
+                loggerFactory.CreateLogger<TcpLspTransport>(), LaunchFor(entry), workspace),
 
             "websocket" when !string.IsNullOrWhiteSpace(entry.Endpoint) => () => new WebSocketLspTransport(
                 entry.Endpoint!.Trim(), loggerFactory.CreateLogger<WebSocketLspTransport>(),

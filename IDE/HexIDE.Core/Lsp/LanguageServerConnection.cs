@@ -177,12 +177,13 @@ public sealed record LanguageConnectionAttempt(
     IReadOnlyList<LanguageConnectionStep> Steps,
     DateTimeOffset StartedAt);
 
-/// <summary>How a connection is reached. The three the configuration file accepts, and nothing else.</summary>
+/// <summary>How a connection is reached. The transports the configuration file accepts, and nothing else.</summary>
 public enum LanguageConnectionTransport
 {
     Stdio,
     Pipe,
     WebSocket,
+    Tcp,
 }
 
 /// <summary>
@@ -227,6 +228,9 @@ public interface ILanguageConnectionRegistry
     /// </para>
     /// </summary>
     IReadOnlyList<LanguageServerConfigProblem> ConfigurationProblems { get; }
+
+    /// <summary>Restarts one entry using its loaded registration and reopens its known documents.</summary>
+    Task RestartAsync(string id, CancellationToken cancellationToken = default);
 
     /// <summary>Raised when any connection's state or advertised capabilities change.</summary>
     event EventHandler? ConnectionsChanged;

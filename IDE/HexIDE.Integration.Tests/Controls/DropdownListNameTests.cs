@@ -150,7 +150,7 @@ public class DropdownListNameTests
     public void The_designer_renders_the_name()
     {
         var form = Load();
-        var designer = new FormEditViewModel(null!, new EventBus(), null!, null!, null!, null!, Substitute.For<ILocalizationService>())
+        var designer = new FormEditViewModel(null!, new EventBus(), null!, null!, null!, null!, Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat())
             .Initialize(form);
 
         byte[] Rendered(string name)
@@ -162,7 +162,7 @@ public class DropdownListNameTests
             Dispatcher.UIThread.RunJobs();
             var bitmap = (Bitmap)((Image)renderer.Child!).Source!;
             using var png = new MemoryStream();
-            bitmap.Save(png);
+            bitmap.Save(png, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
             window.Close();
             return png.ToArray();
         }

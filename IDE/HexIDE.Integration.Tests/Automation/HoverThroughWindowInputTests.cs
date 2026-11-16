@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Diagnostics;
@@ -30,6 +31,9 @@ namespace HexIDE.Integration.Tests.Automation;
 /// </summary>
 public class HoverThroughWindowInputTests
 {
+    // Adapter startup, the DAP handshake and stopped-frame inspection need more than the tooltip default.
+    private const int AdapterStartupTimeoutMs = 20_000;
+
     // Drawn, as the tool waits for: the move is hit-tested against the frame the window last drew.
     private static Window Show(Control content)
     {
@@ -69,6 +73,23 @@ public class HoverThroughWindowInputTests
         }
         ready().Should().BeTrue("waited {0} ms (limit {1} ms) for {2}; tooltip open: {3}; tip: {4}",
             elapsed.ElapsedMilliseconds, timeoutMs, condition, ToolTip.GetIsOpen(control), ToolTip.GetTip(control) ?? "<null>");
+    }
+
+    // The delay hover quotes is the one on the control whose tip it found, not on what the point landed on (#2949).
+    [AvaloniaFact]
+    public void The_declared_tip_owner_is_the_nearest_control_with_a_tip()
+    {
+        var inner = new Button { Content = "inner", Width = 120, Height = 40 };
+        var outer = new Border { Child = inner };
+        ToolTip.SetTip(outer, "outer tip");
+        ToolTip.SetShowDelay(outer, 1234);
+        var window = Show(outer);
+
+        var middle = new Point(60, 20);
+        UiAutomationDriver.DeclaredToolTipOwnerAt(inner, middle).Should().BeSameAs(outer);
+        UiAutomationDriver.DeclaredToolTipAt(inner, middle).Should().Be("outer tip");
+        ToolTip.GetShowDelay(outer).Should().Be(1234);
+        window.Close();
     }
 
     [AvaloniaFact]
@@ -367,7 +388,9 @@ public class HoverThroughWindowInputTests
         var vm = new CodeEditorViewModel(
             Substitute.For<IWindowManager>(), editors ?? Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
             eventBus, lsp, settings, Substitute.For<IStatusBarService>(), new BookmarkService(), new BreakpointService(),
-            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>(), externalDebugger: external);
+            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader(), externalDebugger: external);
         var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "Module1", ModuleKind.StandardModule);
         module.UpdateCode("Option Explicit\r\n\r\nPrivate Sub Foo()\r\n    Mid\r\nEnd Sub\r\n");
         vm.Initialize(module);
@@ -495,7 +518,7 @@ public class HoverThroughWindowInputTests
         try
         {
             await WaitForTip(view.FindControl<TextEditor>("TextEditor")!, () => external.Variables.Count == 1 || immediate.Document.TextLength > 0,
-                "the stopped frame inspection to finish after re-docking");
+                "the stopped frame inspection to finish after re-docking", timeoutMs: AdapterStartupTimeoutMs);
             redocked.Should().BeTrue();
             immediate.Document.Text.Should().BeEmpty();
             staleCallbackCancelledHover.Should().BeFalse("an obsolete callback must not touch the new attachment's hover");
@@ -539,7 +562,7 @@ public class HoverThroughWindowInputTests
         {
             // The variables response raises Changed and cancels pending hovers; wait for that inspection too.
             await WaitForTip(editor, () => external.CanEvaluateHover && external.Variables.Count > 0,
-                "the stopped frame and its variables to finish loading");
+                "the stopped frame and its variables to finish loading", timeoutMs: AdapterStartupTimeoutMs);
             external.CanEvaluateHover.Should().BeTrue();
             editor.Text = "answer";
             for (var i = 0; i < 5; i++) { Avalonia.Headless.AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Dispatcher.UIThread.RunJobs(); }
@@ -632,7 +655,7 @@ public class HoverThroughWindowInputTests
                 var view = (CodeEditorView)window.Content!;
                 if (action == "completion") view.TriggerCompletion();
                 else view.TriggerSignatureHelp();
-                if (CodeEditorView.PendingPopupsOf(editor) is { } pending) await pending;
+                if (CodeEditorView.PendingKeyRequestsOf(editor) is { } pending) await pending;
                 CodeEditorView.OpenPopupsOf(editor).Should().ContainSingle();
             }
             ToolTip.GetIsOpen(editor).Should().BeFalse();

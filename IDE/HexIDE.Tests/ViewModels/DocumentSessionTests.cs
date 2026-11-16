@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using Dock.Model.Core;
 using HexIDE.Bookmarks;
 using HexIDE.Debugging;
@@ -47,7 +48,7 @@ public sealed class DocumentSessionTests : IDisposable
             active = found;
             return true;
         });
-        editors = new EditorService(dock, NewCode, () => new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), localization),
+        editors = new EditorService(dock, NewCode, () => new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), localization, Substitute.For<HexIDE.IDE.ISettingsService>()),
             () => new ProjectDocumentViewModel(localization), NewDesigner, () => manager!, localization) { DocumentSessions = store };
         manager = new ProjectManager(editors, bus);
         bus.Subscribe<ProjectUnloadedEvent>(_ => { tabs.Clear(); active = null; });
@@ -56,10 +57,12 @@ public sealed class DocumentSessionTests : IDisposable
     private CodeEditorViewModel NewCode() => new(Substitute.For<IWindowManager>(), editors, projects, bus,
         Substitute.For<ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
         Substitute.For<IBookmarkService>(), Substitute.For<IBreakpointService>(),
-        Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<IRunScope>(), localization);
+        Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<IRunScope>(), localization,
+            new Vb6ProjectFileFormat(),
+            new Vb6ReadOnlyRegionReader());
 
     private FormEditViewModel NewDesigner() => new(null!, bus, projects, null!, null!,
-        Substitute.For<ISettingsService>(), localization);
+        Substitute.For<ISettingsService>(), localization, new Vb6ProjectFileFormat());
 
     private ProjectDefinition Project(string name = "Test")
     {

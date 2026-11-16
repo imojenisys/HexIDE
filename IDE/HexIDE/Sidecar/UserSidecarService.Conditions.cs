@@ -13,7 +13,7 @@ public partial class UserSidecarService
         foreach (var document in DocumentLookup.DocumentsOf(project))
         {
             if (!owned.Contains(document.Name)) continue;
-            var shift = CodeWindowText.Of(document).HeaderLineCount;
+            var shift = DocumentContent.TextOf(document, null, format, reader).HeaderLineCount;
             Apply(data.CodeBreakpointConditions, shift);
             Apply(data.HeaderBreakpointConditions, 0);
 
@@ -24,8 +24,18 @@ public partial class UserSidecarService
                 {
                     if (!NameIn(name).Equals(document.Name, StringComparison.OrdinalIgnoreCase)) continue;
                     foreach (var (line, expression) in conditions)
-                        if (breakpointService.IsBreakpoint(document, line + offset))
-                            breakpointService.SetCondition(document, line + offset, expression);
+                    {
+                        var target = (long)line + offset;
+                        if (!IsCollected(data.CollectedModuleHeaders, document)
+                            && document.Module is { LoadedLineMap: { } map } module)
+                        {
+                            var old = (long)line - 1 + (offset == 0 ? 0 : module.LoadedOldHeaderLines);
+                            if (old < 0 || old >= map.Length) continue;
+                            target = map[(int)old] + 1;
+                        }
+                        if (target is >= 1 and <= int.MaxValue && breakpointService.IsBreakpoint(document, (int)target))
+                            breakpointService.SetCondition(document, (int)target, expression);
+                    }
                 }
             }
         }
@@ -37,7 +47,7 @@ public partial class UserSidecarService
         var result = new Dictionary<string, Dictionary<int, string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var document in DocumentLookup.DocumentsOf(project))
         {
-            var shift = CodeWindowText.Of(document).HeaderLineCount;
+            var shift = DocumentContent.TextOf(document, null, format, reader).HeaderLineCount;
             foreach (var line in breakpointService.GetBreakpoints(document))
             {
                 if ((line <= shift) != header || breakpointService.GetCondition(document, line) is not { } expression)

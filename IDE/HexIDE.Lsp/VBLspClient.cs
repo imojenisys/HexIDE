@@ -50,6 +50,7 @@ public sealed class VBLspClient : ILspClient
     private JsonRpc? _rpc;
     private volatile bool _initialized;
     private volatile bool _initializeAnswered;
+    private bool _stdioRestarted;
 
     // What the connected server said it supports, kept exactly as it arrived. Raw is the single source of
     // truth: a typed view is one Deserialize away, whereas a summary cannot be turned back into the answer.
@@ -212,8 +213,11 @@ public sealed class VBLspClient : ILspClient
         TimeProvider? timeProvider = null,
         Func<ShowDocumentParams, CancellationToken, Task<bool>>? showDocument = null,
         Func<ShowMessageRequestParams, CancellationToken, Task<MessageActionItem?>>? showMessageRequest = null,
-        Func<WorkspaceEdit, Func<string, RenameDocumentSnapshot?>, CancellationToken, Task<string?>>? applyEdit = null)
+        Func<WorkspaceEdit, Func<string, RenameDocumentSnapshot?>, CancellationToken, Task<string?>>? applyEdit = null,
+        JsonElement? initializationOptions = null)
     {
+        _initializationOptions = initializationOptions is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) } value
+            ? value.Clone() : null;
         _showDocument = showDocument;
         _applyEdit = applyEdit;
         _showMessageRequest = showMessageRequest;
@@ -232,6 +236,7 @@ public sealed class VBLspClient : ILspClient
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    private readonly JsonElement? _initializationOptions;
     private readonly Func<ShowMessageRequestParams, CancellationToken, Task<MessageActionItem?>>? _showMessageRequest;
     private readonly Func<ShowDocumentParams, CancellationToken, Task<bool>>? _showDocument;
     private readonly Func<WorkspaceEdit, Func<string, RenameDocumentSnapshot?>, CancellationToken, Task<string?>>? _applyEdit;
@@ -311,7 +316,7 @@ public sealed class VBLspClient : ILspClient
 
     private async Task<T> InvokeRequestAsync<T>(JsonRpc rpc, string method, object? parameters,
         CancellationToken cancellationToken = default, TimeSpan? timeout = null, string? supersededUri = null,
-        string? documentUri = null, Action<Task>? requestStarted = null)
+        string? documentUri = null, Action<Task>? requestStarted = null, Task? delivered = null)
     {
         if (documentUri is not null && _openDocuments.ContainsKey(documentUri)
             && ServerCapabilities.AcceptsOpenClose(_capabilities?.Value))
@@ -339,7 +344,15 @@ public sealed class VBLspClient : ILspClient
         }
         finally { RequestCancellation.Current.Value = previous; }
 
-        try { return await pending.WaitAsync(timeout ?? RequestTimeout, cancellation.Token); }
+        try
+        {
+            // The deadline is the server's, so it starts when the server can have seen the request. Sending goes
+            // through the thread pool, and on a busy one the timer could end before the request had left, which
+            // read as a server that was never reached (#3553). Bounded as well, for a server that stops reading.
+            if (delivered is not null)
+                await Task.WhenAny(pending, delivered).WaitAsync(RequestTimeout, cancellation.Token);
+            return await pending.WaitAsync(timeout ?? RequestTimeout, cancellation.Token);
+        }
         catch (Exception ex) when (ex is TimeoutException || ex is OperationCanceledException)
         {
             if (ex is TimeoutException) scope.Outcome = ConversationOutcome.TimedOut;
@@ -374,7 +387,7 @@ public sealed class VBLspClient : ILspClient
 
     /// <summary>Connects the transport, binds JSON-RPC, performs the initialize handshake, and
     /// replays any tracked documents. Used for the first connect and for every reconnect.</summary>
-    private async Task ConnectAndInitializeAsync(CancellationToken cancellationToken)
+    private async Task ConnectAndInitializeAsync(CancellationToken cancellationToken, bool restarted = false)
     {
         _serverRefreshesDiagnostics = false;
         // A FRESH formatter per connection: StreamJsonRpc formatters carry per-connection state and
@@ -419,6 +432,13 @@ public sealed class VBLspClient : ILspClient
             return;
         }
 
+        if (restarted)
+            RaiseMessageShown(new ShowMessageParams(LspMessageType.Warning, "")
+            {
+                LocalizationKey = "Str.Lsp.RestartedAfterSilence",
+                ServerDisplayName = _connectionId ?? _languageId,
+            });
+
         attempt.Reached(LanguageConnectionStage.Connected);
         Note(ConversationDirection.Local, ConversationEntryKind.Lifecycle, null, "connected");
 
@@ -427,7 +447,14 @@ public sealed class VBLspClient : ILspClient
         if (_transport.Unobservable is { Length: > 0 } unobservable)
             Note(ConversationDirection.Local, ConversationEntryKind.Note, null, unobservable);
 
-        var rpc = new LspJsonRpc(handler, new LspNotificationReceiver(this));
+        var receiver = new LspNotificationReceiver(this);
+        var rpc = new LspJsonRpc(handler, receiver);
+        var watched = new WatchedFileRegistrations(
+            () => _workspace?.Folders.Select(f => f.Directory).ToArray() ?? [],
+            p => rpc.NotifyWithParameterObjectAsync(WatchedFileRegistrations.Method, p), _logger);
+        receiver.WatchedFiles = watched;
+        _watchedFiles = watched;
+        rpc.Disconnected += (_, _) => watched.Dispose();
         var cancellation = new LspCancellationStrategy(rpc, _logger);
         rpc.CancellationStrategy = cancellation;
         rpc.AddLocalRpcTarget(cancellation);
@@ -440,7 +467,7 @@ public sealed class VBLspClient : ILspClient
 
         await InitializeAsync(cancellationToken, attempt);
 
-        if (_initialized)
+        if (_initialized && ReferenceEquals(_rpc, rpc))
         {
             RaiseConnected();
             await ReopenTrackedDocumentsAsync();
@@ -530,29 +557,20 @@ public sealed class VBLspClient : ILspClient
     }
 
     /// <summary>
-    /// Gives up on a server that accepted the connection and then said nothing.
+    /// Gives up on a server whose initialize handshake did not complete.
     ///
     /// <para>
-    /// The connection is torn down rather than left alone, because leaving it means a request pending on a
-    /// live channel forever — and because <see cref="DisposeRpc"/> detaches the handler before disposing,
-    /// so nothing else here will notice. The reconnect loop is therefore started explicitly rather than
-    /// waited for.
-    /// </para>
-    ///
-    /// <para>
-    /// For <c>stdio</c> that loop does not exist — <c>CanReconnect</c> is false, because the server is a
-    /// child process this client launched and re-dialling it is not a thing the transport can do. In that
-    /// case this is as far as recovery goes, and the point is the log line: the failure stops being
-    /// invisible, which is the whole of the bug.
+    /// Tear down the failed connection. Because <see cref="DisposeRpc"/> detaches the disconnect handler
+    /// before disposing, the reconnect loop is started explicitly.
     /// </para>
     /// </summary>
-    private void AbandonUnansweredHandshake()
+    private void AbandonHandshake(string reason, Exception? exception = null)
     {
-        _logger.LogWarning(
-            "The language server accepted a connection but did not answer initialize within {Timeout}. "
+        _logger.LogWarning(exception,
+            "The language server accepted a connection but {Reason}. "
           + "Abandoning the handshake and tearing the connection down. Language features will be "
           + "unavailable for this server{Recovery}.",
-            _initializeTimeout,
+            reason,
             _transport.CanReconnect ? " until a reconnect succeeds" : ", and this transport cannot reconnect");
 
         DisposeRpc();
@@ -645,6 +663,8 @@ public sealed class VBLspClient : ILspClient
     /// <summary>Unsubscribes and disposes the current JSON-RPC connection (leaving the transport intact).</summary>
     private void DisposeRpc()
     {
+        _watchedFiles?.Dispose();
+        _watchedFiles = null;
         _initializeAnswered = false;
         foreach (var written in _writtenOpens.Values) written.TrySetCanceled();
         var rpc = _rpc;
@@ -677,6 +697,7 @@ public sealed class VBLspClient : ILspClient
             // you, which is the difference between "we never asked" and "we asked and it said nothing".
             Trace: _trace,
             Locale: _locale(),
+            InitializationOptions: _initializationOptions,
             Capabilities: new ClientCapabilities(
                 new TextDocumentClientCapabilities(
                     PublishDiagnostics: new PublishDiagnosticsClientCapabilities(true, new DiagnosticTagSupport([1, 2])),
@@ -710,7 +731,9 @@ public sealed class VBLspClient : ILspClient
                     RangeFormatting: EmptyParams.Instance,
                     Completion: new CompletionClientCapabilities(new CompletionItemKindClientCapabilities(
                         Enum.GetValues<CompletionItemKind>()),
-                        CompletionItem: new CompletionItemClientCapabilities(true, ["plaintext"])),
+                        CompletionItem: new CompletionItemClientCapabilities(true, ["plaintext"],
+                            InsertTextModeSupport: new InsertTextModeClientCapabilities([1, 2])),
+                        CompletionList: new CompletionListClientCapabilities(["insertTextMode"])),
                     SemanticTokens: new SemanticTokensClientCapabilities(new(),
                         ["namespace", "type", "class", "enum", "interface", "struct", "typeParameter",
                          "parameter", "variable", "property", "enumMember", "event", "function", "method",
@@ -722,6 +745,7 @@ public sealed class VBLspClient : ILspClient
                     ApplyEdit: true,
                     WorkspaceFolders: true,
                     Configuration: true,
+                    DidChangeWatchedFiles: new DidChangeWatchedFilesClientCapabilities(),
                     WorkspaceEdit: new WorkspaceEditClientCapabilities(),
                     Diagnostics: new WorkspaceDiagnosticsClientCapabilities(),
                     CodeLens: new WorkspaceCodeLensClientCapabilities(),
@@ -752,11 +776,12 @@ public sealed class VBLspClient : ILspClient
         attempt.Reached(LanguageConnectionStage.HandshakeSent);
         try
         {
-            raw = await InvokeRequestAsync<JsonElement>(_rpc, "initialize", initParams, cancellationToken, _initializeTimeout);
+            raw = await InvokeRequestAsync<JsonElement>(_rpc, "initialize", initParams, cancellationToken, _initializeTimeout,
+                delivered: (_transport as StdioProcessLspTransport)?.FirstRequestDelivered);
             _initializeAnswered = true;
             await _rpc.NotifyWithParameterObjectAsync("initialized", EmptyParams.Instance);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (Exception) when (_stopping || cancellationToken.IsCancellationRequested)
         {
             // Someone called Stop while we were waiting. Ordinary shutdown, not a fault.
             _logger.LogDebug("Initialize abandoned: the client was stopped during the handshake.");
@@ -770,17 +795,35 @@ public sealed class VBLspClient : ILspClient
         }
         catch (TimeoutException)
         {
+            if (!_stopping && !cancellationToken.IsCancellationRequested
+                && !_stdioRestarted && _transport is StdioProcessLspTransport { UnansweredInitializeReached: true })
+            {
+                _stdioRestarted = true;
+                Note(ConversationDirection.Local, ConversationEntryKind.Lifecycle, null,
+                    "initialize unanswered; restarting stdio server once");
+                DisposeRpc();
+                await _transport.DisposeAsync();
+                if (_stopping || cancellationToken.IsCancellationRequested)
+                {
+                    _attempt = attempt.StoppedAt(LanguageConnectionStage.HandshakeSent,
+                        "the client was stopped during the handshake", LanguageConnectionStepOutcome.Cancelled);
+                    return;
+                }
+                await ConnectAndInitializeAsync(cancellationToken, restarted: true);
+                return;
+            }
             _attempt = attempt.StoppedAt(
                 LanguageConnectionStage.HandshakeSent,
-                $"the server did not answer initialize within {_initializeTimeout:g}");
-            AbandonUnansweredHandshake();
+                $"the server did not answer initialize within {_initializeTimeout:g}"
+                + (_stdioRestarted ? "; tried twice" : ""));
+            AbandonHandshake($"did not answer initialize within {_initializeTimeout}");
             RaiseStateChanged();
             return;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to initialize VB6 LSP server");
             _attempt = attempt.StoppedAt(LanguageConnectionStage.HandshakeSent, ex.Message);
+            AbandonHandshake($"initialize failed: {ex.Message}", ex);
             RaiseStateChanged();
             return;
         }
@@ -1748,7 +1791,8 @@ public sealed class VBLspClient : ILspClient
                     ? new CompletionList(false, value.Deserialize(LspJsonContext.Default.CompletionItemArray)!)
                     : value.Deserialize(LspJsonContext.Default.CompletionList);
             onAnswer();
-            return result?.Items ?? [];
+            return result?.Items.Select(item => item.InsertTextMode is null && result.ItemDefaults?.InsertTextMode is { } mode
+                ? item with { InsertTextMode = mode } : item).ToArray() ?? [];
         }
         catch (Exception ex)
         {
@@ -2041,6 +2085,29 @@ public sealed class VBLspClient : ILspClient
         }
     }
 
+    public bool SupportsOnTypeFormatting(string uri, string trigger) => IsRunning
+        && ServerCapabilities.SupportsOnTypeFormatting(AdvertisedCapabilities, trigger);
+
+    internal static readonly TimeSpan OnTypeFormattingTimeout = TimeSpan.FromMilliseconds(250);
+
+    public async Task<TextEdit[]> RequestOnTypeFormattingAsync(string uri, Position position, string trigger, FormattingOptions options, CancellationToken cancellationToken = default)
+    {
+        if (_rpc is null || !_initialized || !SupportsOnTypeFormatting(uri, trigger)) return [];
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(OnTypeFormattingTimeout);
+        var p = new DocumentOnTypeFormattingParams(new TextDocumentIdentifier(uri), position, trigger, options);
+        try
+        {
+            return await InvokeRequestAsync<TextEdit[]?>(_rpc, "textDocument/onTypeFormatting", p,
+                budget.Token, timeout: OnTypeFormattingTimeout, documentUri: uri) ?? [];
+        }
+        catch (Exception ex)
+        {
+            WarnRequestFailedOnce("textDocument/onTypeFormatting", ex, cancellationToken);
+            return [];
+        }
+    }
+
     public bool SupportsRangeFormatting(string uri) => IsRunning
         && ServerCapabilities.Supports(AdvertisedCapabilities, "documentRangeFormattingProvider");
 
@@ -2137,6 +2204,7 @@ public sealed class VBLspClient : ILspClient
     public async Task UpdateWorkspaceFoldersAsync(CancellationToken cancellationToken = default)
     {
         if (_rpc is null || !_initialized) return;
+        _watchedFiles?.UpdateWorkspaceFolders();
         var capabilities = AdvertisedCapabilities;
         if (capabilities is not { ValueKind: JsonValueKind.Object } caps
             || !caps.TryGetProperty("workspace", out var workspace)
@@ -2581,9 +2649,14 @@ public sealed class VBLspClient : ILspClient
         }
     }
 
+    private WatchedFileRegistrations? _watchedFiles;
+
+    public void NotifyWatchedFile(string path, int type) => _watchedFiles?.Notify(path, type);
+
     private sealed class LspNotificationReceiver
     {
         private readonly VBLspClient _client;
+        public WatchedFileRegistrations WatchedFiles { get; set; } = null!;
 
         public LspNotificationReceiver(VBLspClient client) => _client = client;
 
@@ -2706,7 +2779,7 @@ public sealed class VBLspClient : ILspClient
                     && Volatile.Read(ref command.Pending) is not { IsCompleted: true })
                 .OrderBy(command => command.Order).FirstOrDefault();
             if (running is null)
-                return Refuse("HexIDE applies a server's edits only while a command the user started is running.", "Str.Lsp.EditRequiresUserCommand");
+                return Refuse(HexIDE.IDE.Distribution.DisplayName + " applies a server's edits only while a command the user started is running.", "Str.Lsp.EditRequiresUserCommand");
             if (_client._applyEdit is not { } apply)
                 return Refuse("No workspace editor is available.", "Str.Lsp.NoWorkspaceEditor");
             // Versioned edits retain the latest-sent check; unversioned edits use the oldest command.
@@ -2735,38 +2808,29 @@ public sealed class VBLspClient : ILspClient
             _client.RaiseMessageShown(p);
         }
 
-        /// <summary>
-        /// Refuses dynamic capability registration, out loud.
-        ///
-        /// <para>
-        /// <b>Refusing is correct, and is not the part worth changing.</b> <c>dynamicRegistration</c> is a
-        /// <em>client</em> capability — the specification's own wording is "whether hover supports dynamic
-        /// registration" — and this client declares it nowhere. A conformant server therefore may not
-        /// register dynamically, and must put everything in its <c>initialize</c> reply.
-        /// </para>
-        ///
-        /// <para>
-        /// Servers that ask anyway exist, and the wire answer they already got was the right one: a
-        /// <c>MethodNotFound</c> error, which lets them fall back instead of waiting. That behaviour is
-        /// preserved exactly — the error code is set deliberately rather than inherited from having no
-        /// handler at all. What was missing was on this side: nothing was written down, so a server that
-        /// asked, was refused, and quietly served less left the user with fewer features and no trace of
-        /// why (hexide-io/HexIDE#288).
-        /// </para>
-        /// </summary>
         [JsonRpcMethod("client/registerCapability", UseSingleObjectParameterDeserialization = true)]
-        public void OnRegisterCapability(JsonElement p)
-        {
-            _client._logger.LogWarning(
-                "The {Language} server asked to register capabilities dynamically, which this client does "
-              + "not support and does not advertise support for; refused. Anything it withheld from its "
-              + "initialize reply expecting to register later will be unavailable. Registrations: {What}",
-                _client._languageId, Describe(p));
+        public void OnRegisterCapability(JsonElement p) => ChangeRegistration(p, unregister: false);
 
-            throw new LocalRpcException("This client does not support dynamic capability registration.")
+        private void ChangeRegistration(JsonElement p, bool unregister)
+        {
+            try
             {
-                ErrorCode = (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.MethodNotFound,
-            };
+                if (unregister) WatchedFiles.Unregister(p);
+                else WatchedFiles.Register(p);
+            }
+            catch (LocalRpcException)
+            {
+                _client._logger.LogWarning(
+                    "The {Language} server asked to register capabilities dynamically; refused unsupported registrations: {What}",
+                    _client._languageId, Describe(p));
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _client._logger.LogWarning(ex, "Invalid watched-file registration: {What}", Describe(p));
+                throw new LocalRpcException("Invalid watched-file registration: " + ex.Message)
+                { ErrorCode = (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.InvalidParams };
+            }
         }
 
         [JsonRpcMethod("workspace/codeLens/refresh")]
@@ -2809,20 +2873,8 @@ public sealed class VBLspClient : ILspClient
                 _client.PullDiagnosticsInBackground(uri);
         }
 
-        /// <summary>The counterpart, refused the same way and for the same reason.</summary>
         [JsonRpcMethod("client/unregisterCapability", UseSingleObjectParameterDeserialization = true)]
-        public void OnUnregisterCapability(JsonElement p)
-        {
-            _client._logger.LogWarning(
-                "The {Language} server asked to unregister capabilities dynamically; refused, as nothing "
-              + "was ever registered that way. Registrations: {What}",
-                _client._languageId, Describe(p));
-
-            throw new LocalRpcException("This client does not support dynamic capability registration.")
-            {
-                ErrorCode = (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.MethodNotFound,
-            };
-        }
+        public void OnUnregisterCapability(JsonElement p) => ChangeRegistration(p, unregister: true);
 
         /// <summary>
         /// The methods named in a registration payload, for the log. Best effort by design: this is a
@@ -2920,6 +2972,7 @@ public sealed class VBLspClient : ILspClient
         // advertises it IS taken up on it; the absence of a warning is about what its ABSENCE means.
         "diagnosticProvider",
         "documentFormattingProvider",
+        "documentOnTypeFormattingProvider",
         "documentRangeFormattingProvider",
         "documentHighlightProvider",
         "documentSymbolProvider",

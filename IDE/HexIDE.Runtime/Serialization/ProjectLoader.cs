@@ -206,7 +206,9 @@ public sealed class ProjectLoader
                 var (moduleSource, _, moduleEncoding, moduleByteForByte) = await ReadSourceAsync(moduleAbsolutePath, ProjectEncodingRecords.Read(serializedProject.ExtensionTail, modulePath));
                 module.TextEncoding = moduleEncoding;
                 // .bas/.cls: strip the VB6 header so Code is the body only (no-op for .pag/.ctl).
-                var (preservedHeader, moduleBody) = ModuleFileFormat.SplitHeader(moduleSource, moduleKind);
+                var (preservedHeader, moduleBody) = ModuleFileFormat.SplitHeader(moduleSource, moduleKind, out var lineMap, out var oldHeaderLines);
+                module.LoadedLineMap = lineMap;
+                module.LoadedOldHeaderLines = oldHeaderLines;
 
                 module.RecordOriginalHeader(preservedHeader);
 
@@ -239,6 +241,23 @@ public sealed class ProjectLoader
                 // line would have the next Save Project remove the member from the project instead.
                 project.PreserveItemLine(ItemLineFor(moduleKind, moduleName, modulePath), serializedProject.ModuleLineSlots[index]);
             }
+        }
+
+        // Decide after every member has loaded: a later module can collide too. Collisions are unmeasured
+        // (#3774), so keep the project-line name for those rather than choosing a winner by load order.
+        var names = project.Modules.Select(m => (Module: m, Original: m.Name,
+            Loaded: ModuleFileFormat.HandlesHeader(m.Kind)
+                ? ModuleFileFormat.ModuleNameFor(m.Name, m.OriginalHeader) : m.Name)).ToArray();
+        foreach (var item in names)
+        {
+            if (names.Any(other => other.Module != item.Module &&
+                    (string.Equals(other.Original, item.Loaded, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(other.Loaded, item.Loaded, StringComparison.OrdinalIgnoreCase))) ||
+                project.Forms.Any(f => string.Equals(f.Name, item.Loaded, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (!string.Equals(item.Original, item.Loaded, StringComparison.OrdinalIgnoreCase))
+                item.Module.ProjectLineName = item.Original;
+            item.Module.Name = item.Loaded;
         }
 
         // Always retain the startup form NAME so Startup= survives round-trip even when its .frm was

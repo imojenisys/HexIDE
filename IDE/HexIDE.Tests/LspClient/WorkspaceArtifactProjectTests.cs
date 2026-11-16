@@ -18,7 +18,7 @@ public sealed class WorkspaceArtifactProjectTests
         };
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(new[] { project });
-        var sut = new ProjectLspWorkspace(() => manager);
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
         sut.Projects.Should().ContainSingle();
         var changes = 0;
         sut.ProjectChanged += () => changes++;
@@ -58,7 +58,7 @@ public sealed class WorkspaceArtifactProjectTests
         };
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(new[] { project });
-        var sut = new ProjectLspWorkspace(() => manager);
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
         sut.Projects.Should().ContainSingle();
         var changes = 0;
         sut.ProjectChanged += () => changes++;
@@ -94,19 +94,32 @@ public sealed class WorkspaceArtifactProjectTests
         project.AddReference(new VbReference(Guid.NewGuid().ToString(), "1.0", 0, @"\\host.invalid\share\remote.tlb", "Remote"));
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(new[] { project });
-        var sut = new ProjectLspWorkspace(() => manager);
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
         sut.Projects[0].Project.References.Select(r => r.Name).Should().Equal("OLE Automation", "Remote");
         sut.Dispose();
     }
 
     [Fact]
-    public void A_contributed_project_is_never_rendered_as_a_vbp_for_a_server()
+    public void A_project_whose_type_writes_its_file_is_rendered_for_a_server_whoever_opened_it()
     {
-        var path = Path.Combine(Path.GetTempPath(), "hexide-projection-" + Guid.NewGuid().ToString("N"), ".rdproj");
-        var project = new ProjectDefinition(VBProjectType.EXE, "Ledger") { AbsolutePath = path, ContributedBy = "rdcore" };
+        var path = Path.Combine(Path.GetTempPath(), "hexide-projection-" + Guid.NewGuid().ToString("N"), "Probe.vbp");
+        var project = new ProjectDefinition(VBProjectType.EXE, "Probe") { AbsolutePath = path, ContributedBy = "rdcore" };
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(new[] { project });
-        var sut = new ProjectLspWorkspace(() => manager);
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
+
+        sut.Projects[0].ProjectText.Should().NotBeNull();
+        sut.Dispose();
+    }
+
+    [Fact]
+    public void A_project_whose_type_does_not_write_its_file_is_never_rendered_for_a_server()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "hexide-projection-" + Guid.NewGuid().ToString("N"), ".rdproj");
+        var project = new ProjectDefinition(VBProjectType.EXE, "Ledger") { AbsolutePath = path, Offers = ProjectOffers.Nothing };
+        var manager = Substitute.For<IProjectManager>();
+        manager.LoadedProjects.Returns(new[] { project });
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
 
         sut.Projects[0].Project.DefinitionPath.Should().Be(path);
         sut.Projects[0].ProjectText.Should().BeNull("its file is its add-in's, in its add-in's format");
@@ -120,7 +133,7 @@ public sealed class WorkspaceArtifactProjectTests
         var project = new ProjectDefinition(VBProjectType.EXE, "Probe") { AbsolutePath = path };
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(new[] { project });
-        var sut = new ProjectLspWorkspace(() => manager);
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
         var changes = 0;
         sut.ProjectChanged += () => changes++;
         (await sut.Projects[0].ProjectText!(TestContext.Current.CancellationToken)).Should().Contain("Name=\"Probe\"");
@@ -164,7 +177,7 @@ public sealed class WorkspaceArtifactProjectTests
         if (line is not null) project.UnknownPreSectionLines.Add((0, line));
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(new[] { project });
-        var sut = new ProjectLspWorkspace(() => manager);
+        var sut = new ProjectLspWorkspace(() => manager, new Vb6ProjectFileFormat());
         var arguments = sut.Projects[0].Project.CompilationArguments!;
         arguments.Should().HaveCount(count);
         if (count > 0)

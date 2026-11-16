@@ -176,6 +176,9 @@ public record ShowMessageParams(
 
     [JsonIgnore]
     public bool IsEditRefusal { get; init; }
+
+    [JsonIgnore]
+    public string? ServerDisplayName { get; init; }
 }
 
 /// <param name="RootUri">
@@ -206,7 +209,9 @@ public record InitializeParams(
     [property: JsonPropertyName("trace")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Trace = null,
     [property: JsonPropertyName("locale")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Locale = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Locale = null,
+    [property: JsonPropertyName("initializationOptions")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonElement? InitializationOptions = null);
 
 /// <summary>
 /// How much a server should say about its own work: the three values the protocol defines, and nothing else.
@@ -324,11 +329,20 @@ public record CompletionClientCapabilities(
     [property: JsonPropertyName("completionItemKind")] CompletionItemKindClientCapabilities CompletionItemKind,
     [property: JsonPropertyName("insertTextMode")] int InsertTextMode = 1,
     [property: JsonPropertyName("completionItem")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CompletionItemClientCapabilities? CompletionItem = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CompletionItemClientCapabilities? CompletionItem = null,
+    [property: JsonPropertyName("completionList")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CompletionListClientCapabilities? CompletionList = null);
 
 public record CompletionItemClientCapabilities(
     [property: JsonPropertyName("preselectSupport")] bool PreselectSupport,
-    [property: JsonPropertyName("documentationFormat")] string[] DocumentationFormat);
+    [property: JsonPropertyName("documentationFormat")] string[] DocumentationFormat,
+    [property: JsonPropertyName("insertReplaceSupport")] bool InsertReplaceSupport = true,
+    [property: JsonPropertyName("snippetSupport")] bool SnippetSupport = true,
+    [property: JsonPropertyName("insertTextModeSupport")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] InsertTextModeClientCapabilities? InsertTextModeSupport = null);
+
+public record InsertTextModeClientCapabilities([property: JsonPropertyName("valueSet")] int[] ValueSet);
+public record CompletionListClientCapabilities([property: JsonPropertyName("itemDefaults")] string[] ItemDefaults);
 
 public record CompletionItemKindClientCapabilities(
     [property: JsonPropertyName("valueSet")] CompletionItemKind[] ValueSet);
@@ -373,7 +387,13 @@ public record WorkspaceClientCapabilities(
     [property: JsonPropertyName("workspaceEdit")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WorkspaceEditClientCapabilities? WorkspaceEdit = null,
     [property: JsonPropertyName("codeLens")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WorkspaceCodeLensClientCapabilities? CodeLens = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] WorkspaceCodeLensClientCapabilities? CodeLens = null,
+    [property: JsonPropertyName("didChangeWatchedFiles")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DidChangeWatchedFilesClientCapabilities? DidChangeWatchedFiles = null);
+
+public record DidChangeWatchedFilesClientCapabilities(
+    [property: JsonPropertyName("dynamicRegistration")] bool DynamicRegistration = true,
+    [property: JsonPropertyName("relativePatternSupport")] bool RelativePatternSupport = true);
 
 public record WorkspaceEditClientCapabilities(
     [property: JsonPropertyName("documentChanges")] bool DocumentChanges = true);
@@ -630,6 +650,18 @@ public record ServerCapabilities(
         && caps.TryGetProperty(capabilityName, out var value)
         && IsEnabled(value);
 
+    public static bool SupportsOnTypeFormatting(System.Text.Json.JsonElement? capabilities, string trigger) =>
+        trigger.Length > 0
+        && capabilities is { ValueKind: System.Text.Json.JsonValueKind.Object } caps
+        && caps.TryGetProperty("documentOnTypeFormattingProvider", out var provider)
+        && provider.ValueKind == System.Text.Json.JsonValueKind.Object
+        && ((provider.TryGetProperty("firstTriggerCharacter", out var first)
+             && first.ValueKind == System.Text.Json.JsonValueKind.String && first.GetString() == trigger)
+            || (provider.TryGetProperty("moreTriggerCharacter", out var more)
+                && more.ValueKind == System.Text.Json.JsonValueKind.Array
+                && more.EnumerateArray().Any(c => c.ValueKind == System.Text.Json.JsonValueKind.String
+                    && c.GetString() == trigger)));
+
     /// <summary>
     /// True when the server named this command in its <c>executeCommandProvider.commands</c>.
     /// </summary>
@@ -870,7 +902,7 @@ public record CompletionItem(
     [property: JsonPropertyName("insertText")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? InsertText = null,
     [property: JsonPropertyName("textEdit")]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TextEdit? TextEdit = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CompletionTextEdit? TextEdit = null,
     [property: JsonPropertyName("additionalTextEdits")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] TextEdit[]? AdditionalTextEdits = null,
     [property: JsonPropertyName("insertTextFormat")]
@@ -882,7 +914,21 @@ public record CompletionItem(
     [property: JsonPropertyName("preselect")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? Preselect = null,
     [property: JsonPropertyName("documentation"), JsonConverter(typeof(CompletionDocumentationConverter))]
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] MarkupContent? Documentation = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] MarkupContent? Documentation = null,
+    [property: JsonPropertyName("insertTextMode")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? InsertTextMode = null);
+
+public record CompletionTextEdit(
+    [property: JsonPropertyName("newText")] string NewText,
+    [property: JsonPropertyName("range")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Range? Range = null,
+    [property: JsonPropertyName("insert")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Range? Insert = null,
+    [property: JsonPropertyName("replace")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Range? Replace = null)
+{
+    public static implicit operator CompletionTextEdit(TextEdit edit) => new(edit.NewText, edit.Range);
+}
 
 public sealed class CompletionDocumentationConverter : JsonConverter<MarkupContent>
 {
@@ -897,7 +943,13 @@ public sealed class CompletionDocumentationConverter : JsonConverter<MarkupConte
 
 public record CompletionList(
     [property: JsonPropertyName("isIncomplete")] bool IsIncomplete,
-    [property: JsonPropertyName("items")]        CompletionItem[] Items);
+    [property: JsonPropertyName("items")]        CompletionItem[] Items,
+    [property: JsonPropertyName("itemDefaults")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] CompletionItemDefaults? ItemDefaults = null);
+
+public record CompletionItemDefaults(
+    [property: JsonPropertyName("insertTextMode")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? InsertTextMode = null);
 
 public record DocumentSymbolParams(
     [property: JsonPropertyName("textDocument")] TextDocumentIdentifier TextDocument);
@@ -1132,6 +1184,13 @@ public record FormattingOptions(
 public record DocumentRangeFormattingParams(
     [property: JsonPropertyName("textDocument")] TextDocumentIdentifier TextDocument,
     [property: JsonPropertyName("range")] Range Range,
+    [property: JsonPropertyName("options")] FormattingOptions Options);
+
+/// <summary>Formatting after a typed trigger; Position is after the character was inserted.</summary>
+public record DocumentOnTypeFormattingParams(
+    [property: JsonPropertyName("textDocument")] TextDocumentIdentifier TextDocument,
+    [property: JsonPropertyName("position")] Position Position,
+    [property: JsonPropertyName("ch")] string Ch,
     [property: JsonPropertyName("options")] FormattingOptions Options);
 
 /// <summary>Document formatting request parameters.</summary>
@@ -1445,3 +1504,10 @@ public record CallHierarchyIncomingCall(
 public record CallHierarchyOutgoingCall(
     [property: JsonPropertyName("to")] CallHierarchyItem To,
     [property: JsonPropertyName("fromRanges")] Range[] FromRanges);
+
+public record WatchedFileEvent(
+    [property: JsonPropertyName("uri")] string Uri,
+    [property: JsonPropertyName("type")] int Type);
+
+public record DidChangeWatchedFilesParams(
+    [property: JsonPropertyName("changes")] WatchedFileEvent[] Changes);

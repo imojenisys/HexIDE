@@ -13,8 +13,10 @@ using HexIDE.Forms.ViewModels.Options;
 using HexIDE.IDE;
 using HexIDE.Runtime.AvaloniaInterop;
 using HexIDE.Runtime.Components;
+using HexIDE.Runtime.Components.InBox;
 using HexIDE.Runtime.Debugging;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.TwinBasic;
 using ModelContextProtocol.Server;
 using Microsoft.AspNetCore.Http;
 
@@ -24,7 +26,7 @@ namespace HexIDE.Desktop.Server;
 internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpContextAccessor = null)
 {
     [McpServerTool(Name = "get_project_info")]
-    [Description("Returns the startup project's name, path, and lists of forms, modules and carried files (RelatedDoc entries), and in 'projects' the same for every loaded project, each with 'isStartup'. With a project group open the top-level fields describe only the startup project, so read 'projects' for the rest; 'note' says when the top-level fields are not the whole picture, including when nothing is loaded or no startup project is set. It also names projects with no chosen home, even when a working-copy path exists: Save Project asks where to put them.")]
+    [Description("Returns the startup project's name, path, and lists of forms, modules and carried files (RelatedDoc entries), and in 'projects' the same for every loaded project, each with 'isStartup'. With a project group open the top-level fields describe only the startup project, so read 'projects' for the rest; 'note' says when the top-level fields are not the whole picture, including when nothing is loaded or no startup project is set. It also names projects with no chosen home, even when a working-copy path exists: Save Project asks where to put them. Each project reports its own projectFile. Open archive projects are also in projects, with their container path and entries (folders and hidden entries included): /-separated, percent-escaped name segments, matched exactly by open_file. Archive entries open read-only without a language server; use the container path as project to disambiguate.")]
     public async Task<ProjectInfoResult> GetProjectInfoAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -41,7 +43,12 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     ReferenceEquals(p, startup),
                     p.Forms.Select(f => f.Name).ToArray(),
                     p.Modules.Select(m => m.Name).ToArray(),
-                    p.RelatedDocuments.Select(d => d.Name).ToArray()))
+                    p.RelatedDocuments.Select(d => d.Name).ToArray(),
+                    // The project's own file only once it has a chosen home: a working copy is not its file.
+                    p.AbsolutePath is { } file && !IsWorkingCopy(p, file) ? file : null))
+                .Concat((ctx.Archives?.Projects ?? []).Select(p => new ProjectSummary(
+                    p.Name, p.ContainerPath, false, [], [], [], p.ContainerPath,
+                    ArchiveToolPaths.Entries(p.Root).Select(ArchiveToolPaths.PathOf).ToArray())))
                 .ToArray();
 
             var note = loaded.Count switch
@@ -54,6 +61,11 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 _ => $"{loaded.Count} projects are loaded. The top-level fields describe the startup project, "
                      + $"{startup.Name}; 'projects' lists all of them.",
             };
+
+            if (ctx.Archives?.Projects.Count is > 0)
+                note = $"{ctx.Archives.Projects.Count} archive project(s) are open read-only; 'projects' lists their container paths "
+                    + "and entries. No language server is attached to archive entries. "
+                    + (loaded.Count == 0 ? "The top-level startup-project fields are empty." : note);
 
             foreach (var project in loaded.Where(p => p.AbsolutePath is null || IsWorkingCopy(p, p.AbsolutePath)))
                 note += $" {project.Name} has no chosen home yet. Save Project asks where to put its new documents and project file; any temporary files are working copies.";
@@ -112,8 +124,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                + "server sent one, 'code' (the rule that fired) and 'href' (where that rule is documented). "
                + "'uri' is the name the language server knows the document by: its file: URI, or "
                + "untitled:<project>/<name>.<ext> while it has no file. 'project' and 'document' name it as the IDE "
-               + "does, and are absent when the uri names no loaded form, module, class or carried file, or a file two loaded "
-               + "projects share, since nothing then says which project's copy it is about. 'severity' is Error, Warning, "
+               + "does, and are absent when the uri names no loaded form, module, class or carried file. In a group, the owner is "
+               + "the startup project if it lists the file, else the first loaded project that does. "
+               + "A shared file appears under that owner only; switching startup recomputes it. 'severity' is Error, Warning, "
                + "Information or Hint, as the server reported it, or Unknown when the server sent none. "
                + "'line' and 'column' are 1-based, and the line is counted from the top of the file with its header "
                + "included, as the code window numbers it; a VB6 compiler error is converted to that numbering. "
@@ -130,7 +143,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var named = await Dispatcher.UIThread.InvokeAsync(() => published
             .Select(p => p.Uri)
             .Distinct(StringComparer.Ordinal)
-            .ToDictionary(uri => uri, uri => NamedDocuments.ForUri(ctx.ProjectManager.LoadedProjects, uri),
+            .ToDictionary(uri => uri, uri => NamedDocuments.ForDiagnostic(ctx.ProjectManager.LoadedProjects, ctx.ProjectManager.StartupProject, uri),
                 StringComparer.Ordinal));
 
         var items = published
@@ -184,7 +197,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "get_file_content")]
-    [Description("Returns the current text of a named form, module or carried file: the open editor's text if it is open, otherwise the IDE's copy (for a carried file, the file on disk). For a form, module or class that is its WHOLE FILE, open or not: a form's VERSION line and designer block, a class's header and the leading Attribute lines come first, then the code. So line 1 is the file's first line, as set_breakpoints, set_bookmarks, get_diagnostics and the debugger tools count it, and an editor offset (interact set_property CaretOffset, or the offset a type_text or press_key refusal gives) indexes this text. set_file_content takes it back as it is, or the code alone. A form created in this session and not yet saved or changed in the designer has no header yet, so its text is its code alone. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was read, as the IDE spells them. hasUnsavedChanges is true when saving would change the file on disk — edits typed in the editor, controls added, removed or reordered in the designer, or any other change to the IDE's copy since it was last loaded or saved. A document with no file yet always has unsaved changes.")]
+    [Description("Returns the current text of a named form, module or carried file: the open editor's text if it is open, otherwise the IDE's copy (for a carried file, the file on disk). For a form, module or class that is its WHOLE FILE, open or not: a form's VERSION line and designer block, a class's header and the leading Attribute lines come first, then the code. So line 1 is the file's first line, as set_breakpoints, set_bookmarks, get_diagnostics and the debugger tools count it, and an editor offset (interact set_property CaretOffset, or the offset a type_text or press_key refusal gives) indexes this text. set_file_content takes it back as it is, or the code alone. New forms hold their header from creation, before their first save. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was read, as the IDE spells them. hasUnsavedChanges means the document has edits not yet saved, including code and designer changes. A save can still normalise a file the IDE did not write, for example by adding a missing module name line. A document with no file yet always has unsaved changes.")]
     public async Task<FileContentResult> GetFileContentAsync(string name, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -204,7 +217,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 // from different things: the editor's code section against the model's Code. The whole buffer
                 // never equals Code, so comparing what this returns would call every open document edited.
                 var editor = CodeEditorOf(document);
-                var text = HexIDE.IDE.DocumentContent.Read(document, editor);
+                var text = HexIDE.IDE.DocumentContent.Read(document, editor, ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader);
                 var codeAhead = HexIDE.IDE.DocumentContent.CodeAheadOfModel(document, editor);
                 if (document.Form is { } form)
                 {
@@ -239,7 +252,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             .FirstOrDefault(d => d.FormDefinition == form);
 
     [McpServerTool(Name = "set_file_content")]
-    [Description("Replaces the VB6 source of the form, module or class 'name' and saves to disk; `project` picks one where a group holds two of that name. The reply's 'project' and 'document' name what was written, as the IDE spells them. Two parts of the file are the IDE's, and content that changes either is refused with nothing changed. The header (a form's or UserControl's VERSION line and designer block, a class's header, the leading Attribute lines) changes from the designer and the Properties window, so a changed control or Instancing is not applied by sending it here. A member's Attribute lines, the run under a procedure's or variable's declaration that gives its description or dispatch id, may move or be renamed with it and go with its declaration; the reply names each member whose lines are otherwise changed, added or dropped. A form's leading 'Attribute VB_*' lines are its identity: if content leaves them out the existing ones are kept and the reply says so. A project started with --newproject has a form working copy in the temp folder, written without a picker. A pathless document is refused before changes unless answer_next_file_dialog is armed. The reply's 'note' names the file written and the range the document's lines are now numbered in, from the top of the file with the header included, as get_file_content returns it and set_breakpoints counts, and says whether the document is open in an editor, since only open documents are analysed for get_diagnostics. The save writes the whole file, so text set earlier and not yet saved, such as a form's captions, counts too: when the document's code page cannot hold a character anywhere in it, nothing is written and no dialog is shown, the code stays in the IDE, and the reply names the document, the code page, the character and the line that holds it.")]
+    [Description("Replaces the VB6 source of the form, module or class 'name' and saves to disk; `project` picks one where a group holds two of that name. Two parts of the file are the IDE's, and content that changes either is refused with nothing changed. The header (a form's or UserControl's VERSION line and designer block, a class's header, the leading Attribute lines) changes from the designer and the Properties window, so a changed control or Instancing is not applied by sending it here. A member's Attribute lines, the run under a procedure's or variable's declaration that gives its description or dispatch id, may move or be renamed with it and go with its declaration; the reply names each member whose lines are otherwise changed, added or dropped. Omitted leading Attribute lines are kept, as the reply says. A project started with --newproject has a form working copy in the temp folder, written without a picker. A pathless document is refused before changes unless answer_next_file_dialog is armed. The reply's 'note' names the file written and the range the document's lines are now numbered in, from the top of the file with the header included, as get_file_content returns it and set_breakpoints counts, and whether an editor is open (only open files get diagnostics). The save writes the whole file, so text set earlier and not yet saved, such as a form's captions, counts too: when the document's code page cannot hold a character anywhere in it, nothing is written and no dialog is shown, the code stays in the IDE, and the reply names the document, the code page, the character and the line that holds it. Refuses writes outside the project's folder or through links, including armed destinations. Before replacing source or companion bytes, preserves a recovery file; the reply names it and how to restore it.")]
     public async Task<MutateResult> SetFileContentAsync(
         [Description("A form, module or class, as get_project_info lists them, found in every loaded project without "
                      + "regard to case. A name two documents share is refused, and the reply lists them.")]
@@ -251,7 +264,11 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         string? project = null,
         CancellationToken ct = default)
     {
-        var restoredHeader = false;
+        if (ProjectWriteSafety.NameRefusal(name) is { } nameRefusal)
+            return new MutateResult(false, nameRefusal);
+        using var writeAttempt = new ProjectWriteSafety.WriteAttempt();
+        string recoveryNote = "";
+        string? restoredHeader = null;
         string? editNote = null;
         DocumentIdentity? target = null;
         NamedDocument found = default;
@@ -267,6 +284,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (found.Document is not { } document)
                 return (null, null, found.Error);
             target = document;
+            if (document.Form is { CanSaveFaithfully: false })
+                return (null, null, CodeEditorViewModel.ReadOnlyWriteRefusal);
+            if (ProjectWriteSafety.Prepare(document, ctx.ProjectFileFormat, out recoveryNote, writeAttempt) is { } safetyRefusal)
+                return (null, null, safetyRefusal);
 
             // Refused BEFORE the edit. This used to apply the code and only then find there was no file to
             // write, so the reply said the change failed while the editor held it. (#538)
@@ -287,14 +308,17 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // better: a designer block exactly as the form has it applies nothing, and one that differs is
             // refused with the reason. The separate refusal had to go in the same change as the read, or this
             // tool would have refused exactly what get_file_content now returns.
-            var replaced = HexIDE.IDE.DocumentContent.Write(document, CodeEditorOf(document), content);
+            var replaced = HexIDE.IDE.DocumentContent.Write(document, CodeEditorOf(document), content, ctx.ReadOnlyRegionRules, ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader);
             if (replaced.Refusal is { } refusal)
                 return (null, null, refusal);
 
-            // Whether the CALLER left a form's Attribute block out, not whether anything was put back: the
-            // designer block is always put back in front of code sent alone. The block is the form's identity,
-            // and leaving it out used to delete it with no warning, straight to disk (gap 14).
-            restoredHeader = HexIDE.IDE.DocumentContent.LeftOutAttributeLines(document, content);
+            // Report what the caller left out, rather than whether the guard restored any text:
+            // a prefix is always restored when code is sent alone.
+            if (HexIDE.IDE.DocumentContent.LeftOutLeadingRegion(document, content, ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader) is { } omitted)
+            {
+                restoredHeader = ctx.ReadOnlyRegionRules?.DescribeRegions(omitted.Text.Text, omitted.Text.PrefixLength, [omitted.Region])
+                    ?? "read-only text";
+            }
             editNote = ctx.ProjectRunnerService.CodeEditNote(edit: true);
             return (document.Form, document.Module, null);
         });
@@ -320,15 +344,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             var (written, refused) = await SaveQuietlyAsync(() => form is not null
                 ? ctx.ProjectService.SaveForm(form, false, interactive: false, rewrites: rewrites)
                 : module is not null ? ctx.ProjectService.SaveModule(module, false, interactive: false, rewrites: rewrites) : Task.FromResult(false));
+            writeAttempt.Written = written;
             if (refused is not null)
                 // Not "the new code was refused": the character can be anywhere in the file. The message quotes its line.
                 return Naming(new MutateResult(false, cancel.After($"The new code is in the IDE, but the file was not written. {refused.Message}"), editNote?.TrimStart()), target);
             return Naming(written
-                ? new MutateResult(true, null, cancel.After(await Dispatcher.UIThread.InvokeAsync(() => WrittenNote(target!)) + editNote + rewrites.Note
-                    + (restoredHeader
-                        ? " Kept the form's Attribute header, which the content omitted. VB_Name is the form's "
-                          + "identity; without this the write would have destroyed it. Call get_file_content "
-                          + "first and edit what it returns, which includes the header."
+                ? new MutateResult(true, null, cancel.After(await Dispatcher.UIThread.InvokeAsync(() => WrittenNote(target!)) + recoveryNote + editNote + rewrites.Note
+                    + (restoredHeader is not null
+                        ? $" Kept {restoredHeader}, which the content left out. Call get_file_content first and edit what it returns, which includes it."
                         : "")))
                 : new MutateResult(false, cancel.After("HexIDE cannot reproduce this file faithfully, so it was not "
                                         + "written and the copy on disk is unchanged."), editNote?.TrimStart()), target);
@@ -345,7 +368,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         catch (Exception ex)
         {
             // The edit is already in the IDE by now; a bare exception message would read as though it were not.
-            return Naming(new MutateResult(false, cancel.After($"The new code is in the IDE but was not written: {ToolFailures.WithoutProfile(ex.Message)}")), target);
+            return Naming(new MutateResult(false, cancel.After($"The new code is in the IDE but was not written: {ToolFailures.WithoutProfile(ex.Message)}" + writeAttempt.FailureNote)), target);
         }
     }
 
@@ -371,16 +394,15 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     /// </para>
     /// <para>
     /// Read AFTER the save, and the order matters. A form's save re-renders its designer block and adopts the
-    /// result as the header: a form that had no header yet gains one there, and one VB6 wrote can change
-    /// height. A range taken before the save would disagree with the next get_file_content in exactly the case
-    /// a caller cannot predict. The path is read afterwards for the same reason: a first save through an armed
+    /// result as the header, which can change height for a file VB6 wrote. A range taken before the save would
+    /// disagree with the next get_file_content in exactly the case a caller cannot predict. The path is read afterwards for the same reason: a first save through an armed
     /// file dialog is where a document gets one.
     /// </para>
     /// </remarks>
     private string WrittenNote(DocumentIdentity document)
     {
         var editor = CodeEditorOf(document);
-        var lines = HexIDE.IDE.DocumentContent.TextOf(document, editor).LineCount;
+        var lines = HexIDE.IDE.DocumentContent.TextOf(document, editor, ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader).LineCount;
         return WriteLocationNote(document.Project, document.AbsolutePath) + $" Its lines are numbered 1..{lines}, from the top of "
                + "the file with the header included, as get_file_content returns it. "
                + (editor is not null
@@ -478,7 +500,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "get_form_controls")]
-    [Description("Returns all controls on a form or UserControl with their key design-time properties (name, type, position, size, caption, text, visible, enabled, and a control array element's index, which name(index) takes); with 'controlName', that one control with every property it has, in the text set_control_property takes where it takes one. Position and size in that summary are in PIXELS, left/top relative to the control's container; a .frm stores twips, 15 to a pixel. The 'properties' rows give Left, Top, Width and Height as the Properties window does instead, in twips or the container's ScaleMode, each naming its unit. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name the form, as the IDE spells them; visible, enabled, caption and text are left out where the control's class has no such property. Carried controls appear with carried: true, their name, block type, position and size, and a note: HexIDE draws but does not model them, so they cannot be moved, sized or set. controlName also finds these rows, with the same note and no properties.")]
+    [Description("Returns all controls on a form or UserControl with their key design-time properties (name, type, position, size, caption, text, visible, enabled, and a control array element's index, which name(index) takes); with 'controlName', that one control with every property it has, in the text set_control_property takes where it takes one. Position and size in that summary are in PIXELS, left/top relative to the control's container; a .frm stores twips, 15 to a pixel. The 'properties' rows give Left, Top, Width and Height as the Properties window does instead, in twips or the container's ScaleMode, each naming its unit. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name the form, as the IDE spells them; visible, enabled, caption and text are left out where the control's class has no such property. Carried controls appear with carried: true, their name, block type, position and size, and a note: HexIDE draws but does not model them, so they cannot be moved, sized or set. controlName also finds these rows, with the same note and no properties. Within each container, rows are in z-order, bottom first; zOrder is 0 at the bottom. A container's rows come right after its own row. Compare zOrder only for rows with the same container (absent means the form). The form itself and menus omit zOrder. An open designer supplies live draw order; otherwise the model supplies it. SSTab children give tab (0 to Tabs - 1); zOrder spans the whole SSTab. Off-page children are shifted left by 75,000 twips (5,000 summary pixels). With controlName an SSTab gives its selected Tab and Tabs count; set_control_property with Tab switches pages.")]
     public async Task<FormControlsResult> GetFormControlsAsync(
         string formName,
         string? project = null,
@@ -490,7 +512,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                      + "not the summary's pixels: in the container's ScaleMode, twips on a form unless it says otherwise, "
                      + "twips inside a Frame, and a form's own Width and Height with its frame; the row's 'note' names the "
                      + "unit. 'settable' says whether set_control_property takes that text back; a "
-                     + "picture is loaded with its row's ... button in the Properties window (arm answer_next_file_dialog first). Properties the file holds that HexIDE does not model, or "
+                     + "picture is loaded with its row's ... button in the Properties window (arm answer_next_file_dialog first), and '(None)' clears one. Properties the file holds that HexIDE does not model, or "
                      + "could not read, are rows too, with the file's text, not settable, and a 'note' saying which. "
                      + "A control array named without an index is its first element, and the reply's 'note' says so.")]
         string? controlName = null,
@@ -508,26 +530,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 .OfType<HexIDE.VisualDesigner.FormEditViewModel>()
                 .FirstOrDefault(d => d.FormDefinition == form);
             var components = designerVm is not null
-                ? (IEnumerable<ComponentInstance>)designerVm.AllComponents.Select(v => v.Instance).ToList()
-                : form.Components;
+                ? designerVm.Components.Select(v => v.Instance).Prepend(designerVm.Form.Instance).ToList()
+                : form.Components.ToList();
             const string carriedNote = "HexIDE draws this carried control but does not model it; it cannot be moved, sized or set.";
-            var carried = new List<ControlInfo>();
-            foreach (var parent in components)
-            {
-                foreach (var block in parent.PreservedChildSubtrees)
-                {
-                    if (HexIDE.Runtime.Serialization.UnmodelledControl.Read(block.Text) is not { } control)
-                        continue;
-                    var twipsPerPixel = HexIDE.Runtime.BuiltinTypes.VBScaleModeExtensions.PixelToTwips;
-                    carried.Add(new ControlInfo(control.Name, control.TypeName,
-                        control.Left / twipsPerPixel, control.Top / twipsPerPixel,
-                        control.Width / twipsPerPixel, control.Height / twipsPerPixel,
-                        null, null, null, null,
-                        parent.BaseClass is FormComponentClass ? null : parent.GetPropertyOrDefault(VBProperties.NameProperty),
-                        Carried: true, Note: carriedNote));
-                }
-            }
-
             ControlInfo Info(ComponentInstance c)
             {
                 var name    = c.GetPropertyOrDefault(VBProperties.NameProperty) ?? "";
@@ -560,14 +565,80 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     visible, enabled,
                     caption, text,
                     container,
-                    PropertyText.ArrayIndexOf(c));
+                    PropertyText.ArrayIndexOf(c),
+                    Tab: c.Container?.BaseClass is SSTabComponentClass tabs
+                        ? tabs.DesignerTabOf(c.Container, name) : null);
             }
+
+            var root = components.Single(c => c.BaseClass is FormComponentClass);
+            ComponentInstance Parent(ComponentInstance c) => c.Container ?? root;
+            var summaries = components.ToDictionary(c => c, Info);
+            var rows = new List<ControlInfo> { summaries[root] };
+            var carried = new List<ControlInfo>();
+            var visited = new HashSet<ComponentInstance> { root };
+            void ListChildren(ComponentInstance parent)
+            {
+                var children = components.Where(c => c != root && c.BaseClass is not MenuComponentClass
+                    && ReferenceEquals(Parent(c), parent)).ToList();
+                var blocks = parent.PreservedChildSubtrees;
+                var written = (parent == root
+                    ? ctx.ProjectFileFormat.RootChildren(components, root)
+                    : parent.ContainedControls).ToList();
+                var before = CarriedOrder.ChildrenBefore(written.Count, blocks);
+                var siblings = new List<(ComponentInstance? Instance, ControlInfo Row, int Order)>();
+                for (var i = 0; i < children.Count; i++)
+                {
+                    var child = children[i];
+                    // File order is top first; live Components and DrawIndex are bottom first.
+                    var fileIndex = written.IndexOf(child);
+                    var order = designerVm is null ? -(fileIndex + before.Count(n => n <= fileIndex))
+                        : designerVm.Components.Single(c => ReferenceEquals(c.Instance, child)).DrawIndex;
+                    siblings.Add((child, summaries[child], order));
+                }
+                var boxes = designerVm?.UnmodelledControls
+                    .Where(c => ReferenceEquals(c.Container?.Instance ?? root, parent)).ToList();
+                var boxIndex = 0;
+                for (var i = 0; i < blocks.Count; i++)
+                {
+                    if (HexIDE.Runtime.Serialization.UnmodelledControl.Read(blocks[i].Text) is not { } control)
+                        continue;
+                    var twipsPerPixel = HexIDE.Runtime.BuiltinTypes.VBScaleModeExtensions.PixelToTwips;
+                    var row = new ControlInfo(control.Name, control.TypeName,
+                        control.Left / twipsPerPixel, control.Top / twipsPerPixel,
+                        control.Width / twipsPerPixel, control.Height / twipsPerPixel,
+                        null, null, null, null,
+                        parent == root ? null : parent.GetPropertyOrDefault(VBProperties.NameProperty),
+                        Carried: true, Note: carriedNote,
+                        Tab: parent.BaseClass is SSTabComponentClass tabs
+                            ? tabs.DesignerTabOf(parent, control.Name) : null);
+                    var order = boxes is null ? -(before[i] + i) : boxes[boxIndex++].DrawIndex;
+                    siblings.Add((null, row, order));
+                }
+                var zOrder = 0;
+                foreach (var sibling in siblings.OrderBy(c => c.Order))
+                {
+                    var row = sibling.Row with { ZOrder = zOrder++ };
+                    rows.Add(row);
+                    if (sibling.Instance is { } child)
+                    {
+                        summaries[child] = row;
+                        if (visited.Add(child))
+                            ListChildren(child);
+                    }
+                    else
+                        carried.Add(row);
+                }
+            }
+            ListChildren(root);
+            // Menus are not drawn. Retain any unplaced model entries rather than silently lose them.
+            rows.AddRange(components.Where(c => !visited.Contains(c)).Select(c => summaries[c]));
 
             // One control, with every row the Properties window shows for it (#923): set_control_property sent
             // callers here for a control's properties, and only eight were listed.
             if (controlName is not null)
             {
-                var all = components.ToList();
+                // Keep a bare control-array name's existing first-element lookup independent of draw order.
+                var all = designerVm?.AllComponents.Select(c => c.Instance).ToList() ?? form.Components.ToList();
                 var matches = PropertyText.Named(all, controlName);
                 if (matches.Count == 0)
                 {
@@ -587,17 +658,26 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     : $"'{controlName}' names a control array of {matches.Count}; this is its first, Index "
                       + $"{PropertyText.ArrayIndexOf(control)?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown"}. "
                       + $"Name one as {controlName}(n) for another.";
-                return new FormControlsResult(null, [Info(control)], document.Project.Name, document.Name,
-                    PropertyText.Rows(control, (property, pixels) => DesignPositions.IsPosition(property)
-                        ? (DesignPositions.Shown(form, control, property, pixels), DesignPositions.Unit(form, control, property))
-                        : null), note);
+                var properties = PropertyText.Rows(control, (property, pixels) => DesignPositions.IsPosition(property)
+                    ? (DesignPositions.Shown(form, control, property, pixels), DesignPositions.Unit(form, control, property))
+                    : null);
+                if (control.BaseClass is SSTabComponentClass tabs)
+                {
+                    properties = [.. properties.Where(p => p.Name is not ("Tab" or "Tabs")),
+                        new("Tab", PropertyText.Display(tabs.DesignerTab(control)), true,
+                            "Selected designer page; set_control_property switches it without an undo entry."),
+                        new("Tabs", PropertyText.Display(tabs.DesignerTabs(control)), false, "Saved page count.")];
+                    properties = [.. properties.OrderBy(p => p.Name)];
+                }
+                return new FormControlsResult(null, [summaries[control]], document.Project.Name, document.Name,
+                    properties, note);
             }
-            return new FormControlsResult(null, components.Select(Info).Concat(carried).ToArray(), document.Project.Name, document.Name);
+            return new FormControlsResult(null, rows.ToArray(), document.Project.Name, document.Name);
         });
     }
 
     [McpServerTool(Name = "set_control_property")]
-    [Description("Sets a named property on a form or UserControl control and writes it to disk. The form is named in any loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. 'value' is written as the Properties window shows it; its own description gives the forms, and a refused value's reply says what that property takes. get_form_controls lists the controls, and with 'controlName' every property of one, its value as this tool takes it. A property is matched by the name the Properties window shows, without regard to case and to its parentheses, so 'Name' reaches '(Name)'. Setting Name renames the control under the rules the Properties window applies, whether or not the designer is open: not empty, and unique on the form; for the form itself also a valid VB6 name that no other form or module of the project has, because it renames the document. A rename the naming rules refuse changes nothing. The save writes the whole file, so text set earlier and not yet saved counts too: when the file's code page cannot hold a character anywhere in it, the value is set in the IDE but nothing is written and no dialog is shown, and the reply names the document, the code page, the character and the line that holds it. A project started with --newproject has a form working copy in the temp folder, written without a picker. A pathless document is refused before changes unless answer_next_file_dialog is armed. The reply's 'note' gives the value the property now holds, which can differ from the text sent, and 'project' and 'document' name the form as the IDE spells them.")]
+    [Description("Sets a form or UserControl control property and saves it. SSTab Tab selects a page (0 to Tabs - 1) without undo; a page naming an unmodelled control is refused unchanged. Searches loaded projects without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. 'value' is written as the Properties window shows it; its own description gives the forms, and a refused value's reply says what that property takes. get_form_controls lists the controls, and with 'controlName' every property of one, its value as this tool takes it. A property is matched by the name the Properties window shows, without regard to case and to its parentheses, so 'Name' reaches '(Name)'. Setting Name renames the control under the rules the Properties window applies, whether or not the designer is open: not empty, and unique on the form; for the form itself also a valid VB6 name that no other form or module of the project has, because it renames the document. A rename the naming rules refuse changes nothing. The save writes the whole file, so text set earlier and not yet saved counts too: when the file's code page cannot hold a character anywhere in it, the value is set in the IDE but nothing is written and no dialog is shown, and the reply names the document, the code page, the character and the line that holds it. A project started with --newproject has a form working copy in the temp folder, written without a picker. A pathless document is refused before changes unless answer_next_file_dialog is armed. The reply's note gives the stored value; project and document name the form as the IDE spells them. Refuses writes outside the project's folder or through links, including armed destinations. Before replacing source or companion bytes, preserves a recovery file; the reply names it and how to restore it.")]
     public async Task<MutateResult> SetControlPropertyAsync(
         string formName,
         [Description("The control: its name, or for an element of a control array name(index), such as lblTitle(1), "
@@ -614,11 +694,15 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                      + "value's reply says why where it can, and lists what that property takes. Left, Top, Width and "
                      + "Height are in the unit the Properties window shows them in, which get_form_controls' row for "
                      + "each names: twips, or the container's ScaleMode. Not the pixels of get_form_controls' summary "
-                     + "or of move_control.")]
+                     + "or of move_control. '(None)' clears a picture.")]
         string value, string? project = null,
         CancellationToken ct = default)
     {
+        if (ProjectWriteSafety.NameRefusal(formName) is { } nameRefusal)
+            return new MutateResult(false, nameRefusal);
         // What the property holds after the set, which is not always what was sent: "0 - Transparent" stores 0. (#655)
+        using var writeAttempt = new ProjectWriteSafety.WriteAttempt();
+        string recoveryNote = "";
         string? stored = null;
         DocumentIdentity? target = null;
         var (form, ownerModule, error) = await Dispatcher.UIThread.InvokeAsync<(FormDefinition?, ModuleDefinition?, string?)>(() =>
@@ -653,6 +737,35 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                         : ""));
             if (control is null)
                 return (null, null, $"No control named '{controlName}' on {document.Display}");
+
+            if (control.BaseClass is SSTabComponentClass pageTabs
+                && property.Equals("Tab", StringComparison.OrdinalIgnoreCase)
+                && pageTabs.DesignerPageSwitchRefusal(control) is { } pageRefusal)
+                return (null, null, pageRefusal);
+
+            if (control.BaseClass is SSTabComponentClass tabs
+                && property.Equals("Tab", StringComparison.OrdinalIgnoreCase))
+            {
+                var last = tabs.DesignerTabs(control) - 1;
+                if (!int.TryParse(value, System.Globalization.NumberStyles.Integer,
+                        System.Globalization.CultureInfo.InvariantCulture, out var page) || page < 0 || page > last)
+                    return (null, null, $"Tab takes a whole-number page index from 0 to {last}. Nothing was changed.");
+                if (HexIDE.IDE.ScriptedFileDialogs.WouldShowPicker(document.AbsolutePath))
+                    return (null, null, $"{document.Display} {HexIDE.IDE.ScriptedFileDialogs.PickerRefusal}");
+                if (ProjectWriteSafety.Prepare(document, ctx.ProjectFileFormat, out recoveryNote, writeAttempt) is { } tabSafetyRefusal)
+                    return (null, null, tabSafetyRefusal);
+                tabs.SelectDesignerPage(control, page,
+                    components.Where(c => ReferenceEquals(c.Container, control)).ToList());
+                if (designerVm is not null)
+                    designerVm.CommitLayout();
+                else
+                {
+                    form.NotifyRootPropertiesChanged();
+                    ctx.EventBus.Publish(new HexIDE.Events.FormLayoutChangedEvent(form));
+                }
+                stored = $"{PropertyText.AddressedName(control)}.Tab is now {page}.";
+                return (form, ownerModule, null);
+            }
 
             // As the Properties window shows them, case and the parentheses of '(Name)' aside: a caller writes
             // 'Name', and was told the property did not exist. (#494)
@@ -692,6 +805,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 && HexIDE.VisualDesigner.ComponentNaming.RefusalFor(control, before as string, parsed as string,
                        form.Components, form, control.BaseClass is FormComponentClass, ctx.Localization) is { } refusal)
                 return (null, null, $"'{controlName}' was not renamed: {refusal}");
+            if (ProjectWriteSafety.Prepare(document, ctx.ProjectFileFormat, out recoveryNote, writeAttempt) is { } safetyRefusal)
+                return (null, null, safetyRefusal);
             try
             {
                 control.SetUntypedProperty(propClass, parsed);
@@ -756,12 +871,13 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             var (written, refused) = await SaveQuietlyAsync(() => ownerModule is not null
                 ? ctx.ProjectService.SaveModule(ownerModule, false, interactive: false, rewrites: rewrites)
                 : ctx.ProjectService.SaveForm(form!, false, interactive: false, rewrites: rewrites));
+            writeAttempt.Written = written;
             if (refused is not null)
                 return Naming(new MutateResult(false, cancel.After($"'{property}' is set in the IDE, but the file was not written. {refused.Message}")), target);
             // See the note on the other write tool: a refusal must not come back as success. (#147)
             return Naming(written
-                ? new MutateResult(true, null, cancel.After(stored + " " + WriteLocationNote(target!.Project, target.AbsolutePath) + rewrites.Note))
-                : new MutateResult(false, cancel.After("HexIDE cannot reproduce this file faithfully, so it was not "
+                ? new MutateResult(true, null, cancel.After(stored + recoveryNote + " " + WriteLocationNote(target!.Project, target.AbsolutePath) + rewrites.Note))
+                : new MutateResult(false, cancel.After($"'{property}' is set in the IDE. HexIDE cannot reproduce this file faithfully, so it was not "
                                         + "written and the copy on disk is unchanged.")), target);
         }
         catch (OperationCanceledException) when (cancel.Cancelled || cancel.Refused)
@@ -775,16 +891,16 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         {
             // The property is already set in the IDE by now; a bare exception message would read as though it
             // were not.
-            return Naming(new MutateResult(false, cancel.After($"'{property}' is set in the IDE but was not written: {ToolFailures.WithoutProfile(ex.Message)}")), target);
+            return Naming(new MutateResult(false, cancel.After($"'{property}' is set in the IDE but was not written: {ToolFailures.WithoutProfile(ex.Message)}" + writeAttempt.FailureNote)), target);
         }
     }
 
     [McpServerTool(Name = "open_file")]
-    [Description("Opens a form, module or carried file by name in the IDE code editor. Use get_project_info to list available names. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was opened, as the IDE spells them. A carried file is also found by its filename, which differs from its name when VB6 carried it on a code line (`Module=Notes; Notes.md` is named Notes). The editor gets keyboard focus, as opening it by hand gives it. The reply's 'note' names the tab now active and how many are open. Pass 'line', and 'column' if wanted, to put the caret there, as the code window numbers them, so type_text and press_key act at that point with no offset to work out; the note then gives the caret's line, column and offset.")]
+    [Description("Opens a form, module or carried file by name in the IDE code editor. Use get_project_info to list available names. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was opened, as the IDE spells them. A carried file is also found by its filename (`Module=Notes; Notes.md` is named Notes). The editor gets keyboard focus, as opening it by hand gives it; in a split code window that is the pane last used, which is the one 'line' moves. The reply's 'area' is the document area (0 for the first, 1 for the next, in layout order). New tabs open in the area last used; an existing tab stays in its area. The reply's 'note' names the tab now active and how many are open. Pass 'line', and 'column' if wanted, to put the caret there, as the code window numbers them, so type_text and press_key act at that point with no offset to work out; the note always gives the caret's line, column and offset, even without 'line'. In the header or an Attribute line it also names the nearest editable place. Also opens archive entries by the exact paths get_project_info lists: /-separated, percent-escaped segments. Pass project as the container path, filename or stored project name. Archive entries open read-only without a language server; a line needs an available text preview. Also opens a project file by filename, including a group's .vbg, read-only; project selects its owner by name or path.")]
     public async Task<MutateResult> OpenFileAsync(
         string name, string? project = null,
         [Description("Where to put the caret: a 1-based line, counted from the top of the file with its header included, "
-                     + "as the code window, get_file_content and set_breakpoints count it. Not for a carried file. A line "
+                     + "as the code window, get_file_content and set_breakpoints count it. A line "
                      + "or column off the text is refused, and nothing is opened.")]
         int? line = null,
         [Description("The 1-based column on 'line', 1 by default, counted in characters as the status bar counts them, so a "
@@ -796,18 +912,25 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             return new MutateResult(false, "'column' needs 'line'; nothing was opened");
         DocumentIdentity? placedIn = null;
         RelatedDocumentDefinition? placedInCarried = null;
+        ArchiveDocumentViewModel? placedInArchive = null;
+        ProjectFileDocumentViewModel? placedInProjectFile = null;
         var opened = await Dispatcher.UIThread.InvokeAsync(() =>
         {
             // Carried files are the only project members with no other route in: the Project Explorer opens
             // one on a DOUBLE-CLICK, which no interaction tool could produce when this was written, and Add
             // File goes through a native dialog. Without them here a whole editor type is undrivable, which is
             // what blocked verifying #255 against the running IDE. See docs/mcp-server-gaps.md.
+            var projectFile = OpenProjectFile(name, project, line, column, out placedInProjectFile);
+            if (projectFile != null) return projectFile;
+            var archive = OpenArchive(name, project, line, column, out placedInArchive);
+            if (archive != null) return archive;
+            var archives = ctx.Archives?.Projects ?? [];
             var found = Find(name, project, carried: true);
             if (found.Document is { } document)
             {
                 // Checked against the text get_file_content returns before anything opens, so a refusal changes nothing.
                 if (line is { } wanted && HexIDE.Automation.CaretPlacement.Refusal(
-                        HexIDE.IDE.DocumentContent.TextOf(document, CodeEditorOf(document)).Text, wanted, column ?? 1) is { } refusal)
+                        HexIDE.IDE.DocumentContent.TextOf(document, CodeEditorOf(document), ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader).Text, wanted, column ?? 1) is { } refusal)
                     return Naming(new MutateResult(false, $"Nothing was opened: in {document.Display}, {refusal}"), document);
                 if (document.Form is { } form)
                     ctx.EditorService.EditCode(form);
@@ -818,9 +941,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     if (CodeEditorOf(document) is not { } editor || !HexIDE.Automation.CaretPlacement.Place(editor, at, column ?? 1))
                         return Naming(new MutateResult(false,
                             $"{document.Display} was opened, but its code window could not be found to put the caret in"), document);
-                    placedIn = document;
                 }
-                return Naming(new MutateResult(true, null, TabStateNote()), document);
+                placedIn = document;
+                return Naming(new MutateResult(true, null, TabStateNote(), Area: ctx.DocumentDockService.ActiveTab is { } tab ? ctx.DocumentDockService.AreaOf(tab) : null), document);
             }
             if (found.Carried is { } carried)
             {
@@ -840,27 +963,134 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     if (CarriedEditorOf(carried) is not { } editor || !HexIDE.Automation.CaretPlacement.Place(editor, at, column ?? 1))
                         return Naming(new MutateResult(false,
                             $"{carried.Name} was opened, but its editor could not be found to put the caret in"), found);
-                    placedInCarried = carried;
                 }
-                return Naming(new MutateResult(true, null, TabStateNote()), found);
+                placedInCarried = carried;
+                return Naming(new MutateResult(true, null, TabStateNote(), Area: ctx.DocumentDockService.ActiveTab is { } tab ? ctx.DocumentDockService.AreaOf(tab) : null), found);
             }
-            return new MutateResult(false, found.Error);
+            var inventory = ArchiveToolPaths.MissInventory(archives);
+            var archiveOnly = archives.Count > 0 && (ctx.ProjectManager.LoadedProjects.Count == 0
+                || (project != null && archives.Any(p => ArchiveToolPaths.ProjectMatches(p, project))
+                    && !ctx.ProjectManager.LoadedProjects.Any(p => string.Equals(p.Name, project, StringComparison.OrdinalIgnoreCase))));
+            return new MutateResult(false,
+                (archiveOnly ? "No matching archive entry." : found.Error)
+                + inventory + ProjectFileInventory() + " Use get_project_info to list available names and archive entries.");
         });
 
         var focused = await FocusingTheActiveTabAsync(opened);
-        if ((placedIn is null && placedInCarried is null) || !focused.Success)
+        if ((placedIn is null && placedInCarried is null && placedInArchive is null && placedInProjectFile is null) || !focused.Success)
             return focused;
         // Read back, not echoed (#700 review): once focus and the view's first layout have run, as the view opens a fold
         // around a caret navigated into it and the editor moves one it could not show.
         var where = await Dispatcher.UIThread.InvokeAsync(
-            () => (placedIn is { } placed ? CodeEditorOf(placed) : (ISearchableDocument?)CarriedEditorOf(placedInCarried!)) is { } editor
-                ? HexIDE.Automation.CaretPlacement.Where(editor, line!.Value, column ?? 1) : null,
+            () =>
+            {
+                var editor = placedIn is { } placed ? CodeEditorOf(placed)
+                    : placedInArchive ?? (ISearchableDocument?)placedInProjectFile ?? (ISearchableDocument?)CarriedEditorOf(placedInCarried!);
+                if (editor is null) return null;
+                var at = editor.Document.GetLocation(editor.CaretOffset);
+                return placedInArchive != null || placedInProjectFile != null
+                    ? $"The caret is at line {at.Line}, column {at.Column}: offset {editor.CaretOffset} in the read-only preview."
+                    : HexIDE.Automation.CaretPlacement.Where(editor, line ?? at.Line, line is null ? at.Column : column ?? 1);
+            },
             DispatcherPriority.Background);
         return where is null ? focused : focused with { Note = $"{focused.Note} {where}" };
     }
 
+    private IEnumerable<HexIDE.IDE.ProjectFileSource> ProjectFiles()
+    {
+        foreach (var project in ctx.ProjectManager.LoadedProjects)
+            if (HexIDE.IDE.ProjectFileSource.ChosenPath(project) != null)
+                yield return new HexIDE.IDE.ProjectFileSource(project);
+        if (ctx.ProjectManager.CurrentGroup is { AbsolutePath: not null } group)
+            yield return new HexIDE.IDE.ProjectFileSource(group);
+    }
+
+    private static string ProjectFileOwnerName(HexIDE.IDE.ProjectFileSource file) => file.Owner switch
+    {
+        ProjectDefinition project => project.Name,
+        ProjectGroupDefinition group => group.Name,
+        _ => "",
+    };
+
+    private string ProjectFileInventory()
+    {
+        var paths = ProjectFiles().Select(f => f.Path).ToArray();
+        return paths.Length == 0 ? " No chosen project files are available."
+            : " Project files: " + string.Join(", ", paths) + ".";
+    }
+
+    private MutateResult? OpenProjectFile(string name, string? project, int? line, int? column,
+        out ProjectFileDocumentViewModel? opened)
+    {
+        opened = null;
+        var matches = ProjectFiles().Where(f =>
+            string.Equals(Path.GetFileName(f.Path), name, StringComparison.OrdinalIgnoreCase)
+            && (project == null || new[] { ProjectFileOwnerName(f), f.Path, Path.GetFileName(f.Path) }
+                .Any(p => string.Equals(p, project, StringComparison.OrdinalIgnoreCase)))).ToArray();
+        if (matches.Length == 0) return null;
+        if (matches.Length > 1)
+            return new MutateResult(false, "Ambiguous project file; pass project as its path: "
+                + string.Join(", ", matches.Select(f => f.Path)));
+        var source = matches[0];
+        if (line is { } wanted)
+        {
+            using var preview = new ProjectFileDocumentViewModel(source, null);
+            if (preview.LoadError is { } error) return new MutateResult(false, "Nothing was opened: " + error);
+            if (HexIDE.Automation.CaretPlacement.Refusal(preview.Document.Text, wanted, column ?? 1) is { } refusal)
+                return new MutateResult(false, "Nothing was opened: " + refusal);
+        }
+        ctx.EditorService.EditProjectFile(source);
+        var editor = ctx.DocumentDockService.OpenDocuments.OfType<ProjectFileDocumentViewModel>()
+            .FirstOrDefault(vm => vm.Source.Owner == source.Owner);
+        opened = editor;
+        if (line is { } at && editor != null) HexIDE.Automation.CaretPlacement.Place(editor, at, column ?? 1);
+        return new MutateResult(true, null, TabStateNote() + " Project file opened read-only."
+            + (editor?.LoadError is { } loadError ? " Could not read the file: " + loadError : ""),
+            Project: ProjectFileOwnerName(source), Document: Path.GetFileName(source.Path),
+            Area: ctx.DocumentDockService.ActiveTab is { } tab ? ctx.DocumentDockService.AreaOf(tab) : null);
+    }
+
+    private MutateResult? OpenArchive(string name, string? project, int? line, int? column,
+        out ArchiveDocumentViewModel? placedInArchive)
+    {
+        placedInArchive = null;
+        var archives = ctx.Archives?.Projects ?? [];
+        var entries = archives.Where(p => ArchiveToolPaths.ProjectMatches(p, project))
+            .SelectMany(p => ArchiveToolPaths.Entries(p.Root))
+            .Where(e => string.Equals(ArchiveToolPaths.PathOf(e), name, StringComparison.Ordinal))
+            .ToArray();
+        if (entries.Length > 1)
+            return new MutateResult(false, $"'{name}' names more than one document: "
+                + string.Join(", ", entries.Select(e => e.Identity.ContainerPath))
+                + ". Pass `project` with a container path to say which archive.");
+        if (entries.Length == 1)
+        {
+            var entry = entries[0];
+            if (line is { } wanted)
+            {
+                var preview = (entry as ArchiveProjectDocument)?.ReadText();
+                if (preview?.Status != ArchiveTextStatus.Available)
+                    return new MutateResult(false, $"Nothing was opened: {ArchiveToolPaths.PathOf(entry)} has no text preview "
+                        + $"({preview?.Status.ToString() ?? "folder"}). Omit 'line' to inspect its metadata.");
+                if (CaretPlacement.Refusal(preview.Text!, wanted, column ?? 1) is { } refusal)
+                    return new MutateResult(false, $"Nothing was opened: in {ArchiveToolPaths.PathOf(entry)}, {refusal}");
+            }
+            ctx.Archives!.OpenDocument(entry);
+            placedInArchive = ctx.DocumentDockService.OpenDocuments.OfType<ArchiveDocumentViewModel>()
+                .FirstOrDefault(tab => tab.Entry.Identity.Equals(entry.Identity));
+            if (placedInArchive == null)
+                return new MutateResult(false, $"{ArchiveToolPaths.PathOf(entry)}'s archive inspector could not be found.");
+            if (line is { } at) CaretPlacement.Place(placedInArchive, at, column ?? 1);
+            return new MutateResult(true, null,
+                TabStateNote() + " This archive entry is read-only; no language server is attached.",
+                Project: entry.Identity.ContainerPath, Document: ArchiveToolPaths.PathOf(entry),
+                Area: ctx.DocumentDockService.ActiveTab is { } tab ? ctx.DocumentDockService.AreaOf(tab) : null);
+        }
+        return null;
+    }
+
     [McpServerTool(Name = "view_designer")]
-    [Description("Opens a form or UserControl by name in the visual designer, bringing it to the front. Useful before take_snapshot to ensure the designer surface is visible. Use get_project_info to list available names. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was opened, as the IDE spells them. The designer gets keyboard focus, as opening it by hand gives it. The reply's 'note' names the tab now active and how many are open.")]
+    [Description("Opens a form or UserControl by name in the visual designer, bringing it to the front. Useful before take_snapshot to ensure the designer surface is visible. Use get_project_info to list available names. Searches every loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. The reply's 'project' and 'document' name what was opened, as the IDE spells them. The designer gets keyboard focus, as opening it by hand gives it. The reply's 'area' is the document area (0 for the first, 1 for the next, in layout order). New tabs open in the area last used; an existing tab stays in its area. The reply's 'note' names the tab now active and how many are open.")]
     public async Task<MutateResult> ViewDesignerAsync(string name, string? project = null, CancellationToken ct = default)
     {
         return await FocusingTheActiveTabAsync(await Dispatcher.UIThread.InvokeAsync(() =>
@@ -869,7 +1099,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (named.Form is not { } form)
                 return new MutateResult(false, named.Error);
             ctx.EditorService.EditForm(form);
-            return Naming(new MutateResult(true, null, TabStateNote()), named.Document);
+            return Naming(new MutateResult(true, null, TabStateNote(), Area: ctx.DocumentDockService.ActiveTab is { } tab ? ctx.DocumentDockService.AreaOf(tab) : null), named.Document);
         }));
     }
 
@@ -948,25 +1178,23 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             .Where(c => ReferenceEquals(c.DataContext, tab) && c.IsEffectivelyVisible && c.IsEffectivelyEnabled)
             .ToList();
         // The surface a click lands on: an editor's text area, or the form itself in a designer, which is
-        // what FormEditView makes focusable and what a click on the canvas focuses.
-        var surface = own.FirstOrDefault(c => c is AvaloniaEdit.Editing.TextArea)
+        // what FormEditView makes focusable and what a click on the canvas focuses. A split code window has a text
+        // area per pane, and the one to focus is the one navigation moved (#3618), which needn't be the first.
+        var moved = own.OfType<HexIDE.Forms.Views.CodeEditorView>().FirstOrDefault()?.ActiveTextArea;
+        var surface = own.FirstOrDefault(c => ReferenceEquals(c, moved))
+                      ?? own.FirstOrDefault(c => c is AvaloniaEdit.Editing.TextArea)
                       ?? own.FirstOrDefault(c => c.Name == "FormContainer");
         return surface is null ? null : surface.Focus() ? FocusOutcome.Focused : FocusOutcome.Refused;
     }
 
     [McpServerTool(Name = "run_project")]
-    [Description("Starts running the current VB6 project in the IDE. Returns an error if no project is loaded, if it is already running, or if the start never becomes a run: a syntax error in the startup form or in any standard or class module (the error names the module), no startup form, a Sub Main project with no usable or with two Sub Mains, a startup form that cannot be built, or a declaration that cannot be loaded — in those cases nothing is running, the IDE has opened a runtime-error dialog, and get_last_runtime_error returns the same text. step_into, step_over, step_out and run_to_cursor report a failed start from idle the same way. The reply's 'note' says, after up to 2 s, whether it paused (at a breakpoint or Stop, with the module and the line, counted from the top of the file as the code window numbers it), is running, or ended, and names any run-time error it raised, including reaching a construct HexIDE does not implement, which ends the run. It also says how much Debug.Print wrote, which 'printed' holds.")]
+    [Description("Starts running the current VB6 project in the IDE. Returns an error if no project is loaded, if it is already running, if no run engine runs it (the error says what can), or if the start never becomes a run: a syntax error in the startup form or in any standard or class module (the error names the module), no startup form, a Sub Main project with no usable or with two Sub Mains, a startup form that cannot be built, or a declaration that cannot be loaded — in those cases nothing is running, the IDE has opened a runtime-error dialog, and get_last_runtime_error returns the same text. step_into, step_over, step_out and run_to_cursor report a failed start from idle the same way. The reply's 'note' says, after up to 2 s, whether it paused (at a breakpoint or Stop, with the module and the line, counted from the top of the file as the code window numbers it), is running, or ended, and names any run-time error it raised, including reaching a construct HexIDE does not implement, which ends the run. It also says how much Debug.Print wrote, which 'printed' holds. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public async Task<MutateResult> RunProjectAsync(CancellationToken ct)
     {
         var (refused, outcome) = await StartAndAwaitStopAsync(() =>
         {
             if (!ctx.ProjectRunnerService.CanRunStartupProject)
-            {
-                var reason = ctx.ProjectManager.StartupProject is null
-                    ? "No project loaded"
-                    : "Project is already running";
-                return new MutateResult(false, reason);
-            }
+                return new MutateResult(false, WhyNoStart("No project loaded"));
             // So get_last_runtime_error answers "did THIS run raise" rather than "has anything ever".
             // The sequence survives, so a caller holding an older one can still tell something happened.
             ctx.RootViewModel.RuntimeErrors.Clear();
@@ -1009,15 +1237,35 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             : new MutateResult(false, HexIDE.IDE.MessageText.StartFailedReply(failure));
     }
 
+    /// <summary>
+    /// Why the startup project can't start, for a tool that found it can't. The reason used to be inferred from the
+    /// answer being no, so a project no engine runs was reported as already running, or as not loaded (#3514).
+    /// </summary>
+    private string WhyNoStart(string noProject) =>
+        ctx.ProjectManager.StartupProject is null ? noProject
+        : ctx.ProjectRunnerService.IsRunning ? "Project is already running"
+        : NoEngineNote() ?? "The startup project can't be started now. If a project archive has the focus, open_file or "
+          + "activate_document_tab on one of the project's documents moves it.";
+
+    /// <summary>
+    /// What a tool that needs a run engine says when none runs the startup project, or null when one does or something
+    /// is running. On the UI thread: it asks each launch whether it runs the project.
+    /// </summary>
+    private string? NoEngineNote() =>
+        ctx.ProjectRunnerService.StartupWithNoEngine is { } none ? NoRunEngine.Explain(none, ctx.Localization) : null;
+
+    /// <summary>A refusal for having nothing running, which says so when nothing could be (#3514).</summary>
+    private string NothingRunning(string refusal) => NoEngineNote() is { } none ? $"{refusal}. {none}" : refusal;
+
     [McpServerTool(Name = "get_last_runtime_error")]
-    [Description("Returns the last runtime error the running program raised, WITH ITS TEXT, and keeps it after the error dialog has been dismissed. That includes a compile error met while it ran, and the reason a start never became a run; a line such an error names counts from the top of the file, header included, as the code window numbers it. Use it after any run that might raise: stop_project and shutdown_ide both close open dialogs, so a run whose form silently did nothing is otherwise indistinguishable from a run whose error dialog was dismissed a moment earlier. run_project clears the message first, so a result here belongs to the most recent run. 'sequence' only ever increases and is not cleared — compare it across runs to tell 'no error' from 'the same error again', which message text cannot do. 'module' and 'line' say where it was raised, the line counted as the code window numbers it, when a statement of the program raised it; a start that never became a run has neither. 'at' is when it was raised, in UTC like every other stamp the tools return. Returns raised:false when the current run has raised nothing.")]
+    [Description("Returns the last runtime error the running program raised, WITH ITS TEXT, and keeps it after the error dialog has been dismissed. That includes a compile error met while it ran, and the reason a start never became a run; a line such an error names counts from the top of the file, header included, as the code window numbers it. Use it after any run that might raise: stop_project and shutdown_ide both close open dialogs, so a run whose form silently did nothing is otherwise indistinguishable from a run whose error dialog was dismissed a moment earlier. run_project clears the message first, so a result here belongs to the most recent run. 'sequence' only ever increases and is not cleared — compare it across runs to tell 'no error' from 'the same error again', which message text cannot do. 'module' and 'line' say where it was raised, the line counted as the code window numbers it, when a statement raised it or parsing found a compile error with a line before the run began; errors without a location have neither. 'at' is when it was raised, in UTC like every other stamp the tools return. Returns raised:false when the current run has raised nothing.")]
     public async Task<RuntimeErrorResult> GetLastRuntimeErrorAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             var last = ctx.RootViewModel.RuntimeErrors.Last;
             return last is null
-                ? new RuntimeErrorResult(false, null, null, ctx.RootViewModel.RuntimeErrors.Sequence)
+                ? new RuntimeErrorResult(false, null, null, ctx.RootViewModel.RuntimeErrors.Sequence, Note: NoEngineNote())
                 : new RuntimeErrorResult(true, last.Value.Message,
                                          last.Value.At.ToString("o"), last.Value.Sequence,
                                          last.Value.Where?.Module, last.Value.Where?.Line);
@@ -1031,7 +1279,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             if (!ctx.ProjectRunnerService.CanEndProject)
-                return new MutateResult(false, "No project is currently running");
+                return new MutateResult(false, NothingRunning("No project is currently running"));
             var isExternal = ctx.RootViewModel.ExternalDebugger?.IsActive == true;
             ctx.ProjectRunnerService.EndProject();
             if (isExternal)
@@ -1045,7 +1293,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "get_window_state")]
-    [Description("Returns a window's state (Maximized/Normal/Minimized) and the reported position and client size in every state: the IDE's own window unless 'window' names another, such as a running form. x and y are in screen pixels and width and height in device-independent pixels, as set_window_state takes them; 'outer' (the whole window, on Windows with its invisible resize border), 'frame' (as drawn) and 'client' give each edge on the screen in device-independent pixels, with 'scale' beside them, and 'units' says so in the reply. 'name' is what to pass as 'window' to reach the same window again.")]
+    [Description("Returns a window's state (Maximized/Normal/Minimized) and the reported position and client size in every state: the IDE's own window unless 'window' names another, such as a running form. x and y are in screen pixels and width and height in device-independent pixels, as set_window_state takes them; 'outer' (the whole window, on Windows with its invisible resize border), 'frame' (as drawn) and 'client' give each edge on the screen in device-independent pixels, with 'scale' beside them, and 'units' says so in the reply. On native Wayland, which has no window positions, the position fields are left out and 'note' says why. 'name' is what to pass as 'window' to reach the same window again.")]
     public async Task<WindowStateResult> GetWindowStateAsync(
         [Description(WindowStateParameter)] string? window = null, CancellationToken ct = default)
     {
@@ -1114,12 +1362,32 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var scale = window.DesktopScaling;
         var outer = HexIDE.Automation.NativeWindowFrame.OuterRect(window) is { } o ? WindowRect.Of(o, scale) : null;
         var frame = HexIDE.Automation.NativeWindowFrame.VisibleFrame(window) is { } f ? WindowRect.Of(f, scale) : null;
-        var client = window.IsVisible && window.WindowState != Avalonia.Controls.WindowState.Minimized
+        // Native Wayland has no position to give: Position is always 0,0, and client's origin would be the title bar's depth
+        // reported as a place on the screen (#3576).
+        var positioned = !HexIDE.Automation.NativeWayland.Hosts(window);
+        var client = positioned && window.IsVisible && window.WindowState != Avalonia.Controls.WindowState.Minimized
             ? WindowRect.Of(window.PointToScreen(new Avalonia.Point(0, 0)), size, scale) : null;
-        return new WindowStateResult(state, pos.X, pos.Y, (int)size.Width, (int)size.Height, name,
+        return new WindowStateResult(state, positioned ? pos.X : null, positioned ? pos.Y : null, (int)size.Width, (int)size.Height, name,
             Scale: Math.Round(scale, 3), Outer: outer, Frame: frame, Client: client, Units: WindowStateUnits,
-            Note: ServerOptions.DpiUnaware ? DpiUnawareNote : null);
+            Note: ServerOptions.DpiUnaware ? DpiUnawareNote : positioned ? null : NoPositionNote);
     }
+
+    /// <summary>What get_window_state says on native Wayland, where the numbers it leaves out don't exist (#3576).</summary>
+    internal const string NoPositionNote =
+        "On native Wayland the compositor places every window and doesn't tell the program where, so x, y, outer, frame and "
+        + "client are left out rather than given as 0,0, which would read as a measurement. width, height and state are read "
+        + "as usual. inspect_element's boundingRect and take_snapshot are relative to the window itself, so neither needs a "
+        + "screen position.";
+
+    /// <summary>
+    /// Why <paramref name="x"/> and <paramref name="y"/> can't be honoured on <paramref name="target"/>; null when they can.
+    /// Accepted, a move waited out its 1 s and then read as a window manager that was slow to confirm (#3576).
+    /// </summary>
+    internal static string? PositionRefusal(Avalonia.Controls.Window target, string name, int? x, int? y) =>
+        (x is not null || y is not null) && HexIDE.Automation.NativeWayland.Hosts(target)
+            ? $"On native Wayland only the compositor can place a window, so '{name}' can't be moved, however long you wait. "
+              + "Leave out x and y; state, width and height work without them. Nothing was changed."
+            : null;
 
     /// <summary>Why the scale is 1 on a scaled display, for an IDE started with --dpi-unaware (#3083).</summary>
     internal const string DpiUnawareNote =
@@ -1136,7 +1404,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         + "pixels. outer is the window's whole rectangle, which on Windows includes an invisible resize border; frame is "
         + "the window as drawn, title bar and border included; client is the area inside. None is given for a window "
         + "that is hidden or minimized, and Windows puts a minimized window's x and y at -32000. outer and frame are "
-        + "also left out where the platform reports no frame.";
+        + "also left out where the platform reports no frame. On native Wayland, which has no window positions, x, y and "
+        + "client are left out too.";
 
     /// <summary>
     /// Why a person couldn't make <paramref name="target"/> the state or size asked for: it has no minimize or maximize box,
@@ -1158,7 +1427,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     };
 
     [McpServerTool(Name = "set_window_state")]
-    [Description("Sets a window to Maximized, Normal, or Minimized, the IDE's own unless 'window' names another, and replies with the resulting state, position and size as get_window_state reports them. Another window, such as a running form, changes as a click on its minimize, maximize or restore box would, so its Resize runs, and the reply waits for the program as interact's does. It is refused where a person couldn't do the same: no such box, a fixed border for a resize, a disabled window, or one under a modal dialog. Waits up to 1 s for the state, then up to 1 s for any requested move/resize; if unconfirmed, success is false and note explains how to re-read, or, on an X11 display with no window manager, that a minimize or maximize can never be applied there. When setting Normal, any of `x`, `y`, `width` and `height` that are passed are applied after a confirmed restore; each is optional, and one left out keeps its current value. `x` and `y` are screen pixels and `width` and `height` the client area in device-independent pixels, as get_window_state reports them. They apply only to Normal and are refused with any other state. `width` and `height` must be positive, and a position that would leave the window on no screen at all is refused with the screens' bounds. An invalid argument is refused before anything changes. A timed-out request may still be applied later.")]
+    [Description("Sets a window to Maximized, Normal, or Minimized, the IDE's own unless 'window' names another, and replies with the resulting state, position and size as get_window_state reports them. Another window, such as a running form, changes as a click on its minimize, maximize or restore box would, so its Resize runs, and the reply waits for the program as interact's does. It is refused where a person couldn't do the same: no such box, a fixed border for a resize, a disabled window, or one under a modal dialog. Waits up to 1 s for the state, then up to 1 s for any requested move/resize; if unconfirmed, success is false and note explains how to re-read, or, on an X11 display with no window manager, that a minimize or maximize can never be applied there. When setting Normal, any of `x`, `y`, `width` and `height` that are passed are applied after a confirmed restore; each is optional, and one left out keeps its current value. `x` and `y` are screen pixels and `width` and `height` the client area in device-independent pixels, as get_window_state reports them. They apply only to Normal and are refused with any other state. `width` and `height` must be positive, and a position that would leave the window on no screen at all is refused with the screens' bounds, as `x` and `y` are on native Wayland, where only the compositor places a window. An invalid argument is refused before anything changes. A timed-out request may still be applied later.")]
     public async Task<WindowStateChangeResult> SetWindowStateAsync(
         string state,
         // Defaults, not just nullable types: a nullable parameter with no default is required in the schema,
@@ -1198,6 +1467,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (width is <= 0 || height is <= 0)
                 return new WindowStateChangeResult(false,
                     $"width and height must be positive; got {(width is <= 0 ? $"width {width}" : $"height {height}")}. Nothing was changed.", null);
+            if (PositionRefusal(resolved, name!, x, y) is { } noMove)
+                return new WindowStateChangeResult(false, noMove, null);
             // Another window is changed as a person changes it, so what a person couldn't do is refused (#2357). The IDE's
             // own is set as it always was.
             if (!main && (WindowBoxRefusal(resolved, name!, target.Value, width is not null || height is not null)
@@ -1226,7 +1497,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             (acted, actedName) = (resolved, name);
             var applied = await HexIDE.Automation.WindowChange.ApplyAsync(resolved, target.Value, x, y, width, height, ct);
             if (applied)
-                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), null);
+                return new WindowStateChangeResult(true, null, WindowStateOf(resolved, name!), WindowSizeNote(resolved, width, height));
             var (error, note) = Unconfirmed(target.Value, X11WindowManager.IsRunning());
             return new WindowStateChangeResult(false, error, WindowStateOf(resolved, name!), note);
         });
@@ -1243,6 +1514,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             Note = result.Note is null ? programNote : programNote is null ? result.Note : result.Note + " " + programNote,
         };
     }
+
+    private static string? WindowSizeNote(Avalonia.Controls.Window window, int? width, int? height) =>
+        width is not null && Math.Abs(width.Value - window.ClientSize.Width) > 1 / window.RenderScaling
+        || height is not null && Math.Abs(height.Value - window.ClientSize.Height) > 1 / window.RenderScaling
+            ? $"Requested client size {width?.ToString() ?? "unchanged"}×{height?.ToString() ?? "unchanged"}; "
+              + $"the screen allowed {window.ClientSize.Width:0.#}×{window.ClientSize.Height:0.#}. "
+              + "x/y/width/height can't exceed the screen's working area. Ask for a size that fits the working area."
+            : null;
 
     // The program wait's parenthesised addition to a reply, as a sentence of its own for a note.
     internal static string ProgramNote(string detail)
@@ -1437,7 +1716,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "add_control")]
-    [Description("Places a control of the given type on a named form's designer canvas at the given position and size, and writes the form to disk. x, y, width and height are in PIXELS, as the designer draws and get_form_controls reports: a .frm and VB6's Properties window use twips, 15 to a pixel, so VB6's default CommandButton (1215 × 495 twips) is 81 × 33 here. The reply's 'note' gives where the control landed, and says when it lies outside the form. The form must be open in the visual designer (call view_designer first if needed). The form is named in any loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. Returns the auto-generated control name (e.g. 'Command1'), with 'project' and 'document' naming the form as the IDE spells them. A project started with --newproject has a form working copy in the temp folder, written without a picker. A pathless form is refused before placement unless answer_next_file_dialog is armed; arm it with no path to keep it pathless. Two refusals come AFTER the control is placed, and each comes back as success:false naming the control, which is then in the designer but not on disk: HexIDE cannot reproduce the form faithfully, or the form's code page cannot hold a character in text written earlier and not yet saved. The second shows no dialog, and the reply names the document, the code page, the character and the line that holds it; once that text is changed, set_control_property or set_file_content writes the form, the new control included.")]
+    [Description("Places a control of the given type on a named form's designer canvas at the given position and size, and writes the form to disk. x, y, width and height are in PIXELS, as the designer draws and get_form_controls reports: a .frm and VB6's Properties window use twips, 15 to a pixel, so VB6's default CommandButton (1215 × 495 twips) is 81 × 33 here. The reply's 'note' gives where the control landed, and says when it lies outside the form. The form must be open in the visual designer (call view_designer first if needed). The form is named in any loaded project, without regard to case; pass `project` when a group holds two documents of one name, and without it an ambiguous name is refused and the reply lists them. Returns the auto-generated control name (e.g. 'Command1'), with 'project' and 'document' naming the form as the IDE spells them. A project started with --newproject has a form working copy in the temp folder, written without a picker. A pathless form is refused before placement unless answer_next_file_dialog is armed; arm it with no path to keep it pathless. Two refusals come AFTER the control is placed, and each comes back as success:false naming the control, which is then in the designer but not on disk: HexIDE cannot reproduce the form faithfully, or the form's code page cannot hold a character in text written earlier and not yet saved. The second shows no dialog, and the reply names the document, the code page, the character and the line that holds it; once that text is changed, set_control_property or set_file_content writes the form, the new control included. Refuses writes outside the project's folder or through links, including armed destinations. Before replacing source or companion bytes, preserves a recovery file; the reply names it and how to restore it.")]
     public async Task<AddControlResult> AddControlAsync(
         string formName,
         [Description("A class as get_toolbox_items lists it, such as CommandButton or VB.CommandButton. An in-box control is offered only while the project references its library, which Project > Components sets, and once for each such library: its type name picks the library, as ComctlLib.ProgressBar does, and a bare ProgressBar takes the first.")] string type,
@@ -1446,6 +1725,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         string? project = null,
         CancellationToken ct = default)
     {
+        if (ProjectWriteSafety.NameRefusal(formName) is { } nameRefusal)
+            return new AddControlResult(false, null, nameRefusal);
+        using var writeAttempt = new ProjectWriteSafety.WriteAttempt();
+        string recoveryNote = "";
         var spawned = await Dispatcher.UIThread.InvokeAsync(() =>
         {
             // The name resolves to a document first, in every loaded project, and only then to the designer
@@ -1473,13 +1756,11 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             {
                 var known = string.Join(", ", tools.Select(c => c.VBTypeName!.Replace("VB.", "")));
                 // An in-box control is in the toolbox only while the project references its library, as in VB6.
-                var inBox = HexIDE.Runtime.Components.InBox.InBoxComponentClass.Implemented.FirstOrDefault(c =>
-                    string.Equals(c.ControlClassName, type, StringComparison.OrdinalIgnoreCase)
-                    || c.Libraries.Any(l => string.Equals(l.TypeName(c.ControlClassName), type, StringComparison.OrdinalIgnoreCase)));
-                var files = inBox?.Libraries.Select(l => l.File).ToList() ?? [];
-                var why = inBox is null
+                var offering = designer.ToolsBoxToolViewModel.LibrariesOffering(type);
+                var files = offering.Select(c => c.Library.File).ToList();
+                var why = offering.Count == 0
                     ? ""
-                    : $" {inBox.ControlClassName} comes from {string.Join(" or ", files)}, and {document.Project.Name} "
+                    : $" {offering[0].ControlName} comes from {string.Join(" or ", files)}, and {document.Project.Name} "
                       + (files.Count == 1 ? "doesn't reference it" : files.Count == 2 ? "references neither" : "references none of them")
                       + ": check one in Project > Components first, as in VB6.";
                 return new AddControlResult(false, null,
@@ -1488,8 +1769,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             }
 
             // REFUSED before anything is placed, rather than placed and then blocked. This tool saves the
-            // form, and a form with no file saves through the native picker, which stops this server
-            // answering: the call never returned and every call behind it hung. An armed answer makes the
+            // form, and a form with no file saves through a native picker outside the control tree. An armed answer makes the
             // save safe to attempt, including an armed cancel, which keeps the form without a file. (#514)
             //
             // A UserControl or PropertyPage is saved through its MODULE, which holds the .ctl/.pag path; the
@@ -1499,6 +1779,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (HexIDE.IDE.ScriptedFileDialogs.WouldShowPicker(owner?.AbsolutePath ?? form.AbsolutePath))
                 return new AddControlResult(false, null,
                     $"{(owner is not null ? owner.Kind.ToString() : "Form")} '{document.Name}' {HexIDE.IDE.ScriptedFileDialogs.PickerRefusal}",
+                    Project: document.Project.Name, Document: document.Name);
+
+            if (ProjectWriteSafety.Prepare(document, ctx.ProjectFileFormat, out recoveryNote, writeAttempt) is { } safetyRefusal)
+                return new AddControlResult(false, null, safetyRefusal,
                     Project: document.Project.Name, Document: document.Name);
 
             // As a drag begun at its top-left: inside a Frame or PictureBox, it goes into the innermost one there (#2039).
@@ -1542,6 +1826,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     : ctx.ProjectService.SaveForm(spawned.Form, false, interactive: false, rewrites: rewrites));
             // The character is in text written earlier and never saved, since a new control brings none of its
             // own: the message quotes the line that holds it, which no read tool might otherwise show.
+            writeAttempt.Written = written;
             if (refused is not null)
                 return spawned with
                 {
@@ -1555,7 +1840,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // saying otherwise would be its own wrong answer -- but the file on disk does not have it, and
             // a caller who is told "saved" will not find out until something else reads that file.
             return written
-                ? spawned with { Form = null, Note = cancel.After(spawned.Note + " " + WriteLocationNote(spawned.Form.Owner, OwnerModuleOf(spawned.Form)?.AbsolutePath ?? spawned.Form.AbsolutePath) + rewrites.Note) }
+                ? spawned with { Form = null, Note = cancel.After(spawned.Note + recoveryNote + " " + WriteLocationNote(spawned.Form.Owner, OwnerModuleOf(spawned.Form)?.AbsolutePath ?? spawned.Form.AbsolutePath) + rewrites.Note) }
                 : spawned with
                 {
                     Success = false, Form = null, Note = null,
@@ -1578,7 +1863,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             return spawned with
             {
                 Success = false, Form = null, Note = null,
-                Error = cancel.After($"'{spawned.ControlName}' was added to the designer but the save failed: {ToolFailures.WithoutProfile(ex.Message)}"),
+                Error = cancel.After($"'{spawned.ControlName}' was added to the designer but the save failed: {ToolFailures.WithoutProfile(ex.Message)}" + writeAttempt.FailureNote),
             };
         }
     }
@@ -1606,8 +1891,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         ctx.ProjectRunnerService.IsRunning
             ? $"The project is running, not paused, so {what}. break_program pauses it where it is, or "
               + "set_breakpoints on a line it will reach and it stops there."
-            : $"No project is running, so {what}. set_breakpoints on the line you want, then run_project; "
-              + "step_into starts it and breaks on the first statement.";
+            : NoEngineNote() is { } none
+                ? $"No project is running, so {what}. {none}"
+                : $"No project is running, so {what}. set_breakpoints on the line you want, then run_project; "
+                  + "step_into starts it and breaks on the first statement.";
 
     /// <summary>The UserControl or PropertyPage module whose designer half this is, or null for a form.</summary>
     private ModuleDefinition? OwnerModuleOf(FormDefinition? form) =>
@@ -1699,7 +1986,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
             // Counted from 1 here and from 0 in the store (#571); MarkLineRules converts both ways.
             var (outside, toStore) = HexIDE.IDE.MarkLineRules.BookmarkRequest(
-                HexIDE.IDE.DocumentContent.TextOf(document, CodeEditorOf(document)), document.Display, lines,
+                HexIDE.IDE.DocumentContent.TextOf(document, CodeEditorOf(document), ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader), document.Display, lines,
                 ctx.BookmarkService.GetBookmarks(document));
             if (outside is not null)
                 return Naming(new MutateResult(false, outside), document);
@@ -1712,7 +1999,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     // ---- Debugger ----
 
     [McpServerTool(Name = "get_breakpoints")]
-    [Description("Returns the breakpoint line numbers for a form or module, named by its own VB6 name in any loaded project (case does not matter). Lines are 1-based and counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. Empty array if none. The reply's 'project' and 'document' name it as the IDE spells them, and 'uri' is the name a language server knows it by: its file: URI, or untitled:<project>/<name>.<ext> while it has no file, as get_diagnostics reports it.")]
+    [Description("Returns the breakpoint line numbers for a form or module, named by its own VB6 name in any loaded project (case does not matter). Lines are 1-based and counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. Empty array if none. The optional conditions map gives each conditional line's expression, keyed by line number; it is absent when all breakpoints are unconditional. The note names conditional lines. A condition is a VB expression evaluated in the line's procedure each time it is reached, pausing when True. The reply's 'project' and 'document' name it as the IDE spells them, and 'uri' is the name a language server knows it by: its file: URI, or untitled:<project>/<name>.<ext> while it has no file, as get_diagnostics reports it.")]
     public async Task<BreakpointsResult> GetBreakpointsAsync(string name, string? project = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1721,14 +2008,18 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (lookup.Document is not { } document)
                 return new BreakpointsResult(null, null, null, [], lookup.Error);
 
+            var lines = ctx.BreakpointService.GetBreakpoints(document);
+            var conditions = BreakpointConditions(document, lines);
             return new BreakpointsResult(document.Project.Name, document.Name, DocumentWireName.For(document),
-                [.. ctx.BreakpointService.GetBreakpoints(document)], null);
+                [.. lines], null, conditions, ConditionalLinesNote(conditions));
         });
     }
 
     [McpServerTool(Name = "set_breakpoints")]
-    [Description("Replaces all breakpoints for a form or module with the supplied 1-based line numbers, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Named by its own VB6 name in any loaded project (case does not matter); pass `project` to say which when a group holds two of one name. Pass an empty array to clear them. A line the document does not have is refused, and so is a new breakpoint on a line of the header or of a member's Attribute lines, which never run; then nothing is changed, and the reply says where the code starts. Takes effect immediately if that project is the one running. The note reports what the document holds afterwards, and 'project' and 'document' name it as the IDE spells them.")]
-    public async Task<MutateResult> SetBreakpointsAsync(string name, int[] lines, string? project = null, CancellationToken ct = default)
+    [Description("Replaces all breakpoints for a form or module with the supplied 1-based line numbers, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them. Named by its own VB6 name in any loaded project (case does not matter); pass `project` to say which when a group holds two of one name. Pass an empty array to clear them. Optional `conditions` maps line numbers to expressions, e.g. {\"6\":\"i = 3\"} with lines [6]. Omitted keys keep existing conditions; explicit blank expressions clear them. Conditions are VB expressions evaluated in the line's procedure each time it is reached, pausing when True. A condition key absent from lines is refused with nothing changed. A line the document does not have is refused, and so is a new breakpoint on a line of the header or of a member's Attribute lines, which never run; then nothing is changed, and the reply says where the code starts. Takes effect immediately if that project is the one running. The note names conditions set or cleared and reports what the document holds afterwards, and 'project' and 'document' name it as the IDE spells them.")]
+    public async Task<MutateResult> SetBreakpointsAsync(string name, int[] lines, string? project = null,
+        [Description("Optional map from breakpoint line number to condition expression; keys must also appear in lines. Omitted keys keep old conditions; explicit blank expressions clear them.")] Dictionary<int, string>? conditions = null,
+        CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -1741,10 +2032,48 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (OutsideDocument(document, lines, first: 1, "breakpoint", ctx.BreakpointService.GetBreakpoints(document)) is { } outside)
                 return Naming(new MutateResult(false, outside, ctx.ProjectRunnerService.CodeEditNote()?.TrimStart()), document);
 
+            if (conditions is not null)
+            {
+                var missing = conditions.Keys.Where(line => !lines.Contains(line)).Order().ToArray();
+                if (missing.Length > 0)
+                    return Naming(new MutateResult(false,
+                        $"Condition line(s) {string.Join(", ", missing)}: not a breakpoint in lines. Nothing changed."), document);
+            }
+
+            var changes = new List<string>();
             ctx.BreakpointService.SetDocument(document, lines);
-            return Naming(new MutateResult(true, null, Held(document, ctx.BreakpointService.GetBreakpoints(document), "breakpoint") + ctx.ProjectRunnerService.CodeEditNote()), document);
+            if (conditions is not null)
+                foreach (var (line, condition) in conditions.OrderBy(pair => pair.Key))
+                {
+                    var old = ctx.BreakpointService.GetCondition(document, line);
+                    ctx.BreakpointService.SetCondition(document, line, condition);
+                    if (string.IsNullOrWhiteSpace(condition))
+                    {
+                        // A blank for a line that had no condition changes nothing, so it is not reported as a clear.
+                        if (old is not null) changes.Add($"Cleared line {line}'s condition \"{old}\".");
+                    }
+                    else
+                        changes.Add($"Set line {line}'s condition \"{condition}\".");
+                }
+            var held = ctx.BreakpointService.GetBreakpoints(document);
+            var note = string.Join(" ", new[] { Held(document, held, "breakpoint"),
+                ConditionalLinesNote(BreakpointConditions(document, held)), string.Join(" ", changes),
+                ctx.ProjectRunnerService.CodeEditNote()?.Trim() }.Where(part => !string.IsNullOrEmpty(part)));
+            return Naming(new MutateResult(true, null, note), document);
         });
     }
+
+    private Dictionary<int, string>? BreakpointConditions(DocumentIdentity document, IReadOnlyList<int> lines)
+    {
+        var conditions = new Dictionary<int, string>();
+        foreach (var line in lines)
+            if (ctx.BreakpointService.GetCondition(document, line) is { } condition)
+                conditions[line] = condition;
+        return conditions.Count == 0 ? null : conditions;
+    }
+
+    private static string? ConditionalLinesNote(Dictionary<int, string>? conditions) =>
+        conditions is null ? null : $"Conditional breakpoint lines: {string.Join(", ", conditions.Keys)}.";
 
     [McpServerTool(Name = "clear_all_breakpoints")]
     [Description("Removes every breakpoint the IDE holds, in EVERY loaded project rather than only the startup one. With a group open that is more than it sounds; to clear one document, call set_breakpoints with an empty array. The reply's 'note' says how many breakpoints were cleared, in how many documents.")]
@@ -1770,7 +2099,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var (refused, outcome) = await StartAndAwaitStopAsync(() =>
         {
             if (!ctx.ProjectRunnerService.CanBreakProject)
-                return new MutateResult(false, ctx.ProjectRunnerService.IsRunning ? "Already paused" : "No project is running");
+                return new MutateResult(false, ctx.ProjectRunnerService.IsRunning ? "Already paused" : NothingRunning("No project is running"));
             ctx.ProjectRunnerService.BreakCurrentProject();
             return null;
         }, StepReplyWait, ct, externalControl: true);
@@ -1786,13 +2115,13 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "continue_program")]
-    [Description("Resumes a paused project (VB6 Continue / F5 in break mode). External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. Error if not currently paused. The reply's 'note' says, after up to 2 s, whether it paused again (with the module and the line, counted from the top of the file as the code window numbers it), is running, or ended.")]
+    [Description("Resumes a paused project (VB6 Continue / F5 in break mode). External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. Error if not currently paused. The reply's 'note' says, after up to 2 s, whether it paused again (with the module and the line, counted from the top of the file as the code window numbers it), is running, or ended. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public async Task<MutateResult> ContinueProgramAsync(CancellationToken ct)
     {
         var (refused, outcome) = await StartAndAwaitStopAsync(() =>
         {
             if (!ctx.ProjectRunnerService.CanContinueProject)
-                return new MutateResult(false, "Project is not paused");
+                return new MutateResult(false, NoEngineNote() is { } none ? $"No project is running. {none}" : "Project is not paused");
             ctx.ProjectRunnerService.ContinueProject();
             return null;
         }, RunReplyWait, ct, externalControl: true);
@@ -1939,7 +2268,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         }
     }
 
-    private string PausedAt(StoppedInfo at) => $"Paused at {ctx.ProjectRunnerService.RunningProject?.Name}/{at.Module} line {at.Line} ({at.Reason}).";
+    private string PausedAt(StoppedInfo at) => $"Paused at {ctx.ProjectRunnerService.RunningProject?.Name}/{at.Module} line {at.Line} ({at.Reason})." + ConditionFailureNote(at);
+
+    private static string ConditionFailureNote(StoppedInfo? at) => at is { ConditionError: { } error } stop
+        ? $" Breakpoint condition '{stop.ConditionExpression}' on line {stop.Line} couldn't be evaluated: {error}." : "";
 
     /// <summary>A successful run, step, break or stop reply with what the program printed since its run began or a reply
     /// last reported it, in 'printed', and its note saying how much or that there was none (#2531).</summary>
@@ -1963,7 +2295,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             () => can() ? StartFailure(start) : new MutateResult(false,
                 ctx.RootViewModel.ExternalDebugger?.IsActive == true
                     ? "The external session must be paused and the adapter ready before stepping."
-                    : "No project to step — load a project first"),
+                    : WhyNoStart("No project to step — load a project first")),
             StepReplyWait, ct, externalControl: true);
         if (refused is not null)
             return refused;
@@ -1977,22 +2309,22 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "step_into")]
-    [Description("Step Into (F8): from idle, starts the project and breaks at the first executed statement; while paused, executes the next statement and breaks (descending into any called Sub/Function); while running, breaks at the next statement. External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. The reply's 'note' says where it paused (module, line counted from the top of the file as the code window numbers it, and reason) or, when no pause comes within 2 s, whether the program is still running or has ended.")]
+    [Description("Step Into (F8): from idle, starts the project and breaks at the first executed statement; while paused, executes the next statement and breaks (descending into any called Sub/Function); while running, breaks at the next statement. External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. The reply's 'note' says where it paused (module, line counted from the top of the file as the code window numbers it, and reason) or, when no pause comes within 2 s, whether the program is still running or has ended. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public Task<MutateResult> StepIntoAsync(CancellationToken ct) =>
         StepAndReportAsync(() => ctx.ProjectRunnerService.CanStepIntoProject, () => ctx.ProjectRunnerService.StepIntoProject(), ct);
 
     [McpServerTool(Name = "step_over")]
-    [Description("Step Over (Shift+F8): while paused, executes the next statement and breaks in the SAME frame — a called Sub/Function runs to completion without descending (unlike step_into). On a non-call statement it behaves like step_into. From idle, starts the project and breaks at the first statement. The reply's 'note' says where it paused (module, line counted from the top of the file as the code window numbers it, and reason) or, when no pause comes within 2 s, whether the program is still running or has ended. External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept.")]
+    [Description("Step Over (Shift+F8): while paused, executes the next statement and breaks in the SAME frame — a called Sub/Function runs to completion without descending (unlike step_into). On a non-call statement it behaves like step_into. From idle, starts the project and breaks at the first statement. The reply's 'note' says where it paused (module, line counted from the top of the file as the code window numbers it, and reason) or, when no pause comes within 2 s, whether the program is still running or has ended. External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public Task<MutateResult> StepOverAsync(CancellationToken ct) =>
         StepAndReportAsync(() => ctx.ProjectRunnerService.CanStepOverProject, () => ctx.ProjectRunnerService.StepOverProject(), ct);
 
     [McpServerTool(Name = "step_out")]
-    [Description("Step Out (Ctrl+Shift+F8): while paused, runs the rest of the current procedure and breaks at the statement in the CALLER after it returns. External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. Stepping out of the outermost frame runs that event/procedure to completion. From idle it starts the project (like Step Into); while running it requests a pause. The reply's 'note' says where it paused (module, line counted from the top of the file as the code window numbers it, and reason) or, when no pause comes within 2 s, whether the program is still running or has ended.")]
+    [Description("Step Out (Ctrl+Shift+F8): while paused, runs the rest of the current procedure and breaks at the statement in the CALLER after it returns. External sessions send the command to the debug adapter and report its next stop (source file path and line), running or ended after up to 2 s; adapter refusals report the message and whether inspection was kept. Stepping out of the outermost frame runs that event/procedure to completion. From idle it starts the project (like Step Into); while running it requests a pause. The reply's 'note' says where it paused (module, line counted from the top of the file as the code window numbers it, and reason) or, when no pause comes within 2 s, whether the program is still running or has ended. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public Task<MutateResult> StepOutAsync(CancellationToken ct) =>
         StepAndReportAsync(() => ctx.ProjectRunnerService.CanStepOutProject, () => ctx.ProjectRunnerService.StepOutProject(), ct);
 
     [McpServerTool(Name = "run_to_cursor")]
-    [Description("Run To Cursor (Ctrl+F8): run until (module, 1-based line, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them) then break — a one-shot temporary breakpoint. While paused it continues to the target; while running it arms the target; from idle it starts the project and runs to the target (a real breakpoint hit first stays paused there; continue proceeds toward the target). The reply's 'note' says where it paused or, within 2 s, that it has not got there yet, and 'project' and 'document' name the target's document as the IDE spells them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. External sessions refuse this command because they lack one-shot breakpoint support; set a breakpoint in the editor and use continue_program instead.")]
+    [Description("Run To Cursor (Ctrl+F8): run until (module, 1-based line, counted from the top of the file with its header included (a form's designer block, a class's header and the Attribute lines), as the code window numbers them) then break — a one-shot temporary breakpoint. While paused it continues to the target; while running it arms the target; from idle it starts the project and runs to the target (a real breakpoint hit first stays paused there; continue proceeds toward the target). The reply's 'note' says where it paused or, within 2 s, that it has not got there yet, and 'project' and 'document' name the target's document as the IDE spells them. Pass `project` when a group holds two documents of one name; without it an ambiguous name is refused and the reply lists them. External sessions refuse this command because they lack one-shot breakpoint support; set a breakpoint in the editor and use continue_program instead. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public async Task<MutateResult> RunToCursorAsync(string module, int line, string? project = null, CancellationToken ct = default)
     {
         if (await Dispatcher.UIThread.InvokeAsync(() => ctx.RootViewModel.ExternalDebugger?.IsActive == true))
@@ -2002,7 +2334,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var (refused, outcome) = await StartAndAwaitStopAsync(() =>
         {
             if (!ctx.ProjectRunnerService.CanRunToCursor)
-                return new MutateResult(false, "No project to run — load a project first");
+                return new MutateResult(false, WhyNoStart("No project to run — load a project first"));
 
             var lookup = ResolveDocument(module, project);
             if (lookup.Document is not { } document)
@@ -2072,7 +2404,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // hold a module called the same thing — which would move the execution point of the running
             // project to a line of a document that is not executing.
             if (ctx.ProjectRunnerService.RunningProject is not { } running)
-                return Naming(new MutateResult(false, "No project is running"), document);
+                return Naming(new MutateResult(false, NothingRunning("No project is running")), document);
             if (!document.IsIn(running))
                 return Naming(new MutateResult(false,
                     $"{document.Display} is not in the running project ('{running.Name}')"), document);
@@ -2087,7 +2419,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     [DescribesEnum(typeof(DebugState))]
     [DescribesEnum(typeof(StopReason))]
     [DescribesEnum(typeof(HexIDE.Dap.DapSessionState), "Created", "Stopped")]
-    [Description("Returns the current or most recent session's debug state. Interpreter states: Running/Paused/Stopped. External states: Starting/Running/Paused (adapter Stopped)/Ended/Faulted; running is true only for Starting, Running or Paused, even during adapter cleanup. When paused, module and 1-based line locate the break, counted from the file top, header included, as the code window numbers it. Interpreter module is a module name and project names its running project. External module is the adapter's source file path, project is absent; set_next_statement takes a module name, not that path. stopReason is Breakpoint (breakpoint or Run To Cursor), Watch (a break watch), Step (step completed), StopStatement (VB6 Stop), Assertion (failed Debug.Assert), Pause (requested break), or RuntimeError (unhandled error, Debug chosen). External reasons map breakpoint/function breakpoint to Breakpoint, data breakpoint to Watch, step/goto to Step, pause to Pause, exception to RuntimeError; unknown reasons give null. adapterStopReason retains the external adapter's raw reason. Both reasons are null unless Paused.")]
+    [Description("Returns the current or most recent session's debug state. Interpreter states: Running/Paused/Stopped. External states: Starting/Running/Paused (adapter Stopped)/Ended/Faulted; running is true only for Starting, Running or Paused, even during adapter cleanup. When paused, module and 1-based line locate the break, counted from the file top, header included, as the code window numbers it. Interpreter module is a module name and project names its running project. External module is the adapter's source file path, project is absent; set_next_statement takes a module name, not that path. stopReason is Breakpoint (breakpoint or Run To Cursor), Watch (a break watch), Step (step completed), StopStatement (VB6 Stop), Assertion (failed Debug.Assert), Pause (requested break), or RuntimeError (unhandled error, Debug chosen). External reasons map breakpoint/function breakpoint to Breakpoint, data breakpoint to Watch, step/goto to Step, pause to Pause, exception to RuntimeError; unknown reasons give null. adapterStopReason retains the external adapter's raw reason. Both reasons are null unless Paused. 'note' says when no run engine runs the startup project. A failed breakpoint condition still pauses; note names the condition and evaluation error, excluded from printed.")]
     public async Task<DebugStateResult> GetDebugStateAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -2129,7 +2461,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 // The module is a bare name, and a group may hold two of it: the running project says which.
                 stop is null ? null : ctx.ProjectRunnerService.RunningProject?.Name,
                 // The note is written to follow another sentence; standing alone, it starts with no space.
-                Note: ctx.ProjectRunnerService.CodeEditNote()?.TrimStart());
+                Note: stop is { ConditionError: not null }
+                    ? ConditionFailureNote(stop).TrimStart() + ctx.ProjectRunnerService.CodeEditNote()
+                    : ctx.ProjectRunnerService.CodeEditNote()?.TrimStart() ?? NoEngineNote());
         });
     }
 
@@ -2264,7 +2598,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 w.Expression, w.Type.ToString(), w.Context,
                 result?.Display ?? "<Out of context>", result?.TypeName ?? "", result?.Ok ?? false));
         }
-        return new WatchesResult(true, null, rows.ToArray(), ctx.ProjectRunnerService.RunningProject?.Name);
+        return new WatchesResult(true, null, rows.ToArray(), ctx.ProjectRunnerService.RunningProject?.Name, NoEngineNote());
     }
 
     [McpServerTool(Name = "evaluate")]
@@ -2275,7 +2609,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             return new EvaluateResult(false, ctx.Localization.GetString("Str.Debug.External.Unsupported"), null);
         string? result = await Dispatcher.UIThread.InvokeAsync(() => ctx.DebugController.EvaluateAsync(expression));
         return result is null
-            ? new EvaluateResult(false, NotPausedRefusal("there is no frame to evaluate against"), null)
+            ? new EvaluateResult(false, await Dispatcher.UIThread.InvokeAsync(() => NotPausedRefusal("there is no frame to evaluate against")), null)
             : new EvaluateResult(true, null, result);
     }
 
@@ -2307,7 +2641,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
     [McpServerTool(Name = "shutdown_ide")]
     [Description("Shuts down the HexIDE application cleanly, triggering all shutdown handlers. " +
-                 "Stops a running project and closes any dialogs still open first — otherwise the app " +
+                 "Stops a running project and closes any dialogs still open first; floating IDE tools stay floating. Otherwise the app " +
                  "keeps running (its shutdown mode is last-window-close) and the next build fails on a " +
                  "file lock. The reply says what was torn down; it CANNOT confirm the process exited, " +
                  "because the reply has to be sent before it does — poll /health until it stops " +
@@ -2458,7 +2792,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "take_snapshot")]
-    [Description("Captures the window's client area, without its title bar or frame, as a PNG, or with 'includeFrame' the whole window as Windows renders it, even where another window covers it. 'captureArea' says which in the reply; 'title' is the actual window title, including the IDE's. 'activeDialog' is retained for compatibility (null for the IDE). Returns the file path so the caller can read the image, with its size in pixels ('width', 'height') and its 'scale', the pixels per device-independent unit; 'pathNote' says how long the file is kept. Open popups can extend the image left or above the window: 'windowOffsetX' and 'windowOffsetY' give the window origin in full-image pixels (otherwise zero), and 'units' maps inspect_element's window-relative 'boundingRect' into the image, and into the inline copy. If any other window is open (a dialog, the Find window, or a running program's form) it is captured in preference to the IDE's own, whether or not it is on top; otherwise the main window is captured. 'window' selects which top-level window to address, as its description says: under \"auto\" (default) a running program's form, INCLUDING while it is paused at a breakpoint, is usually picked over the IDE; pass \"ide\" for the IDE itself, or a window's title or a running form's name for that window. The path is on the IDE's machine: a client attached from another machine, through a tunnel, passes 'inline' true to get the image itself as well, in a copy fitted to 1568 pixels described by 'inlineWidth', 'inlineHeight' and 'inlineScale'. The 'note' says what the image leaves out, such as a popup on no screen or too far from the window, and when a render target drew it because the compositor gave none within 5 s.")]
+    [Description("Captures the window's client area, without its title bar or frame, as a PNG, or with 'includeFrame' the whole window as Windows renders it, even where another window covers it. 'captureArea' says which in the reply; 'title' is the actual window title, including the IDE's. 'activeDialog' is retained for compatibility (null for the IDE). Returns the file path so the caller can read the image, with its size in pixels ('width', 'height') and its 'scale', the pixels per device-independent unit; 'pathNote' says how long the file is kept. Open popups can extend the image left or above the window: 'windowOffsetX' and 'windowOffsetY' give the window origin in full-image pixels (otherwise zero), and 'units' maps inspect_element's window-relative 'boundingRect' into the image, and into the inline copy. If another non-tool window is open (a dialog, the Find window, or a running program's form) it is captured in preference to the IDE's own, whether or not it is on top; otherwise the main window is captured. 'window' selects which top-level window to address, as its description says: under \"auto\" (default) a running program's form, INCLUDING while it is paused at a breakpoint, is usually picked over the IDE; pass \"ide\" for the IDE itself, or a window's title or a running form's name for that window. The path is on the IDE's machine: a client attached from another machine, through a tunnel, passes 'inline' true to get the image itself as well, in a copy fitted to 1568 pixels described by 'inlineWidth', 'inlineHeight' and 'inlineScale'. The 'note' says what the image leaves out, such as a popup on no screen or too far from the window, and when a render target drew it because the compositor gave none within 5 s.")]
     public async Task<SnapshotResult> TakeSnapshotAsync(
         [Description(WindowParameter)] string? window = null,
         // The tool holds an inline copy, which InlineSnapshot attaches after the reply (#957).
@@ -2513,7 +2847,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
             // A file per capture, so the path an earlier call returned still holds its image (#756).
             var path = HexIDE.Automation.SnapshotComposer.NewCapturePath(System.IO.Path.GetTempPath(), DateTime.UtcNow);
-            bitmap.Save(path);
+            bitmap.Save(path, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
 
             // The window origin includes any space left for a popup above or to its left (#648).
             var result = new SnapshotResult(path, null, activeDialog,
@@ -2532,7 +2866,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             var (width, height) = InlineSnapshot.Fit(bitmap.PixelSize.Width, bitmap.PixelSize.Height);
             // A render target cannot be scaled directly, so a larger image is encoded and decoded again at the fitted width.
             using var png = new System.IO.MemoryStream();
-            bitmap.Save(png);
+            bitmap.Save(png, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
             if (width != bitmap.PixelSize.Width)
             {
                 png.Position = 0;
@@ -2540,7 +2874,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                     png, width, Avalonia.Media.Imaging.BitmapInterpolationMode.HighQuality);
                 height = fitted.PixelSize.Height;
                 png.SetLength(0);
-                fitted.Save(png);
+                fitted.Save(png, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
             }
             InlineSnapshot.Hold(path, png.ToArray());
             var inlineScale = active.DesktopScaling * width / bitmap.PixelSize.Width;
@@ -2593,7 +2927,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         "Which top-level window the path is resolved against: \"auto\" (default) is any visible window other than the "
         + "IDE's own, whether or not it is on top: a dialog, the Find window, or a running VB6 program's form, INCLUDING "
         + "while it is paused at a breakpoint; among several, a dialog wins, then the one with focus, then the one opened "
-        + "last, else the IDE's own. \"ide\" reaches the IDE's own window; a window's title, or a running form's name such as \"Form2\", reaches that "
+        + "last, else the IDE's own. Floating IDE tools are skipped by auto; use their stable layout key (such as \"immediate\") or window title. \"ide\" reaches the IDE's own window; a window's title, or a running form's name such as \"Form2\", reaches that "
         + "window, or of two stacked under one name the one on top, which is how a form behind another form of the program is reached. An unknown name is refused with "
         + "the open windows listed, each form by its name and title: ask for an unknown name to discover them; the name is the stable handle.";
 
@@ -2601,7 +2935,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     [Description("Returns the active window's live control tree to address controls (see 'window'). Uses the UIA 'control view': None-type wrappers without focus, AutomationId or non-scroll capability are collapsed; x:Name alone keeps no wrapper. Adorners are under their control. Overflow never inserts a path segment. Context menus and flyouts have a ContextMenu or Flyout segment under their owner; owner paths stay stable. Each node carries its addressing 'path' (feed it back as a target), ControlType, Name, AutomationId, ClassName, the DataContext ViewModel type, supported interaction providers and isEnabled. Providers and their interact actions: invoke → invoke, selection and selectionItem → select and remove_from_selection, multiSelectItem → add_to_selection and remove_from_selection, value → set_value, toggle → toggle, expandCollapse → expand/collapse (also a context menu or flyout the control owns), rangeValue → set_range_value, scroll → scroll. Only usable actions are reported: a list that fits has no scroll; a progress bar has no rangeValue. Range capability keeps a node even with unusable bounds. A .NET type used as a name is reported as 'typeNameAsName' instead; it cannot name a path. Nodes may carry 'isHidden' and 'isOffscreen'; 'flagsNote' says what each means when a node has one. A long ListBox makes rows only for what is in view and a focused row, so its dump lists those; interact 'select' with a value scrolls to the rest. Top-level 'focusedPath' names the keyboard focus anywhere in the window, or 'focusReason' says why there is none. Scope a dump with 'root', or search with 'match'; 'maxDepth' and 'interactiveOnly' say what is kept and when a node is 'truncated'. A tree over about 40,000 characters is cut to fit, keeping the active document, and the 'note', written first, says what was cut.")]
     public async Task<VisualTreeResult> DumpVisualTreeAsync(
         [Description("A path to dump only that subtree; omit for the whole window. For deeply nested or large areas, "
-                     + "scope the dump this way. name is x:Name when set; label is the peer text when different. A segment accepts either.")]
+                     + "scope the dump this way. Tool parts use stable AutomationIds such as TitleBar[Tool.locals]/Pane[Tool.locals]; tool document tabs use TabItem[Tool.languageServers]. name is x:Name when set; label is the peer text when different. A segment accepts either.")]
         string? root = null,
         [Description("How many levels to walk, counted in control-view levels rather than raw visuals; at least 1. "
                      + "Default 20. A node whose children lie below the cut-off carries \"truncated\": true and an "
@@ -2683,7 +3017,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             result = result with { Root = fitted, Note = fitNote ?? result.Note };
         }
         var shown = result.Root is { } root2 ? [root2] : result.Matches ?? [];
-        return result with { FlagsNote = FlagsNote(shown) };
+        return result with { FlagsNote = FlagsNote(shown), Note = ScriptedFileDialogs.WithNativePickerNote(result.Note) };
     }
 
     /// <summary>
@@ -2841,7 +3175,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     {
         var note = total switch
         {
-            0 => $"Nothing matches '{match}'. Name, AutomationId, ClassName, ControlType, typeNameAsName and the "
+            0 => $"Nothing matches '{match}'. Name, label, AutomationId, ClassName, ControlType, typeNameAsName and the "
                  + "DataContext type are searched, as text that contains it, ignoring case.",
             1 => $"1 node matches '{match}'.",
             _ when total > MatchLimit => $"{total} nodes match '{match}'; the first {MatchLimit}, in tree order, are listed. "
@@ -2851,7 +3185,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         if (unsearched > 0)
             note += $" {unsearched} {(unsearched == 1 ? "branch" : "branches")} stopped at maxDepth and {(unsearched == 1 ? "was" : "were")} "
               + "not searched: raise maxDepth, or search again from a truncated node's path as 'root'.";
-        var tabs = dock?.AllTabs.Where(t => !ReferenceEquals(t, dock.ActiveTab)).Select(t => t.Title ?? "").ToArray() ?? [];
+        var shownTabs = dock?.ShownTabs ?? [];
+        var tabs = dock?.AllTabs.Where(t => !shownTabs.Contains(t)).Select(t => t.Title ?? "").ToArray() ?? [];
         if (tabs.Length > 0)
             note += $" {tabs.Length} open tab(s) are not selected, and what they hold is not in the tree: "
                     + string.Join(", ", tabs.Select(t => $"'{t}'")) + ". activate_document_tab brings one to the front.";
@@ -2902,24 +3237,28 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "interact")]
-    [Description("Drives a live control at 'target' (a dump_visual_tree path) through UI Automation. 'action' lists the verbs; 'value' describes their arguments. A provider action needs its reported provider and fails without it, with no fallback to reflection: choose invoke_command/set_property explicitly. click needs no provider: it raises pointer input at the point itself, on whatever a real press there would reach, moving there first unless the last click left it there, so a form's MouseMove precedes MouseDown, releasing 50 ms later as separate input so the press handler runs first; it waits up to a second for the next frame, since hit-testing needs a drawn window; its reply names the button, the keys held, press coordinates and landing, and, with to, release coordinates and recipient (capturer or hit-tested control); a point where nothing takes the pointer is refused, and nothing is pressed. Actions are real, with no confirmation. Every verb except invoke_command/set_property refuses a disabled target, naming a disabling container or blocking dialog to answer first, and one not showing (\"isHidden\": true in dump_visual_tree), as no person could reach it; those two reach its view model or its own Command. toggle, expand, collapse, set_value and set_property reply with the state read back. set_value on a non-editable ComboBox selects item text ignoring case; a miss names items. Other read-only values are refused. Find the target and what it supports with dump_visual_tree/inspect_element first. While a VB6 program runs or is paused 'auto' usually picks its form: pass 'window' \"ide\" to act on the IDE. " + ProgramWaitNote)]
+    [Description("Drives a live control at 'target' (a dump_visual_tree path) through UI Automation. 'action' lists the verbs; 'value' describes their arguments. A provider action needs its reported provider and fails without it, with no fallback to reflection: choose invoke_command/set_property explicitly. click needs no provider: it raises pointer input at the point itself, on whatever a real press there would reach, moving there first unless the last click left it there, so a form's MouseMove precedes MouseDown, releasing 50 ms later as separate input so the press handler runs first; it waits up to a second for the next frame, since hit-testing needs a drawn window; its reply names the button, the keys held, press coordinates and landing, and, with to, release coordinates and recipient (capturer or hit-tested control); a point where nothing takes the pointer is refused, and nothing is pressed. Code replies name line/column, project/document, breakpoint/bookmark, or a covering header/control and covered line. Every verb except invoke_command/set_property refuses a disabled target, naming a disabling container or blocking dialog to answer first, and one not showing (\"isHidden\": true in dump_visual_tree), as no person could reach it; those two reach its view model or its own Command. toggle, expand, collapse, set_value and set_property reply with the state read back. set_value on a non-editable ComboBox selects item text ignoring case; a miss names items. Other read-only values are refused. Find the target and what it supports with dump_visual_tree/inspect_element first. While a VB6 program runs or is paused 'auto' usually picks its form: pass 'window' \"ide\" to act on the IDE. " + ProgramWaitNote)]
     public async Task<InteractOutcome> InteractAsync(
         [Description("A path from dump_visual_tree, including ContextMenu/Flyout segments for attached popups.")]
         string target,
         [Description("One of: invoke (click a Button or menu item); select (pick a ComboBox or ListBox item, a DataGrid row or a tree node; with 'value', a row out of view is scrolled to first; a dropdown's items exist only while it is open, so expand it, dump_visual_tree(root=combo), then select, which closes it as a click does); add_to_selection / remove_from_selection (add a multi-select list item or remove a list/tree item without replacing the selection; the reply names the primary, on a designer the last control added); double_click (raise DoubleTapped, selecting the target first as a real double-click does, or commit a completion item; how the Project Explorer opens an item); click (press and release a pointer on the target as a real click does, so a running form raises MouseDown, Click and MouseUp; the only verb that presses; to drags, and hold stops before letting go; any control, a Label or a form's area included); release (let go of that held button); set_value (set a TextBox's text, or a fixed ComboBox's item; a box bound to a property is committed as Enter would); toggle (flip a CheckBox); expand / collapse (a dropdown, tree node, expander or menu, or else the context menu or flyout the control owns); set_range_value (set a Slider or ScrollBar, as dragging its thumb would); scroll (moves the target's own scroller or bars, so an editor or a DataGrid works, else the nearest container that scrolls that way); wheel (turn the mouse wheel over the target as a person does, so its own wheel handling runs; the reply says what moved); invoke_command and set_property (reflection: use the DataContext members inspect_element lists, or value Command for the target's resolved command); close (the target's window, as its close box does; a Yes/No or Abort/Retry/Ignore MsgBox refuses, a form's QueryUnload may; not the IDE's main window).")]
         string action,
-        [Description("Required for set_value (the text), set_range_value (a number, '.' for decimals), scroll (up, down, left or right for a page; line_up, line_down, line_left or line_right for a line; home or end for the top or bottom) and the reflection actions (invoke_command: Command runs the target’s resolved Command with its CommandParameter, checking CanExecute; otherwise the name of an ICommand property, or of a method XAML binds as a Command with no CommandParameter, refused when its Can<name>(object) returns false; set_property: \"PropertyName=NewValue\"). For select, the item text to match; omit it when 'target' already points at the item. For wheel: up, down, left or right, then notches (default 1) and an optional x,y, as 'down 3'. Optional for click: a point 'x,y' relative to the target's top-left ('.' for decimals; the centre when omitted), a button, left, right or middle (left when omitted), any of shift, ctrl and alt to hold, and double for two clicks, in any order and separated by spaces, as in '10,5 right double' or 'double'; append to x,y or to <path>:x,y to drag (paste a dump_visual_tree path, including spaces); release coordinates are relative to that control, or the target without a path; to cannot accompany double; add hold to a drag to stop before its release, with the button still down at the to point until action release. While it is held, every reply's heldButton says where, a snapshot or a dump shows the drag in progress, click, double_click and hover are refused, and keys still go. For release: x,y relative to the target, or <path>:x,y, moves the held button there first; with no value it lets go where it is held. Example: click '20,20 to 100,60 hold' on the designer canvas shows the draw preview to 100,60, then release '140,90' draws to 140,90. With no call for 120 s a hold is abandoned; heldButton says how, and the next reply what it did.")]
+        [Description("For set_value: text; set_range_value: number; scroll (up, down, left or right for a page; line_up, line_down, line_left or line_right for a line; home or end for the top or bottom) and the reflection actions (invoke_command: Command runs the target’s resolved Command with its CommandParameter, checking CanExecute; otherwise the name of an ICommand property, or of a method XAML binds as a Command with no CommandParameter, refused when its Can<name>(object) returns false; set_property: \"PropertyName=NewValue\"). For select, the item text to match; omit it when 'target' already points at the item. For wheel: up, down, left or right, then notches (default 1) and an optional x,y, as 'down 3'. Optional for click: a point 'x,y' relative to the target's top-left ('.' for decimals; the centre when omitted), a button, left, right or middle (left when omitted), any of shift, ctrl and alt to hold, and double for two clicks, in any order and separated by spaces, as in '10,5 right double' or 'double'; append to x,y or to <path>:x,y to drag (paste a dump_visual_tree path, including spaces); release coordinates are relative to that control, or the target without a path; to cannot accompany double; add hold to a drag to stop before its release, with the button still down at the to point until action release. While it is held, every reply's heldButton says where, a snapshot or a dump shows the drag in progress, click, double_click and hover are refused, and keys still go. For release: x,y relative to the target, or <path>:x,y, moves the held button there first; with no value it lets go where it is held. Code windows, text and margins also take 1-based line:N or line:N,col:M for click/double_click; off-screen lines scroll into view; invalid lines report the line count. With no call for 120 s a hold is abandoned; heldButton says how, and the next reply what it did.")]
         string? value = null,
         [Description(WindowParameter)]
         string? window = null,
         CancellationToken ct = default)
     {
+        if (ScriptedFileDialogs.NativePickerNote is { } blocking)
+            return new InteractOutcome(false, "peer", null, blocking);
         Control? acted = null;
         UiAutomationDriver.ProgramWatch? watch = null;
         // A Make asking whether to replace its archive: an action that answers the box is told what Make did then (#2718).
         var asking = HexIDE.Projects.MakeOutcomes.Latest is { Current: HexIDE.Projects.MakeOutcomes.Stage.Asking } make ? make : null;
         var outcome = await Dispatcher.UIThread.InvokeAsync(async () =>
         {
+            if (ScriptedFileDialogs.NativePickerNote is { } blockingNow)
+                return new InteractOutcome(false, "peer", null, blockingNow);
             var (active, _, error) = ResolveActiveWindow(window);
             if (active is null)
                 return new InteractOutcome(false, "peer", null, error);
@@ -2954,11 +3293,11 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             outcome = await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.AfterClose(acted, outcome, watch));
         if (outcome.Success && await MakeReply.AfterAnswerAsync(asking, ct) is { } made)
             outcome = outcome with { Detail = outcome.Detail is null ? made : outcome.Detail.TrimEnd('.') + ". " + made };
-        return outcome;
+        return outcome with { Detail = ScriptedFileDialogs.WithNativePickerNote(outcome.Detail) };
     }
 
     [McpServerTool(Name = "type_text")]
-    [Description("Types text into the control at 'target' (a path from dump_visual_tree) by inserting at the caret via the control's own API, writing over a standing selection as a person's typing does (the reply says how many characters it replaced), reported as mechanism \"document\" because it is an edit and not key events ('mode' \"keyboard\" sends key events instead, as a person types, Shift's own key around a capital); a read-only or disabled surface is refused, as a person's typing would be — works on the code editor (AvaloniaEdit), which has no value provider for 'interact set_value'. See 'target' for descendant surface selection and refusals. See 'text' for line breaks. Use press_key for Enter/Tab/commands. In a code window a selection reaching the file's header or a member's Attribute lines, which only the IDE changes, has only its editable parts replaced, and the reply says what stayed; with nothing editable, or the caret in such a region, it is refused, naming the region and giving an editable offset into the whole file (get_file_content). At the end of a declaration whose Attribute lines follow it, the text from its first line break on goes after those lines, with its line breaks written as the file's, as a person's paste does there; the reply says so and gives the caret's new offset. 'window' picks the top-level window the path is resolved against; its own description lists the values. " + ProgramWaitNote)]
+    [Description("Types text into the control at 'target' (a path from dump_visual_tree) by inserting at the caret via the control's own API, replacing a selection as typing does (the reply says how many characters it replaced), reported as mechanism \"document\" because it is an edit and not key events ('mode' \"keyboard\" sends key events instead, as a person types, Shift's own key around a capital). Keyboard mode delivers protected edits: when the code window writes nothing, the reply says 'refused by the code window', reports the caret and quotes any status bar message that key set, or says it gave no message. In document mode a read-only or disabled surface is refused, as a person's typing would be — works on the code editor (AvaloniaEdit), which has no value provider for 'interact set_value'. See 'target' for descendant surface selection and refusals. See 'text' for line breaks. Use press_key for Enter/Tab/commands. In document mode, a code-window selection reaching the file's header or a member's Attribute lines, which only the IDE changes, has only its editable parts replaced, and the reply says what stayed; with nothing editable, or the caret in such a region, it is refused, naming the region and giving an editable offset into the whole file (get_file_content). At the end of a declaration whose Attribute lines follow it, or before or inside its trailing comment, the text from its first line break on goes after those lines, followed by any remaining comment text; the caret precedes that moved comment, with its line breaks written as the file's, as a person's paste does there; the reply says so and gives the caret's new offset. 'window' selects the top-level window. " + ProgramWaitNote)]
     public async Task<InteractOutcome> TypeTextAsync(
         [Description("A path from dump_visual_tree. A target that is not showing is refused. If the target is not itself a text surface, a descendant editor/textbox is used (AvaloniaEdit is preferred over incidental textboxes); the reply gives the path of the surface that took the text. A target holding more than one showing surface of the chosen kind is refused, with their paths listed. In the default mode a dropdown that is not editable is refused with a pointer to select.")]
         string target,
@@ -2971,11 +3310,12 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                      + "auto-indent, completion or auto-close. \"keyboard\" types it as a person does, a key at a time, to "
                      + "the focused control: KeyDown, TextInput and KeyUp per character, \\n as Enter and \\t as Tab, with "
                      + "key bindings tried first, so what typing drives runs. In a code window that is the completion "
-                     + "request a letter makes, parameter info on ( and , and auto-indent and the End a line break adds; "
+                     + "request a letter makes, parameter info on ( and , on-type formatting, and auto-indent and the End a line break adds; "
                      + "after each key the language server's answer is waited for, up to 2 s. The text that lands may "
                      + "differ from what was sent, so read it back. A Tab that moves focus sends the rest to where focus "
-                     + "went. The typing stops, and the reply says after how many keys, at a key a protected line refuses, "
-                     + "or when a dialog opens, over this window or another. Nothing is typed while a modal dialog is open "
+                     + "went. The typing stops after sending a key the code window refuses; the reply reports the caret "
+                     + "and any status bar message that key set, says which key was sent and what was not sent. It also stops "
+                     + "when a dialog opens, over this window or another. Nothing is typed while a modal dialog is open "
                      + "over the window, as a person's keys would go to it. A control with no text box that takes focus, "
                      + "such as a running form's RichTextBox, is sent the keys too, and the reply says if it took none of "
                      + "their text. Its mechanism is \"keyboard\".")]
@@ -3032,7 +3372,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "hover")]
-    [Description("Moves the pointer onto the control at 'target' (a path from dump_visual_tree) by sending a mouse move through the window's own input, as the platform delivers a real one, watches for a tip, and reports its text: a declared ToolTip.Tip, such as a toolbar button's, and a tip a control raises from its own pointer handler, such as LSP quick-info and the debugger's Auto Data Tips in the code editor. A tip that is a control reads as its visible text blocks, joined with ' / '. The move is hit-tested as a real one is: when something else is drawn at the point the reply says what it landed on, and reports that control's tip, as that is what a person would be shown; a disabled target shows a tip only with ToolTip.ShowOnDisabled, and the reply says it is disabled. When nothing is drawn at the point, or Avalonia's input cannot be reached, the move is raised on the control instead, which opens only the second kind, and the reply says so. Without 'x' and 'y' a code editor is hovered at its CARET, which is how a particular identifier is hovered; see 'x'. 'dwellMs' is how long to watch, and 'window' picks the window. When no tip opens, the reply adds the 'declared tip' of the control under the hovered point or its nearest ancestor that sets one, which is the text a human would be shown there. The pointer then leaves the window, closing the tip, unless 'stay' keeps it there for a snapshot: 'tipBounds' places an opened tip in the window as inspect_element's boundingRect does, and 'detail' gives its offset from the point hovered. The cursor and pointer-over stay the hover's until the real mouse next moves.")]
+    [Description("Moves the pointer onto the control at 'target' (a path from dump_visual_tree) through the window's input, watches for a tip, and reports its text: a declared ToolTip.Tip, such as a toolbar button's, and a tip a control raises from its own pointer handler, such as LSP quick-info and the debugger's Auto Data Tips in the code editor. A tip that is a control reads as its visible text blocks, joined with ' / '. The move is hit-tested as a real one is: when something else is drawn at the point the reply says what it landed on, and reports its tip; a disabled target shows a tip only with ToolTip.ShowOnDisabled, and the reply says it is disabled. When nothing is drawn at the point, or Avalonia's input cannot be reached, the move is raised on the control instead, which opens only the second kind, and the reply says so. Without 'x' and 'y' a code editor is hovered at its CARET, to hover an identifier; see 'x'. 'dwellMs' is how long to watch, and 'window' picks the window. When no tip opens, the reply adds the 'declared tip' of the control under the hovered point or its nearest ancestor that sets one, as a person would see there. The pointer then leaves the window, closing the tip, unless 'stay' keeps it there for a snapshot: 'tipBounds' places an opened tip in the window as inspect_element's boundingRect does, and 'detail' gives its offset from the point hovered. The cursor and pointer-over stay the hover's until the real mouse changes position; stay ignores known same-position restatements. " + ProgramWaitNote + " The reply reports Debug.Print output in 'printed', since the run began or the last reply that reported it, or says nothing was printed.")]
     public async Task<InteractOutcome> HoverAsync(
         [Description("A path from dump_visual_tree. A target that is not a code editor but contains one is hovered at "
                      + "that editor, the first showing under it, and the reply then names the editor and gives its path, "
@@ -3053,7 +3393,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         [Description("True leaves the pointer on the point when the watch ends, for a snapshot: what it landed on keeps "
                      + "its pointer-over look, such as a flat toolbar button's hot image, and an opened tip stays open. "
                      + "The reply says whether it reads as under the pointer, as inspect_element's isPointerOver does. It "
-                     + "lasts until the next click, drag or hover in that window, or the real mouse's next move over it. "
+                     + "lasts until the next click, drag or hover, in that window or another, or the real mouse's next move over it. "
                      + "Default false: the pointer leaves the window.")]
         bool stay = false,
         CancellationToken ct = default)
@@ -3063,6 +3403,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 $"dwellMs must be between 0 and {MaxHoverDwellMs}; it was {dwellMs}");
 
         UiAutomationDriver.HoverLanding? landing = null;
+        UiAutomationDriver.ProgramWatch? program = null;
 
         // The move is hit-tested against what the window last drew, as click's press is: a window opened a moment ago has
         // drawn nothing, so its next frame is waited for first (#1265).
@@ -3081,12 +3422,17 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
         var raised = await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            program = UiAutomationDriver.WatchProgram(TopLevel.GetTopLevel(found) as Window, () => ctx.DebugController.CurrentStop);
             var outcome = UiAutomationDriver.Hover(found, x, y, target, out var landed);
             landing = landed;
+            // Protect the tooltip dwell too: opening its popup can restate the resting real mouse (#2666).
+            if (stay && outcome.Success && landed is { ThroughWindowInput: true } protectedAt)
+                UiAutomationDriver.StayHover(protectedAt.Receiver);
             return outcome;
         });
 
         if (!raised.Success || landing is not { } at) return raised;
+        var sinceMove = System.Diagnostics.Stopwatch.StartNew();
         var hovered = at.Receiver;
         // The real mouse, or another hover running at the same time, takes the tip, and only the window's input says so (#2376).
         var watch = at.ThroughWindowInput
@@ -3106,6 +3452,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         string? tip = null;
         string? declared = null;
         var enabled = true;
+        // How long after the move the poll first saw a tip open (#2949), and the delay the control declares when none did.
+        long? openedAfter = null;
+        var showDelay = 0;
         // Where the tip was while it was open, beside the point hovered, both in the window: it closes when the hover ends,
         // so this is the only time its placement can be read (#1303).
         (Rect Bounds, Point Hovered)? placed = null;
@@ -3132,6 +3481,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                             && at.Receiver.TranslatePoint(at.Point, window) is { } point
                             ? (bounds, point) : placed);
                 });
+                if (tip is not null)
+                    openedAfter ??= sinceMove.ElapsedMilliseconds;
                 if (tip is not null && tip.EndsWith(UiAutomationDriver.NoTextToRead, StringComparison.Ordinal))
                     (textless, tip) = (tip, null);
             }
@@ -3144,8 +3495,9 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // Collapsing them would turn a limitation into a passing assertion.
             if (tip is null)
             {
-                (declared, enabled) = await Dispatcher.UIThread.InvokeAsync(
-                    () => (UiAutomationDriver.DeclaredToolTipAt(at.Receiver, at.Point), at.Receiver.IsEffectivelyEnabled));
+                (declared, enabled, showDelay) = await Dispatcher.UIThread.InvokeAsync(() =>
+                    (UiAutomationDriver.DeclaredToolTipAt(at.Receiver, at.Point), at.Receiver.IsEffectivelyEnabled,
+                     UiAutomationDriver.DeclaredToolTipOwnerAt(at.Receiver, at.Point) is { } owner ? ToolTip.GetShowDelay(owner) : 0));
                 // Read before the pointer leaves, which cancels a request still waiting and would report it as cancelled.
                 quickInfo = await QuickInfoNoteAsync(at, watermark, dwellMs);
             }
@@ -3160,10 +3512,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             // state is read a moment later, with the watch still running, so the reply says what settled and what took it.
             var staying = stay && at.ThroughWindowInput && !ct.IsCancellationRequested;
             if (staying)
-            {
-                await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.StayHover(hovered));
                 await Task.Delay(UiAutomationDriver.StaySettle, CancellationToken.None);
-            }
             var settled = watch is null ? null : await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 var what = watch.Moved;
@@ -3175,20 +3524,26 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                 stayed = await Dispatcher.UIThread.InvokeAsync(() =>
                     UiAutomationDriver.StayedNote(hovered, settled, saidAlready: tip is null && enabled && settled == moved));
             else if (at.ThroughWindowInput)
-                await Dispatcher.UIThread.InvokeAsync(() => UiAutomationDriver.EndHover(hovered));
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    if (stay && TopLevel.GetTopLevel(hovered) is { } top)
+                        UiAutomationDriver.EndStayingHover(top);
+                    UiAutomationDriver.EndHover(hovered);
+                });
             else if (stay)
                 stayed = "; 'stay' left nothing under the pointer: the move was raised on the control, which sets nothing "
                          + "as under it";
         }
 
         if (tip is not null)
-            return placed is not { } where
-                ? raised with { Detail = raised.Detail + "; tip: " + tip + stayed }
+            return await WaitForProgramAsync(program, placed is not { } where
+                ? raised with { Detail = raised.Detail + "; tip: " + tip + TipOpenedAfter(openedAfter ?? 0) + stayed }
                 : raised with
                 {
-                    Detail = raised.Detail + "; tip: " + tip + " (" + TipPlacement(where.Bounds, where.Hovered) + ")" + stayed,
+                    Detail = raised.Detail + "; tip: " + tip + " (" + TipPlacement(where.Bounds, where.Hovered) + ")"
+                             + TipOpenedAfter(openedAfter ?? 0) + stayed,
                     TipBounds = [Round(where.Bounds.X), Round(where.Bounds.Y), Round(where.Bounds.Width), Round(where.Bounds.Height)],
-                };
+                }, ct);
 
         // Said as a fact when input the hover did not send moved the pointer during the watch, whether or not a tip is
         // declared: quick info and Auto Data Tips declare none, and missed the same way (#2376). Not for a disabled target,
@@ -3196,7 +3551,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         var took = enabled ? moved : null;
         var unopened = raised.Detail + "; no tip opened within " + dwellMs + "ms" + (took is null ? string.Empty : " (" + took + ")")
                        + (quickInfo is null ? string.Empty : "; " + quickInfo);
-        return raised with
+        return await WaitForProgramAsync(program, raised with
         {
             Detail = (declared is null
                 ? unopened
@@ -3204,9 +3559,23 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
                   + (took is not null ? string.Empty
                       : !at.ThroughWindowInput
                       ? " (the move was raised on the control, which Avalonia's ToolTipService never sees)"
-                      : enabled ? " (its ToolTip.ShowDelay may be longer than the watch)" : string.Empty)
+                      : enabled ? " (" + ShowDelayNote(showDelay, dwellMs) + ")" : string.Empty)
                   + "; declared tip: " + declared) + stayed,
-        };
+        }, ct);
+    }
+
+    /// <summary>How long after the move a tip was first seen open (#2949); the poll looks every 50 ms, so "about".</summary>
+    internal static string TipOpenedAfter(long milliseconds) =>
+        "; seen open about " + milliseconds.ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms after the move";
+
+    /// <summary>
+    /// What the delay a control declares says about a watch in which its tip did not open (#2949), so the next dwell
+    /// can be chosen and not found by trying several.
+    /// </summary>
+    internal static string ShowDelayNote(int showDelayMs, int dwellMs)
+    {
+        var delay = "its ToolTip.ShowDelay is " + showDelayMs.ToString(System.Globalization.CultureInfo.InvariantCulture) + "ms";
+        return showDelayMs >= dwellMs ? delay + ", longer than the watch: pass a dwellMs above that" : delay;
     }
 
     // The watch is bounded so a mistyped value cannot hold a call open for minutes. Refused rather than
@@ -3284,7 +3653,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     private static string? TipOn(Control c) =>
         ToolTip.GetIsOpen(c) && UiAutomationDriver.TipText(ToolTip.GetTip(c)) is { } text ? text : null;
     [McpServerTool(Name = "press_key")]
-    [Description("Presses a key on the control at 'target' through the window's platform input, so access keys (Alt+letter), menus and key bindings see it with optional 'modifiers', whose own keys go down before it and up after, as a person's chord, and types the key's character if it has one; 'window' selects the top-level window. If target contains the keyboard focus, presses there without moving it. Unmodified Escape stays in a focused attached menu or flyout placed on target's ancestor; the reply names its path. Otherwise focuses the DEEPEST input surface under 'target' (a code editor's TextArea); falls back to the first focusable descendant, and FAILS when nothing under 'target' can take keyboard focus. The reply says 'moved focus from <path or nothing> to <path>' when it moved focus before delivery, which raises a running program's focus events. The mechanism is 'window-input', or 'routed-key' when focus or platform input was unavailable and KeyDown/KeyUp were raised on the surface instead, which skips access keys; a refusal reads 'keyboard'. In a code window, Delete or Back over a selection deletes only its editable parts, and says what was left. Any other change to the file's header or a member's Attribute lines, which only the IDE changes, is refused; the reply names the region and gives an editable offset into the whole file (get_file_content), or advice for a backward deletion. A key deleting the whole of a declaration's line deletes its Attribute lines with it, as the code window's keys do, and is not refused. Navigation keys are never refused. Refused on a disabled control, and while a modal dialog is open over the window, which would take a person's keys. " + ProgramWaitNote)]
+    [Description("Presses a key on 'target' through window input: access keys (Alt+letter), menus and key bindings see it. 'modifiers' go down before and up after it; it types the key's character. 'window' selects the window. Retains focus inside target. Unmodified Escape stays in a focused attached menu or flyout placed on target's ancestor; the reply names its path. Otherwise focuses the DEEPEST input surface under 'target' (a code editor's TextArea); falls back to the first focusable descendant, and FAILS when nothing under 'target' can take keyboard focus. A focus move says 'moved focus from <path or nothing> to <path>', raising focus events. The mechanism is 'window-input', or 'routed-key' when focus or platform input was unavailable and KeyDown/KeyUp were raised on the surface instead, which skips access keys; refusals before delivery read 'keyboard'. In a code window, Delete/Back, Delete Line, Cut, Paste and Tab/Shift+Tab over a selection that takes in protected text (the header or a member's Attribute lines) edit its editable parts and say what was left. Keys reach the code window even in protected text. When it writes nothing there, the reply says 'refused by the code window', reports the caret and quotes any status bar message that key set, or says it gave no message; the header and Attribute lines stay protected. Deleting a declaration's whole line deletes its Attribute lines too, and is not refused. Navigation keys are never refused. Waits up to 2 s for completion, parameter info and on-type formatting, including applied edits, then reports the caret; a budget expiry says so. Refuses disabled controls or a modal dialog over the window, which takes a person's keys. " + ProgramWaitNote)]
     public async Task<InteractOutcome> PressKeyAsync(
         [Description("A control's path from dump_visual_tree, including ContextMenu/Flyout segments for attached popups.")] string target,
         [Description("An Avalonia Key name: Enter, Tab, Back, Delete, Escape, Down, S, ... A chord written as one, such as 'Ctrl+H', is read as key 'H' with modifiers 'Ctrl', and the reply says so.")] string key,
@@ -3293,7 +3662,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         CancellationToken ct = default)
     {
         UiAutomationDriver.ProgramWatch? watch = null;
-        var outcome = await Dispatcher.UIThread.InvokeAsync(() =>
+        var outcome = await Dispatcher.UIThread.InvokeAsync(async () =>
         {
             var (active, _, error) = ResolveActiveWindow(window);
             if (active is null)
@@ -3305,7 +3674,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
             // Read before the action: a MsgBox it answers closes, and loses what ties it to the program (#1232).
             watch = UiAutomationDriver.WatchProgram(active, () => ctx.DebugController.CurrentStop);
-            return UiAutomationDriver.PressKey(control, key, modifiers, target);
+            return await UiAutomationDriver.PressKeyAsync(control, key, modifiers, target, ct);
         });
         return await WaitForProgramAsync(watch, outcome, ct);
     }
@@ -3358,13 +3727,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     internal static string? LeftOutNote(IReadOnlyList<HexIDE.Automation.SnapshotComposer.LeftOutPopup> leftOut) =>
         leftOut.Count == 0 ? null
             : $"Left out of this image: {string.Join("; ", leftOut.Select(p =>
-                $"a {p.Kind} popup reported at screen pixels ({p.Rect.X}, {p.Rect.Y}), {p.Rect.Width} × {p.Rect.Height}, {p.Reason}"))}. "
+                $"a {p.Kind} popup {(p.Located ? $"reported at screen pixels ({p.Rect.X}, {p.Rect.Y}), " : "")}{p.Rect.Width} × {p.Rect.Height}, {p.Reason}"))}. "
               + "The window and every other open popup are drawn, and dump_visual_tree still lists a left-out popup's controls.";
 
     /// <summary>A document tab's kind, as get_document_tabs reports it.</summary>
     private static string TabType(object tab) => tab switch
     {
         HexIDE.VisualDesigner.FormEditViewModel => "designer",
+        ArchiveDocumentViewModel => "archive",
         BaseEditorWindowViewModel => "code",
         _ => "tool",
     };
@@ -3373,11 +3743,15 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     {
         var editor = tab as BaseEditorWindowViewModel;
         var document = editor?.OpenDocument;
+        var carried = (tab as RelatedDocumentEditorViewModel)?.RelatedDocument;
+        var entry = (tab as ArchiveDocumentViewModel)?.Entry;
         // IsModified is what the tab's `*` is drawn from (#1797), and the title leaves the `*` out (#1945). A tool tab
         // or a read-only view holds nothing to save, so it reports nothing rather than a false that reads as "saved".
         return new DocumentTabInfo(tab.Title ?? "", TabType(tab),
-            ReferenceEquals(tab, ctx.DocumentDockService.ActiveTab), document?.Project.Name, document?.Name,
-            editor is { CanHoldUnsavedChanges: true } ? editor.IsModified : null);
+            ReferenceEquals(tab, ctx.DocumentDockService.ActiveTab),
+            entry?.Identity.ContainerPath ?? document?.Project.Name ?? carried?.Owner.Name,
+            entry is not null ? ArchiveToolPaths.PathOf(entry) : document?.Name ?? carried?.Name,
+            editor is { CanHoldUnsavedChanges: true } ? editor.IsModified : null, ctx.DocumentDockService.AreaOf(tab));
     }
 
     /// <summary>
@@ -3396,7 +3770,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "get_document_tabs")]
-    [Description("Returns EVERY tab in the document region with its title, type, project, document, whether it is the active one, and isModified: whether the tab has unsaved changes. The tab marks those with a `*` that the title leaves out, so the title stays the one activate_document_tab and close_document_tab match. Project and document name a form or module's source, and only such a tab has them. isModified is absent where nothing can be saved: a tool tab, and the read-only project and archive views. It is per tab: a form's designer and code tabs each have one, and they can differ, so the form is unsaved if either is true. 'type' is 'designer' for a form or UserControl designer, 'code' for a source editor, and 'tool' for a document that is not an editor at all — the Object Browser, the language-server connection list, the protocol inspector. Those three are real tabs in the same strip and used to be missing from this answer, which made an automation client believe a tab it could see on screen did not exist. get_open_editors answers the narrower question: the editors only, and which of them is active.")]
+    [Description("Returns EVERY tab across all document areas, including splits, with area (0 for the first area, 1 for the next, in layout order; distinguishes equal titles), title, type, project, document, whether it is the active one, and isModified: whether the tab has unsaved changes. The tab marks those with a `*` that the title leaves out, so the title stays the one activate_document_tab and close_document_tab match. Project and document name a form, module or carried file's source; for an archive entry they are the container path and percent-escaped entry path returned by open_file. isModified is absent where nothing can be saved: a tool tab, and the read-only project and archive views. It is per tab: a form's designer and code tabs each have one, and they can differ, so the form is unsaved if either is true. 'type' is 'designer' for a form or UserControl designer, 'code' for a source editor, 'archive' for a read-only archive entry, and 'tool' for a document that is not an editor at all — the Object Browser, the language-server connection list, the protocol inspector. Those three are real tabs in the document region and used to be missing from this answer, which made an automation client believe a tab it could see on screen did not exist. get_open_editors answers the narrower question: the editors only, and which of them is active.")]
     public async Task<DocumentTabsResult> GetDocumentTabsAsync(CancellationToken ct)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
@@ -3412,46 +3786,97 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "activate_document_tab")]
-    [Description("Brings a tab to the front, giving an editor keyboard focus. Pass `name` (the document's VB6 name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool); a duplicate title is refused. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
+    [Description("Brings a tab to the front, giving an editor keyboard focus. Pass `name` (a form, module or carried file's name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. The document must already have an open tab. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool) and read-only archive entries (type 'archive'); a duplicate title is refused. A trailing unsaved `*` is accepted when no exact title matches; the note explains that the title omits it. A title no tab has is tried as a document name, used when one tab shows it. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
     public async Task<MutateResult> ActivateDocumentTabAsync(string? title = null, string? name = null,
         string? project = null, string? type = null, CancellationToken ct = default)
     {
         return await FocusingTheActiveTabAsync(await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            var lookup = name is null ? default : ResolveDocument(name, project);
-            var (tab, error) = FindTab(title, lookup, type, project);
+            var lookup = name is null ? default : Find(name, project, carried: true);
+            var (tab, error, matched) = FindTab(title, lookup, type, project, caption: true);
             if (tab is null)
                 return Naming(new MutateResult(false, error), lookup);
             var found = ctx.DocumentDockService.TryActivateAny(d => ReferenceEquals(d, tab));
-            return Naming(new MutateResult(found, null, TabStateNote()),
+            return Naming(Naming(new MutateResult(found, null, matched + TabStateNote()), lookup),
                 (tab as BaseEditorWindowViewModel)?.OpenDocument);
         }));
     }
 
-    private (Dock.Model.Core.IDockable? Tab, string? Error) FindTab(
-        string? title, NamedDocument lookup, string? type, string? project)
+    /// <summary>
+    /// The tab a call names, or why it names none. <c>Matched</c> explains a title accepted as a document name
+    /// or with its unsaved marker removed, and is null for an exact match.
+    /// </summary>
+    private (Dock.Model.Core.IDockable? Tab, string? Error, string? Matched) FindTab(
+        string? title, NamedDocument lookup, string? type, string? project, bool caption = false)
     {
-        if (title is not null && (lookup.Document is not null || lookup.Error is not null || project is not null))
-            return (null, "Pass either `title` or `name` with optional `project`, not both.");
+        if (title is not null && (lookup.Document is not null || lookup.Carried is not null || lookup.Error is not null || project is not null))
+            return (null, "Pass either `title` or `name` with optional `project`, not both.", null);
         if (lookup.Error is not null)
-            return (null, lookup.Error);
-        if (title is null && lookup.Document is null)
-            return (null, "Pass `name` with optional `project` for a document, or `title` for a tool tab. get_document_tabs lists both.");
-        if (type is not null && type is not ("code" or "designer" or "tool"))
-            return (null, "Use `type`: code, designer or tool, as get_document_tabs reports it.");
+            return (null, lookup.Error, null);
+        if (title is null && lookup.Document is null && lookup.Carried is null)
+            return (null, "Pass `name` with optional `project` for a document, or `title` for a tool tab. get_document_tabs lists both.", null);
+        if (type is not null && type is not ("code" or "designer" or "archive" or "tool"))
+            return (null, "Use `type`: code, designer, archive or tool, as get_document_tabs reports it.", null);
         var matches = ctx.DocumentDockService.AllTabs.Where(d =>
             (lookup.Document is { } document
                 ? (d as BaseEditorWindowViewModel)?.OpenDocument == document
-                : string.Equals(d.Title, title, StringComparison.OrdinalIgnoreCase))
+                : lookup.Carried is { } carried
+                    ? (d as RelatedDocumentEditorViewModel)?.RelatedDocument == carried
+                    : string.Equals(d.Title, title, StringComparison.OrdinalIgnoreCase))
             && (type is null || TabType(d) == type)).ToArray();
+        string? matched = null;
+        if (matches.Length == 0 && caption && title is not null && title.EndsWith('*'))
+        {
+            // Dock's ModifiedTemplate draws a separate "*" with spacing, rather than changing Title (#3930).
+            var clean = title[..^1].TrimEnd();
+            matches = ctx.DocumentDockService.AllTabs.Where(d =>
+                string.Equals(d.Title, clean, StringComparison.OrdinalIgnoreCase)
+                && (type is null || TabType(d) == type)).ToArray();
+            matched = "The title leaves the unsaved marker out. ";
+        }
+        if (matches.Length == 0 && lookup.Document is null && lookup.Carried is null)
+            return ByDocumentName(title!, type);
         return matches.Length switch
         {
-            1 => (matches[0], null),
-            0 => (null, lookup.Document is { } document
-                ? $"No open tab for {document.Display}" + (type is null ? "." : $" of type '{type}'.")
-                : NoSuchTab(title!)),
-            _ => (null, "More than one tab matches. Pass `name` and `project` to identify the document, and `type` (code or designer) to choose its tab. get_document_tabs lists them."),
+            1 => (matches[0], null, matched),
+            0 => (null, $"No open tab for {lookup.Document?.Display ?? $"{lookup.Project}/{lookup.Name}"}" + (type is null ? "." : $" of type '{type}'."), null),
+            _ when matches.All(tab => TabType(tab) == "tool") => (null, "More than one tab matches. These are tool tabs. Use dump_visual_tree to locate the intended tab’s close button, then interact to invoke it. Tool tabs have no document name or project to distinguish them.", null),
+            _ => (null, "More than one tab matches. Pass `name` and `project` to identify the document, and `type` (code or designer) to choose its tab. get_document_tabs lists them.", null),
         };
+    }
+
+    /// <summary>
+    /// A title that is no tab's, taken as the name of a document the open tabs show (#3338).
+    /// </summary>
+    /// <remarks>
+    /// A caller holds a document's name, as get_project_info lists it and open_file takes it, and a tab tool's
+    /// <c>title</c> is the parameter it reaches for. A tab's title is built from that name, with the project before
+    /// it and the view after, so "Var1" matched no tab titled "Probe2 - Var1 (Code)", and the first call was
+    /// refused. Only a document exactly one tab shows is acted on. Several are refused, naming each and what picks
+    /// one, since guessing between two tabs is no better than a refusal.
+    /// </remarks>
+    private (Dock.Model.Core.IDockable? Tab, string? Error, string? Matched) ByDocumentName(string title, string? type)
+    {
+        var showing = ctx.DocumentDockService.AllTabs
+            .Select(d => (Tab: d, Document: (d as BaseEditorWindowViewModel)?.OpenDocument))
+            .Where(t => t.Document is not null && string.Equals(t.Document.Name, title, StringComparison.OrdinalIgnoreCase)
+                        && (type is null || TabType(t.Tab) == type))
+            .ToArray();
+        if (showing.Length == 0)
+            return (null, NoSuchTab(title), null);
+        if (showing.Length == 1)
+            return (showing[0].Tab, null,
+                $"No tab is titled '{title}', so it was taken as a document name: '{showing[0].Tab.Title}' is the one "
+                + $"tab showing {showing[0].Document!.Display}. `name` is the parameter for a document. ");
+        var documents = showing.Select(t => t.Document!).Distinct().ToArray();
+        var picks = new List<string>();
+        if (documents.Length > 1)
+            picks.Add("`project` for the document");
+        if (showing.Length > documents.Length)
+            picks.Add("`type` (code or designer) for its tab");
+        return (null, $"No tab is titled '{title}'. As a document name it fits {showing.Length} tabs: "
+                      + string.Join(", ", showing.Select(t => $"'{t.Tab.Title}'"))
+                      + $". Pass `name` \"{documents[0].Name}\" with {string.Join(" and ", picks)}.", null);
     }
 
     /// <summary>Says which tabs there are, rather than only that this one is not among them.</summary>
@@ -3472,14 +3897,14 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     }
 
     [McpServerTool(Name = "close_document_tab")]
-    [Description("Closes a tab; a save prompt can leave it open, which the note reports. Pass `name` (the document's VB6 name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool); a duplicate title is refused. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
+    [Description("Closes a tab; a save prompt can leave it open, which the note reports. Pass `name` (the document's VB6 name) and optional `project`, matched without regard to case through the same lookup as open_file. An ambiguous document is refused with candidates. If both code and designer tabs are open, pass `type`: code or designer. Alternatively pass `title` from get_document_tabs, including for tool tabs (type tool) and read-only archive entries (type 'archive'); a duplicate title is refused, and a title no tab has is tried as a document name, used when one tab shows it. Pass either title or name, not both. The reply names the target's project and document when it has one, and its note identifies the active tab and count afterward.")]
     public async Task<MutateResult> CloseDocumentTabAsync(string? title = null, string? name = null,
         string? project = null, string? type = null, CancellationToken ct = default)
     {
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             var lookup = name is null ? default : ResolveDocument(name, project);
-            var (tab, error) = FindTab(title, lookup, type, project);
+            var (tab, error, matched) = FindTab(title, lookup, type, project);
             if (tab is null)
                 return Naming(new MutateResult(false, error), lookup);
             var document = (tab as BaseEditorWindowViewModel)?.OpenDocument;
@@ -3487,10 +3912,10 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (!closed)
                 return Naming(new MutateResult(false, "The tab could not be closed. " + TabStateNote()), document);
             var stillOpen = ctx.DocumentDockService.AllTabs.Any(d => ReferenceEquals(d, tab));
-            return Naming(new MutateResult(true, null, stillOpen
+            return Naming(new MutateResult(true, null, matched + (stillOpen
                 ? $"'{tab.Title}' is still open: closing it is waiting on an answer, most likely a save prompt, which "
                   + "dump_visual_tree shows. " + TabStateNote()
-                : $"Closed '{tab.Title}'. " + TabStateNote()), document);
+                : $"Closed '{tab.Title}'. " + TabStateNote())), document);
         });
     }
 
@@ -3498,9 +3923,13 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     [Description("Invokes a menu item by slash-separated path, e.g. 'Tools/Hello from TestAddin' or 'Add-Ins/TestAddin/Do Something'. Each segment is the text the menu displays, matched case-insensitively: 'Project/Add Module' reaches the item whose header is 'Add _Module' (the underscore marks the access key, wherever it falls), and a trailing '...' may be left off, so 'Tools/Options' reaches 'Options...'. A menu need not be open first: each submenu on the path gets its SubmenuOpened, as opening it does, so one filled then holds its items. An item whose header is a control is matched by its automation name, as dump_visual_tree names it. If a segment is not found, the error names the menu it looked in and every item that menu holds. Most built-in items are routed commands, which act on the control that has keyboard focus, as a real click does: one that belongs to a document (Tools/Add Procedure to a code window) needs focus in that document, which open_file, view_designer and activate_document_tab give it, as opening it by hand does; the refusal names what has focus instead. A checkable item with no command of its own, such as View/Minimap, is ticked or unticked, as a click does. Returns an error if the path cannot be resolved or the item cannot execute. The reply's 'note' names the item invoked, as its menu shows it. File/Make waits for its result: the program it wrote, with its size, or why it wrote none.")]
     public async Task<MutateResult> InvokeMenuItemAsync(string path, CancellationToken ct)
     {
+        if (ScriptedFileDialogs.NativePickerNote is { } blocking)
+            return new MutateResult(false, blocking);
         var makes = HexIDE.Projects.MakeOutcomes.Started;
         var invoked = await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            if (ScriptedFileDialogs.NativePickerNote is { } blockingNow)
+                return new MutateResult(false, blockingNow);
             var lifetime = Avalonia.Application.Current!.ApplicationLifetime
                 as IClassicDesktopStyleApplicationLifetime;
             var window = lifetime?.MainWindow;
@@ -3540,7 +3969,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
         // Make runs on after its command returns, and said how it ended only in its own message box (#2671).
         if (invoked.Success && HexIDE.Projects.MakeOutcomes.Latest is { } make && make.Number > makes)
             invoked = invoked with { Note = invoked.Note + " " + await MakeReply.AwaitAsync(make, ct) };
-        return invoked;
+        return invoked with { Note = ScriptedFileDialogs.WithNativePickerNote(invoked.Note) };
     }
 
     /// <summary>What has keyboard focus in <paramref name="window"/>, for a refusal that depends on it.</summary>
@@ -3657,7 +4086,7 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
     /// </remarks>
     private string? OutsideDocument(DocumentIdentity document, int[] lines, int first, string what, IReadOnlyCollection<int>? held = null)
     {
-        var text = HexIDE.IDE.DocumentContent.TextOf(document, CodeEditorOf(document));
+        var text = HexIDE.IDE.DocumentContent.TextOf(document, CodeEditorOf(document), ctx.ProjectFileFormat, ctx.ReadOnlyRegionReader);
         return HexIDE.IDE.MarkLineRules.Refusal(text, document.Display, lines, held ?? [], first, what);
     }
 
@@ -3779,14 +4208,31 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
 
 
     [McpServerTool(Name = "answer_next_file_dialog")]
-    [Description("Pre-answers the next file dialog the IDE opens, so a Save As / Open / Export flow can be driven end to end. A file picker is a NATIVE operating-system dialog: it is outside the control tree, dump_visual_tree cannot see it, interact cannot address it, and a modal one stops this server answering at all — so without this every feature ending in a file dialog needed a person to click.\n\nPass the absolute path the dialog should return as `path`. For an Open that lets a person select several files, pass them all as `paths` instead, one answer; a save, or an Open that takes one file, answers that as cancelled and a reply says so. Omit both to answer as CANCELLED, which is a distinct path through most of these flows and the one least likely to have been exercised by hand. The answer is consumed by ONE dialog and is not sticky: arm it immediately before the action that opens the picker, or it will be spent by whichever dialog opens first. set_file_content, set_control_property and add_control say when their save took no answer and one armed before the call is still pending. So do invoke_menu_item for Save Project / Save Project As and interact on project-save toolbar buttons. A document save reached through invoke_menu_item, press_key or interact can still be waiting on formatting when they reply: check with clear_file_dialog_answers, but a pending count then can mean the picker has not opened yet.\n\nThis does not simulate the dialog. Everything downstream of the picker — the writing, the naming, the refusals — is the same code a real click reaches; only the part a person performs is skipped. Nothing is created: name a path in a directory that exists, or the flow under test will report the failure it would really report.")]
+    [Description("Pre-answers the next file dialog the IDE opens, so a Save As / Open / Export flow can be driven end to end. A native picker is outside the control tree. Tools report an open picker, but cannot answer it: close or cancel it in the operating system. Arm one answer per picker before the action: project saves ask in order for forms, modules, project, then group when needed. Save As and a scratch project (including --newproject) ask for every member and the project, even with working-copy paths; ordinary Save asks for files without paths.\n\nPass the absolute path the dialog should return as `path`. For an Open that lets a person select several files, pass them all as `paths` instead, one answer; a save, or an Open that takes one file, answers that as cancelled and a reply says so. Omit both to answer as CANCELLED, which is a distinct path through most of these flows and the one least likely to have been exercised by hand. The answer is consumed by ONE dialog and is not sticky: arm it immediately before the action that opens the picker, or it will be spent by whichever dialog opens first. set_file_content, set_control_property and add_control say when their save took no answer and one armed before the call is still pending. So do invoke_menu_item for Save Project / Save Project As and interact on project-save toolbar buttons. A document save reached through invoke_menu_item, press_key or interact can still be waiting on formatting when they reply: check with clear_file_dialog_answers, but a pending count then can mean the picker has not opened yet.\n\nNothing is created by arming: name a path in an existing directory.")]
     public Task<FileDialogAnsweredResult> AnswerNextFileDialogAsync(
         string? path = null, string[]? paths = null, CancellationToken ct = default)
     {
-        // A refusal reached outside a save tool has no reply of its own, and the caller arms again next (#2408).
+        // A refusal reached outside a save tool has no reply of its own, and the caller arms again next (#2408). A picker
+        // already open can't take the answer, which the other tools that meet one also say (#3913).
         var earlier = HexIDE.IDE.ScriptedFileDialogs.TakeUnreportedRefusal();
+        string Told(string note) => HexIDE.IDE.ScriptedFileDialogs.WithNativePickerNote(note + earlier)!;
         FileDialogAnsweredResult Refuse(string error) => new(false, null, HexIDE.IDE.ScriptedFileDialogs.Pending,
-            "Nothing was armed." + earlier, Error: error);
+            Told("Nothing was armed."), Error: error);
+        // An answer armed behind others goes to a later picker, so "the next file dialog" would misdirect it (#3913).
+        static string Which(int place) => place <= 1 ? "The next file dialog" : $"The {Ordinal(place)} file dialog to open from now";
+        static string Before(int place) => place switch
+        {
+            <= 1 => "",
+            2 => " The answer armed before it is spent first.",
+            _ => $" The {place - 1} answers armed before it are spent first.",
+        };
+        static string Ordinal(int n) => n + (n % 100 is 11 or 12 or 13 ? "th" : (n % 10) switch
+        {
+            1 => "st",
+            2 => "nd",
+            3 => "rd",
+            _ => "th",
+        });
 
         if (paths is not null)
         {
@@ -3795,28 +4241,28 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             if (paths.Length == 0 || paths.Any(string.IsNullOrWhiteSpace))
                 return Task.FromResult(Refuse("paths must name at least one file, and none of them blank. To answer "
                                               + "as cancelled, omit both path and paths."));
-            HexIDE.IDE.ScriptedFileDialogs.AnswerNextWithMany(paths);
+            var many = HexIDE.IDE.ScriptedFileDialogs.AnswerNextWithMany(paths);
             return Task.FromResult(new FileDialogAnsweredResult(
                 true, paths.Length == 1 ? paths[0] : null, HexIDE.IDE.ScriptedFileDialogs.Pending,
-                (paths.Length == 1
-                    ? $"The next file dialog will return '{paths[0]}'."
-                    : $"The next file dialog will return these {paths.Length} files, in this order, as a person selecting "
+                Told((paths.Length == 1
+                    ? $"{Which(many)} will return '{paths[0]}'."
+                    : $"{Which(many)} will return these {paths.Length} files, in this order, as a person selecting "
                       + "them in an Open that allows several would. A save, or an Open that takes one file, cannot take "
                       + "them: it answers as cancelled, and a reply says so.")
-                + " Nothing has been created there." + earlier,
+                + Before(many) + " Nothing has been created there."),
                 Paths: paths));
         }
 
-        HexIDE.IDE.ScriptedFileDialogs.AnswerNextWith(path);
+        var place = HexIDE.IDE.ScriptedFileDialogs.AnswerNextWith(path);
 
         var cancels = string.IsNullOrWhiteSpace(path);
         return Task.FromResult(new FileDialogAnsweredResult(
             true,
             cancels ? null : path,
             HexIDE.IDE.ScriptedFileDialogs.Pending,
-            (cancels
-                ? "The next file dialog will answer as cancelled."
-                : $"The next file dialog will return '{path}'. Nothing has been created there.") + earlier,
+            Told(cancels
+                ? $"{Which(place)} will answer as cancelled.{Before(place)}"
+                : $"{Which(place)} will return '{path}'.{Before(place)} Nothing has been created there."),
             Paths: cancels ? null : [path!]));
     }
 
@@ -3831,7 +4277,8 @@ internal sealed class HexIdeTools(IdeContext ctx, IHttpContextAccessor? httpCont
             (discarded == 0
                 ? "Nothing was armed."
                 : $"Discarded {discarded} armed answer(s); the next file dialog will be shown for real.")
-            + HexIDE.IDE.ScriptedFileDialogs.TakeUnreportedRefusal()));
+            + HexIDE.IDE.ScriptedFileDialogs.TakeUnreportedRefusal()
+            + (ScriptedFileDialogs.NativePickerNote is { } open ? " " + open : "")));
     }
 
     [McpServerTool(Name = "set_lock_key")]
@@ -4070,7 +4517,9 @@ internal record ControlInfo(
     // no element. name(index) addresses it in get_form_controls, set_control_property and move_control (#1252 review).
     int? Index = null,
     bool? Carried = null,
-    string? Note = null);
+    string? Note = null,
+    int? ZOrder = null,
+    int? Tab = null);
 
 /// <param name="Scale">Image pixels per device-independent unit, the unit inspect_element's boundingRect is in.</param>
 internal record SnapshotResult(
@@ -4103,7 +4552,9 @@ internal record ProjectSummary(
     bool IsStartup,
     string[] Forms,
     string[] Modules,
-    string[] RelatedDocuments);
+    string[] RelatedDocuments,
+    string? ProjectFile = null,
+    string[]? Entries = null);
 
 internal record OpenEditorsResult(
     string[] OpenWindows,
@@ -4144,7 +4595,7 @@ internal record DiagnosticItem(
 /// <param name="Document">The document's own name, as the IDE spells it rather than as the call spelled it.</param>
 internal record MutateResult(
     bool Success, string? Error, string? Note = null, string? Project = null, string? Document = null,
-    string? Printed = null);
+    string? Printed = null, int? Area = null);
 
 /// <summary>
 /// What <c>shutdown_ide</c> tore down on the way out. <see cref="Requested"/> is deliberately not
@@ -4160,7 +4611,7 @@ internal record AddFileResult(
 
 /// <summary>A window's state, as <c>get_window_state</c> reports it. <c>Name</c> is what reaches it as 'window' again;
 /// <c>Error</c> says why no window was read.</summary>
-internal record WindowStateResult(string State, int X, int Y, int Width, int Height, string? Name = null, string? Error = null,
+internal record WindowStateResult(string State, int? X, int? Y, int Width, int Height, string? Name = null, string? Error = null,
     double? Scale = null, WindowRect? Outer = null, WindowRect? Frame = null, WindowRect? Client = null, string? Units = null,
     string? Note = null);
 
@@ -4186,7 +4637,7 @@ internal record ToolWindowsResult(ToolWindowInfo[] Tools);
 internal record DocumentTabsResult(DocumentTabInfo[] Tabs);
 
 internal record DocumentTabInfo(string Title, string Type, bool IsActive, string? Project = null, string? Document = null,
-    bool? IsModified = null);
+    bool? IsModified = null, int Area = 0);
 
 internal record UndoStateResult(
     string ActiveEditorKind,
@@ -4217,7 +4668,9 @@ internal record BookmarksResult(string? Project, string? Document, string? Uri, 
 /// <param name="Project">The project holding the document, by name.</param>
 /// <param name="Document">The document's own VB6 name, as the IDE spells it rather than as the call spelled it.</param>
 /// <param name="Uri">The name a language server knows this document by.</param>
-internal record BreakpointsResult(string? Project, string? Document, string? Uri, int[] Lines, string? Error);
+internal record BreakpointsResult(string? Project, string? Document, string? Uri, int[] Lines, string? Error,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    Dictionary<int, string>? Conditions = null, string? Note = null);
 
 /// <param name="Project">
 /// The running project, by name, while paused: <c>Module</c> is a bare name, and a group may hold two documents
@@ -4245,7 +4698,8 @@ internal record CallStackResult(bool Success, string? Error, CallStackFrameRow[]
 
 internal record CallStackFrameRow(string Proc, string Module, int Line, int Count = 1);
 
-internal record WatchesResult(bool Success, string? Error, WatchRow[] Watches, string? Project = null);
+/// <param name="Note">Says that no run engine runs the startup project, so the values stay out of context (#3514). Absent otherwise.</param>
+internal record WatchesResult(bool Success, string? Error, WatchRow[] Watches, string? Project = null, string? Note = null);
 
 internal record WatchRow(string Expression, string WatchType, string Context, string Value, string Type, bool Ok);
 
@@ -4257,7 +4711,8 @@ internal record TemplateInfo(string Name, bool Supported, string Source);
 
 internal record NewProjectTemplatesResult(TemplateInfo[] Templates);
 
-internal record RuntimeErrorResult(bool Raised, string? Message, string? At, int Sequence, string? Module = null, int? Line = null);
+internal record RuntimeErrorResult(bool Raised, string? Message, string? At, int Sequence, string? Module = null, int? Line = null,
+    string? Note = null);
 
 /// <param name="Path">What the next dialog will return, or null when it will answer as cancelled or return several.</param>
 /// <param name="Pending">How many answers are still armed, so a stale one is visible rather than latent.</param>

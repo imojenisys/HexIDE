@@ -159,8 +159,8 @@ answers. A header the grammar can read stays in the tree, and no file in the cor
 
 Option lines directly before a malformed first procedure no longer make the module-level prediction
 fail with an empty procedure tree (#939). That procedure and its symbol survive, with the same syntax
-diagnostics as without the Option lines. Recovery inside the procedure can still hide later procedures
-and errors (#938).
+diagnostics as without the Option lines. Recovery inside the procedure is still partial, as the statement-level
+recovery below describes (#938).
 
 The grammar had to learn whole files first. When both grammars were first given every corpus file whole,
 30 of 46 failed inside the header, all for one reason: VB6 writes an enumerated property value with a
@@ -303,10 +303,9 @@ around them: a server fold that nests is kept, and one that crosses one of them 
 is dropped ([`lsp-client.md`](./lsp-client.md)). They describe the file format rather than the code, so they
 are the same whichever server is attached. Checked live on `demo/bill-of-fare`, none of the server's eleven
 procedure folds started in or crossed the form's 90-line header, which stayed one folded row when they
-arrived. As the client reads it, a procedure's fold runs from the start of its declaration's line to
-`End Sub`, so it contains its attribute run's fold, and the two nest. LSP starts that fold after the
-declaration's text instead, which is where the attribute fold starts, and the client's merge would then drop
-the procedure's fold ([#1022](https://github.com/hexide-io/HexIDE/issues/1022)).
+arrived. The client reads a procedure's fold as LSP defines it, from the end of its declaration's text
+(`startCharacter`) to `End Sub`, so it contains its attribute run's fold, and the merge keeps both, nested
+([#1022](https://github.com/hexide-io/HexIDE/issues/1022)).
 
 - ◐ The scanner is regex/stack-based rather than ANTLR, so unusual nesting can misbehave. An ANTLR-backed
   replacement needs no client change.
@@ -332,7 +331,11 @@ first open starts analysis, completion can return the static keywords and built-
 declarations have been parsed. Diagnostics still run and publish for every
 change, and other requests (including formatting) still wait for that change's analysis.
 
-- ◐ No position awareness — the full list comes back regardless of cursor context.
+- Comments (apostrophe and Rem, including continued comments and `Rem:`) and string literals, including unfinished strings and doubled quotes, return an empty list (#3577).
+  Comment forms follow the measured [Rem rules](vb6-fidelity-oracle/line-continuations-and-statement-separators.md)
+  and [continued comments across CR/LF/CRLF](vb6-fidelity-oracle/a-lone-cr-or-lf-in-vb6-source.md).
+- A bare `Rem` at the caret and a member such as `x.Rem ` remain code for completion (#3577).
+- ◐ Outside free text, the full list comes back regardless of cursor context.
 - ■ No member-access completion (`obj.`), no type-aware filtering, no symbols from other project files. Each
   needs binding: resolving what `obj` *is*, or what type is expected here, is the relationship between two
   symbols rather than a list of them.
@@ -345,7 +348,7 @@ change, and other requests (including formatting) still wait for that change's a
 
 **`textDocument/signatureHelp`**
 
-148 VB6 built-ins are covered, spanning strings, byte strings, type conversions, math, arrays,
+151 VB6 built-ins are covered, spanning strings, byte strings, type conversions, math, arrays,
 character/ASCII, date/time, inspection, error handling, files and I/O, financial and object/misc. The active parameter tracks comma position through nested
 parentheses. Past the end of a signature whose last parameter is a list, as `Array`, `Choose` and `Switch` have,
 that parameter stays active. Past any other signature's end, the argument's own index is sent, so no parameter
@@ -537,6 +540,24 @@ explicit `$/setTrace` produced zero `$/logTrace` frames between them. So the bun
 reference implementation the client half is proved against.
 
 ---
+
+## Parser startup
+
+At startup the bundled server schedules a background parse of a small synthetic module containing
+declarations, calls, a loop and an incomplete assignment (#2502). The assignment forces SLL to fall
+back to LL with error recovery. The stdio read loop starts without waiting: initialization and document
+analysis can overlap the warm-up. Synthetic diagnostics are never published. Completion logs the duration
+and prediction stage; a warm-up failure is logged without stopping the server.
+
+Each parse owns its lexer, parser and token stream. ANTLR 4.13.1's `ParserATNSimulator` thread-safety
+contract permits sharing the generated decision DFAs and prediction-context cache across parser instances;
+its DFA updates and context-cache interning are locked (see the pinned C#
+[parser](https://github.com/antlr/antlr4/blob/4.13.1/runtime/CSharp/src/Atn/ParserATNSimulator.cs),
+[lexer](https://github.com/antlr/antlr4/blob/4.13.1/runtime/CSharp/src/Atn/LexerATNSimulator.cs) and
+[cache](https://github.com/antlr/antlr4/blob/4.13.1/runtime/CSharp/src/Atn/ATNSimulator.cs) implementations).
+This warms representative grammar paths, not every possible input, and an edit arriving during warm-up can still pay cold costs. The existing per-document
+budget and cached-result fallback still apply. Startup measurements are recorded in
+[issue #2502](https://github.com/hexide-io/HexIDE/issues/2502).
 
 ## Summary
 

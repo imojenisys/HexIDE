@@ -47,7 +47,7 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
     restores their enabled states afterwards. Headless tests cover both owners and Yes/No; native enabled-state
     verification on the running IDE remains required.
   - **Remaining differences:** ownership still differs from VB6, and the program isn't paused for the prompt in
-    run mode, so Timers keep firing. Floating a code window currently hides it instead (#1361).
+    run mode, so Timers keep firing. Code windows no longer float at all, so they stay in the IDE as VB6's did (#1361).
 - **HexIDE:** the interpreter can apply *no* edit live, so keyboard edits while running/paused pop that same
   prompt (OK = reset + keep the edit; Cancel = revert). So HexIDE over-prompts relative to VB6 (it resets even for a
   comment).
@@ -106,7 +106,9 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
   statement (a documented divergence — the faithful proc-end-clear had introduced 7 defects in the Phase-2 review, so
   it was removed). The v2·P5 dispatch-idle disarm restored the VB6 behaviour after both P5 adversarial reviewers
   independently flagged the leak (a Step Over leaving `target=1` fired on *every* subsequent event).
-- **Status:** **resolved (v2·P5)**. Matches VB6's "next event runs free."
+- **Status:** **resolved (v2·P5)**. Matches VB6's "next event runs free." **#2320:** returning to idle also
+  publishes Continued and releases frozen events, so the shell leaves break mode (title, current-line bar,
+  inspection windows and command availability). VB6's title and toolbar at this point remain unmeasured.
 
 ### D5. Step Over / Step Out (v2·P5)
 - **VB6:** Shift+F8 (Step Over — run a called proc to completion, break at the next statement in the current frame),
@@ -436,7 +438,9 @@ position, and so does a refused step. What VB6 does with the caret there hasn't 
   dialog. End is enabled; Continue, Debug and Help are not. End ends the run. Closed any other way, the dialog
   leaves the run going, with the event procedure that met the error abandoned, as after a run-time error in an
   event procedure. A syntax error found before the run begins is a start that never became a run: it is reported in
-  the same dialog, with the module it is in named, and nothing runs.
+  the same dialog, and nothing runs. Parse-time compile errors with a line also carry their module and
+  whole-file line through `get_last_runtime_error` ([#3960](https://github.com/hexide-io/HexIDE/issues/3960));
+  errors without a line remain unlocated. The dialog text and buttons are unchanged.
 - **Why:** one route for every error a run meets. Sub Main's compile errors already went through that dialog
   (#754), and a separate compile-error box would answer the same error two ways. A tree-walker meets a compile error
   only when it reaches the statement, so stopping before the run began is not possible for it.
@@ -589,10 +593,10 @@ position, and so does a refused step. What VB6 does with the caret there hasn't 
   first line of code, and is migrated as its project opens, each mark moved down onto the statement it was set
   on (task 3.17). Sidecar version 3 anchors code marks after the full header, so a conflicted external header
   change that never reaches the stores no longer moves those marks on reopen (#884). Its stored offsets are
-  converted at the persistence boundary; the stores and every public surface still use file lines. A newly
-  created form's header still first appears at its first designer change, save or reload
-  ([#885](https://github.com/hexide-io/HexIDE/issues/885)); version 3 can now distinguish its code marks from
-  marks already in a header.
+  converted at the persistence boundary; the stores and every public surface still use file lines. New forms,
+  including a project template's `Form1`, hold their header from creation
+  ([#885](https://github.com/hexide-io/HexIDE/issues/885)). Breakpoints and bookmarks set before the first save
+  reopen on the same statements; version 3 needs no additional numbering record.
 - **Numbered D23 when task 3.16 recorded it**, and renumbered in #273's documentation pass: merging main brought
   in main's own D23 (#1011, cited from `VBWindowContext`), which came first.
 
@@ -620,15 +624,16 @@ position, and so does a refused step. What VB6 does with the caret there hasn't 
 
 ---
 
-### D27. Watch context outside break mode (#2290)
+### D32. Watch context outside break mode (#2290)
 - **VB6:** module-wide watches cannot see procedure locals. An undefined name shows
   `<Expression not defined in context>` with type `Empty`, including at design time and after End.
   A valid but inactive context shows `<Out of context>` with type `Empty`.
   [Measured table](vb6-fidelity-oracle/a-watch-and-its-context.md).
 - **HexIDE:** paused watches now respect the stored module/procedure scope and read a caller's frame.
-  Outside break mode all rows still show the localized out-of-context value with a blank type.
-- **Why:** design-time resolution needs collected declarations without a live interpreter frame; this first
-  slice changes evaluation of live frames only. The all-procedures placeholder still lacks a stored module
+  Outside break mode all rows still show the localized out-of-context value. At design time and after
+  End their type is `Empty`; while running it remains blank (running-state refresh was not measured).
+- **Why:** design-time name resolution needs collected declarations without a live interpreter frame.
+  The all-procedures placeholder still lacks a stored module
   at design time and uses the paused module. Explicit module contexts are supported within that module.
 - **Status:** **partial**, #2290. Remaining: design-time/after-End resolution and context selection/storage.
   Recursion, cross-module contexts, Break When types and running-state refresh were not measured and
@@ -668,10 +673,11 @@ position, and so does a refused step. What VB6 does with the caret there hasn't 
 ## Deferred debugger surfaces (not divergences yet — just not built)
 
 Immediate USER-CALL execution (calling a user Sub/Function from the Immediate window — the deadlock-prone part, D15;
-assignment/Set landed in P7c, D14); hit counts and interpreter evaluation of per-line conditions (additive Evolution
+assignment/Set landed in P7c, D14); hit counts (additive Evolution
 item — VB6's watch-based Break-When-True/Changed shipped in P6b). Condition… edits per-line expressions
-with gutter glyphs/tooltips and sidecar persistence (#2914). Interpreter runs ignore these expressions
-and stop unconditionally, with a localized Immediate notice once per run; capable DAP adapters evaluate them. Tracked in
+with gutter glyphs/tooltips and sidecar persistence (#2914). Interpreter runs evaluate these expressions
+in the executing frame using the read-only watch evaluator, skip false results and stop with the expression
+and error in Immediate on evaluation failure (#3005); capable DAP adapters evaluate them. Tracked in
 [`MISSING_FEATURES.md`](MISSING_FEATURES.md) and the spec's v2 list (P8). Serious/compiled debugging belongs to a
 compiled backend over DAP. *(Landed since this list was written: Watches + Break-When-True/Changed + Data Tips (P6), Run To Cursor
 + Set Next Statement + Immediate assignment/Set (P7), the Locals property/control surface incl. the form-`Me` +

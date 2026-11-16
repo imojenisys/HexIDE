@@ -48,6 +48,7 @@
         <ProjectReference Include="..\HexIDE.AIChat\HexIDE.AIChat.csproj" />
         <!-- PackageSigner is used to produce signed fixtures for the verifier tests. -->
         <ProjectReference Include="..\HexIDE.AddinPacker\HexIDE.AddinPacker.csproj" />
+        <ProjectReference Include="..\HexIDE.Repack\HexIDE.Repack.csproj" />
     </ItemGroup>
 
     <!-- Exercise the actual Debug automation server, including its generated native stubs.
@@ -64,6 +65,8 @@
          that finds nothing failing rather than skipping (#1440). -->
     <ItemGroup>
         <Compile Include="..\HexIDE.Runtime.Tests\Vb6Template.cs" Link="Infrastructure\Vb6Template.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\LspSessionLeakGuard.cs" Link="Infrastructure\LspSessionLeakGuard.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\LspSessionLeakGuardTests.cs" Link="Infrastructure\LspSessionLeakGuardTests.cs" />
     </ItemGroup>
 
     <!-- Keep the executable helper's dependency manifest and dependencies together, rather than
@@ -82,5 +85,11 @@
         <Copy SourceFiles="@(_LspTestHostFiles)"
               DestinationFolder="$(OutDir)LspTestHost/%(_LspTestHostFiles.RecursiveDir)" SkipUnchangedFiles="true" />
     </Target>
+
+    <!-- Redirect before any test can read or write the contributor's IDE profile (#3805). -->
+    <ItemGroup>
+        <Compile Include="..\HexIDE.Integration.Tests\TemporaryProfile.cs" Link="Infrastructure\TemporaryProfile.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\TemporaryProfileTests.cs" Link="Infrastructure\TemporaryProfileTests.cs" />
+    </ItemGroup>
 
 </Project>

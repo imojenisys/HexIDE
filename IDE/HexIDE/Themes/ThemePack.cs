@@ -8,16 +8,20 @@ public record ThemePackRecord(
     string Name,
     string? Description,
     string? ThemeVariant,
-    Dictionary<string, string>? Colors
+    Dictionary<string, string>? Colors,
+    double? PlaceholderOpacity = null,
+    double? TabSelectionBorderThickness = null,
+    double? ChromeBorderThickness = null
 );
 
 [JsonSerializable(typeof(ThemePackRecord))]
+[JsonSerializable(typeof(string[]))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class ThemeJsonContext : JsonSerializerContext { }
 
 /// <summary>
 /// Maps JSON colour names from a theme pack to Avalonia resource keys.
-/// Keys must exactly match what Classic.axaml declares so DynamicResource bindings update live.
+/// Keys match Classic.axaml or the base themes so DynamicResource bindings update live.
 /// </summary>
 internal static class ColorKeyMapping
 {
@@ -44,6 +48,13 @@ internal static class ColorKeyMapping
             ["GrayText"]                = (SystemColors.GrayTextBrushKey,               true),
             ["InactiveCaption"]         = (SystemColors.InactiveCaptionBrushKey,         true),
             ["InactiveCaptionText"]     = (SystemColors.InactiveCaptionTextBrushKey,     true),
+            ["WindowFrame"]             = (SystemColors.WindowFrameBrushKey,             true),
+            ["ScrollBar"]               = (SystemColors.ScrollBarBrushKey,               true),
+            ["ActiveCaption"]           = (SystemColors.ActiveCaptionBrushKey,           true),
+            ["ActiveBorder"]            = (SystemColors.ActiveBorderBrushKey,            true),
+            ["InactiveBorder"]          = (SystemColors.InactiveBorderBrushKey,          true),
+            ["InfoText"]                = (SystemColors.InfoTextBrushKey,                true),
+            ["Info"]                    = (SystemColors.InfoBrushKey,                    true),
             // Custom string-keyed brushes
             ["ActiveTitleBar"]          = ("ActiveTitleBarBrush",                        true),
             ["InactiveTitleBar"]        = ("InactiveTitleBarBrush",                      true),
@@ -63,6 +74,7 @@ internal static class ColorKeyMapping
             ["WarningBannerBorder"]     = ("WarningBannerBorderBrush",                    true),
             ["WarningBannerForeground"] = ("WarningBannerForegroundBrush",                true),
             ["ValidationError"]         = ("ValidationErrorBrush",                        true),
+            ["LinkText"]                = ("LinkTextBrush",                               true),
             ["InactiveCodeText"]        = ("InactiveCodeTextBrush",                        true),
             // The code window's read-only text and fold labels (#273 task 3.15). Every shipped pack carries it,
             // because the light default misses the contrast bar on a dark editor; ShippedThemePackTests checks.
@@ -73,6 +85,28 @@ internal static class ColorKeyMapping
             ["BracketDepth2"] = ("BracketDepth2Brush", true),
             ["BracketDepth3"] = ("BracketDepth3Brush", true),
             ["BracketUnmatched"] = ("BracketUnmatchedBrush", true),
+            // Base-theme and Dock resources used by chrome outside the Classic palette.
+            ["ThemeBackgroundBrush"] = ("ThemeBackgroundBrush", true),
+            ["ThemeForegroundBrush"] = ("ThemeForegroundBrush", true),
+            ["ThemeForegroundLowBrush"] = ("ThemeForegroundLowBrush", true),
+            ["ThemeControlMidBrush"] = ("ThemeControlMidBrush", true),
+            ["ThemeControlMidHighBrush"] = ("ThemeControlMidHighBrush", true),
+            ["ThemeControlHighlightMidBrush"] = ("ThemeControlHighlightMidBrush", true),
+            ["ThemeAccentBrush2"] = ("ThemeAccentBrush2", true),
+            ["ThemeAccentBrush3"] = ("ThemeAccentBrush3", true),
+            ["ThemeAccentBrush4"] = ("ThemeAccentBrush4", true),
+            ["DockThemeBackgroundBrush"] = ("DockThemeBackgroundBrush", true),
+            ["DockThemeControlBackgroundBrush"] = ("DockThemeControlBackgroundBrush", true),
+            ["DockDocumentTabStripBackgroundBrush"] = ("DockDocumentTabStripBackgroundBrush", true),
+            ["DockSurfacePanelBrush"] = ("DockSurfacePanelBrush", true),
+            ["DockSurfaceHeaderBrush"] = ("DockSurfaceHeaderBrush", true),
+            ["DockSurfaceSidebarBrush"] = ("DockSurfaceSidebarBrush", true),
+            ["DockTabBackgroundBrush"] = ("DockTabBackgroundBrush", true),
+            ["DockTabActiveBackgroundBrush"] = ("DockTabActiveBackgroundBrush", true),
+            ["DockTabForegroundBrush"] = ("DockTabForegroundBrush", true),
+            ["DockTabSelectedForegroundBrush"] = ("DockTabSelectedForegroundBrush", true),
+            ["DockTabActiveForegroundBrush"] = ("DockTabActiveForegroundBrush", true),
+            ["LineNumbersForeground"] = ("LineNumbersForegroundBrush", true),
             // Accent colors stored as Color (not SolidColorBrush), matching Classic.axaml
             ["SystemAccentColor"]       = ("SystemAccentColor",                          false),
             ["SystemAccentColorLight1"] = ("SystemAccentColorLight1",                    false),

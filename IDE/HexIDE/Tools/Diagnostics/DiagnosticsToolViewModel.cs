@@ -10,13 +10,14 @@ using PropertyChanged.SourceGenerator;
 
 namespace HexIDE.Tools.Diagnostics;
 
-public sealed record DiagnosticRow(string Uri, string Server, Diagnostic Diagnostic, string SeverityText, string? DocumentName = null)
+public sealed record DiagnosticRow(string Uri, string Server, Diagnostic Diagnostic, string SeverityText, string? DocumentName = null, string? Project = null)
 {
     public string FullPath => System.Uri.TryCreate(Uri, UriKind.Absolute, out var uri) && uri.IsFile
         ? uri.LocalPath : System.Uri.UnescapeDataString(Uri);
     public string Document => DocumentName ?? FullPath.Replace('\\', '/').Split('/').Last();
     public int Line => Diagnostic.Range.Start.Line + 1;
     public string Message => Diagnostic.Message;
+    public string? Source => Diagnostic.Source;
     public double MessageOpacity => Diagnostic.Tags?.Contains(1) == true ? 0.5 : 1;
     public Avalonia.Media.TextDecorationCollection? MessageDecorations => Diagnostic.Tags?.Contains(2) == true
         ? Avalonia.Media.TextDecorations.Strikethrough : null;
@@ -28,10 +29,16 @@ public partial class DiagnosticsToolViewModel : Tool
     private readonly ILanguageConnectionRegistry registry;
     private readonly IDocumentDockService documents;
     private readonly IEditorService editors;
+    private readonly IProjectManager? projects;
+    public bool ShowProjects => projects?.LoadedProjects.Count > 1;
     private string? currentUri;
     private readonly ILocalizationService localization;
 
     public ObservableCollection<DiagnosticRow> Rows { get; } = [];
+    [Notify] private int errorCount;
+    [Notify] private int warningCount;
+    [Notify] private int informationCount;
+    [Notify] private int hintCount;
     [Notify] private bool errors = true;
     [Notify] private bool warnings = true;
     [Notify] private bool information = true;
@@ -40,9 +47,10 @@ public partial class DiagnosticsToolViewModel : Tool
     [Notify] private DiagnosticRow? selectedRow;
 
     public DiagnosticsToolViewModel(ILanguageConnectionRegistry registry, ILspClient client,
-        IDocumentDockService documents, IEditorService editors, ILocalizationService localization)
+        IDocumentDockService documents, IEditorService editors, ILocalizationService localization, IProjectManager? projects = null)
     {
         this.registry = registry;
+        this.projects = projects;
         this.localization = localization;
         this.documents = documents;
         this.editors = editors;
@@ -50,8 +58,17 @@ public partial class DiagnosticsToolViewModel : Tool
         CanClose = true;
         CanPin = false;
         localization.LanguageChanged += Refresh;
-        client.DiagnosticsPublished += (_, _) => Dispatcher.UIThread.Post(Refresh);
+        // Taken here, on the UI thread: diagnostics arrive on the client's read loop, and asking Dispatcher.UIThread
+        // there while a headless test's setup has it cleared makes that thread the UI thread (#2530).
+        var uiThread = Dispatcher.UIThread;
+        client.DiagnosticsPublished += (_, _) => uiThread.Post(Refresh);
         documents.PropertyChanged += (_, _) => Refresh();
+        if (projects is not null)
+        {
+            projects.PropertyChanged += (_, _) => Refresh();
+            projects.ProjectLoaded += _ => Refresh();
+            projects.ProjectUnloaded += _ => Refresh();
+        }
         Refresh();
     }
 
@@ -64,12 +81,21 @@ public partial class DiagnosticsToolViewModel : Tool
             currentUri = LspDocumentUri.ForFile(path);
         else if (active?.OpenDocument is { } identity) currentUri = DocumentWireName.For(identity);
 
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(ShowProjects)));
         var selected = SelectedRow;
         Rows.Clear();
+        int errorsTotal = 0, warningsTotal = 0, informationTotal = 0, hintsTotal = 0;
         foreach (var item in registry.Diagnostics)
         {
             if (CurrentDocumentOnly && (currentUri is null || !LspDocumentUri.AreSame(currentUri, item.Uri))) continue;
             var severity = item.Diagnostic.Severity ?? DiagnosticSeverity.Error;
+            switch (severity)
+            {
+                case DiagnosticSeverity.Error: errorsTotal++; break;
+                case DiagnosticSeverity.Warning: warningsTotal++; break;
+                case DiagnosticSeverity.Information: informationTotal++; break;
+                case DiagnosticSeverity.Hint: hintsTotal++; break;
+            }
             if (!(severity switch
                 {
                     DiagnosticSeverity.Error => Errors,
@@ -86,8 +112,14 @@ public partial class DiagnosticsToolViewModel : Tool
                     DiagnosticSeverity.Information => "Information",
                     DiagnosticSeverity.Hint => "Hint",
                     _ => "Error"
-                })), editors.DocumentNameForUri(item.Uri)));
+                })), editors.DocumentNameForUri(item.Uri), ShowProjects
+                    ? NamedDocuments.ForDiagnostic(projects!.LoadedProjects, projects.StartupProject, item.Uri).Project
+                    : null));
         }
+        ErrorCount = errorsTotal;
+        WarningCount = warningsTotal;
+        InformationCount = informationTotal;
+        HintCount = hintsTotal;
         SelectedRow = Rows.FirstOrDefault(r => r == selected);
     }
 

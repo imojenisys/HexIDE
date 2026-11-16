@@ -13,6 +13,16 @@ the kind of thing that erodes silently unless it is a requirement.
 
 ## Requirements
 
+### Requirement: Background parser warm-up
+The bundled stdio server SHALL schedule a representative SLL-to-LL parse with error recovery on a
+background task without waiting before starting its read loop or publishing the synthetic diagnostics.
+It SHALL log the duration and prediction stage on completion, and log failures without stopping the server.
+
+#### Scenario: A new server session
+- **WHEN** the bundled server starts and its synthetic LL parse is still running
+- **THEN** it can answer initialize and accept document notifications
+- **AND** document analysis may run concurrently with the warm-up
+
 ### Requirement: VB6 mechanical source limits produce compatibility warnings
 The bundled server SHALL warn on a logical line's 25th continuation, counting each extra 1,023-character
 piece of a physical line as one continuation. It SHALL also warn on a physical line over 1,023 characters,
@@ -467,3 +477,12 @@ Traversal SHALL continue with subsequent statements after a bounded subtree is s
 - **WHEN** a parsed module contains 100,000 additions followed by declarations and another procedure
 - **THEN** symbol and declaration collection completes and retains the later declarations and procedure
 - **AND** Option Explicit checking can still report an undeclared reference in a later statement
+
+### Requirement: Completion excludes VB free text
+The bundled server SHALL return an empty completion list at a position inside an apostrophe comment,
+Rem comment or string literal, including an unfinished literal or doubled quotes, and in continued
+comments (#3577).
+
+#### Scenario: A completion request within a comment
+- **WHEN** completion is requested after `on` in `' Typed on`
+- **THEN** the completion list has no items

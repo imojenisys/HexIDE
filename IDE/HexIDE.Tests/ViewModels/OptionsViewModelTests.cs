@@ -145,7 +145,8 @@ public class OptionsViewModelTests
 
         sut.SelectedNode.Should().BeSameAs(sut.RootNodes.Single(n => n.Key == "Str.Options.Node.AddIns"));
         sut.SelectedNode!.IsExpanded.Should().BeTrue();
-        sut.CurrentPage.Should().BeNull();
+        var overview = sut.CurrentPage.Should().BeOfType<AddinsOverviewPageViewModel>().Subject;
+        overview.Addins.Should().Equal(installed ? new[] { _addinA, _addinB } : []);
         sut.CanRestorePageDefaults.Should().BeFalse();
     }
 
@@ -459,7 +460,8 @@ public class OptionsViewModelTests
         group.Children.Should().ContainSingle();
         sut.SelectedNode = group.Children[0];
         sut.SelectedNode.Title.Should().Be("(no add-ins installed)");
-        sut.CurrentPage.Should().BeNull();
+        sut.CurrentPage.Should().BeSameAs(group.Page);
+        sut.CurrentPage.Should().BeOfType<AddinsOverviewPageViewModel>().Subject.Addins.Should().BeEmpty();
         sut.CanRestorePageDefaults.Should().BeFalse();
     }
 
@@ -530,5 +532,26 @@ public class OptionsViewModelTests
     {
         // default add-ins A and B have no contributed pages registered
         Addin(CreateSut(), "Add-in A").HasContributedContent.Should().BeFalse();
+    }
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Addin_pages_share_the_dialog_language_and_unsubscribe_on_close(bool accept)
+    {
+        _addinRegistry.GetAll().Returns([_addinA with { Title = "" }]);
+        var sut = CreateSut();
+        var node = Flatten(sut.RootNodes).Single(n => n.Page is AddinOptionsPageViewModel);
+        var page = (AddinOptionsPageViewModel)node.Page!;
+        var changed = new List<string?>();
+        page.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        _localization.Apply("de");
+        page.ToggleLabel.Should().Be(_localization.GetString("Str.Options.Addin.Deactivate"));
+        node.Title.Should().Be(_localization.GetString("Str.Options.Addin.Unnamed"));
+        changed.Should().Contain("ToggleLabel");
+        if (accept) sut.OkCommand.Execute(null);
+        else sut.CancelCommand.Execute(null);
+        changed.Clear();
+        _localization.Apply("pseudo");
+        changed.Should().BeEmpty();
     }
 }

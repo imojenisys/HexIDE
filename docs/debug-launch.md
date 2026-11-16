@@ -109,9 +109,9 @@ conditional breakpoints and applied saved edits in the measurements recorded in 
   `logMessage` remain refused before launch (#2914).
 - **Edits reach the program only through the adapter.** HexIDE sends nothing when you edit. An adapter that
   reads the saved sources when the program resumes, as RDCore's does, runs an edit you saved while stopped,
-  so save before you step. Use **Save Project**: Ctrl+S does not save a module (#244), and where no blank
-  line separates a module's declarations from its first procedure it inserts one, which moves every
-  statement below it. An adapter that
+  so save before you step. Ctrl+S saves the module you are in (#244), and **Save Project** saves them all.
+  Where no blank line separates a module's declarations from its first procedure, Save Project inserts one,
+  which moves every statement below it. An adapter that
   can't apply an edit refuses the step and leaves the program stopped. HexIDE prints its message in
   Immediate, and keeps Call Stack, Locals, the selected frame and the current line as they were, without moving the caret or scrolling the editor (#2912, #2914).
   Undo the edit and save again, or End. When an adapter sends `invalidated` while the program is stopped,
@@ -159,6 +159,9 @@ no one-shot breakpoint support; set a breakpoint in the editor and continue inst
 If an adapter does not answer **End** and must be killed after cleanup waits, Immediate shows one
 localized notice with its name and elapsed wait in seconds. Any nonempty standard-error tail follows
 separately. Exit codes and forced-termination details remain in the log and Protocol Inspector (#2980).
+This also applies when stopped-frame inspection is available before startup's thread request finishes:
+End's disconnect cleanup completes before startup disposes the session, and cancellation still reports
+the adapter's final process result. Disconnect exceptions during End stay in the log (#3858).
 
 ### Breakpoint conditions (#2914)
 

@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using HexIDE.Bookmarks;
 using HexIDE.Debugging;
 using HexIDE.Events;
@@ -68,7 +69,7 @@ public class EditorServiceNavigationTests
             var carried = new RelatedDocumentDefinition(project, "notes.md", path);
             project.AddRelatedDocument(carried);
             using var editor = new RelatedDocumentEditorViewModel(Substitute.For<HexIDE.Lsp.ILspClient>(),
-                Substitute.For<IWindowManager>(), Substitute.For<HexIDE.Localization.ILocalizationService>());
+                Substitute.For<IWindowManager>(), Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
             editor.Initialize(carried);
             _dock.TryActivate(Arg.Any<Func<RelatedDocumentEditorViewModel, bool>>()).Returns(true);
             _dock.OpenDocuments.Returns([editor]);
@@ -94,7 +95,9 @@ public class EditorServiceNavigationTests
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<IBookmarkService>(), Substitute.For<IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            Substitute.For<IRunScope>(), Substitute.For<HexIDE.Localization.ILocalizationService>());
+            Substitute.For<IRunScope>(), Substitute.For<HexIDE.Localization.ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader());
         editor.Initialize(module);
         _dock.TryActivate(Arg.Any<Func<CodeEditorViewModel, bool>>(), takeFocus).Returns(true);
         _dock.OpenDocuments.Returns([editor]);

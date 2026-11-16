@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using Avalonia.Threading;
 using HexIDE.Forms.ViewModels;
 using HexIDE.IDE;
@@ -106,7 +107,7 @@ public class OutlineToolViewModelTests
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
-            Substitute.For<ILocalizationService>()).Initialize(TestHelpers.CreateForm());
+            Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader()).Initialize(TestHelpers.CreateForm());
 
     [AvaloniaFact]
     public async Task ActiveDocument_RefreshesFollowsCaretNavigatesAndClears()
@@ -118,7 +119,7 @@ public class OutlineToolViewModelTests
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
-            Substitute.For<ILocalizationService>()).Initialize(TestHelpers.CreateForm());
+            Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader()).Initialize(TestHelpers.CreateForm());
         var documents = Substitute.For<IDocumentDockService>();
         documents.ActiveDocument.Returns(editor);
         using var sut = new OutlineToolViewModel(Substitute.For<ILocalizationService>(), documents);
@@ -161,7 +162,7 @@ public class OutlineToolViewModelTests
             var lsp = Substitute.For<ILspClient>();
             lsp.IsRunning.Returns(true);
             var localization = Substitute.For<ILocalizationService>();
-            using var editor = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), localization)
+            using var editor = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), localization, Substitute.For<HexIDE.IDE.ISettingsService>())
                 .Initialize(new HexIDE.Runtime.ProjectElements.RelatedDocumentDefinition(
                     TestHelpers.CreateProject("P"), "outline.txt", path));
             var documents = Substitute.For<IDocumentDockService>();
@@ -188,7 +189,7 @@ public class OutlineToolViewModelTests
             sut.SelectedNode!.Name.Should().Be("Two");
             sut.SelectedKind = sut.Kinds.Single(k => k.Kind == SymbolKind.Method);
             sut.Roots.Should().ContainSingle();
-            using var other = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), localization);
+            using var other = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), localization, Substitute.For<HexIDE.IDE.ISettingsService>());
             documents.ActiveDocument.Returns(other);
             documents.PropertyChanged += Raise.Event<PropertyChangedEventHandler>(documents,
                 new PropertyChangedEventArgs(nameof(IDocumentDockService.ActiveDocument)));
@@ -210,7 +211,7 @@ public class OutlineToolViewModelTests
             var pending = new TaskCompletionSource<DocumentSymbol[]>();
             lsp.RequestDocumentSymbolsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(pending.Task);
             using var editor = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(),
-                Substitute.For<ILocalizationService>()).Initialize(new HexIDE.Runtime.ProjectElements.RelatedDocumentDefinition(
+                Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>()).Initialize(new HexIDE.Runtime.ProjectElements.RelatedDocumentDefinition(
                     TestHelpers.CreateProject("P"), "outline.txt", path));
             var request = ((IOutlineDocument)editor).RefreshSymbolsAsync();
             editor.Document.Insert(0, "' newer\n");

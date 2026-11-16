@@ -35,6 +35,7 @@ public class ViewLocator : IDataTemplate
         Register<RelatedDocumentEditorViewModel, RelatedDocumentEditorView>();
         Register<ArchiveDocumentViewModel, ArchiveDocumentView>();
         Register<ProjectDocumentViewModel, ProjectDocumentView>();
+        Register<ProjectFileDocumentViewModel, ProjectFileDocumentView>();
         Register<FormEditViewModel, FormEditView>();
         Register<MenuEditorViewModel, MenuEditorView>();
         Register<ToolBoxToolViewModel, ToolBoxToolView>();
@@ -54,6 +55,7 @@ public class ViewLocator : IDataTemplate
         Register<FormDesignerGridPageViewModel, FormDesignerGridPageView>();
         Register<DeveloperPageViewModel, DeveloperPageView>();
         Register<AddinOptionsPageViewModel, AddinOptionsPageView>();
+        Register<AddinsOverviewPageViewModel, AddinsOverviewPageView>();
         Register<AddinConsentDialogViewModel, AddinConsentDialog>();
         Register<WorkspaceArtifactConsentViewModel, WorkspaceArtifactConsentView>();
         Register<WorkspaceArtifactPageViewModel, WorkspaceArtifactPageView>();
@@ -73,6 +75,7 @@ public class ViewLocator : IDataTemplate
         Register<ObjectBrowserToolViewModel, ObjectBrowserToolView>();
         Register<TranslationEditorViewModel, TranslationEditorView>();
         Register<LanguageServersToolViewModel, LanguageServersToolView>();
+        Register<LanguageServerEditorViewModel, LanguageServerEditorView>();
         Register<ProtocolInspectorToolViewModel, ProtocolInspectorToolView>();
         Register<HexIDE.Tools.Diagnostics.DiagnosticsToolViewModel, HexIDE.Tools.Diagnostics.DiagnosticsToolView>();
         Register<NewProjectViewModel, NewProjectView>();

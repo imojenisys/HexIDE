@@ -5,7 +5,7 @@ using System.Threading.Tasks;
 namespace HexIDE.Runtime.Debugging;
 
 /// <summary>
-/// The default <see cref="IDebugController"/> — a cooperative, single-threaded (UI-thread) debug session for the
+/// The default <see cref="IDebugGate"/> — a cooperative, single-threaded (UI-thread) debug session for the
 /// tree-walking interpreter. Everything runs on one thread, so no locking is needed: the walk and the front-end
 /// (Continue/Pause/Stop) never run concurrently — the walk is suspended at a <c>TaskCompletionSource</c>
 /// whenever the front-end acts.
@@ -25,7 +25,7 @@ namespace HexIDE.Runtime.Debugging;
 /// opens both (break-frame first); a reset resumes them so their gate re-checks <see cref="IsAborting"/> and
 /// raises <see cref="StopExecutionSignal"/> to unwind.
 /// </summary>
-public sealed class DebugController : IDebugController
+public sealed class DebugController : IDebugGate
 {
     public bool CanBreak { get; init; } = true;
 
@@ -33,6 +33,7 @@ public sealed class DebugController : IDebugController
 
     private readonly Dictionary<string, HashSet<int>> _breakpoints = new(StringComparer.OrdinalIgnoreCase);
     private bool _anyBreakpoints;
+    private readonly Dictionary<string, Dictionary<int, string>> _conditions = new(StringComparer.OrdinalIgnoreCase);
 
     // Break-type watches (Break When True / Changed), evaluated against the executing frame at every statement while
     // running. Gated behind _anyWatchBreaks so the common (no-watch) hot path pays nothing.
@@ -108,6 +109,7 @@ public sealed class DebugController : IDebugController
 
     public void SetBreakpoints(string module, IReadOnlyCollection<int> lines)
     {
+        _conditions.Remove(module);
         if (lines.Count == 0)
             _breakpoints.Remove(module);
         else
@@ -115,9 +117,13 @@ public sealed class DebugController : IDebugController
         _anyBreakpoints = _breakpoints.Count > 0;
     }
 
+    public void SetBreakpointConditions(string module, IReadOnlyDictionary<int, string> conditions)
+        => _conditions[module] = new Dictionary<int, string>(conditions);
+
     public void ClearBreakpoints()
     {
         _breakpoints.Clear();
+        _conditions.Clear();
         _anyBreakpoints = false;
     }
 
@@ -229,18 +235,21 @@ public sealed class DebugController : IDebugController
 
             bool runToHit = MatchesRunTo(line, module);
 
-            if (ShouldBreak(line, module, frame) || watchTripped)
+            var condition = MatchesBreakpoint(line, module)
+                ? await EvaluateBreakpointConditionAsync(line, module, frame) : (Hit: false, Expression: (string?)null, Error: (string?)null);
+            bool breakpointHit = condition.Hit;
+            if (_pauseRequested || StepWantsBreak(frame) || breakpointHit || runToHit || watchTripped)
             {
                 // Breakpoint wins (VB6 shows a breakpoint hit even mid-step); then Run To Cursor (a temp breakpoint);
                 // then a watch; then a step; then pause.
-                var reason = MatchesBreakpoint(line, module) || runToHit ? StopReason.Breakpoint
+                var reason = breakpointHit || runToHit ? StopReason.Breakpoint
                            : watchTripped ? StopReason.Watch
                            : _stepMode != StepMode.None ? StopReason.Step
                            : StopReason.Pause;
                 if (runToHit) _runToTarget = null;   // one-shot temp breakpoint reached
                 _pauseRequested = false;
                 _stepMode = StepMode.None;   // one-shot — F8 breaks once; press again to step again
-                await SuspendAtBreakAsync(reason, line, module, frame);
+                await SuspendAtBreakAsync(reason, line, module, frame, condition.Expression, condition.Error);
                 return;
             }
         }
@@ -256,10 +265,11 @@ public sealed class DebugController : IDebugController
         }
     }
 
-    private async ValueTask SuspendAtBreakAsync(StopReason reason, int line, string module, IDebugFrame? frame)
+    private async ValueTask SuspendAtBreakAsync(StopReason reason, int line, string module, IDebugFrame? frame,
+        string? conditionExpression = null, string? conditionError = null)
     {
         _state = DebugState.Paused;
-        _currentStop = new StoppedInfo(reason, module, line);
+        _currentStop = new StoppedInfo(reason, module, line, conditionExpression, conditionError);
         // Capture the DECIDING activation's frame for Locals. Only this activation reaches here (newcomers freeze on
         // the resume gate above), so there is never a clobber; cleared when the break ends (Continue/Step/Stop/Reset).
         _currentFrame = frame;
@@ -306,6 +316,24 @@ public sealed class DebugController : IDebugController
 
     private bool MatchesRunTo(int line, string module)
         => _runToTarget is (var m, var l) && l == line && string.Equals(m, module, StringComparison.OrdinalIgnoreCase);
+
+    private async ValueTask<(bool Hit, string? Expression, string? Error)> EvaluateBreakpointConditionAsync(int line, string module, IDebugFrame? frame)
+    {
+        if (!_conditions.TryGetValue(module, out var conditions) || !conditions.TryGetValue(line, out var expression))
+            return (true, null, null);
+        if (frame is null)
+            return (true, null, null);
+        DebugEvalResult result;
+        try { result = await frame.EvaluateTypedAsync(expression); }
+        catch (Exception ex)
+        {
+            return (true, expression, ex.Message);
+        }
+        // The evaluator reports an undeclared name as "Syntax error" with UndefinedName set, which is right for a Watch
+        // row but would tell a person their condition is malformed when it names something not in scope (#3830).
+        return result.Ok ? (result.Truthy, null, null)
+            : (true, expression, result.UndefinedName ? "Variable not defined" : result.Display);
+    }
 
     // Evaluate each break-type watch against the executing frame. Break-When-True trips whenever the expression
     // coerces to True (level-triggered — VB6: "break when the expression evaluates to True"); Break-When-Changed
@@ -447,8 +475,14 @@ public sealed class DebugController : IDebugController
         // A dispatch (event-handler chain) returned to idle without the armed step ever breaking. Disarm it so a
         // leftover Step Into/Over/Out can't fire on the NEXT, unrelated event handler. Only while Running — never
         // disturb a step armed for a chain that is currently paused mid-flight (Paused), nor after Stop (Stopped).
-        if (_state == DebugState.Running)
-            _stepMode = StepMode.None;
+        if (_state != DebugState.Running || _stepMode == StepMode.None)
+            return;
+        _stepMode = StepMode.None;
+        var rg = _resumeGate;
+        _resumeGate = null;
+        // No next Stopped will move the amber bar: leave break mode and release frozen events as Continue does.
+        Continued?.Invoke();
+        rg?.TrySetResult();
     }
 
     public void Stop()

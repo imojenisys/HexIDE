@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Avalonia;
 using Avalonia.Threading;
 using HexIDE.Addins;
 
@@ -19,13 +20,14 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     private readonly IHexIdeHost _host;
     private readonly ChatSession _session;
     private ChatSettings _settings;
-    private readonly OpenAiClient _client;
+    private readonly ChatClient _client;
     private readonly IdeToolExecutor _tools;
     private readonly string _settingsDir;
     private readonly string _historyPath;
 
     private string _inputText = string.Empty;
     private bool _isResponding;
+    private CancellationTokenSource? _responseCancellation;
     private bool _reloadSettingsPending;
     private bool _egressNoticeShown;
     private ChatMessageViewModel? _activeStream;
@@ -73,14 +75,16 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public ChatViewModel(IHexIdeHost host, string settingsDir)
+    public ChatViewModel(IHexIdeHost host, string settingsDir) : this(host, settingsDir, new ChatClient()) { }
+
+    internal ChatViewModel(IHexIdeHost host, string settingsDir, ChatClient client)
     {
         _host        = host;
         _settingsDir = settingsDir;
         _settings    = ChatSettings.Load(settingsDir);
         _historyPath = Path.Combine(settingsDir, "chat-history.json");
         _session     = ChatSession.LoadFrom(_historyPath);
-        _client      = new OpenAiClient();
+        _client      = client;
         _tools       = new IdeToolExecutor(host);
 
         foreach (var msg in _session.Log.Where(m => m.Role is "user" or "assistant"))
@@ -101,6 +105,16 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         var text = InputText.Trim();
         if (string.IsNullOrEmpty(text) || IsResponding) return;
 
+        // Loopback as the URI resolves it (localhost and all of 127.0.0.0/8 and ::1), as OpenAiClient already decides.
+        var localEndpoint = Uri.TryCreate(_settings.BaseUrl, UriKind.Absolute, out var endpoint) && endpoint.IsLoopback;
+        if (!localEndpoint && string.IsNullOrWhiteSpace(_settings.ResolveApiKey()))
+        {
+            ShowError(new ChatStopException("Str.AIChat.ApiKeyRequired"));
+            return;
+        }
+
+        using var cancellation = new CancellationTokenSource();
+        _responseCancellation = cancellation;
         InputText   = string.Empty;
         IsResponding = true;
 
@@ -112,7 +126,17 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
         try
         {
-            await RunAgenticLoopAsync();
+            await RunAgenticLoopAsync(cancellation.Token);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            if (_activeStream is { } stream)
+            {
+                stream.IsStreaming = false;
+                if (string.IsNullOrEmpty(stream.RawContent)) Messages.Remove(stream);
+                else _session.Add(new ConversationMessage("assistant", stream.RawContent));
+                _activeStream = null;
+            }
         }
         catch (Exception ex)
         {
@@ -122,6 +146,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         {
             FlushHeldNotes();
             _session.SaveTo(_historyPath);
+            _responseCancellation = null;
             IsResponding = false;
         }
     }
@@ -141,8 +166,18 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             _activeStream = null;
         }
 
-        Messages.Add(new ChatMessageViewModel("assistant", $"Error: {ex.Message}", isError: true));
+        var message = ex.Message;
+        if (ex is ChatStopException stop)
+        {
+            // Add-ins share the shell's localized resources without referencing the shell assembly.
+            message = Application.Current?.TryGetResource(stop.ResourceKey, null, out var value) == true
+                ? value as string ?? stop.ResourceKey : stop.ResourceKey;
+            if (!string.IsNullOrEmpty(stop.Explanation)) message += " " + stop.Explanation;
+        }
+        Messages.Add(new ChatMessageViewModel("assistant", ex is ChatStopException ? message : ChatStrings.Format("Str.AIChat.Error", message), isError: true));
     }
+
+    public void Stop() => _responseCancellation?.Cancel();
 
     public void NewChat()
     {
@@ -176,15 +211,15 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             if (doc is null)
             {
                 Messages.Add(new ChatMessageViewModel("assistant",
-                    "Not applied: no code window is active. Open the file to apply the code to, then click Apply again.",
+                    ChatStrings.GetString("Str.AIChat.NoActiveCodeWindow"),
                     isError: true));
                 return;
             }
 
             var result = await _host.Editor.TrySetContent(doc.FileName, code, doc.Project);
             Messages.Add(result.Succeeded
-                ? new ChatMessageViewModel("assistant", $"Applied to {doc.FileName}.", isStatusLine: true)
-                : new ChatMessageViewModel("assistant", $"Not applied to {doc.FileName}: {result.Reason}", isError: true));
+                ? new ChatMessageViewModel("assistant", ChatStrings.Format("Str.AIChat.Applied", doc.FileName), isStatusLine: true)
+                : new ChatMessageViewModel("assistant", ChatStrings.Format("Str.AIChat.NotAppliedTo", doc.FileName, result.Reason ?? string.Empty), isError: true));
             TellAssistant(result.Succeeded
                 ? $"The developer applied a code block from this chat to {Describe(doc)}, and the IDE accepted it"
                   + (result.HeaderKept ? ", keeping the file's own header in front of it." : ".")
@@ -193,7 +228,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            Messages.Add(new ChatMessageViewModel("assistant", $"Not applied: {ex.Message}", isError: true));
+            Messages.Add(new ChatMessageViewModel("assistant", ChatStrings.Format("Str.AIChat.NotApplied", ex.Message), isError: true));
             if (doc is not null)
                 TellAssistant($"The developer applied a code block from this chat to {Describe(doc)}, and it failed, "
                               + $"so nothing was written: {ex.Message}");
@@ -235,15 +270,17 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
     // ── agentic loop ─────────────────────────────────────────────────────────
 
-    private async Task RunAgenticLoopAsync()
+    private async Task RunAgenticLoopAsync(CancellationToken ct)
     {
+        FlushHeldNotes();
+        ct.ThrowIfCancellationRequested();
+        await MaybeCompactAsync(ct);
+        var systemPrompt = BuildSystemPrompt();
         while (true)
         {
             // Here the last message is the developer's or a tool result, after which a note may come.
             FlushHeldNotes();
-            await MaybeCompactAsync();
-
-            var systemPrompt = BuildSystemPrompt();
+            ct.ThrowIfCancellationRequested();
             var apiMessages  = _session.BuildApiMessages(systemPrompt);
 
             var aiMsgVm = new ChatMessageViewModel("assistant") { IsStreaming = true };
@@ -252,11 +289,14 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
             var contentBuilder = new StringBuilder();
             List<ToolCall>? toolCalls = null;
+            JsonArray? nativeContent = null;
 
             await foreach (var chunk in _client.StreamAsync(
                 _settings.BaseUrl, _settings.ResolveApiKey(), _settings.ModelId,
-                apiMessages, IdeToolExecutor.ToolDefinitions))
+                apiMessages, IdeToolExecutor.ToolDefinitions, ct, _settings))
             {
+                ct.ThrowIfCancellationRequested();
+                if (chunk.NativeContent is not null) nativeContent = chunk.NativeContent;
                 if (chunk.IsDone) break;
 
                 if (chunk.ContentDelta is not null)
@@ -269,8 +309,9 @@ public sealed class ChatViewModel : INotifyPropertyChanged
                     toolCalls = [..chunk.FinishedToolCalls];
             }
 
+            ct.ThrowIfCancellationRequested();
             var finalContent = contentBuilder.ToString();
-            var assistantMsg = new ConversationMessage("assistant", finalContent, toolCalls);
+            var assistantMsg = new ConversationMessage("assistant", finalContent, toolCalls) { NativeContent = nativeContent };
             _session.Add(assistantMsg);
             Dispatcher.UIThread.Post(() => aiMsgVm.IsStreaming = false);
             _activeStream = null;
@@ -281,11 +322,19 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             {
                 // Write tools (edit / run / stop) pause for an in-panel approve/reject; read tools run
                 // freely. A rejection is fed back to the model as a tool result so it can adjust.
+                if (ct.IsCancellationRequested)
+                {
+                    _session.Add(new ConversationMessage("tool", "{\"success\":false,\"error\":\"Cancelled\"}",
+                        toolCallId: tc.Id, toolName: tc.Name));
+                    continue;
+                }
+
                 if (IdeToolExecutor.WriteTools.Contains(tc.Name))
                 {
                     var approval = new ChatMessageViewModel("assistant", DescribeWriteTool(tc), isApproval: true);
                     Dispatcher.UIThread.Post(() => Messages.Add(approval));
 
+                    using var registration = ct.Register(() => Dispatcher.UIThread.Post(approval.Reject));
                     if (!await approval.Decision)
                     {
                         var declined = JsonSerializer.Serialize(new { success = false, error = "The user declined this action." });
@@ -311,7 +360,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
     internal async Task RunToolCallAsync(ToolCall tc)
     {
         var statusVm = new ChatMessageViewModel("assistant",
-            $"Using tool: `{tc.Name}`", isStatusLine: true);
+            ChatStrings.Format("Str.AIChat.UsingTool", tc.Name), isStatusLine: true);
         Dispatcher.UIThread.Post(() => Messages.Add(statusVm));
 
         var result = await _tools.ExecuteAsync(tc);
@@ -344,14 +393,26 @@ public sealed class ChatViewModel : INotifyPropertyChanged
             reason = result;
         }
 
-        var file = FileNameOf(tc) ?? "the file";
+        var file = FileNameOf(tc);
         if (tc.Name == "apply_edit")
-            return succeeded
-                ? new ChatMessageViewModel("assistant", $"Applied to {file}.", isStatusLine: true)
-                : new ChatMessageViewModel("assistant", $"Not applied to {file}: {reason ?? "no reason was given."}", isError: true);
+        {
+            if (succeeded)
+                return new ChatMessageViewModel("assistant", file is null
+                    ? ChatStrings.GetString("Str.AIChat.AppliedUnnamed")
+                    : ChatStrings.Format("Str.AIChat.Applied", file), isStatusLine: true);
+            return new ChatMessageViewModel("assistant", file is null
+                ? reason is null
+                    ? ChatStrings.GetString("Str.AIChat.NotAppliedToUnnamedNoReason")
+                    : ChatStrings.Format("Str.AIChat.NotAppliedToUnnamed", reason)
+                : reason is null
+                    ? ChatStrings.Format("Str.AIChat.NotAppliedToNoReason", file)
+                    : ChatStrings.Format("Str.AIChat.NotAppliedTo", file, reason), isError: true);
+        }
         return succeeded
             ? null
-            : new ChatMessageViewModel("assistant", $"`{tc.Name}` failed: {reason ?? "no reason was given."}", isError: true);
+            : new ChatMessageViewModel("assistant", reason is null
+                ? ChatStrings.Format("Str.AIChat.ToolFailedNoReason", tc.Name)
+                : ChatStrings.Format("Str.AIChat.ToolFailed", tc.Name, reason), isError: true);
     }
 
     /// <summary>The <c>file_name</c> a tool call names, or null.</summary>
@@ -375,10 +436,12 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
         return tc.Name switch
         {
-            "apply_edit"   => $"Allow the AI to replace the entire contents of {(string.IsNullOrEmpty(file) ? "a file" : $"“{file}”")}?",
-            "run_project"  => "Allow the AI to run the project in the IDE runtime?",
-            "stop_project" => "Allow the AI to stop the running project?",
-            _              => $"Allow the AI to run “{tc.Name}”?",
+            "apply_edit"   => file is null
+                ? ChatStrings.GetString("Str.AIChat.AllowReplaceUnnamed")
+                : ChatStrings.Format("Str.AIChat.AllowReplace", file),
+            "run_project"  => ChatStrings.GetString("Str.AIChat.AllowRunProject"),
+            "stop_project" => ChatStrings.GetString("Str.AIChat.AllowStopProject"),
+            _              => ChatStrings.Format("Str.AIChat.AllowTool", tc.Name),
         };
     }
 
@@ -405,12 +468,11 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
         var host = Uri.TryCreate(_settings.BaseUrl, UriKind.Absolute, out var u) ? u.Host : _settings.BaseUrl;
         var tip = _settings.ApiKeyIsFromPlaintextFile()
-            ? " Tip: set the HEXIDE_AI_API_KEY environment variable to avoid storing your API key in a file."
+            ? " " + ChatStrings.GetString("Str.AIChat.PrivacyKeyTip")
             : "";
 
         Messages.Add(new ChatMessageViewModel("assistant",
-            $"ℹ Privacy: your messages, the active file's contents (for a form, its layout and captions too), and its diagnostics are sent to {host} — " +
-            "a third-party service you configured in AI Chat settings." + tip,
+            string.Format(ChatStrings.GetString("Str.AIChat.PrivacyNotice"), host) + tip,
             isStatusLine: true));
 
         try { File.WriteAllText(ackPath, EgressNoticeVersion); } catch { /* best-effort */ }
@@ -418,7 +480,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
 
     // ── compaction ───────────────────────────────────────────────────────────
 
-    private async Task MaybeCompactAsync()
+    private async Task MaybeCompactAsync(CancellationToken ct)
     {
         if (!_session.NeedsCompaction(_settings.MaxTurnsBeforeCompaction)) return;
 
@@ -458,7 +520,7 @@ public sealed class ChatViewModel : INotifyPropertyChanged
         var summary = new StringBuilder();
         await foreach (var chunk in _client.StreamAsync(
             _settings.BaseUrl, _settings.ResolveApiKey(), _settings.ModelId,
-            summaryPrompt, new System.Text.Json.Nodes.JsonArray()))
+            summaryPrompt, new System.Text.Json.Nodes.JsonArray(), ct, _settings))
         {
             if (chunk.ContentDelta is not null) summary.Append(chunk.ContentDelta);
             if (chunk.IsDone) break;

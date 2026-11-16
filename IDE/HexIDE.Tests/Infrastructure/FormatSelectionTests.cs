@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using Avalonia.Labs.Input;
 using Avalonia.Threading;
 using HexIDE.Desktop.Server;
@@ -21,9 +22,9 @@ public class FormatSelectionTests
              new ComponentInstance(CommandButtonComponentClass.Instance, "Command1"),
              new ComponentInstance(CommandButtonComponentClass.Instance, "Command2")], "");
         var toolbox = new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(),
-            Substitute.For<IComponentRegistry>(), Substitute.For<ILocalizationService>());
+            new ComponentRegistry(), Substitute.For<ILocalizationService>());
         return new FormEditViewModel(toolbox, Substitute.For<IEventBus>(), Substitute.For<IProjectService>(),
-            null!, null!, Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>()).Initialize(form);
+            null!, null!, Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat()).Initialize(form);
     }
 
     [AvaloniaTheory]
@@ -134,7 +135,9 @@ public class FormatSelectionTests
         var dock = Substitute.For<IDocumentDockService>();
         dock.ActiveDocument.Returns(vm);
         using var context = new IdeContext(Substitute.For<IProjectManager>(), dock, Substitute.For<ILspClient>(),
-            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
+            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader());
         var tools = new HexIdeTools(context);
         var controls = vm.AllComponents.Where(c => c.Name.StartsWith("Command")).ToArray();
         for (var count = 0; count < minimum; count++)

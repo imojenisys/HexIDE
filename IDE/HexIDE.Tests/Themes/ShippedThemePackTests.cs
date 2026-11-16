@@ -34,7 +34,21 @@ public class ShippedThemePackTests
     /// </summary>
     private const double Distinct = 1.5;
 
-    public static TheoryData<string> Packs => new() { "Classic", "Dark", "Abyss" };
+    public static TheoryData<string> Packs => new() { "Classic", "Dark", "Abyss", "HighContrastLight", "HighContrastDark" };
+
+    [Theory]
+    [MemberData(nameof(Packs))]
+    public void LinkTextIsThemedAndLegible(string pack)
+    {
+        ColorKeyMapping.Table.Should().ContainKey("LinkText");
+        ColorKeyMapping.Table["LinkText"].Should().Be(("LinkTextBrush", true));
+        var colours = ColoursOf(pack);
+        colours.Should().ContainKey("LinkText");
+        var link = Color.Parse(colours["LinkText"]);
+        if (pack == "Classic") link.Should().Be(ClassicDefault("LinkTextBrush"));
+        SyntaxHighlightingTheme.ContrastRatio(link, Color.Parse(colours["Window"]))
+            .Should().BeGreaterThanOrEqualTo(Legible);
+    }
 
     [Fact]
     public void IndentGuidesHaveDistinctThemeColours()
@@ -56,7 +70,8 @@ public class ShippedThemePackTests
     [Fact]
     public void ThePacksTestedHereAreTheOnesTheIdeShips()
     {
-        new ThemeService().AvailableThemes.Should().BeEquivalentTo(Packs.Select(row => (string)row.Data));
+        var missingDirectory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString());
+        new ThemeService(missingDirectory).AvailableThemes.Should().BeEquivalentTo(Packs.Select(row => (string)row.Data));
     }
 
     [Fact]
@@ -78,11 +93,12 @@ public class ShippedThemePackTests
     public static IEnumerable<object[]> DarkPackKeys =>
         from pack in new[] { "Dark", "Abyss" }
         from key in ColorKeyMapping.Table.Keys
+        where !ColorKeyMapping.Table[key].IsBrush || ClassicDefault(ColorKeyMapping.Table[key].Key) is not null
         select new object[] { pack, key };
 
     [Theory]
     [MemberData(nameof(DarkPackKeys))]
-    public void EveryDarkPackCarriesEveryMappedKey(string pack, string key)
+    public void EveryDarkPackCarriesEveryClassicPaletteKey(string pack, string key)
     {
         ColoursOf(pack).Should().ContainKey(key);
     }

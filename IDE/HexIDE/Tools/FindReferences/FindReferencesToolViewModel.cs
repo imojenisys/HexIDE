@@ -24,19 +24,22 @@ public sealed record ReferenceRow(Location? Location, string Module, string Befo
 
 public partial class FindReferencesToolViewModel : ResultsToolViewModel
 {
+    private readonly IProjectFileFormat format;
     private readonly ILspClient client;
     private readonly IEditorService editors;
     private readonly IProjectManager projects;
     private readonly IDocumentDockService documents;
     private readonly ILocalizationService localization;
     private int generation;
+    private string? unavailableUri;
     private ReferenceSearchResult result = new([], []);
     public ObservableCollection<ReferenceRow> Rows { get; } = [];
     [Notify] private ReferenceRow? selectedRow;
 
     public FindReferencesToolViewModel(ILspClient client, IEditorService editors,
-        IProjectManager projects, IDocumentDockService documents, ILocalizationService localization)
+        IProjectManager projects, IDocumentDockService documents, ILocalizationService localization, IProjectFileFormat format)
     {
+        this.format = format;
         this.client = client;
         this.editors = editors;
         this.projects = projects;
@@ -53,6 +56,12 @@ public partial class FindReferencesToolViewModel : ResultsToolViewModel
         var current = ++generation;
         Rows.Clear();
         RequestShow();
+        unavailableUri = client.SupportsCapability(uri, "referencesProvider") ? null : uri;
+        if (unavailableUri is not null)
+        {
+            Refresh();
+            return;
+        }
         ReferenceSearchResult answer;
         try { answer = await client.FindReferencesAsync(uri, position, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
@@ -66,6 +75,7 @@ public partial class FindReferencesToolViewModel : ResultsToolViewModel
     public void ShowLocations(IEnumerable<Location> locations)
     {
         ++generation;
+        unavailableUri = null;
         result = new(locations.Distinct().ToArray(), []);
         Refresh();
         RequestShow();
@@ -79,6 +89,13 @@ public partial class FindReferencesToolViewModel : ResultsToolViewModel
         SelectedRow = null;
         Rows.Clear();
         var members = Members().ToArray();
+        if (unavailableUri is { } uri)
+        {
+            var name = members.FirstOrDefault(m => LspDocumentUri.AreSame(DocumentWireName.For(m), uri))?.Name
+                ?? editors.DocumentNameForUri(uri) ?? uri;
+            Rows.Add(new(null, "", string.Format(localization.GetString("Str.Tool.FindReferences.Unavailable"), name), "", ""));
+            return;
+        }
         var groups = result.Locations.Distinct().GroupBy(l => l.Uri)
             .OrderBy(g => Array.FindIndex(members, m => LspDocumentUri.AreSame(DocumentWireName.For(m), g.Key)) is var index && index >= 0 ? index : int.MaxValue);
         foreach (var group in groups)
@@ -88,8 +105,8 @@ public partial class FindReferencesToolViewModel : ResultsToolViewModel
             Rows.Add(new(null, name, "", "", ""));
             var open = documents.OpenDocuments.OfType<CodeEditorViewModel>()
                 .FirstOrDefault(e => LspDocumentUri.AreSame(e.GetDocumentUriPublic(), group.Key));
-            var text = open?.Document.Text ?? (member?.Module is { } module ? FormCodeText.Prefix(module) + module.Code
-                : member?.Form is { } form ? FormCodeText.Prefix(form) + form.Code : "");
+            var text = open?.Document.Text ?? (member?.Module is { } module ? format.CodePrefix(module) + module.Code
+                : member?.Form is { } form ? format.CodePrefix(form) + form.Code : "");
             var document = new TextDocument(text);
             foreach (var location in group.OrderBy(l => l.Range.Start.Line).ThenBy(l => l.Range.Start.Character))
             {

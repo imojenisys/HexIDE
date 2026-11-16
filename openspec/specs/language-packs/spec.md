@@ -53,7 +53,7 @@ that grows one section at a time is valid at every point along the way.
 
 A **region** is a country or territory variant of a language that already ships — `fr-CA`, `pt-BR`,
 `en-GB` — and overriding only what differs from its neutral is the whole of its job: `en-GB` carries
-eighteen keys of seven hundred and twenty-seven, deliberately. The word is easy to misread as *dialect* or
+a few dozen keys out of more than a thousand, deliberately. The word is easy to misread as *dialect* or
 *minority language*, and that reading is wrong: Basque is not a region of Spanish, it is a language, and it
 ships as the neutral pack `eu`. Anything that is a language rather than a variant of one is a neutral,
 and the requirement below governs it once declared.
@@ -165,6 +165,10 @@ means translating is a task requiring no knowledge of the runtime at all.
 ### Requirement: Pack coverage SHALL be enforced automatically
 The build SHALL fail when a key used by the interface is absent from the canonical pack, and when a pack
 defines a key the canonical pack does not.
+
+The source guard SHALL check AXAML resource references and literal `Str.*` arguments to C#
+`GetString` calls in `IDE/HexIDE`, excluding generated `bin` and `obj` directories. Computed and
+interpolated arguments are outside this source guard and require separate coverage at their use sites.
 
 The two checks catch opposite mistakes. A key used but not canonical renders as its own raw name, which
 reaches a user as gibberish. A key in a pack but not canonical is dead weight — usually a typo, or a

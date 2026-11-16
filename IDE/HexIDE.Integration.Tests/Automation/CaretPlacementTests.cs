@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -67,7 +68,9 @@ public class CaretPlacementTests : IDisposable
         var vm = new CodeEditorViewModel(
             Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
             eventBus, lsp, settings, Substitute.For<IStatusBarService>(), new BookmarkService(), new BreakpointService(),
-            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>());
+            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader(), regionRules: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionRules(), regionWriter: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter());
         made.Add(vm);
         var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "Module1", kind);
         module.UpdateCode(code);
@@ -115,6 +118,49 @@ public class CaretPlacementTests : IDisposable
         typed.Success.Should().BeTrue(typed.Error);
         editor.Document.Text.ReplaceLineEndings("\n").Should()
             .Contain("Private Sub Form_Click()\nDebug.Print \"loaded\"\nEnd Sub");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, "body")]
+    [InlineData(true, "body")]
+    [InlineData(false, "header")]
+    [InlineData(true, "header")]
+    [InlineData(false, "attribute")]
+    [InlineData(true, "attribute")]
+    public async Task Opening_without_a_line_reads_the_caret_without_moving_it(bool alreadyOpen, string position)
+    {
+        var vm = Model(position == "attribute" ? WithRun : Body);
+        var module = vm.ModuleDefinition!;
+        module.Owner.AddModule(module);
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns([module.Owner]);
+        var dock = Substitute.For<IDocumentDockService>();
+        var editors = Substitute.For<IEditorService>();
+        void Open()
+        {
+            dock.OpenDocuments.Returns([vm]);
+            Show(vm);
+        }
+        if (alreadyOpen) Open();
+        else editors.When(e => e.EditCode(module)).Do(_ => Open());
+        var offset = position == "header" ? 0 : position == "attribute"
+            ? vm.Document.Text.IndexOf("Attribute Init.", StringComparison.Ordinal)
+            : vm.Document.GetLineByNumber(5).Offset + 2;
+        vm.CaretOffset = offset;
+        using var context = new HexIDE.Desktop.Server.IdeContext(projects, dock, lsp, editors,
+            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
+                new Vb6ProjectFileFormat(),
+                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader());
+        var tools = new HexIDE.Desktop.Server.HexIdeTools(context);
+
+        var reply = await tools.OpenFileAsync("Module1");
+
+        reply.Success.Should().BeTrue(reply.Error);
+        var at = vm.Document.GetLocation(vm.CaretOffset);
+        reply.Note.Should().Contain($"The caret is at line {at.Line}, column {at.Column}: offset {vm.CaretOffset} in the text get_file_content returns.")
+            .And.NotContain("as asked");
+        vm.CaretOffset.Should().Be(offset);
+        if (position != "body") reply.Note.Should().Contain("nearest place that can be edited");
     }
 
     private static FoldingManager Folds(TextEditor editor) =>
@@ -320,7 +366,7 @@ public class CaretPlacementTests : IDisposable
         var past = vm.PastReadOnlyRegion(vm.CaretOffset);
         var to = vm.Document.GetLocation(past);
         CaretPlacement.Where(vm, 2, 1).Should().Be($"The caret is at line 2, column 1: offset {vm.CaretOffset} in the text "
-            + "get_file_content returns. That is in the file's header, which only the IDE changes, so type_text there would "
+            + "get_file_content returns. That is in the document's header (its designer block, class header or leading Attribute lines), which only the IDE changes, so type_text there would "
             + $"be refused. The nearest place that can be edited is line {to.Line}, column {to.Column}: offset {past}.");
         vm.IsReadOnlyRegion(past, 0).Should().BeFalse("the place it names is one type_text writes at");
     }
@@ -362,7 +408,7 @@ public class CaretPlacementTests : IDisposable
 
     private RelatedDocumentEditorViewModel CarriedModel()
     {
-        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>());
+        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
         vm.Document.Text = Carried;
         return vm;
     }
@@ -418,7 +464,7 @@ public class CaretPlacementTests : IDisposable
     [AvaloniaFact]
     public void Set_property_reads_the_carried_file_caret_after_the_view_clamps_it()
     {
-        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>());
+        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
         vm.Document.Text = "0123456789";
         var view = new RelatedDocumentEditorView { DataContext = vm };
         var window = new Window { Width = 800, Height = 600, Content = view };

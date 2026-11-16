@@ -59,6 +59,73 @@ public class LspClientRegistryTests
 
     private static LspRange Span(int line) => new(new Position(line, 0), new Position(line, 1));
 
+    [Fact]
+    public async Task UserRestartKeepsLoadedRegistrationAfterConfigurationFileChanges()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hexide-restart-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "lsp-servers.json");
+            await File.WriteAllTextAsync(path,
+                """{"servers":[{"id":"selected","transport":"stdio","command":"original","extensions":[".bas"],"languageId":"vb6"}]}""",
+                TestContext.Current.CancellationToken);
+            var loaded = new LanguageServerConfigLoader(path, Substitute.For<ILogger<LanguageServerConfigLoader>>()).Load([]);
+            var registration = new LanguageServerRegistrationFactory(Substitute.For<ILoggerFactory>()).Create(loaded.Entries).Single();
+            var first = FakeServer();
+            var second = FakeServer();
+            var made = 0;
+            await using var registry = Registry(registration with { CreateClient = () => ++made == 1 ? first : second });
+            await registry.OpenDocumentAsync(Vb6Doc, "code", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(path, "invalid JSON", TestContext.Current.CancellationToken);
+
+            await registry.RestartAsync("selected", TestContext.Current.CancellationToken);
+
+            registry.Connections.Single().Endpoint.Should().Contain("original");
+            made.Should().Be(2);
+            await second.Received(1).OpenDocumentAsync(Vb6Doc, "code", Arg.Any<CancellationToken>());
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UserRestartReplacesOnlySelectedServerAndReopensLatestDocument(bool exited)
+    {
+        var first = FakeServer();
+        var replacement = FakeServer();
+        var other = FakeServer();
+        var made = 0;
+        await using var capture = new HexIDE.Conversations.ConversationLog();
+        await using var registry = new LspClientRegistry([
+            Registration("selected", first) with { CreateClient = () => ++made == 1 ? first : replacement },
+            Registration("other", other)], Substitute.For<ILogger<LspClientRegistry>>(), capture: capture);
+        var ct = TestContext.Current.CancellationToken;
+        await registry.OpenDocumentAsync(Vb6Doc, "before", ct);
+        if (exited)
+        {
+            first.IsRunning.Returns(false);
+            first.StateChanged += Raise.Event<EventHandler>(first, EventArgs.Empty);
+        }
+        await registry.ChangeDocumentAsync(Vb6Doc, 2, "latest", ct);
+
+        await registry.RestartAsync("selected", ct);
+
+        for (var waited = 0; capture.Snapshot("selected").Count == 0 && waited < 5000; waited += 20)
+            await Task.Delay(20, ct);
+        capture.Snapshot("selected").Should().ContainSingle(e => e.Detail == "restart requested by user"
+            && e.Kind == HexIDE.Conversations.ConversationEntryKind.Lifecycle);
+        capture.Snapshot("other").Should().BeEmpty();
+        made.Should().Be(2);
+        await first.Received(1).StopAsync();
+        await replacement.Received(1).StartAsync(Arg.Any<CancellationToken>());
+        await replacement.Received(1).OpenDocumentAsync(Vb6Doc, "latest", Arg.Any<CancellationToken>());
+        await other.DidNotReceive().StopAsync();
+        await other.Received(1).StartAsync(Arg.Any<CancellationToken>());
+        await other.Received(1).OpenDocumentAsync(Vb6Doc, "before", Arg.Any<CancellationToken>());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -81,6 +148,33 @@ public class LspClientRegistryTests
         await first.Received(1).RequestPrepareRenameAsync(Vb6Doc, Arg.Any<Position>(), Arg.Any<CancellationToken>());
         await second.Received(1).RequestPrepareRenameAsync(Vb6Doc, Arg.Any<Position>(), Arg.Any<CancellationToken>());
         await unsupported.DidNotReceiveWithAnyArgs().RequestPrepareRenameAsync(default!, default!, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task OnTypeFormattingSelectsOneClaimantForTheSpecificTrigger()
+    {
+        var method = typeof(ILspClient).GetMethod("RequestOnTypeFormattingAsync");
+        method.Should().NotBeNull();
+        var supports = typeof(ILspClient).GetMethod("SupportsOnTypeFormatting");
+        supports.Should().NotBeNull();
+        var cannot = FakeServer(capabilitiesJson: """{"documentOnTypeFormattingProvider":{"firstTriggerCharacter":";"}}""");
+        var high = FakeServer(capabilitiesJson: """{"documentOnTypeFormattingProvider":{"firstTriggerCharacter":"\n"}}""");
+        var low = FakeServer(capabilitiesJson: """{"documentOnTypeFormattingProvider":{"firstTriggerCharacter":"\n"}}""");
+        var ct = TestContext.Current.CancellationToken;
+        Task<TextEdit[]> Format(ILspClient client, CancellationToken token) =>
+            (Task<TextEdit[]>)method!.Invoke(client,
+                [Vb6Doc, new Position(2, 4), "\n", new FormattingOptions(4, true), token])!;
+        Format(high, Arg.Any<CancellationToken>()).Returns([new TextEdit(Span(2), "formatted")]);
+        await using var sut = Registry(Registration("cannot", cannot, priority: 20),
+            Registration("high", high, priority: 10), Registration("low", low));
+        await sut.OpenDocumentAsync(Vb6Doc, "code", ct);
+        ((bool)supports!.Invoke(sut, [Vb6Doc, "\n"])!).Should().BeTrue();
+        ((bool)supports.Invoke(sut, ["file:///unclaimed.txt", "\n"])!).Should().BeFalse();
+        ((bool)supports.Invoke(sut, [Vb6Doc, "\""])!).Should().BeFalse();
+        (await Format(sut, ct)).Should().ContainSingle()
+            .Which.NewText.Should().Be("formatted");
+        await Format(cannot.DidNotReceive(), Arg.Any<CancellationToken>());
+        await Format(low.DidNotReceive(), Arg.Any<CancellationToken>());
     }
 
     private static Task<TextEdit[]> RangeFormat(ILspClient client, string uri, LspRange range, FormattingOptions options, CancellationToken ct)
@@ -151,6 +245,7 @@ public class LspClientRegistryTests
     {
         var server = FakeServer();
         var logger = Substitute.For<ILogger<LspClientRegistry>>();
+        await using var capture = new HexIDE.Conversations.ConversationLog();
         await using var registry = new LspClientRegistry([Registration("server", server)], logger);
         await registry.OpenDocumentAsync(Vb6Doc, "code", TestContext.Current.CancellationToken);
         logger.ClearReceivedCalls();
@@ -658,6 +753,19 @@ public class LspClientRegistryTests
             _fire = null;
             fire?.Invoke();
         }
+    }
+
+    [Fact]
+    public async Task SignatureTriggersComeOnlyFromStartedClaimantsAndAreDistinct()
+    {
+        var first = FakeServer(capabilitiesJson: """{"signatureHelpProvider":{"triggerCharacters":[":","("]}}""");
+        var second = FakeServer(capabilitiesJson: """{"signatureHelpProvider":{"triggerCharacters":[":",","]}}""");
+        var unrelated = FakeServer(capabilitiesJson: """{"signatureHelpProvider":{"triggerCharacters":["!"]}}""");
+        await using var sut = Registry(Registration("first", first), Registration("second", second),
+            Registration("unrelated", unrelated, language: "markdown"));
+        ((ILspClient)sut).SignatureHelpTriggerCharacters(Vb6Doc).Should().BeEmpty();
+        await sut.OpenDocumentAsync(Vb6Doc, "code", TestContext.Current.CancellationToken);
+        ((ILspClient)sut).SignatureHelpTriggerCharacters(Vb6Doc).Should().Equal(":", "(", ",");
     }
 
     [Fact]

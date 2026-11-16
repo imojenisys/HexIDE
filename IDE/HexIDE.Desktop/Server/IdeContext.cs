@@ -9,6 +9,7 @@ namespace HexIDE.Desktop.Server;
 
 internal sealed class IdeContext : IDisposable
 {
+    public ArchiveProjectService? Archives { get; }
     public IProjectManager ProjectManager { get; }
     public IDocumentDockService DocumentDockService { get; }
     public ILspClient LspClient { get; }
@@ -38,6 +39,13 @@ internal sealed class IdeContext : IDisposable
     /// <summary>The session's pseudonym mapping, so every export names a path the same way.</summary>
     public HexIDE.Redaction.Pseudonymiser Pseudonyms { get; }
 
+    /// <summary>The project file format, for a tool that has to know a document's companion file.</summary>
+    public IProjectFileFormat ProjectFileFormat { get; }
+
+    /// <summary>The reader of a document's read-only regions, including when its code window is closed.</summary>
+    public HexIDE.Language.IReadOnlyRegionReader ReadOnlyRegionReader { get; }
+    public HexIDE.Language.IReadOnlyRegionRules? ReadOnlyRegionRules { get; }
+
     public IdeContext(
         IProjectManager projectManager,
         IDocumentDockService documentDockService,
@@ -57,8 +65,13 @@ internal sealed class IdeContext : IDisposable
         HexIDE.Conversations.ConversationLog capture,
         HexIDE.Redaction.Pseudonymiser pseudonyms,
         HexIDE.Localization.ILocalizationService localization,
-        ISettingsService settings)
+        ISettingsService settings,
+        IProjectFileFormat projectFileFormat,
+        HexIDE.Language.IReadOnlyRegionReader readOnlyRegionReader,
+        HexIDE.Language.IReadOnlyRegionRules? readOnlyRegionRules = null,
+        ArchiveProjectService? archives = null)
     {
+        Archives = archives;
         ProjectManager = projectManager;
         DocumentDockService = documentDockService;
         LspClient = lspClient;
@@ -79,6 +92,9 @@ internal sealed class IdeContext : IDisposable
         Pseudonyms = pseudonyms;
         Localization = localization;
         Settings = settings;
+        ProjectFileFormat = projectFileFormat;
+        ReadOnlyRegionReader = readOnlyRegionReader;
+        ReadOnlyRegionRules = readOnlyRegionRules;
     }
 
     public void Dispose() => Diagnostics.Dispose();

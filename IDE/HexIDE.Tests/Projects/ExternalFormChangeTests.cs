@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.IO;
 using System.Linq;
@@ -66,7 +67,7 @@ public class ExternalFormChangeTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
+        return new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
             () => throw new InvalidOperationException("new-project dialog must not be reached"),
             Substitute.For<IWindowManager>(),
             events,
@@ -76,7 +77,8 @@ public class ExternalFormChangeTests : IDisposable
             sidecar,
             baselines,
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(),
+            new Vb6ProjectFileFormat(), new ComponentRegistry());
     }
 
     /// <summary>
@@ -118,7 +120,9 @@ public class ExternalFormChangeTests : IDisposable
         Substitute.For<IStatusBarService>(), Substitute.For<HexIDE.Bookmarks.IBookmarkService>(),
         Substitute.For<HexIDE.Debugging.IBreakpointService>(),
         Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-        Substitute.For<HexIDE.Debugging.IRunScope>(), Substitute.For<HexIDE.Localization.ILocalizationService>());
+        Substitute.For<HexIDE.Debugging.IRunScope>(), Substitute.For<HexIDE.Localization.ILocalizationService>(),
+            new Vb6ProjectFileFormat(),
+            new Vb6ReadOnlyRegionReader());
 
     // #2862: applying the buffer to the model is not a save.
     [AvaloniaFact]
@@ -133,7 +137,7 @@ public class ExternalFormChangeTests : IDisposable
         var path = Path.Join(dir, "Module1.bas");
         File.AppendAllText(path, "' external\r\n");
         var target = new WatchedFileTarget(path, null, module, editor, null);
-        var detector = new DirtyDetector(baselines, svc);
+        var detector = new DirtyDetector(baselines, svc, new Vb6ProjectFileFormat());
         detector.Classify(target).Should().Be(ReloadDecision.Conflict);
 
         await svc.SaveProject(loaded.Single(), saveAs: false);
@@ -152,7 +156,7 @@ public class ExternalFormChangeTests : IDisposable
         form.Code.Should().Contain("' edited");
         File.AppendAllText(path, "' external\r\n");
         var target = new WatchedFileTarget(path, form, null, editor, null);
-        var detector = new DirtyDetector(baselines, svc);
+        var detector = new DirtyDetector(baselines, svc, new Vb6ProjectFileFormat());
         detector.Classify(target).Should().Be(ReloadDecision.Conflict);
 
         await svc.SaveProject(loaded.Single(), saveAs: false);

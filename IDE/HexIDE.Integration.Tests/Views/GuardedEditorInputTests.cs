@@ -87,7 +87,9 @@ public class GuardedEditorInputTests : IDisposable
             windowManager ?? Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
             eventBus, lsp, settings, Substitute.For<IStatusBarService>(), Substitute.For<IBookmarkService>(),
             Substitute.For<IBreakpointService>(), Substitute.For<IDebugController>(), new RunScope(),
-            localization ?? Substitute.For<ILocalizationService>());
+            localization ?? Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader(), regionRules: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionRules());
         made.Add(vm);
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var form = new FormDeserializer().Deserialize(project, Frm, NullSink.Instance)!;
@@ -329,7 +331,10 @@ public class GuardedEditorInputTests : IDisposable
         var before = vm.Document.Text;
         editor.TextArea.Caret.Offset = before.IndexOf("Option Explicit", StringComparison.Ordinal);
 
-        UiAutomationDriver.PressKey(editor, "Back", null).Success.Should().BeFalse();
+        var outcome = UiAutomationDriver.PressKey(editor, "Back", null);
+        outcome.Success.Should().BeFalse();
+        outcome.Error.Should().Contain("Edit after that read-only text instead.")
+            .And.NotContain("Deleting the whole");
 
         vm.Document.Text.Should().Be(before);
     }

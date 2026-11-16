@@ -119,7 +119,7 @@ public class CarriedBoxStackingTests
         var form = new FormDeserializer().Deserialize(project, source, new NullSink())!;
         project.AddForm(form);
         var vm = new FormEditViewModel(null!, Substitute.For<IEventBus>(), Substitute.For<IProjectService>(), null!, null!,
-            Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>()).Initialize(form);
+            Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat()).Initialize(form);
         var view = new FormEditView { DataContext = vm };
         var window = new Window { Width = 800, Height = 600, Content = view };
         window.Show();
@@ -149,6 +149,26 @@ public class CarriedBoxStackingTests
     {
         var hit = d.Window.InputHitTest(visual.TranslatePoint(inside, d.Window)!.Value) as Visual;
         return hit == visual || hit?.GetVisualAncestors().Contains(visual) == true;
+    }
+
+    [AvaloniaTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Routed_z_order_command_moves_the_selected_control(bool toFront)
+    {
+        var d = Open();
+        try
+        {
+            var component = d.Vm.AllComponents.Single(c => c.Name == "Command2");
+            if (!toFront)
+                d.Vm.BringToFront(component);
+            d.Vm.SelectedComponent = component;
+            var command = toFront ? ApplicationCommands.BringToFrontCommand : ApplicationCommands.SendToBackCommand;
+            command.Execute(null, d.View);
+            Render();
+            Topmost(d, Item(d, "Command2"), new Point(20, 10)).Should().Be(toFront);
+        }
+        finally { d.Window.Close(); }
     }
 
     [AvaloniaFact]

@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.IO;
 using Avalonia.Platform.Storage;
 using HexIDE.Bookmarks;
@@ -63,16 +64,106 @@ public sealed class UserFileWriteFailureTests : IDisposable
     }
 
     [Theory]
+    [InlineData("Form1.frm", MessageBoxResult.Yes)]
+    [InlineData("Form1.frm", MessageBoxResult.No)]
+    [InlineData("Form1.frm", MessageBoxResult.Cancel)]
+    [InlineData("Form1.frx", MessageBoxResult.Yes)]
+    [InlineData("Form1.frx", MessageBoxResult.No)]
+    [InlineData("Form1.frx", MessageBoxResult.Cancel)]
+    [InlineData("Module1.bas", MessageBoxResult.Yes)]
+    [InlineData("Module1.bas", MessageBoxResult.No)]
+    [InlineData("Module1.bas", MessageBoxResult.Cancel)]
+    [InlineData("Project1.vbp", MessageBoxResult.Yes)]
+    [InlineData("Project1.vbp", MessageBoxResult.No)]
+    [InlineData("Project1.vbp", MessageBoxResult.Cancel)]
+    [InlineData("UserControl1.ctx", MessageBoxResult.Yes)]
+    [InlineData("UserControl1.ctx", MessageBoxResult.No)]
+    [InlineData("UserControl1.ctx", MessageBoxResult.Cancel)]
+    [InlineData("PropertyPage1.pgx", MessageBoxResult.Yes)]
+    [InlineData("PropertyPage1.pgx", MessageBoxResult.No)]
+    [InlineData("PropertyPage1.pgx", MessageBoxResult.Cancel)]
+    [InlineData("all", MessageBoxResult.Yes)]
+    [InlineData("all", MessageBoxResult.No)]
+    [InlineData("all", MessageBoxResult.Cancel)]
+    [InlineData("cleared picture", MessageBoxResult.Yes)]
+    [InlineData("cleared picture", MessageBoxResult.No)]
+    [InlineData("cleared picture", MessageBoxResult.Cancel)]
+    public async Task DirectorySaveAsksBeforeReplacingAnyOutput(string name, MessageBoxResult answer)
+    {
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString("Str.Tool.ProtocolInspector.ReplaceFiles").Returns("Replace these existing files?\n{0}");
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
+            Substitute.For<IEventBus>(), Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
+            Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
+            localization, Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
+        var project = new ProjectDefinition(VBProjectType.EXE, "Project1");
+        var form = await service.AddNewForm(project, "Form1", interactive: false);
+        form.Components[0].SetProperty(VBProperties.IconProperty, new byte[] { 1, 2, 3, 4 });
+        var module = await service.AddNewModule(project, "Module1", ModuleKind.StandardModule, interactive: false);
+        if (name is "UserControl1.ctx" or "PropertyPage1.pgx")
+        {
+            var designer = name == "UserControl1.ctx"
+                ? await service.AddNewUserControl(project, "UserControl1", interactive: false)
+                : await service.AddNewPropertyPage(project, "PropertyPage1", interactive: false);
+            var image = new ComponentInstance(ImageComponentClass.Instance, "Image1");
+            image.SetProperty(VBProperties.PictureProperty, new byte[] { 1, 2, 3, 4 });
+            designer.FormPart!.UpdateComponents([.. designer.FormPart.Components, image]);
+        }
+        var deletesCompanion = name == "cleared picture";
+        if (deletesCompanion)
+        {
+            form.RecordCitedCompanionBlobCount(1);
+            form.Components[0].SetProperty(VBProperties.IconProperty, null);
+        }
+        string[] existing = name == "all" ? ["Form1.frm", "Form1.frx", "Module1.bas", "Project1.vbp"]
+            : [deletesCompanion ? "Form1.frx" : name];
+        foreach (var file in existing)
+            File.WriteAllText(Target(file), "user data");
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning)
+            .Returns(answer);
+
+        Func<Task> save = () => service.SaveProjectToDirectory(project, root);
+        if (answer == MessageBoxResult.Yes)
+        {
+            await save();
+            foreach (var file in existing)
+            {
+                if (deletesCompanion)
+                    File.Exists(Target(file)).Should().BeFalse();
+                else
+                    File.ReadAllText(Target(file)).Should().NotBe("user data");
+            }
+            File.Exists(Target("Form1.frm")).Should().BeTrue();
+            File.Exists(Target("Module1.bas")).Should().BeTrue();
+            File.Exists(Target("Project1.vbp")).Should().BeTrue();
+        }
+        else
+        {
+            await save.Should().ThrowAsync<OperationCanceledException>();
+            foreach (var file in existing)
+                File.ReadAllText(Target(file)).Should().Be("user data");
+            Directory.GetFiles(root).Should().BeEquivalentTo(existing.Select(Target));
+            form.AbsolutePath.Should().BeNull();
+            module.AbsolutePath.Should().BeNull();
+            project.AbsolutePath.Should().BeNull();
+        }
+        await windows.Received(1).MessageBox("Replace these existing files?\n" + string.Join(Environment.NewLine, existing.Select(Target)),
+            buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning);
+    }
+
+    [Theory]
     [InlineData("Form1.frm")]
     [InlineData("Form1.frx")]
     [InlineData("Module1.bas")]
     [InlineData("Project1.vbp")]
     public async Task ProjectSavePreservesEachTargetOnPartialWrite(string name)
     {
-        var service = new ProjectService(() => throw new InvalidOperationException(), windows,
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning)
+            .Returns(MessageBoxResult.Yes);
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
-            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>());
+            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
         var project = new ProjectDefinition(VBProjectType.EXE, "Project1");
         var form = await service.AddNewForm(project, "Form1", interactive: false);
         form.Components[0].SetProperty(VBProperties.IconProperty, new byte[] { 1, 2, 3, 4 });
@@ -95,10 +186,10 @@ public sealed class UserFileWriteFailureTests : IDisposable
     [InlineData("Project1.vbp")]
     public async Task PackageConversionPreservesEachTargetOnPartialWrite(string name)
     {
-        var service = new ProjectService(() => throw new InvalidOperationException(), windows,
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
-            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>());
+            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
         var project = new ProjectDefinition(VBProjectType.EXE, "Project1");
         await service.AddNewForm(project, "Form1", interactive: false);
         await service.AddNewModule(project, "Module1", ModuleKind.StandardModule, interactive: false);
@@ -119,10 +210,10 @@ public sealed class UserFileWriteFailureTests : IDisposable
         var manager = Substitute.For<IProjectManager>();
         manager.LoadedProjects.Returns(Array.Empty<ProjectDefinition>());
         manager.CurrentGroup.Returns(group);
-        var service = new ProjectService(() => throw new InvalidOperationException(), windows,
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), manager, Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
-            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>());
+            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
         Fail(target);
 
         Func<Task> save = () => service.SaveAllProjects(saveAs: false);
@@ -139,10 +230,10 @@ public sealed class UserFileWriteFailureTests : IDisposable
         Fail(target);
         windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning)
             .Returns(MessageBoxResult.Yes);
-        var service = new ProjectService(() => throw new InvalidOperationException(), windows,
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
-            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>());
+            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
         service.RuntimeDirectory = root;
         Directory.CreateDirectory(Target("standalone"));
         File.WriteAllText(Path.Combine(Target("standalone"), ProjectService.StandaloneRunnerName()!), "runner");
@@ -161,10 +252,10 @@ public sealed class UserFileWriteFailureTests : IDisposable
     {
         var localization = Substitute.For<ILocalizationService>();
         localization.GetString("Str.Tool.ProtocolInspector.ReplaceFiles").Returns("Replace these existing files?\n{0}");
-        var service = new ProjectService(() => throw new InvalidOperationException(), windows,
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
-            localization, Substitute.For<IHeaderRefresher>());
+            localization, Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
         service.RuntimeDirectory = root;
         Directory.CreateDirectory(Target("standalone"));
         File.WriteAllText(Path.Combine(Target("standalone"), ProjectService.StandaloneRunnerName()!), "runner");
@@ -195,10 +286,10 @@ public sealed class UserFileWriteFailureTests : IDisposable
     [Fact]
     public async Task MakeWritesAReadableArchiveAndPreservesRunnerPermissions()
     {
-        var service = new ProjectService(() => throw new InvalidOperationException(), windows,
+        var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
-            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>());
+            Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
         service.RuntimeDirectory = root;
         Directory.CreateDirectory(Target("standalone"));
         var runner = Path.Combine(Target("standalone"), ProjectService.StandaloneRunnerName()!);
@@ -224,7 +315,7 @@ public sealed class UserFileWriteFailureTests : IDisposable
         // The framed one-byte payload accepted by the resource exporter.
         byte[] record = [9, 0, 0, 0, 0x6c, 0x74, 0, 0, 1, 0, 0, 0, 42];
         var owner = new PropertiesToolViewModel(Substitute.For<IDocumentDockService>(), Substitute.For<IEventBus>(),
-            windows, Substitute.For<ILocalizationService>());
+            windows, Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat());
         var row = new PropertyViewModel(owner, VBProperties.PictureProperty, record);
         await row.ExportPictureCommand.ExecuteAsync(null);
         Preserved(target);
@@ -269,7 +360,7 @@ public sealed class UserFileWriteFailureTests : IDisposable
         using var context = new HexIDE.Desktop.Server.IdeContext(Substitute.For<IProjectManager>(),
             Substitute.For<IDocumentDockService>(), Substitute.For<HexIDE.Lsp.ILspClient>(), null!,
             Substitute.For<IProjectRunnerService>(), null!, null!, null!, null!, null!, null!, null!, null!,
-            null!, null!, capture, new Pseudonymiser(), null!, null!);
+            null!, null!, capture, new Pseudonymiser(), null!, null!, new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader());
         var tools = new HexIDE.Desktop.Server.HexIdeTools(context) { ConversationExportDirectory = root };
         Func<Task> export = () => tools.ExportLspConversationAsync(ct: TestContext.Current.CancellationToken);
         await export.Should().ThrowAsync<IOException>();
@@ -287,7 +378,9 @@ public sealed class UserFileWriteFailureTests : IDisposable
         var target = Target("P.user.hexproj");
         File.WriteAllText(target, "{\"version\":4}");
         var bookmarks = new BookmarkService();
-        var service = new UserSidecarService(bookmarks, new BreakpointService(), Substitute.For<IProjectManager>());
+        var service = new UserSidecarService(bookmarks, new BreakpointService(), Substitute.For<IProjectManager>(),
+            new Vb6ProjectFileFormat(),
+            new Vb6ReadOnlyRegionReader());
         await service.LoadAsync(project);
         bookmarks.SetBookmarks(DocumentIdentity.For(project.Forms[0]), [1]);
         var original = File.ReadAllBytes(target);

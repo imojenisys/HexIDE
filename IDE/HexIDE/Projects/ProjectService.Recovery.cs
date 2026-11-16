@@ -18,9 +18,7 @@ public partial class ProjectService
     /// <inheritdoc/>
     public bool ApplyRecovered(FormDefinition form, UnsavedFile content)
     {
-        var blobs = content.Companion is { Length: > 0 } companion ? FrxDeserializer.Read(companion, content.Text) : null;
-        var fresh = new FormDeserializer().Deserialize(form.Owner, content.Text, new DeserializeErrorSink(localization),
-            blobs, BuildUserControlRegistry(form.Owner));
+        var fresh = FormFormatOf(form.Owner).ReadForm(form.Owner, content.Text, CompanionOf(content), new DeserializeErrorSink(localization));
         if (fresh is null)
             return false;
         form.UpdateCode(fresh.Code);
@@ -34,8 +32,7 @@ public partial class ProjectService
     {
         if (module.Kind is ModuleKind.UserControl or ModuleKind.PropertyPage)
         {
-            var blobs = content.Companion is { Length: > 0 } companion ? FrxDeserializer.Read(companion, content.Text) : null;
-            var fresh = new FormDeserializer().Deserialize(module.Owner, content.Text, new DeserializeErrorSink(localization), blobs);
+            var fresh = FormFormatOf(module.Owner).ReadDesignerPart(module.Owner, content.Text, CompanionOf(content), new DeserializeErrorSink(localization));
             if (fresh is null)
                 return false;
             module.UpdateCode(fresh.Code);
@@ -54,34 +51,43 @@ public partial class ProjectService
             return true;
         }
 
-        var (header, body) = ModuleFileFormat.SplitHeader(content.Text, module.Kind);
+        var (header, body) = format.SplitModule(content.Text, module.Kind);
         module.RecordOriginalHeader(header);
         module.UpdateCode(body);
         return true;
     }
 
     /// <inheritdoc/>
-    public bool RecoveredMatches(FormDefinition form, UnsavedFile content) =>
-        string.Equals(RenderForm(form, content.FileName).Text, content.Text, StringComparison.Ordinal);
+    public bool RecoveredMatches(FormDefinition form, UnsavedFile content) => RendersAs(() => RenderForm(form, content.FileName), content);
 
     /// <inheritdoc/>
-    public bool RecoveredMatches(ModuleDefinition module, UnsavedFile content) =>
-        string.Equals(RenderModule(module, content.FileName).Text, content.Text, StringComparison.Ordinal);
+    public bool RecoveredMatches(ModuleDefinition module, UnsavedFile content) => RendersAs(() => RenderModule(module, content.FileName), content);
+
+    // An add-in's format that can't render the document can't say it matches, so the copy is offered.
+    private static bool RendersAs(Func<RenderedFile> render, UnsavedFile content)
+    {
+        try
+        {
+            return string.Equals(render().Text, content.Text, StringComparison.Ordinal);
+        }
+        catch (RenderRefusal)
+        {
+            return false;
+        }
+    }
 
     /// <inheritdoc/>
     public object? AddRecovered(ProjectDefinition project, UnsavedDocument document)
     {
-        // Not into a contributed project: a member its add-in no longer lists is not HexIDE's to add back.
-        if (project.ContributedBy is not null)
+        // Not where the type doesn't offer it: a member its add-in no longer lists is not HexIDE's to add back.
+        if (!project.Offers.ChangesMembership)
             return null;
         if (document.Content is not { } content || CheckAdoptedName(project, document.Name) != AdoptionRefusal.None)
             return null;
 
         if (document.Kind == "Form")
         {
-            var blobs = content.Companion is { Length: > 0 } companion ? FrxDeserializer.Read(companion, content.Text) : null;
-            var form = new FormDeserializer().Deserialize(project, content.Text, new DeserializeErrorSink(localization),
-                blobs, BuildUserControlRegistry(project));
+            var form = FormFormatOf(project).ReadForm(project, content.Text, CompanionOf(content), new DeserializeErrorSink(localization));
             if (form is null)
                 return null;
             form.TextEncoding = document.Encoding;
@@ -154,15 +160,11 @@ public partial class ProjectService
             }
 
             var errorSink = new DeserializeErrorSink(localization);
-            var (project, _, _, _) = await new ProjectLoader
+            var (project, _, _, _) = await format.ReadProjectAsync(renderedAt, HostAnsi, (path, bytes) =>
             {
-                HostAnsi = HostAnsi,
-                FileRead = (path, bytes) =>
-                {
-                    if (!put.Contains(Path.GetFullPath(path)))
-                        baselineStore.Record(path, bytes);
-                },
-            }.LoadAsync(renderedAt, errorSink);
+                if (!put.Contains(Path.GetFullPath(path)))
+                    baselineStore.Record(path, bytes);
+            }, errorSink);
 
             project.AbsolutePath = null;
             project.ItemLinesDirectory = null;
@@ -223,6 +225,8 @@ public partial class ProjectService
             put.Add(Path.GetFullPath(path));
         }
     }
+
+    private static byte[]? CompanionOf(UnsavedFile content) => content.Companion is { Length: > 0 } companion ? companion : null;
 
     private static bool Same(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 

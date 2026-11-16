@@ -29,6 +29,14 @@ public class TestApp : Application
         Console.Error.WriteLine("1085 probe: theme end");
         Styles.Add(new Dock.Avalonia.Themes.Simple.DockSimpleTheme());
         Console.Error.WriteLine("1085 probe: dock theme end");
+        Styles.Add(new StyleInclude(new Uri("avares://HexIDE/"))
+        {
+            Source = new Uri("avares://HexIDE/Themes/ToolChrome.axaml"),
+        });
+        Styles.Add(new StyleInclude(new Uri("avares://HexIDE/"))
+        {
+            Source = new Uri("avares://HexIDE/Themes/DragPreview.axaml"),
+        });
         Styles.Add(new StyleInclude(new Uri("avares://HexIDE.Integration.Tests/"))
         {
             Source = new Uri("avares://Avalonia.Controls.DataGrid/Themes/Simple.xaml"),
@@ -44,6 +52,14 @@ public class TestApp : Application
         {
             Source = new Uri("avares://AvaloniaEdit/Themes/Simple/AvaloniaEdit.xaml"),
         }) ; Console.Error.WriteLine("1085 probe: resource 2");
+        Styles.Add(new StyleInclude(new Uri("avares://HexIDE.Integration.Tests/"))
+        {
+            Source = new Uri("avares://HexIDE/Themes/EditorLinks.axaml"),
+        });
+        Styles.Add(new StyleInclude(new Uri("avares://HexIDE/"))
+        {
+            Source = new Uri("avares://HexIDE/Themes/TabSelection.axaml"),
+        });
         // As App.axaml does: code reads left to right under a right-to-left language (#1944).
         Styles.Add(new StyleInclude(new Uri("avares://HexIDE.Integration.Tests/"))
         {

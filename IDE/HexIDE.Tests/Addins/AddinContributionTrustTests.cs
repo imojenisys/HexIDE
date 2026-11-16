@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.Text.Json;
 using Avalonia.Headless.XUnit;
 using HexIDE.Addins;
@@ -46,6 +47,8 @@ public sealed class AddinContributionTrustTests : IAsyncDisposable
     private readonly IWindowManager _windows = Substitute.For<IWindowManager>();
     private readonly List<string> _failures = [];
     private readonly List<string> _interpreterStarts = [];
+    // F5 that falls back to the run engine reaches this stand-in, which fails its start and says so.
+    private readonly StandInRunEngine _engine = new() { StartFailure = new RunFailure("No startup form", null) };
     private int _configurations;
     private int _opens;
 
@@ -80,7 +83,7 @@ public sealed class AddinContributionTrustTests : IAsyncDisposable
         _debugger.Failed += _failures.Add;
         _launches = new DebugLaunchService(_debugger);
         _projects.StartupProject.Returns(_project);
-        _runner = new ProjectRunnerService(Substitute.For<IEventBus>(), Substitute.For<IWindowManager>(), _projects, localization,
+        _runner = TestRunners.WithEngine(_engine, Substitute.For<IEventBus>(), _projects, localization,
             Substitute.For<IDebugController>(), Substitute.For<IBreakpointService>(), new WatchService(), new RunScope(), _debugger,
             debugLaunches: _launches, runChoices: _choices, statusBar: Substitute.For<IStatusBarService>());
         // The test project has no startup form, so F5 that goes to the interpreter fails at once and says so.
@@ -90,7 +93,9 @@ public sealed class AddinContributionTrustTests : IAsyncDisposable
         _events = new AddinEventService(_projects, runner, new EventBus());
         _diagnostics = new AddinDiagnosticsService(_router, _projects);
         _host = new HexIdeHost(new AddinMenuService(), new AddinToolWindowService(), _events, _registry,
-            new AddinEditorService(Substitute.For<IDocumentDockService>(), Substitute.For<IEditorService>(), _projects),
+            new AddinEditorService(Substitute.For<IDocumentDockService>(), Substitute.For<IEditorService>(), _projects,
+                format: new Vb6ProjectFileFormat(),
+                reader: new Vb6ReadOnlyRegionReader()),
             new AddinProjectService(_projects), _diagnostics, new AddinCommandService(), new AddinProjectTemplateService(),
             new AddinOptionsService(), new ComponentRegistry(), runner,
             new LanguageServerContributions(_router, new LanguageServerRegistrationFactory(NullLoggerFactory.Instance),
@@ -173,7 +178,7 @@ public sealed class AddinContributionTrustTests : IAsyncDisposable
     public void F5_s_state_keeps_and_watches_nothing_once_the_add_in_s_launch_or_the_project_is_gone(string how)
     {
         // F5's state asks the launch only for a project an add-in read.
-        var contributed = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = "RDCore projects" };
+        var contributed = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = "RDCore projects", Offers = ProjectOffers.Nothing };
         contributed.AddModule(new ModuleDefinition(contributed, "Startup", ModuleKind.StandardModule));
         _projects.StartupProject.Returns(contributed);
         using var registration = _host.RegisterDebugLaunch(new AddinDebugLaunch("Probe")
@@ -280,10 +285,11 @@ public sealed class AddinContributionTrustTests : IAsyncDisposable
         var dock = Substitute.For<IDocumentDockService>();
         dock.OpenDocuments.Returns(new List<HexIDE.Forms.ViewModels.BaseEditorWindowViewModel>());
         _projects.LoadedProjects.Returns([]);
-        return new ProjectService(() => throw new InvalidOperationException("no new-project dialog"), _windows,
+        return new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException("no new-project dialog"), _windows,
             Substitute.For<IEventBus>(), _projects, Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), sidecar, new FileBaselineStore(), strings,
-            new HeaderRefresher(new EventBus(), dock, new BreakpointService(), new BookmarkService()),
+            new HeaderRefresher(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), new EventBus(), dock, new BreakpointService(), new BookmarkService(), new Vb6ProjectFileFormat()),
+            new Vb6ProjectFileFormat(), new ComponentRegistry(),
             contributed: _types);
     }
 }

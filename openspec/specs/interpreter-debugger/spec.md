@@ -5,6 +5,8 @@ Define the VB6-style step-through debugging experience over HexIDE's in-box tree
 breakpoints, break mode, stepping, and the inspection windows a VB6 developer expects to find behind
 F5, F8 and F9.
 
+**Known divergence:** Edit Watch has no default key, where the scenarios below bind Ctrl+W (#3430).
+
 The debugger is deliberately built on the interpreter rather than deferred to an external compiled-execution
 backend, because the interpreter is a permanent part of HexIDE and a developer who cannot stop a program on a
 line cannot evaluate the IDE at all. Its limits follow from that choice and are stated as behaviour, not
@@ -12,6 +14,20 @@ hidden: execution is a live host call stack rather than a re-pointable program c
 prompt for a reset and the execution point moves only between top-level statements of the paused procedure.
 
 ## Requirements
+
+### Requirement: Failed breakpoint conditions explain the stop
+
+The interpreter SHALL pause when a breakpoint condition cannot be evaluated. The stop SHALL retain
+the expression and evaluation error as breakpoint details. The IDE SHALL show the expression, module,
+line and error in its localized status bar while paused. Run-control replies and debug-state inspection
+SHALL explain the failed condition and its line; the evaluation error SHALL NOT enter program output.
+
+#### Scenario: A condition cannot be parsed or resolved in the executing frame
+- **WHEN** evaluating a breakpoint condition returns an error or throws
+- **THEN** execution pauses before the statement with the failed expression and error attached
+- **AND** the run or step note and debug-state note explain the failed evaluation
+- **AND** only program output appears in `printed`
+- **AND** resuming or ending the run clears the paused failure detail
 
 ### Requirement: Breakpoints SHALL be toggleable from every VB6-familiar entry point
 The IDE SHALL let the developer toggle a breakpoint from the keyboard, the Debug menu, and the breakpoint gutter, and SHALL clear every breakpoint on request.
@@ -58,7 +74,7 @@ A form's run loads its code and the project's standard (`.bas`) and class (`.cls
 ### Requirement: The developer SHALL be able to suspend and resume a running program
 The IDE SHALL let the developer break into a running program, continue from break mode, and end the run from either state.
 
-Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` statement, and left by continuing or ending the run.
+Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` statement, and left by continuing, ending the run, or a step returning from the outermost event handler without another stop.
 
 #### Scenario: Breaking into a running program
 - **WHEN** the developer presses Ctrl+Break, or chooses Run ▸ Break, while the project is running
@@ -73,6 +89,12 @@ Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` 
 #### Scenario: Continuing from break mode
 - **WHEN** the developer presses F5 while paused
 - **THEN** the program resumes, the current-statement bar clears, the inspection windows blank, and any frozen event handlers are released
+
+#### Scenario: A step returns to event idle
+- **WHEN** Step Into, Over or Out returns from the outermost event handler without another stop
+- **THEN** the pending step clears and the shell shows running mode
+- **AND** the current-statement bar clears, inspection windows blank, and frozen event handlers are released
+- **AND** Break is available again and the next unrelated event runs without the leftover step
 
 #### Scenario: Ending the run from break mode
 - **WHEN** the developer chooses End while paused
@@ -237,6 +259,34 @@ The debug keymap is the deepest layer of VB6 muscle memory and is bound by defau
 - **WHEN** the developer uses the default keymap
 - **THEN** F5 starts or continues, Shift+F5 restarts, Ctrl+Break breaks, F8 steps into, Shift+F8 steps over, Ctrl+Shift+F8 steps out, Ctrl+F8 runs to cursor, F9 toggles a breakpoint, Ctrl+Shift+F9 clears all breakpoints, Ctrl+F9 sets the next statement, Shift+F9 opens Quick Watch, Ctrl+W edits a watch, Ctrl+G opens the Immediate window, and Ctrl+L opens the Call Stack
 
+### Requirement: Debug command enablement follows the handler guards
+The shared routed Debug commands SHALL follow their handler guards: Toggle Breakpoint and Run To Cursor require a code window; Edit Watch requires a selected watch. Without an active external debugger, Set Next Statement SHALL require a code window and a current interpreter stop, and Show Next Statement SHALL require a current stop. Both commands SHALL retain their existing enablement during an active external debugger session.
+
+#### Scenario: Changing the active document
+- **WHEN** the active document changes between a code window and another document or no document
+- **THEN** Toggle Breakpoint, Run To Cursor and Set Next Statement refresh their enablement
+
+#### Scenario: Setting the next statement in design mode
+- **WHEN** a code window is active without a paused interpreter or an active external debugger
+- **THEN** Set Next Statement is disabled
+
+#### Scenario: Entering or leaving a debugger stop
+- **WHEN** the debug controller raises Stopped or Continued (including reset)
+- **THEN** Set Next Statement and Show Next Statement refresh their enablement from the current stop
+
+#### Scenario: Changing watch selection without changing focus
+- **WHEN** a watch row is selected or selection is cleared, including when the rows are rebuilt
+- **THEN** Edit Watch refreshes its enablement without requiring a focus change
+
+### Requirement: Set Next Statement is scoped to the running project
+The interpreter's Set Next Statement menu handler SHALL refuse a document outside the running project,
+or a request with no running project, before passing its module name to the debug controller. Refusal
+SHALL display the localized Set Next Statement refusal message.
+
+#### Scenario: Another project's same-named module
+- **WHEN** the interpreter is paused and the active code window belongs to another project with the same module name
+- **THEN** Set Next Statement refuses the move and leaves the execution point unchanged
+
 ### Requirement: The debugger SHALL be drivable by automation
 The debugger SHALL expose an automation surface mirroring the IDE debug commands.
 
@@ -287,6 +337,10 @@ Watches persist an expression across breaks, so the developer does not re-type i
 - **AND** a procedure-scoped watch SHALL read that procedure's frame anywhere on the call stack
 - **AND** an undefined module-scoped name SHALL display `<Expression not defined in context>` with type `Empty`
 - **AND** a procedure that has returned SHALL display `<Out of context>` with type `Empty`
+
+#### Scenario: Inactive watch types
+- **WHEN** an interpreter watch is displayed at design time or after End
+- **THEN** its Type column SHALL show `Empty`
 
 #### Scenario: Selecting an expanded watch child
 - **WHEN** the developer selects a child of an expanded watch after selecting another watch

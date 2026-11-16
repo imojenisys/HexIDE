@@ -18,7 +18,7 @@ The text is content in the same sense. VB6 source declares no encoding: it is in
 machine that wrote it. So the IDE keeps each source file of a project in the encoding it was read in, and
 refuses an edit that encoding cannot hold rather than converting the file. A file in a code page this machine
 cannot read is still loaded, byte for byte, rather than dropped from the project. A file the project only
-carries is not held to this yet ([#745](https://github.com/hexide-io/HexIDE/issues/745)).
+carries is read as UTF-8 or, where that fails, as Latin-1, and is saved in the encoding it was read in.
 
 > **Known divergence — narrower than this note once said.** The requirements below state the intended
 > contract. It once read that no file of VB6's own shipped samples survived a save byte-identically, and that
@@ -48,7 +48,91 @@ carries is not held to this yet ([#745](https://github.com/hexide-io/HexIDE/issu
 > fallen to none, each form leaving only by round-tripping, the last of them when content cited by a control
 > the IDE does not model began to be carried ([#60](https://github.com/hexide-io/HexIDE/issues/60)).
 
+The module-name collection and save order follows [measurement #3777](../../../docs/vb6-fidelity-oracle/a-modules-name-line-below-the-top-of-its-file.md).
+
 ## Requirements
+
+### Requirement: Project groups retain membership and order
+The reader SHALL treat `StartupProject=` as a member in file order and select it as startup.
+It SHALL consume both `VBGROUP 5.0` and `VBGROUP 5.00` as headers and retain other unknown lines as before.
+See the [VB6 measurements](../../../docs/vb6-fidelity-oracle/a-project-groups-file-as-vb6-writes-it.md).
+
+#### Scenario: Startup is the second member
+- **GIVEN** `Project=A\A.vbp` followed by `StartupProject=B\B.vbp`
+- **WHEN** the group is opened
+- **THEN** it contains A followed by B, with B as startup
+
+#### Scenario: An older HexIDE group lists startup twice
+- **GIVEN** `StartupProject=B\B.vbp`, `Project=A\A.vbp`, and `Project=B\B.vbp`
+- **WHEN** the group is opened
+- **THEN** it loads A followed by B once each, with B as startup, retaining the `Project=` positions
+
+### Requirement: Project groups write the measured VB6 format
+With a startup project, the writer SHALL emit `VBGROUP 5.0` and each project in group order, using
+`StartupProject=` for startup and `Project=` for every other member, with CR LF line endings.
+Groups without startup SHALL retain their prior output pending measurement.
+
+#### Scenario: Saving a group whose startup is second
+- **GIVEN** projects A and B in order, with B as startup
+- **WHEN** the group is saved
+- **THEN** it writes only `Project=A\A.vbp` followed by `StartupProject=B\B.vbp` after the header
+- **AND** any unknown lines follow as before
+
+### Requirement: A loaded module takes its name from its file
+A loaded `.bas` or `.cls` SHALL take its name from its header's `Attribute VB_Name`, falling back to
+its `.vbp` line when no name is present. Loading SHALL show no warning or dialog for a mismatch.
+Save Project SHALL write the loaded name into the `.vbp` and preserve it in the module file.
+Collisions with another project member remain unmeasured; HexIDE SHALL retain the `.vbp` name for that module.
+
+#### Scenario: The file and project line disagree
+- **GIVEN** `Module=WName; Odd.bas` and a file with `Attribute VB_Name = "QName"`
+- **WHEN** the project loads
+- **THEN** the module is named `QName` and code can call `QName.Who()`
+- **AND** Save Project writes `Module=QName; Odd.bas` and keeps the file's name `QName`
+- **AND** a class file's name similarly determines the type available to `New`
+
+#### Scenario: A module has no name attribute
+- **GIVEN** `Module=WName; Odd.bas` and no name attribute in the file
+- **WHEN** the project loads and is saved
+- **THEN** the module keeps `WName` and the saved file begins with `Attribute VB_Name = "WName"`
+
+### Requirement: Module name attributes are collected into the file header
+The reader SHALL collect the first module-level `VB_Name` outside procedures into a `.bas` header.
+For a `.cls`, it SHALL collect the `VERSION`…`END` block and the contiguous module-attribute run
+containing the name. Other lines SHALL keep their body order. A rename SHALL rewrite the name in the
+header when present, or in the code otherwise.
+
+#### Scenario: Unmeasured name and attribute shapes
+- **GIVEN** a dotted member attribute, a name inside a procedure, or a second name line
+- **WHEN** a module is read
+- **THEN** those lines stay in place
+- **AND** separated class attribute runs and relocation of an unterminated final name retain their prior split pending measurement
+
+#### Scenario: A name below a comment or blank line
+- **WHEN** a module is loaded with a comment or blank line above its module name attribute
+- **THEN** its next save writes the name in the header and the comment or blank line below it
+- **AND** renaming it with its code window open or closed reaches the saved name attribute
+
+#### Scenario: Text above a class VERSION line
+- **WHEN** a class has text before its `VERSION` line
+- **THEN** HexIDE preserves that text in order below the collected header
+- **AND** it deliberately diverges from VB6's C1 result, which drops the text, to avoid losing user content
+
+#### Scenario: Load normalises the composition without a user edit
+- **WHEN** collecting the name changes the order of a file's lines at load
+- **THEN** the load's render baseline keeps `hasUnsavedChanges` false until the model is edited
+- **AND** Save Project still writes the normalised file
+- **AND** a breakpoint or bookmark saved before the load stays on the statement it marked
+
+### Requirement: Directory saves require replacement consent
+HexIDE's SaveProjectToDirectory operation SHALL name existing source, binary companion and project
+file destinations in one replacement question before writing any output. Only an explicit Yes SHALL
+allow the operation to proceed. This requirement describes a HexIDE addition, not VB6 Save As behavior.
+
+#### Scenario: A directory save would replace an existing file
+- **WHEN** a directory save targets an existing source, companion or project file
+- **THEN** the replacement question names that file
+- **AND** No or cancellation leaves every destination and the project's document paths unchanged
 
 ### Requirement: New member save pickers suggest the measured directory
 A save picker for a pathless form or module SHALL suggest its owning saved project's directory.
@@ -295,8 +379,12 @@ meaningful.
 - **THEN** it is editable and saveable
 
 #### Scenario: A form with a populated container
-- **WHEN** such a form is loaded, while container nesting does not round-trip
-- **THEN** it is still presented read-only
+- **WHEN** such a form is loaded
+- **THEN** it is editable and saveable
+
+#### Scenario: A structure still not reproduced
+- **WHEN** a form holds a control nested under a class that cannot contain one
+- **THEN** it is presented read-only
 
 ### Requirement: A container's children SHALL be written back inside their container
 Where a file expresses a control as a child of a container, the IDE SHALL write it back inside that
@@ -1018,6 +1106,26 @@ guard SHALL agree with its persistence path: only a pathless member needs an arm
 
 - **WHEN** automation persists a form or module with an existing scratch path
 - **THEN** the edit is written to that path without a picker, and the member remains user-unsaved
+
+### Requirement: Outside project edits require a save decision
+
+HexIDE SHALL check a VB6 project file against the last read or write before replacing it (#3699).
+If both disk bytes and the local project changed, it SHALL offer Reload, Keep My Changes and Cancel
+through the existing cancellable file conflict dialog. If only disk changed, it SHALL preserve the
+file without a question. An unchanged disk file SHALL save without a conflict question.
+
+#### Scenario: Another editor changes the project
+- **GIVEN** an opened `.vbp` with a local project edit and different bytes now on disk
+- **WHEN** the user saves the project
+- **THEN** the conflict dialog offers Reload, Keep My Changes and Cancel before any file is written
+- **AND** Reload reopens the disk project with the existing member-unsaved-changes prompt
+- **AND** Keep My Changes writes the local project
+- **AND** Cancel leaves every file untouched
+
+#### Scenario: Only the other editor changed the project
+- **GIVEN** an opened `.vbp` with no local project edit and different bytes now on disk
+- **WHEN** the user saves the project
+- **THEN** the external project bytes survive without a conflict question
 
 ## Out of Scope
 - **Interpreting preserved binary content.** Binary resources the IDE has no model for stay opaque; they are

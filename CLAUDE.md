@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-**HexIDE** — a cross-platform recreation of the Visual Basic 6 IDE in C#/Avalonia UI. Originally derived from [AvaloniaVisualBasic6](https://github.com/BAndysc/AvaloniaVisualBasic6) (MIT). Monorepo with two halves — `IDE/` and `LspServer/` — both **MIT**. The LSP server runs as a separate process (stdio) for crash isolation and a replaceable backend, not for any licensing reason.
+**HexIDE** — a cross-platform, customisable IDE in C#/Avalonia UI. The VB family (VB6, VBA and twinBASIC) is its first and deepest language support, and for VB6 it recreates the classic IDE faithfully. Other languages attach through language servers and providers. Its own interpreter and forms runtime sit behind the same seams as any other engine, as a peer rather than a fallback. Originally derived from [AvaloniaVisualBasic6](https://github.com/BAndysc/AvaloniaVisualBasic6) (MIT). Monorepo with two halves — `IDE/` and `LspServer/` — both **MIT**. The LSP server runs as a separate process (stdio) for crash isolation and a replaceable backend, not for any licensing reason.
 
 ## Build & Test
 
@@ -20,6 +20,7 @@ pwsh scripts/test.ps1 IDE/HexIDE.Runtime.Tests/          # VB6 interpreter tests
 pwsh scripts/test.ps1 LspServer/HexIDE.VbLspServer.Tests/ # LSP server tests
 pwsh scripts/test.ps1 IDE/HexIDE.Tests/                  # IDE ViewModel tests (foreign servers — see below)
 pwsh scripts/test.ps1 IDE/HexIDE.Integration.Tests/      # Headless Avalonia UI tests
+pwsh scripts/test.ps1 IDE/HexIDE.Runtime.Integration.Tests/ # Headless Avalonia tests of the runtime alone
 
 # Run a single test — NOTE the `--`, and that this is NOT VSTest's --filter (see below)
 pwsh scripts/test.ps1 IDE/HexIDE.Runtime.Tests/ -- --filter-method "*DebugPrint_WithStringLiteral_ShouldOutputCorrectString"
@@ -40,11 +41,13 @@ cd IDE && dotnet publish HexIDE.Desktop -f net10.0 -o bin/
 cd LspServer && dotnet build HexIDE.VbLspServer/
 ```
 
-**A test run that could hang carries a hang-dump timeout**, as CI's Integration step does:
-`pwsh scripts/test.ps1 IDE/HexIDE.Integration.Tests/ -- --hangdump --hangdump-timeout 10m`. The timeout counts
-quiet time, minutes in which no test starts or finishes. So it ends a hang and names the tests still running,
-but it doesn't end a slow, healthy run (hexide-gen measured it in #2618). Only `HexIDE.Integration.Tests`
-references `Microsoft.Testing.Extensions.HangDump` today. Another project rejects the option until it has the
+**A test run that could hang carries a hang-dump timeout**, as CI's headless steps do:
+`pwsh scripts/test.ps1 IDE/HexIDE.Integration.Tests/ -- --hangdump --hangdump-timeout 20m`. Set it well above
+the suite's length, as a budget for the whole run. The timer is meant to count only quiet time, minutes in
+which no test starts or finishes, and on Windows it does (#2618). But on macOS it fired 10 to 11 minutes into
+healthy runs once the suite outgrew it (#3874). Only the two headless suites,
+`HexIDE.Integration.Tests` and `HexIDE.Runtime.Integration.Tests`, reference
+`Microsoft.Testing.Extensions.HangDump` today. Another project rejects the option until it has the
 package, with its licence line.
 
 CI runs two parallel jobs in `.github/workflows/build.yml`: `build-ide` (working dir `IDE/`) and `build-lsp-server` (working dir `LspServer/`), alongside two guard jobs.
@@ -55,7 +58,7 @@ seven days (#1309). This includes both `build-ide-desktop` matrix runners. If a 
 
 CI, `scripts/test.ps1` and `scripts/test-linux.sh` enforce test-count floors from `MIN_TESTS_*` in
 `.github/workflows/build.yml` (#883). A short run must fail so its logs are kept by #1309.
-The four main-suite floors are about 95% of the measured totals recorded beside them; raise them
+The five main-suite floors are about 95% of the measured totals recorded beside them; raise them
 when the suites grow. Both scripts use a floor of one for a filtered run, or accept an explicit
 `--minimum-expected-tests` after `--` for a known slice. Run local suites from the repository root
 with `pwsh scripts/test.ps1 <project> [arguments]` (Windows PowerShell 5.1 also works via
@@ -313,24 +316,35 @@ queued, so every later requery was lost and `FormatSelectionTests`' nine predica
 `TestApp.BuildAvaloniaApp` seeds a pending requery before headless starts, so a regression fails those
 nine cases at once.
 
-**An Integration run that ends hundreds short and still says `Passed!` lost those tests to xunit errors,
+**A headless run that ends hundreds short and still says `Passed!` lost those tests to xunit errors,
 which MTP does not count** ([#2486](https://github.com/hexide-io/HexIDE/issues/2486)). xunit records a
 test case that throws before its test starts as an error, not a failure, and its MTP adapter drops that
 error. The summary, the exit code and a floor with room to spare all see nothing but a smaller total. So
 read xunit's own report: add `--report-xunit --report-xunit-filename x.xml` after the `--`, then run
 `bash scripts/check-xunit-report.sh` on the file. A relative `--results-directory TestResults` puts it in the
-project's own `TestResults/`, on Windows and under WSL alike. CI does both on every Integration step. The cause measured was
+project's own `TestResults/`, on Windows and under WSL alike. CI does both on every step of the two headless
+suites, `HexIDE.Integration.Tests` and `HexIDE.Runtime.Integration.Tests`. The cause measured was
 Avalonia.Headless 12.0.2 starting each test on whatever context the dispatcher thread was left holding,
 fixed by moving to 12.0.4. **Keep the headless packages at Avalonia's version.** `HeadlessTestContextTests`
 fails loudly if one starts a test on a leftover context again.
 
-**A hung Integration run ends 10 minutes after a test last started or finished, and names what was running**
-([#2530](https://github.com/hexide-io/HexIDE/issues/2530)). Every Integration step passes
-`--hangdump --hangdump-timeout 10m --hangdump-type Mini` (`Microsoft.Testing.Extensions.HangDump`, kept at the
-Microsoft.Testing.Platform version xunit.v3 brings). The results directory then holds a `*_hang.log` listing each
-test still running and how long it had run, beside a mini dump with managed stacks
+**A second cause: a dictionary loaded by its `avares://` address before its assembly has loaded**
+([#3663](https://github.com/hexide-io/HexIDE/issues/3663)). Avalonia finds an `avares://` address's compiled
+XAML only in an assembly that is already loaded. A test application that merges such a dictionary first fails
+every test of a class that has not yet touched that assembly, before the test starts. `dotnet test` said 25 of
+25 while 42 tests never ran. Name the assembly through one of its types, as `HexIDE.Runtime.Integration.Tests`'
+`TestApp` does, and judge a new headless project by xunit's report from its first run: it has no earlier total
+to fall short of.
+
+**A hung headless run ends with a report naming what was running**
+([#2530](https://github.com/hexide-io/HexIDE/issues/2530)). Every step of the two headless suites passes
+`--hangdump --hangdump-type Heap` (`Microsoft.Testing.Extensions.HangDump`, kept at the Microsoft.Testing.Platform
+version xunit.v3 brings) with a timeout well above the suite's length: 20 minutes for `HexIDE.Integration.Tests`,
+which takes 11 to 13 minutes on macOS, and 10 for `HexIDE.Runtime.Integration.Tests`, which takes about one. The
+results directory then holds a `*_hang.log` listing each
+test still running and how long it had run, beside a heap dump with managed stacks
 (`dotnet-dump analyze <file> -c "clrstack -all"`). CI turns the log into an error annotation and uploads both.
-Before this, a hang ran out the 30-minute step limit and left no report at all. Add the same options after the
+Before this, a hang ran out the step limit and left no report at all. Add the same options after the
 `--` to get this locally.
 
 ## MCP Dev Loop
@@ -622,6 +636,7 @@ Package versions are pinned centrally in the root `Directory.Packages.props` (Av
 | `HexIDE.Runtime.Tests` | xUnit interpreter tests |
 | `HexIDE.Tests` | IDE ViewModel unit tests |
 | `HexIDE.Integration.Tests` | Headless Avalonia UI tests (`Avalonia.Headless.XUnit`) |
+| `HexIDE.Runtime.Integration.Tests` | Headless Avalonia tests of the runtime alone, with only the resources `HexIDE.Standalone` loads |
 | `HexIDE.Desktop` | Desktop entry point; conditionally copies LspServer exe to output |
 | `HexIDE.Standalone` | Headless VB6 runner (no IDE) |
 | `HexIDE.Browser` | WebAssembly entry point (future aspiration) |
@@ -702,7 +717,11 @@ VB6's actual runtime semantics that exists anywhere. Treat it accordingly:
 
 **Secondary reference (subordinate to the oracle): the VBA documentation** — a local clone of `MicrosoftDocs/VBA-Docs` (the VBA language + object-model reference), located via `$VBA_DOCS`. Licence-vetted MIT-clean: docs are **CC BY 4.0** (attribution-only, *no* copyleft — cannot infect HexIDE's MIT), code samples are **MIT** (© Microsoft). Use it as a **reference for the object model, intrinsic surface, and general semantics** — never as the fidelity authority: it describes *VBA* (VBA7), which diverges from *VB6* at the edges, so `vb6.exe` **always wins** on any behavioural conflict, and every pinned test expectation still comes from the oracle, not the docs. **Two rules to keep clean-room status: (1) never copy the doc prose verbatim** into HexIDE code/comments/docs (facts/APIs/semantics aren't copyrightable, so learning-then-implementing is fine; copying *expression* is not — if you ever quote prose, attribute per CC BY; copied code samples are MIT, keep the notice); **(2) fidelity stays oracle-driven** — this is a lookup aid, not a spec to implement from (that spec-driven lane belongs to a real language engine; HexIDE stays independent). NB this is the docs repo, *not* the formal `[MS-VBAL]` Open Specification (a separate artifact under Microsoft's Open Specifications programme).
 
-## Language-Analysis Boundary — CST, not AST (HARD LIMIT)
+## Language-Analysis Boundary — CST, not AST (HARD LIMIT for the VB family)
+
+**This limit covers the VB family: VB6, VBA and twinBASIC.** Their semantic engines belong to their own projects,
+RDCore and twinBASIC, and HexIDE stays off that ground. It doesn't apply to a language with no open semantic engine,
+but ask the maintainer before building one.
 
 HexIDE's own in-process language tooling operates at the **syntactic (CST) level only**. It parses VB6/VBA
 to a concrete syntax tree and ships CST-level services — syntax diagnostics, structural document symbols,
@@ -756,8 +775,8 @@ statements to each other; it is a map of the program, not a lookup for the walk.
 **The interpreter is an APPROXIMATION, not a reimplementation.** If a program is valid VB6 and can be made
 to run, running it beats refusing it — even at a different evaluation point, even with an error raised later
 than VB6 would raise it, even where a diagnostic VB6 gives at compile time can only be given here as the
-statement executes. `interpreter-core:40-42` already prescribes that translation: same error number, at run
-time rather than before it.
+statement executes. interpreter-core's *An error VB6 reports before running* scenario already prescribes that
+translation: same error number, at run time rather than before it.
 
 So a construct is walled only when it cannot be **executed** — never merely because it cannot be
 **validated the way VB6 validates it**. That distinction is what nine entries in `interpreter-gaps.md` got
@@ -783,8 +802,9 @@ holds it. What is out of reach is:
 1. **Binding — permanent.** Questions answerable only by relating two symbols *without executing either*:
    does this `Public` signature expose a `Private Type`, does `Property Let` agree with `Property Get`, does
    this class satisfy `Implements IFoo`. These cost **diagnostics, not constructs** — the construct is
-   always buildable, and `interpreter-core:40-42` prescribes the in-bounds translation: raise VB6's error
-   number at run time rather than before it. A second-order consequence worth stating: VB6 compiles the
+   always buildable, and interpreter-core's *An error VB6 reports before running* scenario prescribes the
+   in-bounds translation: raise VB6's error number at run time rather than before it. A second-order
+   consequence worth stating: VB6 compiles the
    whole program and HexIDE only sees executed statements, so an error on a never-taken path is invisible
    here and fatal there.
 2. **Tree-walking — an execution-strategy limit, NOT the AST limit.** `GoSub`/`Return`, `On expr
@@ -855,9 +875,10 @@ it's a mitigation.**
   what's in flight, push it, and start nothing new. **Red** (`pause`, from 90%): the team is paused, and nothing
   new starts. Jen may still contact a session about a specific item. If she does, keep the reply short and
   token-light, and don't wake other sessions unless it's urgent. Only Jen lifts the pause; the weekly reset
-  doesn't. Codex lanes keep running what's queued.
+  doesn't. Codex lanes keep running what's queued. **A docs-only oracle PR is outside a pause**, and is queued
+  as usual: oracle pages once sat unqueued for nine days because of one, while main was already citing them.
 
-- **Avalonia 12.0.5 / Dock 12.0.0.2** — the project is on Avalonia 12. `Classic.Avalonia.Theme 12.0.1-beta1` is kept as a **controls-only** dependency (provides `ClassicBorderDecorator`, `ClassicBorderStyle`). **Do not pin it back to 11.3.0.3**: that build was compiled against Avalonia 11, so `ClassicBorderDecorator.DrawRadioButtonBorder` called a `StreamGeometryContext.ArcTo` overload Avalonia 12 replaced, and **every VB6 option button killed the process on render** (`MissingMethodException`, thrown on the render thread — uncatchable, and nothing reaches the Serilog log; the stack only exists in the Windows Application event log). It is a prerelease because it is the only Avalonia-12 build published. `<ClassicTheme />` remains **NOT loaded** and this change does not re-open that question — do not add it back. The `Classic.Avalonia.Theme.Dock`, `.ColorPicker`, and `.DataGrid` sub-packages have been removed. `Avalonia.Themes.Simple 12.0.5` is the base theme (`<SimpleTheme />` in App.axaml).
+- **Avalonia 12 and Dock 12** — the project is on Avalonia 12. The exact versions live only in `Directory.Packages.props`; read them there rather than from this file. `Classic.Avalonia.Theme 12.0.1-beta1` is kept as a **controls-only** dependency (provides `ClassicBorderDecorator`, `ClassicBorderStyle`). **Do not pin it back to 11.3.0.3**: that build was compiled against Avalonia 11, so `ClassicBorderDecorator.DrawRadioButtonBorder` called a `StreamGeometryContext.ArcTo` overload Avalonia 12 replaced, and **every VB6 option button killed the process on render** (`MissingMethodException`, thrown on the render thread — uncatchable, and nothing reaches the Serilog log; the stack only exists in the Windows Application event log). It is a prerelease because it is the only Avalonia-12 build published. `<ClassicTheme />` remains **NOT loaded** and this change does not re-open that question — do not add it back. The `Classic.Avalonia.Theme.Dock`, `.ColorPicker`, and `.DataGrid` sub-packages have been removed. `Avalonia.Themes.Simple`, at Avalonia's version, is the base theme (`<SimpleTheme />` in App.axaml).
 - **`Classic.CommonControls.Avalonia 12.0.1-beta1` controls** (`ToolBar`, `ToolBarButton`, `RebarHandle`, `ListView`, `ListViewItem`) are **NOT used** — the `TypeLoadException: PseudolassesExtensions` applied to the 11.x build, but they stay unused by design (removing VB6 chrome is intended, not incidental). Use standard Avalonia `StackPanel`/`Button`/`ToggleButton`/`ListBox` instead. The version follows `Classic.Avalonia.Theme` transitively; no project references it directly. `SystemColors` static resource keys from that assembly are still used for color lookups and do not crash.
 - **Anything compiled against Avalonia 11 fails only at render time.** That whole class of bug builds cleanly, passes view-model tests, and then kills the process the first time the control is painted. `HexIDE.Integration.Tests/Controls/ClassicRenderTests.cs` is the guard — it renders the affected controls for real under Skia (`UseHeadlessDrawing = false`) and asserts a frame came back. Add a case there before trusting any new `Classic.*` surface.
 - **`Classic.CommonControls.Dialogs` is fully removed** — `MessageBoxResult`, `MessageBoxButtons`, `MessageBoxIcon` are now in `HexIDE.Core/IDE/MessageBoxEnums.cs` (namespace `HexIDE.IDE`). `FontDialogResult`/`AboutDialogOptions` are in `HexIDE/IDE/`. Managed dialog controls (`MessageBox`, `InputBox`) are in `HexIDE.Runtime/Dialogs/`. `AboutDialog`/`FontDialog` views and their ViewModels are in `HexIDE/Forms/Views/` and `HexIDE/Forms/ViewModels/`. `WindowManager` routes all paths (SingleView + desktop) through these managed controls.
@@ -904,7 +925,7 @@ When a new `HexIDE.*` namespace becomes widely used in a project, add it to that
 2. **Server capability** in `VbServerCapabilities.RegisterCapability()` (`VbServerCapabilities.cs`).
 3. **Message types** in `IDE/HexIDE.Core/Lsp/Messages/LspMessages.cs` — `record` types with `[JsonPropertyName]` on every property. (`HexIDE.Lsp/Messages/` holds only the serializer context; the records are in Core.)
 4. **Serializer registration** in `IDE/HexIDE.Lsp/Messages/LspJsonContext.cs` — `[JsonSerializable(typeof(YourResponseType))]`. **Not optional, and not only an AOT concern** — `VBLspClient` builds its `JsonSerializerOptions` *from* this context, whose generated resolver ends in `return null` with nothing chained behind it, so an unregistered type throws under plain JIT too. The throw lands in a debug-level catch, which turns the omission into a server that connects, initializes and then answers nothing — indistinguishable from a broken server, and it has cost real time twice.
-5. **Client** in `IDE/HexIDE.Lsp/ILspClient.cs` + `VBLspClient.cs` — add interface method, implement with `_rpc.InvokeWithParameterObjectAsync<T>(...)`.
+5. **Client** in `IDE/HexIDE.Core/Lsp/ILspClient.cs` + `IDE/HexIDE.Lsp/VBLspClient.cs` — add interface method, implement with `_rpc.InvokeWithParameterObjectAsync<T>(...)`.
 
 ### Adding a new VB6 control
 
@@ -938,8 +959,9 @@ user-facing string is a localization key, never a hardcoded literal.**
    show English fall-through. That list is the shipped set, and it is deliberately not copied here. A missing key *inherits* English
    (no blank control), but that drift must not ship — close it at the point of creation. For more than a
    couple of keys, use the language-packs workflow (one agent per pack: translate the new keys,
-   **preserving `{0}`/`{1}` placeholders and each pack's mnemonic convention** — `_` kept for Latin scripts,
-   omitted for non-Latin). `en-GB` is a thin variant — add a key there only where British English differs
+   **preserving `{0}`/`{1}` placeholders and each pack's mnemonic convention** — `_` kept for Latin scripts;
+   Chinese and Japanese append the English letter in parentheses, as `(_F)`; other non-Latin scripts omit it).
+   `en-GB` is a thin variant — add a key there only where British English differs
    from `en`.
 4. **See the whole picture at once** with the coverage tool, which is the faster way to run a backfill: the
    build failure says *that* a pack is stale, this says *how*, across all of them together.
@@ -995,6 +1017,8 @@ Inherit `BaseVBTestFixture`. Call `await Run("VB6 code")`. Assert via `AssertDeb
 
 **Testing internals:** both `HexIDE` and `HexIDE.Runtime` expose their `internal` members to the test projects
 (`HexIDE.Runtime.Tests`, `HexIDE.Tests`, `HexIDE.Integration.Tests`) via `<InternalsVisibleTo>` in each `.csproj`.
+`HexIDE.Runtime.Integration.Tests`, which references the runtime but not the IDE, sees `HexIDE.Runtime`'s and
+`HexIDE.Core`'s.
 So a test may call an `internal` type/method directly (e.g. `RuntimeExtensions.ExecuteSub`) — prefer that over
 widening visibility to `public` just for a test. When a new test project needs runtime internals, add it to the
 `InternalsVisibleTo` ItemGroup in the relevant `.csproj`.
@@ -1145,6 +1169,9 @@ the PR. Typo-level fixes need no issue.
   `LspClientRegistry.cs`:
   `gh pr list --repo hexide-io/HexIDE --state open --limit 200 --json number,files -q '[.[] | select(any(.files[]; .path | endswith("LspClientRegistry.cs"))) | .number]'`
 - **A label you set is yours to remove**, and one that Jen or another session set is theirs (#499).
+- **A PR that closes an issue updates every doc citing it, and files whatever it left undone so the doc can cite
+  that instead.** A sweep found 21 closed-issue citations in live text, 16 of them for work still undone (#3364), and
+  no guard can tell that a PR left work behind.
 - **Clear `bin/` and `obj/`, or remove the worktree, once its result is posted or its PR merges.** C: ran low
   four times in the week of 10-26.
 

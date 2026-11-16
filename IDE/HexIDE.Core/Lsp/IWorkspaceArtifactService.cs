@@ -5,6 +5,10 @@ public interface IWorkspaceArtifactService
     /// <summary>Runs folder updates on the project-change debounce, before any imports.</summary>
     Task TrackFoldersAsync(LanguageServerRegistration server, Func<CancellationToken, Task> update,
         CancellationToken cancellationToken) => Task.CompletedTask;
+    /// <summary>Workspace configuration problems, including entries that have not started yet.</summary>
+    IReadOnlyList<LanguageServerConfigProblem> GetConfigurationProblems(LanguageServerRegistration server) => [];
+    event Action? ConfigurationProblemsChanged { add { } remove { } }
+
     Task ImportAsync(LanguageServerRegistration server, Func<WorkspaceArtifactContext, CancellationToken, Task> import,
         CancellationToken cancellationToken);
     Task PrepareAsync(LanguageServerRegistration server, CancellationToken cancellationToken);
@@ -16,13 +20,13 @@ public interface IWorkspaceArtifactService
     Task ForgetAsync(LanguageServerRegistration server) => Task.CompletedTask;
 
     /// <summary>
-    /// A regeneration changed this server's artefact, and the server asked to be restarted for it
-    /// (<see cref="WorkspaceArtifactSpec.RestartOnChange"/>). Raised with the server's registration, once per
-    /// regeneration, and never for the write before a launch, an identical regeneration or a refused write. The
-    /// registration, not its id: a server taken out while the IDE runs can have its id taken by another, and the file
-    /// that changed was the first one's.
+    /// An opted-in project membership change or artefact regeneration requires a restart. Raised with the server's
+    /// registration once per debounce, never for the write before a launch or a refused write alone. An identical
+    /// artefact does not cause a restart; changed membership can, independently of the file. The registration, not
+    /// its id: a server taken out while the IDE runs can have its id taken by another.
     /// </summary>
     event Action<LanguageServerRegistration>? RestartRequested;
+    event Action<string, int>? FileChanged { add { } remove { } }
 }
 
 public interface IWorkspaceArtifactWorkspace : ILspWorkspace

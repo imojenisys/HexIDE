@@ -22,11 +22,12 @@ concurrency:
 # 2026-10-26 (#883). Theory rows are counted by execution, not discovery. Raise floors as suites grow.
 # The async test-context lifetime fix is separate: https://github.com/hexide-io/HexIDE/issues/2194.
 env:
-  MIN_TESTS_RUNTIME: 7757       # 8166 measured (WSL, #3213); catches short runs; raise to 95% of a new full total.
-  MIN_TESTS_TWINBASIC: 200      # 226
-  MIN_TESTS_IDE: 6166           # 6491 measured (WSL, #3213); catches short runs; raise to 95% of a new full total.
-  MIN_TESTS_INTEGRATION: 5042   # 5308 measured (WSL, #11); catches short runs; raise to 95% of a new full total.
-  MIN_TESTS_LSP_SERVER: 624     # 657 measured (WSL, #3213); catches short runs; raise to 95% of a new full total.
+  MIN_TESTS_RUNTIME: 8191  # 8623 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_TWINBASIC: 332  # 350 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_IDE: 7684  # 8089 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_INTEGRATION: 3408  # 3588 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_RUNTIME_INTEGRATION: 2612  # 2750 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
+  MIN_TESTS_LSP_SERVER: 704  # 742 measured (CI Linux at e6fb3b859, 2026-11-14); raise to 95% of a new full total.
 
 jobs:
   # ── May the build jobs be skipped for this pull request? ──────────────────────────────────────────
@@ -132,6 +133,12 @@ jobs:
         with:
           node-version: '22'
 
+      # debugpy is a test-only process; the portable pinned wheel needs a Python runtime.
+      - name: Setup Python for the foreign debug adapter
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
       # The foreign-server tests drive real third-party language servers, and are the only check that
       # HexIDE speaks LSP to something it did not write — a client and server by one hand agree with each
       # other rather than with the specification. They are fetched on demand rather than committed, each
@@ -194,8 +201,10 @@ jobs:
       #
       # Only the key-completeness test is excluded. Its two neighbours check that the manifest and the
       # files on disk agree, which no contributor change has a reason to break.
+      # 45, not 30: on macOS this step took 21 to 28 minutes on main on 2026-11-11, and batch 305 timed out at 30
+      # with no test failing. The cap is only a backstop for a hang, so headroom costs nothing on a good run.
       - name: Run ViewModel Tests
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           HEXIDE_REQUIRE_FOREIGN_LSP: '1'
           HEXIDE_FOREIGN_LSP_NO_PATH: '1'
@@ -234,13 +243,17 @@ jobs:
         if: steps.translations.outcome == 'failure'
         run: echo "::warning title=Translations needed before merge::One or more shipped language packs lack keys added to en.json. Expected for a contribution. The maintainer adds them on merge. The step above names the packs and keys."
 
-      # --hangdump: after 10 minutes in which no test starts or finishes, write a dump and the names of the tests still
-      # running, then end the run. A hang used to run out the 30-minute step limit with no report (#2530). The dump
-      # keeps the heap: a mini dump has none, so it can't name the test case that was running.
+      # --hangdump: once the timeout passes with no test starting or finishing, write a dump and the names of the tests
+      # still running, then end the run. A hang used to run out the step limit with no report (#2530). The dump keeps
+      # the heap: a mini dump has none, so it can't name the test case that was running.
+      # Treat the timeout as a budget for the whole run, well above the suite's length: on macOS the timer fired 10m20s
+      # to 11m23s into healthy runs once the suite passed 10 minutes, naming a test seconds old, while other runs past
+      # 10 minutes passed (#3874). The step's 45 minutes cover the run, the timeout and the dump, so a real hang still
+      # ends with its dump rather than at the step limit.
       - name: Run Integration Tests (headless Avalonia UI)
         id: integration
-        timeout-minutes: 30
-        run: dotnet test HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj -- --minimum-expected-tests ${{ env.MIN_TESTS_INTEGRATION }} --results-directory TestResults --report-xunit --report-xunit-filename integration-results.xml --hangdump --hangdump-timeout 10m --hangdump-type Heap
+        timeout-minutes: 45
+        run: dotnet test HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj -- --minimum-expected-tests ${{ env.MIN_TESTS_INTEGRATION }} --results-directory TestResults --report-xunit --report-xunit-filename integration-results.xml --hangdump --hangdump-timeout 20m --hangdump-type Heap
 
       # xunit records a test case that threw before its test started as an error, and MTP never counts it, so a run
       # could lose hundreds of tests and still pass (#2486). xunit's own report keeps the count.
@@ -257,6 +270,28 @@ jobs:
             [ -f "$log" ] || continue
             cat "$log"
             echo "::error title=Integration test hung::Still running when the hang dump was taken: $(tr -s '[:space:]' ' ' < "$log")"
+          done
+
+      # The runtime alone, in an application that loads only what the Standalone runner loads (#3663). Run, checked and
+      # named on a hang as the Integration suite is, above.
+      - name: Run Runtime Integration Tests (headless Avalonia, the runtime alone)
+        id: runtime-integration
+        timeout-minutes: 30
+        run: dotnet test HexIDE.Runtime.Integration.Tests/HexIDE.Runtime.Integration.Tests.csproj -- --minimum-expected-tests ${{ env.MIN_TESTS_RUNTIME_INTEGRATION }} --results-directory TestResults --report-xunit --report-xunit-filename runtime-integration-results.xml --hangdump --hangdump-timeout 10m --hangdump-type Heap
+
+      - name: Check xunit's report for errors MTP does not count (Runtime Integration)
+        if: ${{ !cancelled() && steps.runtime-integration.outcome != 'skipped' }}
+        shell: bash
+        run: bash ../scripts/check-xunit-report.sh HexIDE.Runtime.Integration.Tests/TestResults/runtime-integration-results.xml
+
+      - name: Name a hung Runtime Integration test
+        if: ${{ failure() && steps.runtime-integration.outcome == 'failure' }}
+        shell: bash
+        run: |
+          for log in HexIDE.Runtime.Integration.Tests/TestResults/*_hang.log; do
+            [ -f "$log" ] || continue
+            cat "$log"
+            echo "::error title=Runtime Integration test hung::Still running when the hang dump was taken: $(tr -s '[:space:]' ' ' < "$log")"
           done
 
       # First-party add-in signing: restore the publisher key from a repo secret so the (Exists-gated)
@@ -381,6 +416,12 @@ jobs:
         with:
           node-version: '22'
 
+      # debugpy is a test-only process; the portable pinned wheel needs a Python runtime.
+      - name: Setup Python for the foreign debug adapter
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
       # Separate the Windows architectures so their parallel jobs do not race to save one cache.
       - name: Cache the foreign language servers
         uses: actions/cache@v6
@@ -449,7 +490,7 @@ jobs:
             fi
             if [ -n "$low" ]; then
               echo "$low: ending the test run so the runner survives" >> "$log"
-              pkill -f 'HexIDE\.(Integration\.)?Tests'
+              pkill -f 'HexIDE\.(Runtime\.Integration\.|Integration\.)?Tests'
               exit 0
             fi
           done
@@ -472,8 +513,10 @@ jobs:
       # result — and the outside-contributor handling build-ide does for it has a single place to live.
       # build-ide remains the one that blocks on it.
       # --long-running names any test still running after two minutes, so a hang says which test it is.
+      # 45, not 30: on macOS this step took 21 to 28 minutes on main on 2026-11-11, and batch 305 timed out at 30
+      # with no test failing. The cap is only a backstop for a hang, so headroom costs nothing on a good run.
       - name: Run ViewModel Tests
-        timeout-minutes: 30
+        timeout-minutes: 45
         env:
           HEXIDE_REQUIRE_FOREIGN_LSP: '1'
           HEXIDE_FOREIGN_LSP_NO_PATH: '1'
@@ -495,13 +538,17 @@ jobs:
             echo "No foreign-server report was written."
           fi
 
-      # --hangdump: after 10 minutes in which no test starts or finishes, write a dump and the names of the tests still
-      # running, then end the run. A hang used to run out the 30-minute step limit with no report (#2530). The dump
-      # keeps the heap: a mini dump has none, so it can't name the test case that was running.
+      # --hangdump: once the timeout passes with no test starting or finishing, write a dump and the names of the tests
+      # still running, then end the run. A hang used to run out the step limit with no report (#2530). The dump keeps
+      # the heap: a mini dump has none, so it can't name the test case that was running.
+      # Treat the timeout as a budget for the whole run, well above the suite's length: on macOS the timer fired 10m20s
+      # to 11m23s into healthy runs once the suite passed 10 minutes, naming a test seconds old, while other runs past
+      # 10 minutes passed (#3874). The step's 45 minutes cover the run, the timeout and the dump, so a real hang still
+      # ends with its dump rather than at the step limit.
       - name: Run Integration Tests (headless Avalonia UI)
         id: integration
-        timeout-minutes: 30
-        run: dotnet test HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj -- --minimum-expected-tests ${{ env.MIN_TESTS_INTEGRATION }} --results-directory TestResults --report-xunit --report-xunit-filename integration-results.xml --hangdump --hangdump-timeout 10m --hangdump-type Heap
+        timeout-minutes: 45
+        run: dotnet test HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj -- --minimum-expected-tests ${{ env.MIN_TESTS_INTEGRATION }} --results-directory TestResults --report-xunit --report-xunit-filename integration-results.xml --hangdump --hangdump-timeout 20m --hangdump-type Heap
 
       # As in build-ide: errors xunit records and MTP never counts (#2486).
       - name: Check xunit's report for errors MTP does not count
@@ -517,6 +564,28 @@ jobs:
             [ -f "$log" ] || continue
             cat "$log"
             echo "::error title=Integration test hung::Still running when the hang dump was taken: $(tr -s '[:space:]' ' ' < "$log")"
+          done
+
+      # The runtime alone, in an application that loads only what the Standalone runner loads (#3663). Run, checked and
+      # named on a hang as the Integration suite is, above.
+      - name: Run Runtime Integration Tests (headless Avalonia, the runtime alone)
+        id: runtime-integration
+        timeout-minutes: 30
+        run: dotnet test HexIDE.Runtime.Integration.Tests/HexIDE.Runtime.Integration.Tests.csproj -- --minimum-expected-tests ${{ env.MIN_TESTS_RUNTIME_INTEGRATION }} --results-directory TestResults --report-xunit --report-xunit-filename runtime-integration-results.xml --hangdump --hangdump-timeout 10m --hangdump-type Heap
+
+      - name: Check xunit's report for errors MTP does not count (Runtime Integration)
+        if: ${{ !cancelled() && steps.runtime-integration.outcome != 'skipped' }}
+        shell: bash
+        run: bash ../scripts/check-xunit-report.sh HexIDE.Runtime.Integration.Tests/TestResults/runtime-integration-results.xml
+
+      - name: Name a hung Runtime Integration test
+        if: ${{ failure() && steps.runtime-integration.outcome == 'failure' }}
+        shell: bash
+        run: |
+          for log in HexIDE.Runtime.Integration.Tests/TestResults/*_hang.log; do
+            [ -f "$log" ] || continue
+            cat "$log"
+            echo "::error title=Runtime Integration test hung::Still running when the hang dump was taken: $(tr -s '[:space:]' ' ' < "$log")"
           done
 
       - name: Upload test results on failure

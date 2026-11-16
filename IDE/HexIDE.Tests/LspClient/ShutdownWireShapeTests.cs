@@ -1,4 +1,5 @@
 ﻿using System.Globalization;
+using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
 using HexIDE.Lsp;
@@ -65,6 +66,7 @@ public class ShutdownWireShapeTests : IAsyncDisposable
 
     /// <summary>Signals that the <c>exit</c> notification has actually been read off the wire.</summary>
     private readonly TaskCompletionSource _exitSeen = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _cancellationSeen = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Waits for <c>exit</c> to arrive, so an assertion cannot race the server loop.</summary>
     private Task ExitArrivedAsync() => _exitSeen.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -91,10 +93,18 @@ public class ShutdownWireShapeTests : IAsyncDisposable
 
     private async Task<VBLspClient> ConnectedAsync(
         bool answerShutdown = true, bool answerInitialize = true, bool leaveServerRunning = false,
-        Func<string>? locale = null, bool callHierarchy = true, string? hierarchyResult = null, bool hierarchyError = false, string rangeProvider = "true")
+        Func<string>? locale = null, bool callHierarchy = true, string? hierarchyResult = null, bool hierarchyError = false, string rangeProvider = "true", bool configured = false, string? options = null,
+        string onTypeProvider = "null", bool answerOnType = true)
     {
-        var (clientSide, serverSide) = FullDuplexStream.CreatePair();
-        _disposables.Add(serverSide);
+        var (clientSide, duplexServer) = FullDuplexStream.CreatePair();
+        // Short enough for macOS, whose temp directory leaves 43 characters for a pipe name (PipeNameLimit).
+        var pipeName = "hx-init-" + Guid.NewGuid().ToString("N")[..12];
+        var pipe = configured ? new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous) : null;
+        Stream serverSide = pipe ?? duplexServer;
+        _disposables.Add(clientSide);
+        _disposables.Add(duplexServer);
+        if (configured) _disposables.Add(serverSide);
 
         // A minimal server, spoken by hand. It answers initialize and shutdown so the client's own
         // sequence completes, records everything, and interprets nothing.
@@ -102,6 +112,7 @@ public class ShutdownWireShapeTests : IAsyncDisposable
         {
             try
             {
+                if (pipe is not null) await pipe.WaitForConnectionAsync(_cts.Token);
                 while (!_cts.IsCancellationRequested)
                 {
                     var json = await ReadFrameAsync(serverSide, _cts.Token);
@@ -116,10 +127,12 @@ public class ShutdownWireShapeTests : IAsyncDisposable
                     // does not wait for us to read them. Without this signal the assertions race the
                     // server loop and fail intermittently on a correct implementation.
                     if (m.GetString() == "exit") _exitSeen.TrySetResult();
+                    if (m.GetString() == "$/cancelRequest") _cancellationSeen.TrySetResult();
 
                     if (!doc.RootElement.TryGetProperty("id", out var id)) continue;   // notification
 
                     if (m.GetString() == "shutdown" && !answerShutdown) continue;
+                    if (m.GetString() == "textDocument/onTypeFormatting" && !answerOnType) continue;
                     if (m.GetString() == "initialize")
                     {
                         _initializeSeen.TrySetResult();
@@ -130,7 +143,7 @@ public class ShutdownWireShapeTests : IAsyncDisposable
                     // result ends in three consecutive closing braces, which no $$"""...""" form accepts.
                     var head = "{\"jsonrpc\":\"2.0\",\"id\":" + id.GetRawText() + ",\"result\":";
                     var reply = m.GetString() == "initialize"
-                        ? head + "{\"capabilities\":{\"callHierarchyProvider\":" + (callHierarchy ? "{}" : "false") + ",\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":" + rangeProvider + "},\"serverInfo\":"
+                        ? head + "{\"capabilities\":{\"callHierarchyProvider\":" + (callHierarchy ? "{}" : "false") + ",\"documentFormattingProvider\":true,\"documentRangeFormattingProvider\":" + rangeProvider + ",\"documentOnTypeFormattingProvider\":" + onTypeProvider + "},\"serverInfo\":"
                                + "{\"name\":\"wire-probe\",\"version\":\"1.0.0\"}}}"
                         : head + "null}";
                     if (m.GetString() is "textDocument/prepareCallHierarchy" or
@@ -142,6 +155,8 @@ public class ShutdownWireShapeTests : IAsyncDisposable
                         else if (hierarchyResult is not null)
                             reply = head + hierarchyResult + "}";
                     }
+                    if (m.GetString() == "textDocument/onTypeFormatting")
+                        reply = head + """[{"range":{"start":{"line":2,"character":0},"end":{"line":2,"character":0}},"newText":"    "}]}""";
                     await WriteFrameAsync(serverSide, reply, _cts.Token);
                 }
             }
@@ -157,12 +172,41 @@ public class ShutdownWireShapeTests : IAsyncDisposable
             .Returns(ci => Task.FromResult<IJsonRpcMessageHandler?>(
                 new HeaderDelimitedMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
 
-        var client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6", locale: locale);
+        var optionsMember = options is null ? "" : ",\"initializationOptions\":" + options;
+        var client = configured
+            ? (VBLspClient)new LanguageServerRegistrationFactory(Substitute.For<ILoggerFactory>())
+                .Create(JsonSerializer.Deserialize<LanguageServerConfigFile>($$"""
+                    {"version":1,"servers":[{"id":"probe","languageId":"vb6","extensions":[".bas"],
+                    "transport":"pipe","pipeName":"{{pipeName}}"{{optionsMember}}}]}
+                    """)!.Servers!)
+                .Single().CreateClient()
+            : new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6", locale: locale);
         _disposables.Add(client);
         _starting = client.StartAsync();
         if (answerInitialize) await _starting;
         else await _initializeSeen.Task.WaitAsync(TimeSpan.FromSeconds(10), _cts.Token);
         return client;
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("null")]
+    public async Task InitializeOptionsAreAbsentWhenNotConfigured(string? options)
+    {
+        await ConnectedAsync(configured: true, options: options);
+        FrameFor("initialize").GetProperty("params").TryGetProperty("initializationOptions", out _)
+            .Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"Language\":\"vb6\",\"nested\":{\"flags\":[true,2,null,\"opaque\"]}}")]
+    public async Task InitializeOptionsPassThroughRegistrationUnchanged(string options)
+    {
+        await ConnectedAsync(configured: true, options: options);
+        var parameters = FrameFor("initialize").GetProperty("params");
+        parameters.TryGetProperty("initializationOptions", out var sent).Should().BeTrue();
+        JsonElement.DeepEquals(sent, JsonDocument.Parse(options).RootElement).Should().BeTrue();
     }
 
     [Fact]
@@ -295,6 +339,62 @@ public class ShutdownWireShapeTests : IAsyncDisposable
             _ => () => client.RequestOutgoingCallsAsync(root, TestContext.Current.CancellationToken)
         };
         (await action.Should().ThrowAsync<RemoteInvocationException>()).Which.Message.Should().Contain("unavailable");
+    }
+
+    private const string OnTypeProvider = """{"firstTriggerCharacter":"\n","moreTriggerCharacter":["\""]}""";
+
+    private static Task<TextEdit[]> OnType(ILspClient client, string trigger, CancellationToken ct)
+    {
+        var method = typeof(ILspClient).GetMethod("RequestOnTypeFormattingAsync");
+        method.Should().NotBeNull();
+        return (Task<TextEdit[]>)method!.Invoke(client,
+            ["file:///M.bas", new Position(2, 4), trigger, new FormattingOptions(8, false), ct])!;
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\"")]
+    public async Task OnTypeFormattingCarriesTriggerPositionAndOptions(string trigger)
+    {
+        var client = await ConnectedAsync(onTypeProvider: OnTypeProvider);
+        var edits = await OnType(client, trigger, TestContext.Current.CancellationToken);
+        edits.Should().ContainSingle().Which.NewText.Should().Be("    ");
+        var p = FrameFor("textDocument/onTypeFormatting").GetProperty("params");
+        p.GetProperty("textDocument").GetProperty("uri").GetString().Should().Be("file:///M.bas");
+        p.GetProperty("position").GetProperty("line").GetInt32().Should().Be(2);
+        p.GetProperty("position").GetProperty("character").GetInt32().Should().Be(4);
+        p.GetProperty("ch").GetString().Should().Be(trigger);
+        p.GetProperty("options").GetProperty("tabSize").GetInt32().Should().Be(8);
+        p.GetProperty("options").GetProperty("insertSpaces").GetBoolean().Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("false")]
+    [InlineData("{}")]
+    [InlineData("{\"firstTriggerCharacter\":\";\"}")]
+    public async Task OnTypeFormattingDoesNotSendAnUnclaimedTrigger(string provider)
+    {
+        var client = await ConnectedAsync(onTypeProvider: provider);
+        (await OnType(client, "\n", TestContext.Current.CancellationToken)).Should().BeEmpty();
+        await client.StopAsync();
+        await ExitArrivedAsync();
+        FrameFor("textDocument/onTypeFormatting").ValueKind.Should().Be(JsonValueKind.Undefined);
+    }
+
+    [Fact]
+    public async Task OnTypeFormattingTimeoutCancelsTheWireRequest()
+    {
+        var client = await ConnectedAsync(onTypeProvider: OnTypeProvider, answerOnType: false);
+        (await OnType(client, "\n", TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).Should().BeEmpty();
+        // Cancellation is sent asynchronously; read it before Stop can dispose the connection.
+        await _cancellationSeen.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await client.StopAsync();
+        await ExitArrivedAsync();
+        var id = FrameFor("textDocument/onTypeFormatting").GetProperty("id");
+        FrameFor("$/cancelRequest").GetProperty("params").GetProperty("id").GetRawText()
+            .Should().Be(id.GetRawText());
     }
 
     [Theory]

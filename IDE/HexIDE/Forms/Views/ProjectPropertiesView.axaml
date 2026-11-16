@@ -8,22 +8,28 @@
              x:Class="HexIDE.Forms.Views.ProjectPropertiesView">
     <Grid Margin="6" RowDefinitions="*,6,Auto">
         <TabControl>
+            <!-- Avoid remembered content focus in the strip's Once mode (AvaloniaUI/Avalonia#22003). -->
+            <TabControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <WrapPanel KeyboardNavigation.TabNavigation="Continue" />
+                </ItemsPanelTemplate>
+            </TabControl.ItemsPanel>
 
             <TabItem Header="{DynamicResource Str.Dialog.ProjectProperties.Tab.General}">
                 <StackPanel Orientation="Vertical" Margin="12,7" Spacing="5">
 
-                    <Grid ColumnDefinitions="188,15,160" RowDefinitions="Auto,3,Auto">
+                    <Grid ColumnDefinitions="188,15,160" RowDefinitions="Auto,4,Auto">
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.ProjectType}" />
                         <TextBlock Grid.Row="0" Grid.Column="2" Text="{DynamicResource Str.Dialog.ProjectProperties.General.StartupObject}" />
-                        <ComboBox Grid.Row="2" Grid.Column="0"
-                                    SelectedItem="{CompiledBinding SelectedProjectType}"
+                        <ComboBox Grid.Row="2" Grid.Column="0" IsEnabled="{CompiledBinding CanSetVb6Properties}"
+                                    SelectedItem="{CompiledBinding SelectedProjectTypeChoice}"
                                     ItemsSource="{CompiledBinding ProjectTypes}" />
-                        <ComboBox Grid.Row="2" Grid.Column="2"
+                        <ComboBox Grid.Row="2" Grid.Column="2" IsEnabled="{CompiledBinding CanSetVb6Properties}"
                                     SelectedItem="{CompiledBinding SelectedStartupObject}"
                                     ItemsSource="{CompiledBinding StartupObjects}" />
                     </Grid>
 
-                    <Grid ColumnDefinitions="250,28,*" RowDefinitions="Auto,3,Auto,Auto,3,Auto">
+                    <Grid ColumnDefinitions="250,28,*" RowDefinitions="Auto,4,Auto,Auto,4,Auto">
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.ProjectName}" />
                         <TextBox Grid.Row="2" Grid.Column="0" Text="{CompiledBinding ProjectName}" />
                         <TextBlock Grid.Row="2" Grid.Column="2"
@@ -31,20 +37,20 @@
                                    IsVisible="{CompiledBinding NameError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                                    TextWrapping="Wrap" VerticalAlignment="Center" />
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.HelpFileName}" VerticalAlignment="Bottom" />
+                        <TextBlock Grid.Row="3" Grid.Column="0" Margin="0,4,0,0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.HelpFileName}" VerticalAlignment="Bottom" />
                         <TextBox Grid.Row="5" Grid.Column="0" IsEnabled="False" />
 
-                        <TextBlock Grid.Row="3" Grid.Column="2" Text="{DynamicResource Str.Dialog.ProjectProperties.General.ProjectHelpContextId}" TextWrapping="WrapWithOverflow" />
+                        <TextBlock Grid.Row="3" Grid.Column="2" Margin="0,4,0,0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.ProjectHelpContextId}" TextWrapping="WrapWithOverflow" />
                         <TextBox Grid.Row="5" Grid.Column="2" Text="0" IsEnabled="False" />
                     </Grid>
 
-                    <Grid RowDefinitions="Auto,3,Auto,Auto,3,Auto">
+                    <Grid RowDefinitions="Auto,4,Auto">
                         <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.ProjectDescription}" />
                         <TextBox Grid.Row="2" Grid.Column="0" Text="{CompiledBinding ProjectDescription}" />
                     </Grid>
 
-                    <Grid ColumnDefinitions="150,*">
-                        <StackPanel Spacing="9" Orientation="Vertical">
+                    <Grid ColumnDefinitions="Auto,*">
+                        <StackPanel Spacing="9" Orientation="Vertical" MinWidth="144" Margin="0,0,6,0">
                             <CheckBox IsEnabled="False" Content="{DynamicResource Str.Dialog.ProjectProperties.General.UnattendedExecution}" />
                             <CheckBox IsEnabled="False" Content="{DynamicResource Str.Dialog.ProjectProperties.General.UpgradeActiveXControls}" />
                             <CheckBox IsEnabled="False" Content="{DynamicResource Str.Dialog.ProjectProperties.General.RequireLicenseKey}" />
@@ -52,13 +58,13 @@
                         </StackPanel>
 
                         <HeaderedContentControl Grid.Column="1" Header="{DynamicResource Str.Dialog.ProjectProperties.General.ThreadingModel}" IsEnabled="False">
-                            <Grid RowDefinitions="Auto,2,Auto,2,Auto" ColumnDefinitions="*,*" Margin="2">
+                            <Grid RowDefinitions="Auto,4,Auto,4,Auto" ColumnDefinitions="*,*" ColumnSpacing="4" Margin="2">
                                 <ComboBox Grid.ColumnSpan="2" />
                                 <RadioButton Grid.Row="2" Grid.ColumnSpan="2" Content="{DynamicResource Str.Dialog.ProjectProperties.General.ThreadPerObject}" />
                                 <RadioButton Grid.Row="4" IsChecked="True" Content="{DynamicResource Str.Dialog.ProjectProperties.General.ThreadPool}" />
                                 <DockPanel Grid.Row="4" Grid.Column="1" LastChildFill="False">
                                     <NumericUpDown Value="1" MinWidth="60"/>
-                                    <AccessText VerticalAlignment="Center" Text="{DynamicResource Str.Dialog.ProjectProperties.General.Threads}" />
+                                    <AccessText VerticalAlignment="Center" Margin="4,0,0,0" Text="{DynamicResource Str.Dialog.ProjectProperties.General.Threads}" />
                                 </DockPanel>
                             </Grid>
                         </HeaderedContentControl>
@@ -82,7 +88,7 @@
 
         <StackPanel Grid.Row="2" HorizontalAlignment="Right" Orientation="Horizontal" Spacing="6">
             <Button Command="{CompiledBinding OkCommand}" Content="{DynamicResource Str.Dialog.ProjectProperties.Button.Ok}" />
-            <Button Command="{CompiledBinding CancelCommand}" Content="{DynamicResource Str.Dialog.ProjectProperties.Button.Cancel}" />
+            <Button Command="{CompiledBinding CancelCommand}" Content="{DynamicResource Str.Dialog.ProjectProperties.Button.Cancel}" IsCancel="True" />
             <Button Content="{DynamicResource Str.Dialog.ProjectProperties.Button.Help}" IsEnabled="False" />
             <StackPanel.Styles>
                 <Style Selector="Button">

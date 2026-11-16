@@ -487,10 +487,80 @@ and `ToolbarCaptionTests.Segoe_UI_nine_point_matches_console_measurements` (Wind
   command references/typed arguments, localized labels, live shortcut derivation and named providers
   for dynamic content. Guard command/provider joins, preserve focus routing and test visibility and
   invalid declarations. This is a new component with multiple behaviours and a suite of its own.
+  First slice (#3510): embedded host-owned main-menu declarations and registries, typed command
+  arguments, settings toggles and disabled placeholders, guarded recursively against MainView AXAML.
+  Dynamic captions retain host label bindings and fallback localization keys. Provider declarations
+  cover recent projects, run choices, closed documents, panel layouts and add-ins (including its
+  static Manager child). Contract: `openspec/specs/main-menu-model/spec.md`.
+  First-slice validation: the declaration has 199 placements: 18 submenus, 127 command references, 40 separators, six
+  providers, three placeholders and five toggles. All 26 new cases pass without skips in an isolated
+  xUnit host compiling the actual component and test sources; all 26 fail against inert API scaffolds
+  (empty loading/parsing/validation and command registry, inert state accessors). The production files
+  were never replaced by those scaffolds. Desktop Debug builds with zero warnings/errors; strict
+  validation of `main-menu-model` and tree hygiene pass. No new localization key, VB6 measurement,
+  rendered surface, MISSING_FEATURES status change or MISSING_LANGUAGE count change.
+  Full HexIDE.Tests: 6,884 passed, 40 skipped, zero failures or xUnit errors (6,924 total),
+  including all 26 new cases passing. Raised the measured CI floor to 6,577. The skips are 27
+  Windows/platform cases, ten cases requiring the absent VB6 template tree, and one each requiring
+  the unavailable DAP schema, netcoredbg and debugpy; none is claimed as coverage. Changes remain
+  uncommitted for supervisor review at that boundary. Rendering and the other surface split-outs
+  were left for later work.
+  Second slice (#3510): a separate Avalonia renderer uses these declarations, host bindings, providers,
+  toggles and existing live gesture handling. The embedded data now includes visibility and icon keys.
+  That slice left the IDE displaying AXAML. Renderer/AXAML parity was exercised in English and Arabic, including populated
+  layout providers. All eight renderer cases pass on Linux without skips; all eight fail against an
+  inert renderer scaffold. The metadata parity check and unknown-visibility guard also fail when the
+  new data/validation are removed (ten cases with demonstrated teeth).
+  Full renderer-slice validation (WSL): HexIDE.Tests 7,124 passed, 50 skipped (7,174 total);
+  Integration 5,540 passed, two skipped (5,542 total). Both reports have zero failures and zero
+  xUnit errors. CI floors rise to 6,815 and 5,264. The unit skips are 37 Windows/platform cases,
+  ten absent VB6 templates, one unavailable DAP schema and two uncached debug adapters. The
+  integration skips require Windows font/GDI measurements. No skip is claimed as coverage.
+  Desktop Debug builds with zero warnings/errors; strict spec validation and tree hygiene pass.
+  Third slice (#3510): MainView now installs the renderer and the handwritten AXAML menu is retired.
+  The declaration is the sole menu source. Declaration validation and placement-id guards remain;
+  installed-menu tests cover shipped languages, language changes, named control lookup, automation
+  paths, profile visibility bindings and shortcuts. Expanded profile visibility remains outside this slice.
+  Migration validation: all 12 renderer cases passed with the rendered menu installed while AXAML was
+  retained for comparison; the existing declaration parity also passed. After retirement, declaration
+  guards pass 29/29, renderer cases 13/13 and add-in/profile/shortcut route cases 12/12, with no skips.
+  The no-AXAML guard and installed-menu lifecycle case both fail against the pre-change source (two
+  demonstrated teeth); continuity assertions deliberately retain the existing behavior. Desktop Debug
+  builds with zero warnings/errors; strict spec validation and tree hygiene pass. No VB6 measurement,
+  localization key, MISSING_FEATURES status or MISSING_LANGUAGE count changes.
+  All six changed unit classes pass together (402 cases). Full WSL unit suite: 7,274 passed, 55 skipped,
+  zero failures or xUnit errors. Skips: 42 platform cases, ten missing VB6 templates, two uncached debug
+  adapters and one unavailable DAP schema. Full integration: 5,560 passed, two Windows font/GDI cases
+  skipped, zero xUnit errors, and one failure in the unchanged `LanguageServerLeakGuardTests` real-
+  composition case: its server exits before the guard can observe it running. That failure reproduces
+  standalone without constructing MainView or a menu; it is left for the LSP guard's owner. No skipped
+  case is claimed as coverage. The menu renderer and add-in/profile/shortcut cases pass without skips.
+  MISSING_FEATURES status and MISSING_LANGUAGE counts are unchanged. Live rendering verification
+  remains with the supervisor; no renderer is installed in the IDE by this slice.
 - [ ] **Data-driven toolbars — large:** publish bands/placement ids and render commands and host-owned
   dynamic providers from data, sharing the registry and visibility contract. Test command, toggle,
   flyout, enablement and visibility parity. The shippable model is larger than merely rendering today's
   buttons from an in-tree list; the latter can be a separate medium first slice.
+  Model slice (#3621): embedded declarations for all four bands, sharing the main-menu command,
+  typed-argument and visibility registrations. Static Add Form children retain menu declarations;
+  host providers are `add-project-templates` and `selection-readout` (both icons, text blocks and
+  spacers). Lock Controls retains its command and one-way checked binding. Independent id pins,
+  invalid-declaration guards and AXAML parity protect the migration boundary. Contract:
+  `openspec/specs/toolbar-model/spec.md`. Rendering, profile authoring and #419 remain unfinished.
+  Model validation: 27 new cases pass on Linux without skips; all 27 fail with inert API scaffolding
+  in place of the component. Parity also rejects nine deliberate AXAML changes: structure, command,
+  tooltip, band and item visibility, checked binding, flyout child command, nested flyout content and
+  readout spacing. Desktop Debug builds with zero warnings/errors. No new localization key, VB6
+  measurement, rendered surface, MISSING_FEATURES status change or MISSING_LANGUAGE count change.
+  Full WSL unit validation: 7,302 passed, 55 skipped, zero failures and zero xUnit errors (7,357 total);
+  CI floor rises to 6,989. Skips: 42 Windows/macOS platform cases, ten absent VB6 templates, two
+  uncached debug adapters and one unavailable DAP schema. No skip is claimed as coverage.
+  Local test setup needed the already-built `HexIDE.LspGuard.dll` copied beside the test output's
+  launcher: without its companion DLL, that launcher exited 154 before starting a server. Only
+  generated output was repaired; no build-output source fix is included in this slice. The four
+  affected shutdown cases then passed without skips. The completed full run used live MTP output and
+  a 45-minute outer allowance; an earlier 20-minute allowance cut off a passing run during the
+  repository-wide Roslyn affinity guard. Strict spec validation and tree hygiene pass.
 - [ ] **#419 follow-through — small once the renderer exists:** hook profile toolbar visibility into
   that renderer, with migration parity tests. Do not conflate the already-corrected spec claim with
   implementing the future profile capability.

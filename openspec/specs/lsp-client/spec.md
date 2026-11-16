@@ -12,6 +12,185 @@ later without the editor noticing.
 
 ## Requirements
 
+### Requirement: Diagnostic project attribution in groups
+
+With multiple loaded projects, the Diagnostics tool window SHALL show each diagnostic's
+owning project and `get_diagnostics` SHALL return it in `project`. The owner SHALL be the
+startup project if it lists the document, otherwise the first loaded project that lists it.
+A shared document SHALL appear under that owner only. Switching the startup project SHALL
+recompute attribution. Attribution SHALL NOT change server routing or editor diagnostics.
+
+#### Scenario: Distinct and shared modules
+
+- **GIVEN** two loaded projects listing their own modules and a shared module
+- **WHEN** diagnostics arrive for those modules
+- **THEN** each exclusive module names its own project and the shared module names the startup project
+- **AND** both the Diagnostics window and `get_diagnostics` use that rule
+
+#### Scenario: Startup changes
+
+- **WHEN** the startup project switches to another project listing the shared module
+- **THEN** existing diagnostics for that module name the new startup project
+- **AND** if the startup project does not list a document, its first loaded owner is used
+
+#### Scenario: Unknown document and single project
+
+- **WHEN** a diagnostic names a document no loaded project lists
+- **THEN** it has no project owner
+- **WHEN** only one project is loaded
+- **THEN** the Project column is hidden and automation reply field values are unchanged
+
+### Requirement: Projects sharing a workspace artefact or import folder
+
+For an entry declaring `workspaceArtifact` or `projectImport`, HexIDE SHALL write or import only the first
+loaded project in each resolved host folder. It SHALL report a configuration problem in Tools > Language
+Servers naming all projects sharing that folder, without rejecting the server entry. The problem SHALL
+clear on the project-change debounce when the projects no longer share a folder.
+
+#### Scenario: Two projects would replace the same descriptor
+
+- **GIVEN** First and Second are loaded in that order from the same folder
+- **WHEN** an entry generates a workspace artefact or imports projects
+- **THEN** only First is written or imported for that folder
+- **AND** a configuration problem names First and Second
+
+#### Scenario: Projects move to separate folders
+
+- **GIVEN** a shared-folder configuration problem is shown
+- **WHEN** the projects acquire distinct folders and the project-change debounce completes
+- **THEN** both projects are written or imported in their respective folders
+- **AND** the shared-folder problem disappears
+
+
+### Requirement: Carried-file completion and signature help
+
+A carried-file editor SHALL offer completion and signature help from its claiming language servers,
+only for capabilities each server advertises. It SHALL flush pending document edits before each
+request, use the caret position, and detach its completion, snippet and signature-help handlers
+without stacking them when the view is reattached. The code window SHALL share that component while
+retaining its own completion position, commit keys and editing rules.
+
+#### Scenario: Completion in a carried file
+- **WHEN** Auto List Members is enabled and the developer types a letter, types an advertised completion trigger, or invokes Complete Word
+- **THEN** an advertising server's completion items appear
+- **AND** Enter accepts an item without a line break, Tab also accepts, and Space closes the list without accepting
+- **AND** with nothing selected, Enter closes the list and starts a new line, while Tab accepts the first item
+- **AND** accepting a snippet selects its first stop and Tab advances through its stops
+
+#### Scenario: Signature help in a carried file
+- **WHEN** the developer types a claiming server's advertised signature-help trigger
+- **THEN** the editor displays that server's signature help
+
+#### Scenario: Neither capability advertised
+- **WHEN** the claiming server advertises neither completion nor signature help
+- **THEN** the editor sends neither request and opens neither popup
+
+
+### Requirement: Opt-in restart on project membership changes
+A server entry SHALL accept `restartOnProjectChange`, off by default. At the workspace-folder debounce,
+projects with chosen workspace roots joining or leaving SHALL restart only an opted-in running connection through the registry's
+restart path and reopen its known documents. Project membership SHALL be compared independently of
+deduplicated workspace folders and source lists.
+
+#### Scenario: A project joins or leaves a group
+- **GIVEN** two loaded projects and a running server with `restartOnProjectChange: true`
+- **WHEN** a project joins or leaves the group
+- **THEN** that server restarts once after the debounce and its open documents are reopened
+- **AND** other connections are not restarted
+- **AND** the replacement initializes with the startup project’s `rootUri` and current `workspaceFolders`
+
+#### Scenario: A connection was started without documents
+- **GIVEN** an opted-in connection was started manually and has no open documents
+- **WHEN** a project joins the group
+- **THEN** its replacement starts even though there are no documents to reopen
+
+#### Scenario: Two projects occupy one folder
+- **GIVEN** an opted-in running server
+- **WHEN** another project joins in a folder already represented in `workspaceFolders`
+- **THEN** the membership change still restarts the connection
+
+#### Scenario: The entry keeps the default
+- **GIVEN** an entry without `restartOnProjectChange`
+- **WHEN** group membership changes
+- **THEN** its existing connection receives the normal capability-gated folder update without restarting
+
+#### Scenario: A source list changes
+- **GIVEN** an opted-in running server
+- **WHEN** a source is added without changing the loaded projects
+- **THEN** this setting does not restart the server
+
+
+### Requirement: Registered watched-file notifications
+The client SHALL advertise dynamic registration only for `workspace/didChangeWatchedFiles`, including relative-pattern support. It SHALL honour registration and unregistration per connection, discard registrations on disconnect, and log and refuse unsupported methods. String globs and relative patterns with URI or WorkspaceFolder bases SHALL honour create/change/delete masks. Workspace-relative string globs SHALL follow additions and removals of workspace folders; relative patterns SHALL retain their own base. A registration that would recursively watch a filesystem root, including through the existing ancestor of a missing base, SHALL be logged and refused with `InvalidParams` without installing any part of the request. Matching disk changes and completed IDE writes SHALL be coalesced before notification, and SHALL reach only connections with matching registrations.
+
+#### Scenario: A server registers configuration files
+- **WHEN** a server registers `**/pyproject.toml` and that file changes externally
+- **THEN** the client sends a matching `FileEvent` in `workspace/didChangeWatchedFiles`
+- **AND** unrelated connections receive nothing
+
+#### Scenario: The IDE writes a file
+- **WHEN** an IDE save or artefact generation completes
+- **THEN** the write feeds the same registered-glob matcher directly, independently of editor reload watching
+
+#### Scenario: A registration ends
+- **WHEN** its id is unregistered or its connection drops
+- **THEN** it produces no further file events
+
+
+### Requirement: Failed initialize handshakes are visible
+
+When an initialize handshake fails, the client SHALL log a giving-up Warning including the reason,
+tear down the RPC connection, and retry if the transport supports reconnecting. Caller cancellation and direct client shutdown
+SHALL remain ordinary shutdown logged at Debug. The one permitted silent stdio restart SHALL
+retain its separate policy below.
+
+#### Scenario: Initialize fails before the deadline
+- **WHEN** a server receives initialize and replies with an error or closes the stream
+- **THEN** the client logs the handshake failure at Warning with its reason
+- **AND** tears down the RPC connection without becoming initialized
+
+#### Scenario: The client stops during initialize
+- **WHEN** the caller cancels startup or the client stops while initialize is pending
+- **THEN** the attempt is recorded as Cancelled and logged at Debug without a failure Warning
+
+### Requirement: One restart after a silent stdio initialize
+
+The client SHALL restart a live stdio server at most once when initialize times out, only if the channel tap
+confirms the request reached the channel and a read was waiting with no bytes returned. It SHALL record the
+restart and process identities in the protocol inspector and show a localized status-bar notice naming the
+server. A second unanswered handshake SHALL fail with a reason stating that it was tried twice.
+
+#### Scenario: The replacement answers
+- **WHEN** a live stdio server receives initialize but stays silent until the handshake deadline
+- **AND** its replacement answers initialize
+- **THEN** language features become available on the replacement connection
+- **AND** the inspector and status bar report the restart
+
+#### Scenario: Both processes stay silent
+- **WHEN** both the original and replacement stay silent past their initialize deadlines
+- **THEN** the connection fails with a reason saying it was tried twice
+- **AND** no third process is launched
+
+#### Scenario: Other startup failures
+- **WHEN** a server exits, refuses initialize, returns partial bytes, never receives the write, or startup is cancelled
+- **THEN** this automatic stdio restart does not apply
+
+
+### Requirement: Configured initialization options
+
+The client SHALL pass a registration's `initializationOptions` JSON unchanged in the initialize request.
+It SHALL omit the member when the configuration is absent or null and preserve an explicitly configured empty object.
+
+#### Scenario: A server needs language-specific startup settings
+
+- **WHEN** a registration configures `initializationOptions` as `{"Language":"vb6"}`
+- **THEN** initialize carries that object unchanged
+
+#### Scenario: A registration has no startup settings
+
+- **WHEN** `initializationOptions` is omitted or null
+- **THEN** initialize has no `initializationOptions` member
+
 ### Requirement: User-requested server code actions
 
 The client SHALL request code actions only when the user opens Quick Fixes on a diagnostic in the code
@@ -74,7 +253,7 @@ The client SHALL declare `textDocument.selectionRange` without dynamic registrat
 these requests to the highest-priority claimant advertising `selectionRangeProvider`, accepting
 both boolean and options advertisements. The client SHALL preserve the returned ranges and recursive
 parents without computing enclosing ranges locally. Null replies and failed requests SHALL yield
-empty arrays. Editor commands and selection history remain pending (#3076).
+empty arrays. The editor's Expand Selection and Shrink Selection commands SHALL use these ranges, and SHALL keep the enclosing chain so that Shrink Selection returns through it.
 
 #### Scenario: A server supplies enclosing ranges
 - **WHEN** a caller requests ranges at two selection endpoints from an offering server
@@ -226,6 +405,15 @@ EditorService.NavigateTo. Each result row SHALL expose an automation name contai
 one-based line number and line text, rather than the location record's string representation.
 An empty answer SHALL show a localized no-references row. A failed server SHALL have an error row while
 successful servers' locations remain visible. Callers SHALL be able to supply locations without a request.
+
+#### Scenario: No running server offers references
+- **WHEN** no running language server for the document offers `referencesProvider`
+- **THEN** the pane SHALL show a localized row naming the document and explaining that no running server offers Find References
+- **AND** no references request SHALL be sent, and the command SHALL remain enabled
+
+#### Scenario: A provider finds no references
+- **WHEN** a running server offers references and returns an empty answer
+- **THEN** the pane SHALL show the existing localized no-references row
 
 #### Scenario: A reference in another module
 - **WHEN** the user presses Shift+F12 and selects a result from a second module
@@ -397,6 +585,17 @@ running.
 - **WHEN** the language server process exits while the IDE is running
 - **THEN** the client reports itself as not running and language features go inert
 - **AND** the IDE does not restart it automatically within the session
+
+#### Scenario: The user restarts a stopped server
+- **WHEN** the user restarts a stopped server in Language & Debug Servers
+- **THEN** it starts with its loaded registration and is sent the open documents it claims
+- **AND** the configuration file is not read again
+- **AND** every other entry keeps running untouched
+- **AND** the protocol inspector records that the user requested the restart
+
+#### Scenario: The user restarts a running server
+- **WHEN** the user restarts a running server
+- **THEN** only that entry stops and starts, and its open documents are sent once to the new connection
 
 ### Requirement: Result shapes SHALL distinguish "empty" from "nothing to show"
 Requests returning a collection SHALL return a non-null, possibly-empty collection. Requests returning a
@@ -757,6 +956,17 @@ still goes away.
 - **AND** a kill after a successful shutdown answer and sent exit is recorded as a stop without a fault
 - **AND** otherwise the observed exit code is recorded before transport disposal finishes
 
+### Requirement: Named-pipe process notices survive startup races
+
+A launched named-pipe transport SHALL attach its exit handler before enabling process exit events.
+It SHALL replay the current connect attempt's notices and unexpected-close event to late subscribers.
+
+#### Scenario: A pipe server exits before observation continues
+
+- **WHEN** the launched child exits immediately, before startup observation continues
+- **THEN** the transport reports its exit code before unexpected closure
+- **AND** subscribers attached after the failed connect receive the recorded notices and closure
+
 ### Requirement: Message types SHALL be registered for ahead-of-time serialization
 Every message type crossing the boundary SHALL be registered with the serializer's generated context, and
 call sites SHALL NOT pass anonymously-typed payloads.
@@ -801,7 +1011,10 @@ tries to replace it.
 
 ### Requirement: Configuration SHALL layer over compiled-in defaults
 Default entries SHALL be contributed in code and user configuration SHALL be merged over them by identifier.
-Removing the user configuration SHALL restore the defaults.
+Removing the user configuration SHALL restore the defaults. A complete user entry with a default's identifier
+SHALL replace it wholesale, inheriting no fields. Only
+a user entry omitting required fields SHALL inherit fields it does not write and replace fields it writes,
+including whole objects and arrays. An explicit JSON null SHALL clear the inherited field. Layering SHALL NOT mutate the contributed default or rewrite the file (#1209).
 
 Layering rather than replacement is what makes the previous requirement safe. The bundled server can be a
 row a user may break precisely because the row itself is not stored in the file they edit: an improvement to
@@ -809,6 +1022,14 @@ a default reaches an existing user, and a user who renders their own configurati
 deleting a file rather than by reinstalling.
 
 A default entry whose server cannot be located SHALL be omitted rather than contributed in a broken state.
+
+#### Scenario: A complete entry replaces the bundled server
+- **WHEN** a user entry names the bundled server and supplies all required fields
+- **THEN** no optional fields are inherited, including the bundled priority
+
+#### Scenario: A user adjusts the bundled server
+- **WHEN** a user entry names the bundled server and writes only `trace` and `priority`
+- **THEN** those fields change and the resolved command and claimed extensions remain inherited
 
 #### Scenario: A user has no configuration
 - **WHEN** no user configuration is present
@@ -1438,6 +1659,16 @@ worth showing, and the shape a user interface consumes should not need rebuildin
 - **WHEN** a server is configured for a language and no document of that language has been opened
 - **THEN** the connection is observable, and is distinguishable from a server that failed to start
 
+### Requirement: Absolute pipe names SHALL reach Unix domain sockets on Unix hosts
+On Linux and macOS, the pipe transport SHALL use an absolute `pipeName` verbatim as a Unix domain socket
+path. A bare name SHALL use .NET's `/tmp/CoreFxPipe_<name>` endpoint instead. On Windows the transport
+SHALL continue to use Windows named pipes.
+
+#### Scenario: Connecting to a raw Unix domain socket peer
+- **GIVEN** a server listening on a raw Unix domain socket at an absolute path on Linux or macOS
+- **WHEN** the pipe transport connects with that path as `pipeName`
+- **THEN** JSON-RPC messages round trip over that socket with Content-Length framing
+
 ### Requirement: Servers SHALL start on first use and own their transport
 A server SHALL be started when a document of a language it claims is first opened, and not before. Each
 registered server SHALL carry its own transport configuration.
@@ -1682,7 +1913,10 @@ The client SHALL advertise `window.workDoneProgress`, accept string and integer 
 in the status bar. Progress SHALL name the originating registration’s display name and separate title
 and message with a colon, omitting absent parts. Server titles and messages SHALL be flattened and capped at 200 characters together.
 Tokens SHALL be scoped to their connection. End and disconnect SHALL finish progress immediately without
-erasing a later status message from another operation. Cancellation and partial-result progress are not supported.
+erasing a later status message from another operation. Temporary feedback SHALL retain the bar for its
+duration, with the latest persistent text deferred underneath; an ended progress line SHALL NOT return
+afterwards. Recording deferred text SHALL NOT advance `MessageVersion`; displaying it SHALL advance it.
+Cancellation and partial-result progress are not supported.
 
 #### Scenario: An attached server indexes a workspace
 - **WHEN** a server creates a token and sends begin followed by report
@@ -1690,6 +1924,15 @@ erasing a later status message from another operation. Cancellation and partial-
 - **AND** omitted report fields retain their prior values
 - **WHEN** the server sends end or disconnects
 - **THEN** its progress is removed immediately and any remaining task can be shown
+
+#### Scenario: Progress arrives while temporary feedback is visible
+- **WHEN** begin or report arrives during a temporary status message
+- **THEN** the temporary message SHALL remain for its duration and the latest persistent text SHALL be remembered
+- **AND** recording deferred text SHALL NOT advance the displayed message's `MessageVersion`
+- **WHEN** the duration ends
+- **THEN** the latest persistent text SHALL appear, or the previous persistent text if no update arrived
+- **AND** progress that ended meanwhile SHALL NOT reappear
+- **AND** a further temporary message SHALL replace the current one immediately and restart its duration
 
 #### Scenario: A server begins without creating a token
 - **WHEN** a server sends work-done begin without a prior create request
@@ -1816,7 +2059,7 @@ anyway, so it is recorded rather than defended.
 #### Scenario: Material project changes
 - **WHEN** forms, modules or carried files are added, removed or renamed, or references change
 - **THEN** the artefact is regenerated after debouncing, subject to the same consent and ownership checks
-- **AND** regeneration sends no watched-file notification in this phase (#456)
+- **AND** completed artefact writes and removals feed matching watched-file registrations directly (#456)
 
 #### Scenario: Restart on change
 - **WHEN** an entry sets `restartOnChange` and a regeneration changes its artefact's bytes, including taking the file back
@@ -1845,14 +2088,16 @@ anyway, so it is recorded rather than defended.
 
 ### Requirement: Completion capabilities describe current insertion support
 The client SHALL declare `textDocument.completion` in initialize with default `insertTextMode: 1`
-(asIs), all 25 completion kinds, preselect support and plaintext documentation support.
-It SHALL omit optional completion capabilities it does not implement, including snippet support and
-insert/replace support.
+(asIs), all 25 completion kinds, preselect support, plaintext documentation support, insert/replace
+support, snippet support, both insert text modes and the `insertTextMode` list item default.
+It SHALL omit optional completion capabilities it does not implement, including completion resolve
+and context support.
 
 #### Scenario: A server inspects completion capabilities
 - **WHEN** the client sends initialize
 - **THEN** completion declares kind values 1 through 25, preselect support, plaintext documentation and default insertion mode `1`
-- **AND** snippet, insert/replace, resolve, context and list item default support are absent
+- **AND** insert/replace and both indentation modes are supported, with only `insertTextMode` advertised as a list item default
+- **AND** snippet support is declared; resolve and context support are absent
 
 ### Requirement: Completion text edits commit together
 The editor SHALL apply a completion's TextEdit instead of its insertText or label when provided,
@@ -1870,20 +2115,67 @@ or touches protected text.
 - **WHEN** any additional completion edit touches a protected region
 - **THEN** neither the main edit nor the additional edits are applied
 
+### Requirement: Completion insert ranges and indentation modes
+The editor SHALL apply an InsertReplaceEdit's insert range, preserving text after that range.
+It SHALL preserve supplied whitespace under mode 1 (`asIs`), including when no mode is supplied.
+Under mode 2 (`adjustIndentation`), it SHALL prefix each later line with the
+caret line's leading whitespace up to the caret, preserving that line's own indentation and valid
+snippet stops. It SHALL preserve tabs and spaces exactly, without converting either. The item's mode
+SHALL override the list's `itemDefaults.insertTextMode`. Additional edits SHALL remain literal.
+
+#### Scenario: Insert completion in the middle of a word
+- **WHEN** a completion supplies insert and replace ranges with different ends
+- **THEN** the insert range is replaced and the remaining suffix is kept
+
+#### Scenario: A list supplies indentation mode
+- **WHEN** a list defaults to mode 2 and an item has no explicit mode
+- **THEN** later inserted lines retain their own indentation after the caret line's leading whitespace
+- **AND** an item explicitly requesting mode 1 preserves its supplied whitespace
+
 ### Requirement: Numbered completion snippet placeholders
 The editor SHALL expand numbered tabstops, placeholder defaults, repeated linked placeholders,
-backslash escapes and the final `$0` in completion items with insertTextFormat 2, preserving
-multiline whitespace. It SHALL visit positive tabstops in numeric order, finish at `$0` or the
+backslash escapes and the final `$0` in completion items with insertTextFormat 2, applying the
+item’s indentation mode. It SHALL visit positive tabstops in numeric order, finish at `$0` or the
 insertion end, and end linking on Escape. It SHALL refuse unsupported or malformed snippet syntax
-before changing the document. Snippet support SHALL remain undeclared while nested placeholders
-and variables are unfinished.
+before changing the document, including variable transforms. It SHALL expand nested placeholders
+and retain their stops through indentation adjustment. Inner edits SHALL update enclosing linked copies;
+replacing an outer field SHALL retire its inner stops and copies while retaining other fields.
+It SHALL resolve the nine LSP 3.17 `TM_*` variables from the original editor selection, caret and file URI. Unset variables SHALL use their
+default or empty text; unknown names without defaults SHALL become editable placeholders after
+numbered stops. Unsaved documents SHALL leave file variables unset.
+A surviving linked occurrence SHALL become editable when its primary occurrence is retired.
+An edit confined to a child or a deletion adjacent to an empty child SHALL preserve that child.
+Touching stops SHALL retain independent boundaries, and touching empty copies SHALL mirror once each.
+Indentation adjustment SHALL apply to snippet text before resolving variables, preserving multiline
+variable values verbatim. `TM_FILENAME_BASE` SHALL retain a leading dot when there is no later extension.
+A dollar sign that begins no tabstop or variable SHALL be literal text; an unterminated braced expression
+SHALL still refuse the completion.
+The editor SHALL cache each numbered field’s rendered value and refuse a snippet exceeding
+1,048,576 UTF-16 code units before changing the document.
+
+#### Scenario: Repeated defaults exceed the expansion limit
+- **WHEN** nested linked defaults would expand beyond 1,048,576 UTF-16 code units
+- **THEN** the completion is refused without changing the document
 
 #### Scenario: A completion repeats a loop variable
 - **WHEN** a snippet contains `${1:Item}` followed by `$1` and `${2:c}`
 - **THEN** the default Item is selected and editing it changes both occurrences
 - **AND** Tab selects c and a further Tab finishes at the final stop
 
+#### Scenario: Nested multiline placeholder
+- **WHEN** a snippet contains `${1:If x Then\n  ${2:Foo}}` and requests indentation adjustment
+- **THEN** the outer stop spans both lines including the added indentation
+- **AND** Tab selects the inner Foo stop
+
+#### Scenario: Variables and unknown names
+- **WHEN** a snippet contains `$TM_SELECTED_TEXT`, `${TM_FILENAME:default}` and `$UNKNOWN`
+- **THEN** it inserts the original selection, the filename (or default for an unsaved document), and UNKNOWN
+- **AND** UNKNOWN is an editable stop
+
 ### Requirement: Completion presentation honours server metadata
+The editor SHALL request completion at the start of the identifier around the caret, including for
+Complete Word, so a server filtering by the preceding word can return the full list for that context (#3340).
+
 The client SHALL sort merged completion items ordinally by `sortText ?? label` and match the whole word around the caret using
 `filterText ?? label`, keeping the full list visible. The editor SHALL initially select the first preselected prefix match, otherwise
 its first prefix match, leaving no selection for an empty or unmatched word. It SHALL show string or MarkupContent documentation with detail as plain text and reuse
@@ -1902,9 +2194,14 @@ If no item matches the opening word, the editor SHALL retain the server's list f
 - **WHEN** the server offers a snippet replacement labelled `zsnip` over the word `M` and no item matches `M`
 - **THEN** the item remains available to accept and its snippet fields activate normally
 
+#### Scenario: Requesting within a typed identifier
+- **WHEN** the user requests completion with the caret within or after `Ms`
+- **THEN** the request position is before `M`
+- **AND** after `c.` or `UBound(` with no identifier, the request position remains after the punctuation
+
 ### Requirement: Completion acceptance keys
-The editor SHALL follow the VB6 SP6 measurements linked in issue #3056: Enter accepts a selected
-ordinary completion and then commits a new line; Tab accepts without a break; Space accepts and
+In ordinary code the editor SHALL follow the VB6 SP6 measurements linked in issue #3056: Enter accepts
+a selected ordinary completion and then commits a new line; Tab accepts without a break; Space accepts and
 then types a space; Escape closes without accepting. With no selection, Enter and Space SHALL close
 the list and only type their character, while Tab SHALL accept the first outlined item, replacing the
 whole word including text after the caret. The first Down SHALL highlight that first item.
@@ -1918,6 +2215,19 @@ A snippet choice picker's Enter SHALL accept without a line break and keep snipp
 #### Scenario: Enter in a snippet choice picker
 - **WHEN** the user selects `two` in a snippet choice picker and presses Enter
 - **THEN** `two` replaces the placeholder and its linked occurrences, without inserting a line break
+
+### Requirement: VB free text preserves typing
+The VB code editor SHALL suppress completion inside apostrophe comments, Rem comments and string
+literals, including unfinished literals and doubled quotes, and in continued comments (#3577). This rule
+SHALL apply independently of server replies, including replies arriving after the caret enters free text.
+
+#### Scenario: Space after on in a comment
+- **WHEN** the user types `' Typed on Wayland` one character at a time and a server offers `On Error`
+- **THEN** the document contains exactly the typed text
+
+#### Scenario: String literal text
+- **WHEN** the user types words inside a string literal
+- **THEN** completion does not replace those words
 
 ### Requirement: Completion snippet choices
 The editor SHALL expand a numbered choice placeholder to its first value and offer its values in
@@ -1977,7 +2287,8 @@ deadline and caller cancellation.
 ### Requirement: Project diagnostics panel
 
 The IDE SHALL provide a Diagnostics panel listing current diagnostics across documents with publisher,
-severity, document, line and message. It SHALL filter by severity and current document, update when
+severity, source when supplied, document, line and message. It SHALL show counts per severity,
+respecting the current-document filter but including hidden severities. It SHALL filter by severity and current document, update when
 reports change, and navigate a double-clicked row through the project document resolver.
 Document cells SHALL show the loaded member name, or the file name for an outside file, with the full
 path only in a tooltip and the URI retained for navigation. Severity cells SHALL use localized singular
@@ -2202,8 +2513,8 @@ Substituted values SHALL be JSON-escaped and SHALL NOT be interpreted as templat
 ### Requirement: Declared project imports SHALL replace generated artefacts
 
 On a registry-started connection after initialization, and on the workspace artefact service's
-debounced project-change trigger, the client SHALL call each declared import command with each loaded project's saved URI and in-memory
-project text. The command MUST be advertised by the server. An importing entry SHALL skip workspace
+debounced project-change trigger, the client SHALL call each declared import command with the first loaded
+project's saved URI and in-memory project text in each resolved folder. The command MUST be advertised by the server. An importing entry SHALL skip workspace
 artefact generation. Reply notes SHALL reach the server log used for `window/logMessage`; object
 notes SHALL use their `message` text. Failures or unavailable saved paths
 SHALL be reported as configuration problems without disabling the connection.
@@ -2245,8 +2556,8 @@ reach disk. Overwriting an existing file SHALL NOT report creation. Temporary Ma
 report file operations. Save As retains the original, so it SHALL NOT report a rename. Explorer name
 changes and removal without disk deletion SHALL NOT report file operations.
 
-Disk rename and Remove-with-delete hooks remain outstanding (#2248): current explorer operations change
-names and membership only.
+No explorer operation renames or deletes a file on disk, so the client sends no `didRenameFiles` or
+`didDeleteFiles` today: names and membership change without touching the disk.
 
 #### Scenario: A server requests only Basic modules
 - **GIVEN** a server registers `didCreate` with a `file` scheme and `**/*.bas` file pattern
@@ -2569,3 +2880,144 @@ and be logged once per command.
 - **THEN** the existing Find References pane SHALL show its supplied locations
 - **AND** the document text and numbered lines SHALL remain unchanged
 - **AND** no `textDocument/references` request SHALL be sent
+
+### Requirement: Diagnostic and highlight ranges follow document edits
+
+The editor SHALL anchor diagnostic underlines, diagnostic text colouring and document-highlight
+boxes to its document so that edits before a range move it with the code without waiting for a
+replacement server response (#512).
+
+#### Scenario: A designer replaces a form header
+
+- **GIVEN** a diagnostic or document highlight is drawn over code below the form header
+- **WHEN** a designer edit replaces the header with a longer or shorter header
+- **THEN** the drawn range moves with that code immediately
+- **AND** no new diagnostic publication or document-highlight response is needed
+
+### Requirement: On-type formatting protocol seam selects one trigger owner
+
+The client SHALL expose a query and a request for a document URI and typed character. It SHALL send
+`textDocument/onTypeFormatting` only to the highest-priority running document claimant declaring that
+character in `documentOnTypeFormattingProvider.firstTriggerCharacter` or `moreTriggerCharacter`.
+The request SHALL carry the post-typing position and formatting options, return the server's text edits,
+and cancel after a 250 ms budget with no edits on timeout.
+
+#### Scenario: A higher-priority server declares a different character
+
+- **WHEN** the first claimant declares only `;` and two lower claimants declare newline
+- **AND** the caller requests on-type formatting for newline
+- **THEN** only the higher-priority of the two newline claimants receives the request
+
+#### Scenario: The selected server does not answer
+
+- **WHEN** the on-type formatting request exhausts its budget
+- **THEN** the client sends `$/cancelRequest` for that request and returns no edits
+
+### Requirement: Edit language-server definitions through a field form
+The Language & Debug Servers window SHALL offer Add and Edit for user entries and Customize for bundled
+entries. The form SHALL cover every documented entry field, validate while typing with the configuration
+loader, and show the full command, arguments, environment and resolved pipe placeholders before saving.
+Unresolved workspace placeholders SHALL remain visible with an explanation. Saving SHALL count the
+command identity as seen. The form SHALL NOT start a process.
+
+Saving SHALL patch only the changed values of that entry, preserving unrelated entries, unknown fields
+and comments. Customize SHALL write only changed fields and the bundled id. An existing entry id SHALL
+be read-only. A file changed since the form opened SHALL NOT be overwritten.
+Invalid JSON SHALL name the field using its displayed label. Untouched customized fields SHALL inherit;
+clearing a populated field SHALL write explicit null. The help text SHALL explain both.
+New entries SHALL put each property on its own line, matching surrounding indentation, with id first
+and the rest in documentation order. New fields in existing entries SHALL also use their own lines,
+surrounding indentation and documentation order. New entries SHALL use inline arrays when neighboring
+entries use inline arrays. JSON field errors SHALL report 1-based lines and character columns.
+The form SHALL offer dropdowns for transport, pipeRole, websocketRole, tcpRole and trace, containing the
+documented values plus an empty choice. Existing unrecognized values SHALL remain selected and be
+reported as problems. Only fields used by the selected transport SHALL be visible; hiding a field SHALL
+NOT clear its value.
+
+#### Scenario: Change transport without losing connection settings
+- **WHEN** a user changes a pipe entry to stdio
+- **THEN** pipeName and pipeRole are hidden and their stored values remain unchanged
+- **AND** selecting pipe again shows the retained values
+
+#### Scenario: Edit in a short tool pane
+- **WHEN** Add, Edit or Customize opens a form taller than the tool pane
+- **THEN** the first field receives focus and is brought into view
+- **AND** only the fields scroll, keeping problems, command preview and Save visible
+
+#### Scenario: Customize a bundled server
+- **WHEN** the user changes only its arguments and saves
+- **THEN** the user entry contains only its id and arguments
+- **AND** other fields continue to inherit through the existing layering rules
+
+#### Scenario: Edit a file with comments and unknown fields
+- **WHEN** a user changes one command
+- **THEN** only that command value changes in the file
+- **AND** saving remembers the command identity including arguments and environment
+
+#### Scenario: A hand edit races the form
+- **WHEN** the file changes after the form opens
+- **THEN** saving asks the user to reopen the form and leaves the hand edit untouched
+
+### Requirement: TCP language-server transport
+
+The client SHALL accept `transport: "tcp"` with a `tcp://host:port` endpoint and `tcpRole`
+`connect` (default) or `listen`, using Content-Length framed JSON-RPC in both directions.
+Listen SHALL bind IPv4 loopback for `localhost` and SHALL require an explicit IP literal for
+other bind addresses. Listener port 0 SHALL allocate an OS-selected port; connect SHALL require
+a nonzero port. Invalid endpoints and roles SHALL be rejected during configuration loading.
+The transport SHALL support the pipe launch fields and workspace placeholders, with `{host}`
+and `{port}` providing the host and actual port. A listener SHALL bind before launching its child.
+External servers SHALL remain running on disconnect; launched servers SHALL be owned, observed
+and stopped by the transport, and SHALL NOT auto-reconnect. Connection failures SHALL name
+the host and port. The transport inventory test SHALL enumerate all four supported transports.
+
+#### Scenario: Connect to a running language server
+
+- **GIVEN** a TCP server listening on a configured endpoint
+- **WHEN** the client establishes the connection
+- **THEN** initialize requests and responses cross the socket with Content-Length framing
+
+#### Scenario: Launch a server that dials the IDE
+
+- **GIVEN** a TCP listen entry at `tcp://localhost:0` with a command using `{port}`
+- **WHEN** the connection starts
+- **THEN** HexIDE binds loopback before launching and passes its allocated port to the child
+- **AND** receives the child's connection and exchanges framed language-server messages
+
+### Requirement: A declared typing trigger owns the editor gesture
+
+The code editor SHALL invoke on-type formatting after typing a declared trigger and flushing didChange.
+For a declared newline, Enter SHALL immediately insert a line break with the current line's indentation
+and SHALL skip local block closing and keyword case correction. Without a newline claimant, local Enter
+behavior SHALL remain unchanged. Other claimed typing characters SHALL use the same ownership rule.
+Replies SHALL be discarded after a document version or identity change or view detachment. Accepted edits
+SHALL use the guarded formatting writer and undo together with the typed character or line break,
+without holding an undo group open across the request (#2672). For an edit reaching the caret, the caret
+SHALL stop before the replacement's (n+1)th line break, or at its end if fewer exist, where n counts line
+breaks in the old text from the edit start to the caret. Once stopped at a line break, later insertions
+at that position SHALL NOT move it. This mapping SHALL also apply to reduced replies protecting read-only
+text. Same-position insertions SHALL retain their array order for on-type and document formatting.
+
+#### Scenario: A server closes the block
+
+- **WHEN** Enter follows a block opener and the document's server declares newline
+- **THEN** the server receives the synchronized text and post-newline position
+- **AND** only the server's closer is inserted, with the caret mapped through its indentation edits
+- **AND** one undo restores the text before Enter
+
+#### Scenario: One edit inserts the body and closer at EOF
+
+- **WHEN** the opener is the last line and a reply inserts indentation and a closer at the caret
+- **THEN** the caret stops before the first inserted line break, after the body indentation
+- **AND** the same rule holds when protected edits are dropped from the reply
+
+#### Scenario: A reply outlives its typing version
+
+- **WHEN** typing or undo changes the document before the formatting reply arrives
+- **THEN** the reply changes nothing, even if the text was restored to the requested text
+
+#### Scenario: A newline formatter times out
+
+- **WHEN** the newline formatter exceeds its 250 ms budget
+- **THEN** cancellation is sent and the typed line break and indentation stay
+- **AND** no local closer or keyword correction runs as a fallback

@@ -15,6 +15,27 @@ disclosure, consent and the handling of credentials.
 
 ## Requirements
 
+### Requirement: Localized chat chrome and feedback
+The chat SHALL use the active IDE language for approval prompts and outcomes, tool-use and tool-failure
+wrappers, apply feedback, error prefixes, buttons, the new-chat tooltip and a language-neutral input hint.
+File names, tool names and exception details SHALL remain as supplied. Tool-result payloads and notes
+sent to the model SHALL remain English (#3861, following #3687). The
+[text audience audit](../../../docs/ai-chat-localization.md) lists the literals and their audiences.
+
+#### Scenario: Approval in a German IDE
+- **WHEN** the IDE language is German and the assistant requests an edit
+- **THEN** the developer sees a German approval prompt with the supplied file name unchanged
+- **AND** rejecting it sends an English tool result to the model
+
+
+### Requirement: Reading a named file SHALL leave the developer's view in place
+The assistant's `get_file_content` SHALL call the add-in host's `TryGetDocument` member and report its
+content or refusal reason without navigating to the document.
+
+#### Scenario: Reading a background or closed document
+- **WHEN** the model asks for a named file's content
+- **THEN** the assistant returns the host's whole-file text without changing the active tab or caret
+
 ### Requirement: The input row SHALL fit a narrow dock pane
 The assistant view SHALL allow its prompt box to narrow with the dock pane, keeping Send and New within
 the pane at widths of 212 and 254 logical pixels.
@@ -46,6 +67,65 @@ differently.
 - **WHEN** the configured endpoint is a model server on the developer's own machine
 - **THEN** the assistant works and no conversation content leaves the machine
 
+### Requirement: Anthropic endpoints SHALL use the native Messages API
+When the configured base URL host is exactly `api.anthropic.com` (case insensitive), the assistant SHALL
+use the native streaming Messages API for replies, tool continuations and compaction. All other hosts
+SHALL retain the OpenAI-compatible transport. Credential resolution and cleartext refusal SHALL remain
+the same for both transports.
+
+The native transport SHALL translate system prompts, tool definitions, tool calls and tool results,
+assemble streamed tool input before exposing calls, and preserve native content blocks, including signed
+thinking, in history. It SHALL replay thinking only for the current developer message’s tool round; older
+assistant turns SHALL retain text and tool-use blocks without thinking or redacted thinking. Compaction
+SHALL remove thinking from the kept tail and run only before the first request of a developer message.
+The system prompt SHALL be built once per developer message and reused throughout its tool round.
+It SHALL report stream errors and premature EOF as
+failures rather than successful completion. It SHALL ignore unknown event types.
+
+`chat-settings.json` MAY set `maxTokens` (native output cap, default 64000), `thinking` (the native thinking
+configuration object), optional `workspaceId` (sent as `anthropic-workspace-id` only to Anthropic), and `effort` (sent as `output_config.effort`). Omission of thinking and effort SHALL
+leave their defaults to the configured model; no model-name allowlist SHALL be imposed. These native
+settings SHALL NOT alter requests to other hosts. For example, `"thinking": {"type": "adaptive"}` and
+`"effort": "high"` request adaptive thinking at high effort on a model that supports those settings.
+
+Wire reference read on 2026-11-10, API version **2026-10-21**:
+[Messages](https://platform.claude.com/docs/en/api/messages/create),
+[streaming](https://platform.claude.com/docs/en/build-with-claude/streaming),
+[thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking),
+[steering thinking](https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking),
+[effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+[tool use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/implement-tool-use),
+[API overview](https://platform.claude.com/docs/en/api/overview) and
+[versioning](https://platform.claude.com/docs/en/api/versioning).
+These are protocol references, not a claim of a live provider test; `NativeMessagesTests` uses a fake HTTP
+handler and synthetic event streams following the documented wire shapes.
+
+The native transport SHALL show the API’s `error.message` for unsuccessful HTTP responses. A
+`refusal` stop SHALL use the stream-error display route, including `stop_details.explanation` when
+present; a `max_tokens` stop SHALL visibly identify the incomplete reply. Neither SHALL execute tools.
+
+Additional protocol references checked on 2026-11-10 at the same API version:
+[authentication](https://platform.claude.com/docs/en/manage-claude/authentication),
+[preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking),
+[thinking tool workflows](https://platform.claude.com/docs/en/build-with-claude/thinking-tool-workflows),
+[stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons), and
+[refusal details](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
+
+#### Scenario: Native streamed tool call
+- **WHEN** Anthropic streams a tool's JSON input across several deltas and finishes with `tool_use`
+- **THEN** the assistant receives one assembled call only after message completion
+- **AND** its results return as user content containing `tool_result` blocks
+- **AND** signed thinking blocks are returned unchanged
+
+#### Scenario: Failure during a native stream
+- **WHEN** a stream errors or ends before `message_stop`
+- **THEN** the request fails without executing its tool calls
+
+#### Scenario: A different endpoint
+- **WHEN** the host is OpenAI, a loopback server, or any host other than exactly `api.anthropic.com`
+- **THEN** requests continue to use `/chat/completions` and the OpenAI-compatible format
+- **AND** native content metadata is omitted
+
 ### Requirement: The assistant SHALL refuse to transmit over a cleartext connection
 The assistant SHALL refuse to send a request over an unencrypted connection to a remote host, and SHALL
 permit an unencrypted connection only to the local machine.
@@ -62,6 +142,25 @@ never reaches a network.
 #### Scenario: A local endpoint without encryption
 - **WHEN** the configured endpoint is on the local machine over an unencrypted connection
 - **THEN** the request proceeds
+
+### Requirement: A remote endpoint SHALL require a credential before context is read
+Before assembling a request, reading the active file for context, or compacting history, Send SHALL
+require a non-whitespace effective API key unless the configured endpoint URL's host is `localhost`,
+`127.0.0.1`, or `::1`. The exemption SHALL depend only on that host, never the provider, model, or URL
+path. A blocked send SHALL display a localized explanation naming the `HEXIDE_AI_API_KEY` environment
+variable before `apiKey` in `chat-settings.json`, retain the input, and send no request.
+
+#### Scenario: No key for the default endpoint
+- **WHEN** Send is invoked without a key in settings or any supported environment variable
+- **THEN** no request is made, no active-file context is read, and the chat explains how to set a key
+
+#### Scenario: A keyless local endpoint
+- **WHEN** the configured URL names one of the three loopback hosts
+- **THEN** chat and history compaction may use that endpoint without a key
+
+#### Scenario: A remote URL mentions localhost
+- **WHEN** a remote endpoint has `localhost` only in its path and no effective key
+- **THEN** Send refuses before reading context or making any request
 
 ### Requirement: The credential SHALL be resolvable without storing it in a settings file
 The assistant SHALL accept its credential from the environment in preference to its settings file, and
@@ -83,6 +182,7 @@ than discovering it later.
 ### Requirement: The developer SHALL be told what leaves their machine, before it does
 The assistant SHALL disclose, before its first request of a session, that the conversation, the active
 file's contents and its diagnostics are sent to the configured third-party endpoint, naming that endpoint.
+The disclosure and its conditional file-key tip SHALL use the selected language's resources.
 
 The thing a developer would most want to know is exactly the thing a chat panel makes easiest to forget:
 the code in the editor is part of every request, not just what was typed into the box. Disclosing it once,
@@ -180,3 +280,13 @@ the other side: the assistant carries on as though the edit landed, and the deve
 - **WHEN** the developer applies a code block whose header differs from the active file's
 - **THEN** nothing is written, the transcript says the block was not applied and why, and the assistant is told
   the same
+
+### Requirement: The developer SHALL be able to stop a response
+The panel SHALL offer Stop while responding and SHALL pass cancellation to provider streams, including
+history summarization. Stopping SHALL finish any partial bubble without showing a request error and SHALL
+allow another message. Pending tool approvals SHALL be rejected and remaining tool calls skipped.
+
+#### Scenario: Stopping a provider stream
+- **WHEN** the developer clicks Stop while a response is in flight
+- **THEN** the provider stream is cancelled and the panel accepts another message
+- **AND** any text already received remains visible

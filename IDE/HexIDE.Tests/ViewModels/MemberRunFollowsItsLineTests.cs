@@ -7,6 +7,7 @@ using HexIDE.Localization;
 using HexIDE.Lsp;
 using HexIDE.Projects;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Language;
 using HexIDE.Runtime.Serialization;
 
 namespace HexIDE.Tests.ViewModels;
@@ -57,6 +58,84 @@ public class MemberRunFollowsItsLineTests : IDisposable
         "Attribute Go.VB_Description = \"Goes\"\r\n" +
         "End Sub\r\n";
 
+    [AvaloniaFact]
+    public void TheWindowSeesEachDescribingRunAsOneOfItsRegionsAndNoOrphan()
+    {
+        // The reader's two answers agree (#3668): every run that hangs from a declaration is a read-only region, and
+        // the orphan under the comment is neither.
+        var vm = OpenCode();
+
+        vm.HangingRegionsNow.Select(r => r.Name).Should().Equal("Count", "Go", "Total");
+        vm.ReadOnlyRegionsNow.Should().Contain(vm.HangingRegionsNow.Select(r => r.Region));
+        vm.ReadOnlyRegionsNow.Should().HaveCount(vm.HangingRegionsNow.Count + 1, "the header and the three runs");
+        VerdictsOf(vm).Should().ContainSingle(r => r.Kind == MemberRunKind.Orphan, "the premise: the run under the comment");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Public Sub Go() ' does X", "' does X", "Go")]
+    [InlineData("Public Sub Go() ' does X", "X", "Go")]
+    [InlineData("Public Sub Go(Optional s As String = \"it's\") ' does X", "' does X", "Go")]
+    [InlineData("Public Count As Long ' how many", "' how many", "Count")]
+    [InlineData("Public Sub Go( _\r\n    ByVal x As Long) ' does X", "' does X", "Go")]
+    public void ACommentTailMovesPastTheRunAndTheCaretPrecedesIt(string declaration, string tail, string member)
+    {
+        var attribute = member == "Count" ? "VB_VarDescription" : "VB_Description";
+        var vm = Open($"Option Explicit\r\n{declaration}\r\nAttribute {member}.{attribute} = \"Goes\"\r\nEnd Sub\r\n");
+        var before = vm.Document.Text;
+        var at = At(vm, tail);
+        var placed = vm.InsertLineBreakPastRun(at, 0, "A\nB");
+
+        placed.Should().NotBeNull();
+        vm.Document.Text.Should().Be(before.Remove(at, tail.Length).Insert(at, "A")
+            .Replace("\"Goes\"\r\n", "\"Goes\"\r\nB" + tail + "\r\n"));
+        placed!.End.Should().Be(At(vm, "B" + tail) + 1);
+        vm.HangingRegionsNow.Should().ContainSingle(r => r.Name == member, "the run still hangs from the declaration");
+        vm.Document.UndoStack.Undo();
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public void AnApostropheInsideAStringDoesNotMakeTheDeclarationACommentTail()
+    {
+        var vm = Open("Option Explicit\r\nPublic Sub Go(Optional s As String = \"it's\") ' does X\r\n"
+            + "Attribute Go.VB_Description = \"Goes\"\r\nEnd Sub\r\n");
+
+        vm.ReadOnlySections.PlaceLineBreak(At(vm, "'s"), 0, "\n").Should().BeNull();
+    }
+
+    [AvaloniaFact]
+    public void AnAddInsLineBreakBeforeATrailingCommentIsRefused()
+    {
+        var vm = Open(Code.Replace("Public Sub Go()", "Public Sub Go() ' does X"));
+        var before = vm.Document.Text;
+
+        vm.ApplyEdits([new TextChange(At(vm, "' does X"), 0, "\n")]).Should().NotBeNull();
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public async Task InsertFileBeforeATrailingCommentMovesTheCommentPastTheRun()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"hexide-insert-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "A\nB", TestContext.Current.CancellationToken);
+        try
+        {
+            windowManager.OpenFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerOpenOptions>())
+                .Returns(Task.FromResult<IReadOnlyList<string>?>([path]));
+            var vm = Open(Code.Replace("Public Sub Go()", "Public Sub Go() ' does X"));
+
+            await vm.InsertFileAsync(At(vm, "' does X"), 0);
+
+            vm.Document.Text.Should().Contain("Public Sub Go() A\r\nAttribute")
+                .And.Contain("VB_UserMemId = 0\r\nB' does X\r\n");
+            vm.CaretOffset.Should().Be(At(vm, "B' does X") + 1);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private CodeEditorViewModel Open(string code)
     {
         var eventBus = Substitute.For<IEventBus>();
@@ -69,7 +148,9 @@ public class MemberRunFollowsItsLineTests : IDisposable
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            Substitute.For<HexIDE.Debugging.IRunScope>(), Substitute.For<ILocalizationService>());
+            Substitute.For<HexIDE.Debugging.IRunScope>(), new LocalizationService(),
+                new Vb6ProjectFileFormat(),
+                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader(), regionRules: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionRules(), regionWriter: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter());
         made.Add(vm);
         var module = TestHelpers.CreateModule(name: "Module1", kind: ModuleKind.StandardModule);
         module.UpdateCode(code);
@@ -86,8 +167,15 @@ public class MemberRunFollowsItsLineTests : IDisposable
 
     private static DocumentLine LineOf(CodeEditorViewModel vm, string text) => vm.Document.GetLineByOffset(At(vm, text));
 
-    private static MemberRun RunOf(CodeEditorViewModel vm, string member) =>
-        vm.MemberRunsNow.Single(r => r.Member?.Name == member);
+    private static HangingRegion RunOf(CodeEditorViewModel vm, string member) =>
+        vm.HangingRegionsNow.Single(r => r.Name == member);
+
+    /// <summary>Every attribute run of the buffer as the VB6 reader judges it, the orphans the code window never sees included.</summary>
+    private static IReadOnlyList<MemberRun> VerdictsOf(CodeEditorViewModel vm) =>
+        ReadOnlyRegions.MemberRuns(vm.Document.Text, vm.BufferPrefixLength);
+
+    private static MemberRun VerdictOf(CodeEditorViewModel vm, string member) =>
+        VerdictsOf(vm).Single(r => r.Member?.Name == member);
 
     private static List<(int Offset, int End)> Deletable(CodeEditorViewModel vm, int from, int to) =>
         vm.ReadOnlySections.GetDeletableSegments(new SimpleSegment(from, to - from))
@@ -256,7 +344,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
 
         vm.Document.Remove(last.Offset, last.Length);
 
-        vm.MemberRunsNow.Should().ContainSingle(r => r.DescribesMember).Which.Member!.Value.Name.Should().Be("Go",
+        vm.HangingRegionsNow.Should().ContainSingle().Which.Name.Should().Be("Go",
             "the line left above the run is still the declaration of Go, continued into the line the deletion emptied");
     }
 
@@ -284,7 +372,8 @@ public class MemberRunFollowsItsLineTests : IDisposable
         vm.Document.Remove(first.Offset, first.TotalLength);
 
         vm.Document.Text.Should().Contain("    ByVal x As Long)\r\n" + runText);
-        vm.MemberRunsNow.Should().ContainSingle().Which.DescribesMember.Should().BeFalse();
+        VerdictsOf(vm).Should().ContainSingle().Which.Kind.Should().Be(MemberRunKind.Orphan);
+        vm.HangingRegionsNow.Should().BeEmpty("the code window never sees an orphan");
         vm.ReadOnlyRegionsNow.Should().ContainSingle("only the header is read-only now");
     }
 
@@ -406,7 +495,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
             .Should().NotBeNull();
 
         vm.Document.Text.Should().Contain("Public Sub Leave()\r\nAttribute Go.VB_Description");
-        RunOf(vm, "Leave").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Leave").Kind.Should().Be(MemberRunKind.Procedure);
     }
 
     [AvaloniaTheory]
@@ -421,7 +510,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
         var placed = vm.InsertLineBreakPastRun(declaration.Offset, declaration.Length, text)!;
 
         vm.Document.Text.ReplaceLineEndings("\n").Should().Contain(lastLine + "\nAttribute Go.VB_Description");
-        RunOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
         placed.End.Should().Be(text.EndsWith("Debug.Print x", StringComparison.Ordinal)
             ? LineOf(vm, "    Debug.Print x").EndOffset : LineOf(vm, lastLine).EndOffset);
     }
@@ -438,7 +527,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
             "' note\nPublic Event Other()\nPublic Wrong As Long\n" + declarationText + "\n' tail");
 
         vm.Document.Text.ReplaceLineEndings("\n").Should().Contain(declarationText + "\nAttribute Count.VB_VarDescription");
-        RunOf(vm, "Count").Kind.Should().Be(MemberRunKind.Variable);
+        VerdictOf(vm, "Count").Kind.Should().Be(MemberRunKind.Variable);
     }
 
     [AvaloniaFact]
@@ -450,7 +539,9 @@ public class MemberRunFollowsItsLineTests : IDisposable
         vm.InsertLineBreakPastRun(declaration.Offset, declaration.Length, "' note\n    x = 1");
 
         vm.Document.Text.ReplaceLineEndings("\n").Should().Contain("' note\nAttribute Go.VB_Description");
-        vm.MemberRunsNow.Single(r => r.Region.Start == At(vm, "Attribute Go.VB_Description")).Kind.Should().Be(MemberRunKind.Orphan);
+        VerdictsOf(vm).Single(r => r.Region.Start == At(vm, "Attribute Go.VB_Description")).Kind.Should().Be(MemberRunKind.Orphan);
+        vm.HangingRegionsNow.Should().NotContain(r => r.Region.Start == At(vm, "Attribute Go.VB_Description"),
+            "the code window never sees an orphan");
     }
 
     [AvaloniaFact]
@@ -468,7 +559,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
             await vm.InsertFileAsync(declaration.Offset, declaration.Length);
 
             vm.Document.Text.ReplaceLineEndings("\n").Should().Contain("Public Sub Go()\nAttribute Go.VB_Description");
-            RunOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
+            VerdictOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
             vm.CaretOffset.Should().Be(LineOf(vm, "Public Sub Go()").EndOffset);
         }
         finally { File.Delete(path); }
@@ -503,7 +594,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
         vm.Document.Text.Should().Be(before
             .Replace("Public Sub Go()\r\n", "Public Sub Go() ' x\r\n")
             .Replace("VB_UserMemId = 0\r\n", "VB_UserMemId = 0\r\n    Debug.Print 0\r\n"));
-        RunOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
         vm.Document.UndoStack.Undo();
         vm.Document.Text.Should().Be(before);
     }

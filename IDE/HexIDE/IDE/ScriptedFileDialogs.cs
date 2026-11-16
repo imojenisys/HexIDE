@@ -8,8 +8,8 @@ namespace HexIDE.IDE;
 /// </summary>
 /// <remarks>
 /// <b>A file picker is a native operating-system dialog, so it is outside the control tree entirely.</b>
-/// <c>dump_visual_tree</c> cannot see it, <c>interact</c> cannot address it, and a modal one stops the
-/// automation server answering at all — so every feature that ends in Save As, Open, Make EXE, Add File or
+/// <c>dump_visual_tree</c> cannot see it, <c>interact</c> cannot address it, and one can remain open while the
+/// automation server keeps answering — so every feature that ends in Save As, Open, Make EXE, Add File or
 /// Export was unverifiable, and each of them was verified by asking a person to click. That is the one
 /// thing the dev loop is not allowed to require.
 ///
@@ -43,25 +43,76 @@ public static class ScriptedFileDialogs
     private static long _refusalsReported;
     private static string _lastRefusal = "";
 
+    private static readonly Dictionary<object, string> NativePickers = new();
+
+    internal static object NativePickerOpened(string? title, string? suggestedFileName)
+    {
+        var token = new object();
+        lock (Lock)
+            // A picker HexIDE gives no title shows the system's own, so "title '(not specified)'" sent a caller looking for
+            // a window of that name (#3913).
+            NativePickers.Add(token, (title is null
+                ? "no title from HexIDE (the operating system shows its own, such as 'Save As' or 'Open')"
+                : $"title '{title}'") + $", suggested file name '{suggestedFileName ?? "(none)"}'");
+        return token;
+    }
+
+    internal static void NativePickerClosed(object token)
+    {
+        lock (Lock) NativePickers.Remove(token);
+    }
+
+    public static string? NativePickerNote
+    {
+        get
+        {
+            lock (Lock)
+                return NativePickers.Count == 0 ? null
+                    : $"An open native file picker is outside the control tree: {string.Join("; ", NativePickers.Values)}. "
+                      + "Close or cancel it in the operating system before retrying. Arming an answer cannot answer an "
+                      + "already open picker; clear_file_dialog_answers does not close it.";
+        }
+    }
+
+    public static string? WithNativePickerNote(string? text) => NativePickerNote is { } open
+        ? string.IsNullOrWhiteSpace(text) ? open : text.TrimEnd() + " " + open
+        : text;
+
+    /// <summary>The next single destination, for a write tool's pre-edit safety check; does not consume it.</summary>
+    public static string? NextSinglePath
+    {
+        get
+        {
+            lock (Lock)
+                return Answers.TryPeek(out var answer) && answer.Paths is { Count: 1 } paths ? paths[0] : null;
+        }
+    }
+
     /// <summary>How many answers are queued, for a tool that has to report what it armed.</summary>
     public static int Pending { get { lock (Lock) return Answers.Count; } }
 
     /// <summary>
-    /// Arms one answer. A null or empty path answers as a cancelled dialog.
+    /// Arms one answer. A null or empty path answers as a cancelled dialog. Returns its place in the queue, 1 for the
+    /// next dialog to open, so a reply can say which picker it answers (#3913).
     /// </summary>
     /// <remarks>
     /// Cancel is offered deliberately: "the reader changed their mind" is a distinct path through every
     /// one of these flows and is the one most likely to be written wrong, because it is the one nobody
     /// exercises by hand.
     /// </remarks>
-    public static void AnswerNextWith(string? path)
+    public static int AnswerNextWith(string? path)
     {
-        lock (Lock) Answers.Enqueue((++_armed, string.IsNullOrWhiteSpace(path) ? null : [path]));
+        lock (Lock)
+        {
+            Answers.Enqueue((++_armed, string.IsNullOrWhiteSpace(path) ? null : [path]));
+            return Answers.Count;
+        }
     }
 
     /// <summary>
     /// Arms one answer of several files, as a person selects them in a multi-select Open picker (#2408). Every path
-    /// must be non-blank; one path is the same answer as <see cref="AnswerNextWith"/>.
+    /// must be non-blank; one path is the same answer as <see cref="AnswerNextWith"/>. Returns its place in the queue,
+    /// as that does.
     /// </summary>
     /// <remarks>
     /// It is still one answer, spent by the next dialog to open. A picker that takes one file, a save or an Open
@@ -69,11 +120,15 @@ public static class ScriptedFileDialogs
     /// cancelled rather than taking the first path, which would be a wrong answer that runs, and the refusal is told
     /// to the caller by <see cref="CancelWatch.After"/> or by <see cref="TakeUnreportedRefusal"/>.
     /// </remarks>
-    public static void AnswerNextWithMany(IReadOnlyList<string> paths)
+    public static int AnswerNextWithMany(IReadOnlyList<string> paths)
     {
         if (paths.Count == 0 || paths.Any(string.IsNullOrWhiteSpace))
             throw new ArgumentException("Every path must be non-blank, and there must be at least one.", nameof(paths));
-        lock (Lock) Answers.Enqueue((++_armed, [.. paths]));
+        lock (Lock)
+        {
+            Answers.Enqueue((++_armed, [.. paths]));
+            return Answers.Count;
+        }
     }
 
     /// <summary>Discards every armed answer, so a failed script cannot affect the next one.</summary>
@@ -93,8 +148,7 @@ public static class ScriptedFileDialogs
     /// </summary>
     /// <remarks>
     /// <b>A tool asks this before a save, and refuses rather than blocks when it is true</b>
-    /// (hexide-io/HexIDE#514). A modal native picker stops the automation server answering at all, so the
-    /// call that opened it never returns and neither does anything behind it. Asked before anything is
+    /// (hexide-io/HexIDE#514). A native picker cannot be answered through the control tree. Asked before anything is
     /// changed, so a refusal leaves nothing half-done. An armed answer, including an armed cancel, makes
     /// the save safe to attempt, which is what a caller testing the pathless state needs.
     /// </remarks>
@@ -102,8 +156,8 @@ public static class ScriptedFileDialogs
 
     /// <summary>What a tool says when <see cref="WouldShowPicker"/> refuses it, after naming the document.</summary>
     public const string PickerRefusal =
-        "has no file yet, so saving it would open a native save picker, which stops this server answering " +
-        "until a person closes it. Nothing was changed. Arm answer_next_file_dialog first: with a path to " +
+        "has no file yet, so saving it would open a native save picker outside the control tree. " +
+        "Nothing was changed. Arm answer_next_file_dialog first: with a path to " +
         "save it there, or with none to answer the picker as cancelled and leave the document without a file.";
 
     /// <summary>

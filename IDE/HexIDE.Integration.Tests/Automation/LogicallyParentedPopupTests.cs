@@ -27,6 +27,55 @@ public class LogicallyParentedPopupTests
     private static UiNode? Find(UiNode node, string name) =>
         node.Name == name ? node : node.Children.Select(c => Find(c, name)).FirstOrDefault(n => n is not null);
 
+    private sealed class OwnerViewModel { public string Title { get; set; } = "x"; }
+
+    // A popup's content is in a visual tree of its own, so the walk for where a DataContext is set stopped at the popup, and
+    // a control in it listed every member of what it inherited as though the context started there (#2892). The context is
+    // on the owner and not the window because a headless popup is in the window's overlay layer: a walk up the visuals gets
+    // to the window from there, as a real popup's can't, and only the popup's logical parent leads to the owner.
+    [AvaloniaFact]
+    public void A_control_in_a_popup_says_where_it_inherits_its_DataContext_from()
+    {
+        var item = new MenuItem { Header = "Properties" };
+        var menu = new ContextMenu { ItemsSource = new[] { item } };
+        var target = new Border { ContextMenu = menu, Width = 50, Height = 50, DataContext = new OwnerViewModel() };
+        var window = Show(target);
+        try
+        {
+            UiAutomationDriver.Interact(target, "expand", null).Success.Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+            item.DataContext.Should().BeOfType<OwnerViewModel>("the case is a context inherited through the popup");
+
+            var inspected = UiAutomationDriver.Inspect(item, "Window/ContextMenu/MenuItem", window);
+
+            inspected.DataContextOwner.Should().Be(UiAutomationDriver.PathWithin(window, "Window", target));
+            inspected.DataContextMembers.Should().NotContain(m => m.Name == "Title");
+            inspected.DataContextNote.Should().Contain("inherits its DataContext");
+        }
+        finally { window.Close(); }
+    }
+
+    // A context set on the popup's own content starts there, so it's still that content's, and the walk stops at it.
+    [AvaloniaFact]
+    public void A_DataContext_set_inside_a_popup_is_not_reported_as_inherited_from_outside_it()
+    {
+        var item = new MenuItem { Header = "Properties" };
+        var menu = new ContextMenu { ItemsSource = new[] { item }, DataContext = new OwnerViewModel() };
+        var target = new Border { ContextMenu = menu, Width = 50, Height = 50, DataContext = "outside" };
+        var window = Show(target);
+        try
+        {
+            UiAutomationDriver.Interact(target, "expand", null).Success.Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+
+            var inspected = UiAutomationDriver.Inspect(menu, "Window/ContextMenu", window);
+
+            inspected.DataContextOwner.Should().BeNull();
+            inspected.DataContextMembers.Should().Contain(m => m.Name == "Title");
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public void An_open_flyouts_items_are_in_the_tree()
     {
@@ -175,6 +224,53 @@ public class LogicallyParentedPopupTests
         finally { window.Close(); }
     }
 
+    // A Properties row's menu sits on the Border at the root of its template, which the dump shows as the row's None
+    // child. The row is what a caller aims at, and expand on it was refused with no hint (#2877).
+    [AvaloniaFact]
+    public void Expand_on_a_row_reaches_the_menu_on_its_one_unnamed_wrapper()
+    {
+        var menu = new ContextMenu { ItemsSource = new[] { new MenuItem { Header = "Export picture..." } } };
+        var wrapper = new Border { ContextMenu = menu, Width = 50, Height = 20, Child = new TextBlock { Text = "Picture" } };
+        var row = new ContentControl { Content = wrapper };
+        var window = Show(row);
+        try
+        {
+            var opened = UiAutomationDriver.Interact(row, "expand", null);
+            Dispatcher.UIThread.RunJobs();
+
+            opened.Success.Should().BeTrue(opened.Error);
+            menu.IsOpen.Should().BeTrue();
+            opened.Detail.Should().Contain("the unnamed child of").And.Contain("that holds the menu");
+
+            var closed = UiAutomationDriver.Interact(row, "collapse", null);
+            Dispatcher.UIThread.RunJobs();
+
+            closed.Success.Should().BeTrue(closed.Error);
+            menu.IsOpen.Should().BeFalse();
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Expand_on_a_node_with_two_unnamed_menu_wrappers_is_left_to_the_caller()
+    {
+        var first = new Border { ContextMenu = new ContextMenu(), Width = 50, Height = 20 };
+        var second = new Border { ContextMenu = new ContextMenu(), Width = 50, Height = 20 };
+        var row = new StackPanel { Children = { first, second } };
+        var holder = new ContentControl { Content = row };
+        var window = Show(holder);
+        try
+        {
+            var refused = UiAutomationDriver.Interact(holder, "expand", null);
+
+            refused.Success.Should().BeFalse();
+            refused.Error.Should().Be("element does not support 'expand'");
+            first.ContextMenu!.IsOpen.Should().BeFalse();
+            second.ContextMenu!.IsOpen.Should().BeFalse();
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public void Expand_opens_a_flyout_and_collapse_shuts_it()
     {
@@ -302,6 +398,33 @@ public class LogicallyParentedPopupTests
             UiAutomationDriver.Resolve(window, item.Path).control.Should().BeOfType<MenuItem>();
             UiAutomationDriver.Inspect(UiAutomationDriver.Resolve(window, popup.Path).control!, popup.Path)
                 .Path.Should().Be(popup.Path);
+        }
+        finally { UiAutomationDriver.Interact(target, "collapse", null); window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(PopupRoute.ContextMenu)]
+    [InlineData(PopupRoute.ContextFlyout)]
+    [InlineData(PopupRoute.AttachedFlyout)]
+    [InlineData(PopupRoute.ButtonFlyout)]
+    public void Inspect_PopupOwner_ReportsExpandCollapseState(PopupRoute route)
+    {
+        var (target, isOpen) = Owning(route);
+        var window = Show(target);
+        try
+        {
+            var closed = UiAutomationDriver.Inspect(target, "owner");
+            closed.Providers.Should().Contain("expandCollapse");
+            closed.ExpandCollapseState.Should().Be("Collapsed");
+
+            UiAutomationDriver.Interact(target, "expand", null).Success.Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+            isOpen().Should().BeTrue();
+            UiAutomationDriver.Inspect(target, "owner").ExpandCollapseState.Should().Be("Expanded");
+
+            UiAutomationDriver.Interact(target, "collapse", null).Success.Should().BeTrue();
+            Dispatcher.UIThread.RunJobs();
+            UiAutomationDriver.Inspect(target, "owner").ExpandCollapseState.Should().Be("Collapsed");
         }
         finally { UiAutomationDriver.Interact(target, "collapse", null); window.Close(); }
     }

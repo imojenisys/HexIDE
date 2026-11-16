@@ -80,16 +80,26 @@ allowed cannot silently become a different add-in.
 - **THEN** it is asked for again on the next start
 
 ### Requirement: The consent decision SHALL be re-verified before the add-in is loaded
-Where verification and the consent prompt are separated in time, the IDE SHALL re-verify the package before
-loading it and SHALL load only if the result still matches what the user was shown.
-
-The prompt can stay open indefinitely, and the files it describes are on disk the whole time. Without
-re-verification, the window between "the user reads the publisher name" and "the code runs" is a window in
-which the package can be swapped for a different one that the user never saw.
+The IDE SHALL re-verify each package immediately before loading its entry assembly, on both the startup
+and post-consent paths. It SHALL load only if the verdict and manifest hash match the original verification
+and a manifest is still present. A changed package SHALL be listed as Error with a localized LoadError
+saying it changed on disk after verification, and SHALL retain its id reservation against duplicates.
 
 #### Scenario: A package altered while the prompt is open
-- **WHEN** the package changes between the prompt appearing and the user allowing it
-- **THEN** re-verification fails and the add-in does not load
+- **WHEN** the package on disk differs from the one shown at the consent prompt
+- **THEN** it does not load, even if the user pressed Allow
+- **AND** Options → Add-Ins shows the localized changed-package error
+
+#### Scenario: A package altered between discovery and startup loading
+- **WHEN** another package's initialization or an external writer changes a package after discovery
+- **AND** its re-verification returns a different verdict, a different manifest hash, or no manifest
+- **THEN** no assembly from the changed package loads and it is not initialized
+- **AND** it is listed as Error with the localized changed-package message
+- **AND** a duplicate of its id remains refused
+
+#### Scenario: An unchanged package
+- **WHEN** re-verification matches the original verdict and manifest hash and still has a manifest
+- **THEN** the package loads if it was already allowed, is first-party, or the user allows it at the prompt
 
 ### Requirement: First-party status SHALL be established by key, not by claimed identity
 An add-in SHALL be treated as first-party only when its verified signing key matches a key the IDE ships
@@ -285,3 +295,36 @@ private key material.
   and the private key must match the intermediate public record
 - **WHEN** any of these checks fails
 - **THEN** issuance fails before writing publisher files
+
+### Requirement: Package output replacement preserves user files
+
+`pack` SHALL accept new or empty output folders and unchanged signed packages matching the supplied
+key, payload hashes, trust files and exact inventory. It SHALL refuse output/internal links and
+escaping payload paths, but allow linked ancestors. Ownership/link refusals SHALL name the path,
+explain why, confirm no change, and suggest another folder or moving this one aside. Replacements
+SHALL be staged; build or installation failure SHALL preserve the earlier package.
+
+#### Scenario: Empty output or linked ancestor
+- **WHEN** the output directory is empty or an ancestor of the output is a link
+- **THEN** packing proceeds subject to the same output inventory checks
+
+#### Scenario: Unrelated or edited output
+- **WHEN** the selected output contains unrelated or modified files, an extra directory, or a link
+- **THEN** packing refuses and preserves the existing output
+
+#### Scenario: Replacing a previous signed package
+- **WHEN** the existing output is an unchanged package signed with the supplied signing key and chain
+- **THEN** packing replaces it without prompting after the complete replacement is staged
+
+#### Scenario: Failure before installation
+- **WHEN** copying or signing the staged package fails
+- **THEN** the earlier package remains in place unchanged
+
+### Requirement: Add-in identity in trust surfaces remains the signed manifest name
+The consent prompt and Options → Add-Ins SHALL identify a signed add-in by the verified manifest's title.
+Localized chrome titles SHALL NOT replace that identity. `AddinTitle` and the packer's `--title` SHALL
+retain their separate roles as chrome text and signed package metadata respectively.
+
+#### Scenario: A package supplies a translated chrome title
+- **WHEN** an add-in registers a translated menu, tool window or command label and the language changes
+- **THEN** the consent prompt and Options → Add-Ins retain its signed manifest title

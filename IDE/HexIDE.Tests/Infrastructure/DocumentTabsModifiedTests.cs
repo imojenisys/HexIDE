@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.Text.Json;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
@@ -34,7 +35,9 @@ public sealed class DocumentTabsModifiedTests : IDisposable
         var projects = Substitute.For<IProjectManager>();
         projects.LoadedProjects.Returns([project]);
         context = new IdeContext(projects, dock, Substitute.For<ILspClient>(), null!, Substitute.For<IProjectRunnerService>(),
-            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
+            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader());
         tools = new HexIdeTools(context);
     }
 
@@ -54,14 +57,14 @@ public sealed class DocumentTabsModifiedTests : IDisposable
     }
 
     private FormEditViewModel Designer() => Made(new FormEditViewModel(null!, bus, service, null!, null!,
-        Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>()).Initialize(Form));
+        Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat()).Initialize(Form));
 
     private CodeEditorViewModel Code() => Made(new CodeEditorViewModel(
         Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), service,
         bus, Substitute.For<ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
         Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
         Substitute.For<IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
-        Substitute.For<ILocalizationService>()).Initialize(Form));
+        Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader()).Initialize(Form));
 
     private RelatedDocumentEditorViewModel Carried(string content)
     {
@@ -69,7 +72,7 @@ public sealed class DocumentTabsModifiedTests : IDisposable
         var path = Path.Combine(dir, "notes.txt");
         File.WriteAllText(path, content);
         return Made(new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(),
-            Substitute.For<ILocalizationService>())
+            Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>())
             .Initialize(new RelatedDocumentDefinition(project, "notes.txt", path)));
     }
 
@@ -111,8 +114,7 @@ public sealed class DocumentTabsModifiedTests : IDisposable
             "the title names the tab, and activate_document_tab matches it; the state is its own field");
         Modified(tabs[1]).Should().BeFalse("nothing has been typed into the code window");
         Modified(tabs[2]).Should().BeTrue("the carried file was edited");
-        tabs[2].TryGetProperty("document", out _).Should().BeFalse(
-            "a carried file is no form or module, and has isModified without document, as the description says");
+        tabs[2].GetProperty("document").GetString().Should().Be("notes.txt");
     }
 
     [AvaloniaFact]

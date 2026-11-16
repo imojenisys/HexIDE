@@ -1,15 +1,31 @@
 using System;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.Windows.Input;
+using System.Linq;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using Avalonia.LogicalTree;
+using TextEditor = AvaloniaEdit.TextEditor;
+using Dock.Model.Core;
+using HexIDE.Forms.Views;
+using HexIDE.Forms.ViewModels;
+using HexIDE.VisualDesigner;
+using HexIDE.Tools;
+using HexIDE.Tools.ObjectBrowser;
+using HexIDE.Tools.LanguageServers;
+using HexIDE.Tools.Diagnostics;
+using HexIDE.Tools.ProtocolInspector;
+using HexIDE.VisualDesigner.Views;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Labs.Input;
 using HexIDE.Addins;
 using HexIDE.Projects;
+using HexIDE.Menus;
 using HexIDE.Utils;
 
 namespace HexIDE;
@@ -17,12 +33,39 @@ namespace HexIDE;
 public partial class MainView : UserControl
 {
     private readonly ObservableCollection<MenuItem> _projectItems = [];
-    private readonly ObservableCollection<object> _toolsAddinItems = [];
-    private Separator? _toolsAddinSeparator;
+    private MenuRenderer? _menuRenderer;
 
     public MainView()
     {
+        // Register shortcut tracking before markup or the renderer assigns its first command.
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(MenuUtils).TypeHandle);
         InitializeComponent();
+        DockControl.AttachedToVisualTree += (_, _) => PresentRestoredWindows();
+        DockControl.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Dock.Avalonia.Controls.DockControl.LayoutProperty) PresentRestoredWindows();
+        };
+        var viewNames = this.GetLogicalDescendants().OfType<Control>().Prepend(this)
+            .Where(control => control.Name is not null && ReferenceEquals(this.FindNameScope()!.Find(control.Name), control))
+            .ToArray();
+        DataContextChanged += (_, _) =>
+        {
+            _menuRenderer?.Dispose();
+            _menuRenderer = DataContext is MainViewViewModel menuVm ? new MenuRenderer(menuVm) : null;
+            var names = new NameScope();
+            foreach (var control in viewNames) names.Register(control.Name!, control);
+            if (_menuRenderer is { } renderer)
+                foreach (var (name, item) in renderer.NamedItems) names.Register(name, item);
+            names.Complete();
+            NameScope.SetNameScope(this, names);
+            MainMenuHost.Child = _menuRenderer?.Menu;
+            ++_focusRequest;
+            _pendingFocus = null;
+            if (_focusOwner != null) _focusOwner.KeyboardFocusRequested -= FocusDockable;
+            _focusOwner = DataContext as MainViewViewModel;
+            if (_focusOwner != null) _focusOwner.KeyboardFocusRequested += FocusDockable;
+        };
+        LayoutUpdated += (_, _) => TryFocusDockable();
         // The presenter is created before Opening; keep its source live while the handler fills it.
         ((MenuFlyout)AddProjectButton.Flyout!).ItemsSource = _projectItems;
 #if DEBUG
@@ -32,6 +75,61 @@ public partial class MainView : UserControl
         DockPanel.SetDock(automation, Avalonia.Controls.Dock.Right);
         StatusBarPanel.Children.Insert(2, automation);
 #endif
+    }
+
+    private void PresentRestoredWindows()
+    {
+        // Attachment precedes Show; wait until the owner and Dock's control registration are ready.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (TopLevel.GetTopLevel(DockControl) is Window { IsVisible: true }
+                && DockControl.Layout?.Factory is MainViewViewModel.DockFactory factory)
+                factory.PresentRestoredWindows();
+        }, DispatcherPriority.Background);
+    }
+
+    private MainViewViewModel? _focusOwner;
+    private IDockable? _pendingFocus;
+    private int _focusRequest;
+
+    private void FocusDockable(IDockable dockable, bool reactivating)
+    {
+        var request = ++_focusRequest;
+        _pendingFocus = dockable is CodeEditorViewModel or ImmediateToolViewModel or ProjectToolViewModel
+            or PropertiesToolViewModel or ObjectBrowserToolViewModel
+            || reactivating && dockable is LanguageServersToolViewModel or DiagnosticsToolViewModel or ProtocolInspectorToolViewModel
+            ? dockable : null;
+        // Existing panes need no layout; new content is picked up by LayoutUpdated when Dock creates it.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (request == _focusRequest) TryFocusDockable();
+        }, DispatcherPriority.Background);
+    }
+
+    private void TryFocusDockable()
+    {
+        if (_pendingFocus is not { } dockable) return;
+        var view = this.GetVisualDescendants().OfType<UserControl>()
+            .FirstOrDefault(c => ReferenceEquals(c.DataContext, dockable) && c.IsEffectivelyVisible
+                && c is CodeEditorView or ImmediateToolView or ProjectToolView or PropertiesToolView or ObjectBrowserToolView
+                    or LanguageServersToolView or DiagnosticsToolView or ProtocolInspectorToolView);
+        if (view == null) return;
+        var children = view.GetVisualDescendants().OfType<Control>();
+        Control? input = view switch
+        {
+            CodeEditorView code => code.ActiveTextArea,
+            ImmediateToolView => children.OfType<TextEditor>().FirstOrDefault()?.TextArea,
+            ProjectToolView => children.OfType<TreeViewItem>().FirstOrDefault(c => c.IsSelected && c.IsEffectivelyVisible)
+                ?? children.OfType<TreeViewItem>().FirstOrDefault(c => c.IsEffectivelyVisible),
+            PropertiesToolView => children.OfType<ListBoxItem>().FirstOrDefault(c => c.IsSelected && c.IsEffectivelyVisible)
+                ?? children.OfType<ListBoxItem>().FirstOrDefault(c => c.IsEffectivelyVisible),
+            ObjectBrowserToolView => children.OfType<TextBox>().FirstOrDefault(c => c.IsEffectivelyVisible),
+            LanguageServersToolView or DiagnosticsToolView or ProtocolInspectorToolView => view,
+            _ => null,
+        };
+        // Reactivation focuses the content itself; fresh opens retain their existing focus policy (#3393).
+        if (ReferenceEquals(input, view)) view.Focusable = true;
+        if (input?.Focus() == true) _pendingFocus = null;
     }
 
     private void ProjectFlyoutOpening(object? sender, EventArgs e)
@@ -50,11 +148,7 @@ public partial class MainView : UserControl
                 CommandParameter = template,
                 IsEnabled = template.Supported,
             };
-            var key = template == IProjectTemplate.StandardEXE ? "Str.ProjectType.StandardEXE"
-                : template == IProjectTemplate.ActiveXEXE ? "Str.ProjectType.ActiveXEXE"
-                : template == IProjectTemplate.ActiveXDLL ? "Str.ProjectType.ActiveXDLL"
-                : template == IProjectTemplate.ActiveXControl ? "Str.ProjectType.ActiveXControl" : null;
-            if (key != null)
+            if (template.NameKey is { } key)
                 item.Bind(HeaderedSelectingItemsControl.HeaderProperty, this.GetResourceObservable(key));
             _projectItems.Add(item);
         }
@@ -66,20 +160,36 @@ public partial class MainView : UserControl
         }
     }
 
-    private void AvaloniaOnWeb(object? sender, ExecutedRoutedEventArgs e)
+    internal static void PopulatePanelLayouts(MenuItem menuItem, MainViewViewModel vm)
     {
-        TopLevel.GetTopLevel(this)!.Launcher.LaunchUriAsync(new Uri("https://avaloniaui.net"));
+        menuItem.Items.Clear();
+        MenuItem Item(string key, Action action)
+        {
+            var item = new MenuItem { Command = new DelegateCommand(action) };
+            item.Bind(MenuItem.HeaderProperty, item.GetResourceObservable(key));
+            return item;
+        }
+        menuItem.Items.Add(Item("Str.Layout.Save", () => vm.SaveNamedLayoutAsync().ListenErrors()));
+        menuItem.Items.Add(Item("Str.Layout.FullEditor", vm.FullEditorLayout));
+        foreach (var name in vm.NamedLayouts.Names)
+        {
+            var menu = new MenuItem { Header = new TextBlock { Text = name } };
+            Avalonia.Automation.AutomationProperties.SetName(menu, name);
+            menu.Items.Add(Item("Str.Layout.Switch", () => vm.SwitchNamedLayout(name)));
+            menu.Items.Add(Item("Str.Layout.Rename", () => vm.RenameNamedLayoutAsync(name).ListenErrors()));
+            menu.Items.Add(Item("Str.Layout.Delete", () => vm.DeleteNamedLayoutAsync(name).ListenErrors()));
+            menuItem.Items.Add(menu);
+        }
+    }
+
+    private void ProductOnWeb(object? sender, ExecutedRoutedEventArgs e)
+    {
+        (DataContext as MainViewViewModel)?.OpenGithubRepo();
     }
 
     private void OnDockPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         (DataContext as MainViewViewModel)?.ScheduleLayoutSave();
-    }
-
-    // The Run menu's launches are asked whether they run the startup project as it opens, never on a project's load.
-    private void OnRunMenuOpened(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (ReferenceEquals(e.Source, sender)) (DataContext as MainViewViewModel)?.RunWith?.Refresh();
     }
 
     public MainView WindowInitialized()
@@ -92,18 +202,6 @@ public partial class MainView : UserControl
             // handledEventsToo so a splitter that marks the event handled still schedules a save.
             DockControl.AddHandler(InputElement.PointerReleasedEvent, OnDockPointerReleased,
                 RoutingStrategies.Bubble, handledEventsToo: true);
-
-            var service = vm.AddinMenuService;
-
-            service.ToolsItems.CollectionChanged += (_, _) =>
-                RebuildToolsSection(service.ToolsItems);
-
-            service.AddInsItems.CollectionChanged += (_, _) =>
-                RebuildAddInsMenu(service.AddInsItems);
-
-            // Add-ins load before this subscription is set up, so seed from current state.
-            RebuildToolsSection(service.ToolsItems);
-            RebuildAddInsMenu(service.AddInsItems);
 
             var commands = vm.AddinCommandService;
             commands.CommandsChanged += () => RebuildCommandBindings(commands);
@@ -142,43 +240,12 @@ public partial class MainView : UserControl
         }
     }
 
-    private void RebuildToolsSection(ObservableCollection<AddinMenuItemViewModel> items)
+    internal static MenuItem BuildMenuItem(AddinMenuItemViewModel vm)
     {
-        if (_toolsAddinSeparator is not null)
-        {
-            ToolsMenuItem.Items.Remove(_toolsAddinSeparator);
-            _toolsAddinSeparator = null;
-        }
-        foreach (var item in _toolsAddinItems)
-            ToolsMenuItem.Items.Remove(item);
-        _toolsAddinItems.Clear();
-
-        if (items.Count == 0)
-            return;
-
-        _toolsAddinSeparator = new Separator();
-        ToolsMenuItem.Items.Add(_toolsAddinSeparator);
-        foreach (var vm in items)
-        {
-            var mi = BuildMenuItem(vm);
-            _toolsAddinItems.Add(mi);
-            ToolsMenuItem.Items.Add(mi);
-        }
-    }
-
-    private void RebuildAddInsMenu(ObservableCollection<AddinMenuItemViewModel> items)
-    {
-        AddInsMenuItem.Items.Clear();
-        AddInsMenuItem.Items.Add(AddInManagerMenuItem);
-        if (items.Count > 0)
-            AddInsMenuItem.Items.Add(new Separator());
-        foreach (var vm in items)
-            AddInsMenuItem.Items.Add(BuildMenuItem(vm));
-    }
-
-    private static MenuItem BuildMenuItem(AddinMenuItemViewModel vm)
-    {
-        var mi = new MenuItem { Header = vm.Header };
+        var mi = new MenuItem();
+        var header = CompiledBinding.Create((AddinMenuItemViewModel model) => model.Header);
+        header.Source = vm;
+        mi.Bind(MenuItem.HeaderProperty, header);
         if (vm.Command is not null)
             mi.Command = vm.Command;
         foreach (var sub in vm.SubItems)

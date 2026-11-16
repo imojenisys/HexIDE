@@ -32,8 +32,27 @@ Matching SHALL use a case-insensitive substring of the property name, independen
 - **THEN** the full property lists return, preserving category expansion state
 
 
+### Requirement: Unmodelled properties remain visible and read-only
+
+The Properties window SHALL append every raw property carried by the selected modelled component after
+its modelled properties in both tabs, as greyed read-only rows included in name filtering. Text values
+SHALL retain the file's textual representation; a property with a binary record or companion citation
+SHALL show a localized `(binary)` marker instead. Displaying these rows SHALL NOT alter the saved form
+or companion bytes. This is the presentation contract decided in [#158](https://github.com/hexide-io/HexIDE/issues/158).
+
+#### Scenario: Inspect a carried property
+
+- **WHEN** a selected component carries an unmodelled textual property
+- **THEN** both tabs show its name and saved value after the modelled rows, without an editor
+- **AND** saving after inspecting or filtering the row preserves the form and companion byte for byte
+
+#### Scenario: Inspect a binary record
+
+- **WHEN** the carried property cites a companion record
+- **THEN** its value is the localized binary marker, never the citation or binary bytes
+
 ### Requirement: PictureBox designer bitmap assignment honors AutoSize
-When a bitmap is assigned to a PictureBox with AutoSize True, the designer SHALL set Width and Height to the bitmap's pixel dimensions plus two pixels on each side for the default 3-D Fixed Single border, or no extra pixels with BorderStyle None. It SHALL record those dimensions with the picture edit as one undo step. This implements the measured bitmap cases in [#922's oracle](../../../docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md); runtime AutoSize and Label AutoSize remain pending.
+When a bitmap is assigned to a PictureBox with AutoSize True, the designer SHALL set Width and Height to the bitmap's pixel dimensions plus two pixels on each side for the default 3-D Fixed Single border, or no extra pixels with BorderStyle None. It SHALL record those dimensions with the picture edit as one undo step. This implements the measured bitmap cases in [#922's oracle](../../../docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md); Label AutoSize remains pending; runtime bitmap sizing is specified in [container-controls](../container-controls/spec.md).
 
 #### Scenario: A 40 by 30 bitmap is assigned
 - **WHEN** the designer assigns a 40 by 30 pixel bitmap to an AutoSize PictureBox
@@ -302,7 +321,7 @@ control SHALL be written back once, from the block it was read as.
 Unseen, it is edited around blindly. VB6's box is an empty PictureBox; labelling it is HexIDE's one divergence.
 
 #### Scenario: A control recording only its extents
-- **WHEN** a form holds an ImageList, which records `Left`, `Top`, `_ExtentX` and `_ExtentY` and no `Width` or `Height`
+- **WHEN** a form holds a control HexIDE does not model that records `Left`, `Top`, `_ExtentX` and `_ExtentY` and no `Width` or `Height`
 - **THEN** its box is at `Left` and `Top`, 1200 by 480 twips, as VB6 draws it, whatever the extents say
 
 #### Scenario: A control inside a Frame
@@ -387,7 +406,7 @@ command. A form the runtime loader cannot create SHALL report its existing unsup
 
 ### Requirement: Designer instantiation failures are contained per control
 
-The designer SHALL catch an exception from a control's designer instantiation, layout or drawing, log the exception, and show a disabled placeholder at that control's bounds with its name and the exception message. The view-only label SHALL be localized. The failed preview SHALL NOT prevent the form from remaining open.
+The designer SHALL catch an exception from a control's designer instantiation, layout or drawing, log the exception, and show a disabled placeholder at that control's bounds with its name and the exception message. The view-only label SHALL be localized. The failed preview SHALL NOT prevent the form from remaining open. The designer SHALL exclude a failed preview from the Properties object selector and multi-selection. If a selected preview fails, the designer SHALL select the form instead and remove the failed preview from multi-selection.
 
 #### Scenario: A registered component refuses its designer instance
 
@@ -402,7 +421,20 @@ The designer SHALL catch an exception from a control's designer instantiation, l
 - **THEN** the designer shows that StatusBar's name and reason in a disabled placeholder at its bounds, and the form stays open
 - **AND** opening the preview does not change the serialized form
 
-Conversion to an inert carried block, exclusion from property selection and verbatim carry-over after edits elsewhere on the form remain outstanding under #2405.
+#### Scenario: A selected control preview fails
+
+- **WHEN** a selected control fails to produce its designer preview
+- **THEN** Properties shows the form and its object selector excludes the failed control
+- **AND** multi-selection excludes the failed control, including subsequent attempts to select it
+
+#### Scenario: Save edits elsewhere after a preview fails
+
+- **GIVEN** a form read from writer-normalized text containing a control whose preview fails
+- **WHEN** another control is moved and the form's caption is changed, and the full writer saves the form
+- **THEN** the edits appear in the output and the untouched control's block is byte-identical to its input block
+- **AND** that block is identical to the output with a working preview, including modelled children, companion citations and unmodelled properties
+
+`DesignerInstantiationFailureTests` also opens VB6's own save of a TabStrip form (`corpus/inbox-controls/saved/tabstrip`), whose preview refuses. After the form's caption is edited, the TabStrip's block is saved as VB6's bytes, identical to a save that never built the preview (#2405). A failed preview therefore changes nothing in what is written. Whether every control's block matches VB6's bytes after an edit is the writer's round-trip fidelity, not a property of the preview.
 
 ### Requirement: ImageList designer icon
 The designer SHALL show a modelled MSComctlLib.ImageList as a 38 × 38 box with a two-pixel raised edge.
@@ -448,3 +480,23 @@ replacement, staged and flushed through the atomic writer. A new destination SHA
 #### Scenario: Accept replacement
 - **WHEN** the replacement question is answered Yes
 - **THEN** the destination contains the exported picture payload
+
+### Requirement: Missing symbol fonts use drawable Unicode equivalents
+Label, CommandButton, CheckBox and OptionButton captions SHALL use the same symbol-font mapping in the designer
+and at run time. Missing Charset 2 fonts SHALL use the equivalents chosen in
+[#1133](https://github.com/hexide-io/HexIDE/issues/1133), keeping original text for unmapped or undrawable glyphs.
+This rendering substitution SHALL NOT change Caption/Text readback or permit setting a missing font at run time.
+
+#### Scenario: A form names a symbol font
+- **WHEN** a Charset 2 font is installed
+- **THEN** its caption retains its GDI private-use mapping
+- **WHEN** Wingdings, Wingdings 2, Wingdings 3 or Webdings is missing (family names compared without regard to case)
+- **THEN** its caption uses the byte-to-scalar facts in WG2 N4384 (UTC L2/12-368), section 7
+- **WHEN** Marlett is missing
+- **THEN** its caption uses the short table chosen in #1133
+
+#### Scenario: A symbol precedes an access key
+- **WHEN** a missing Wingdings caption is `M&J` and the host can draw both equivalents
+- **THEN** the displayed text contains U+1F4A3 followed by U+263A
+- **AND** the access-key underline follows the two-unit U+1F4A3 and marks U+263A
+- **AND** Caption still reads `M&J`

@@ -23,6 +23,33 @@ namespace HexIDE.Integration.Tests.Views;
 
 public class OptionsViewIntegrationTests
 {
+    [AvaloniaFact]
+    public void TheSystemDefaultRowReadsInTheIdesLanguage()
+    {
+        var (settings, _, _, languageSwitch, _, _) = Mocks();
+        settings.ActiveLanguage.Returns("system");
+        languageSwitch.AvailableLanguages.Returns([new LanguageInfo("system", "System default", "ltr"), new LanguageInfo("en", "English", "ltr")]);
+        var view = new LanguagePageView
+        {
+            DataContext = new LanguagePageViewModel(settings, languageSwitch, new LocalizationService(), () => { }),
+        };
+        view.Resources["Str.Options.Language.SystemDefault"] = "localized system default";
+        var window = new Window { Content = view, Width = 480, Height = 360 };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var shown = view.GetVisualDescendants().OfType<TextBlock>()
+                .Where(text => text.IsEffectivelyVisible).Select(text => text.Text).ToList();
+            shown.Should().Contain("localized system default").And.NotContain("System default");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static readonly AddinInfo SampleAddin =
         new("/addins/Demo.dll", "Demo Add-in", "A demo add-in", "1.0", "Tester");
 
@@ -53,6 +80,36 @@ public class OptionsViewIntegrationTests
         registry.GetAll().Returns([SampleAddin]);
         registry.GetStatus(SampleAddin.AssemblyPath).Returns(AddinStatus.Loaded);
         return (settings, theme, keymap, languageSwitch, registry, new AddinOptionsService());
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AddInManager_ShowsOverviewAndInstalledAddins(bool installed)
+    {
+        var (settings, theme, keymap, languageSwitch, registry, addinOptions) = Mocks();
+        if (!installed) registry.GetAll().Returns([]);
+        var vm = new OptionsViewModel(settings, theme, keymap, languageSwitch, registry, addinOptions,
+            Substitute.For<IDeveloperModeService>(), new LocalizationService(), Substitute.For<IEventBus>(),
+            "Str.Options.Node.AddIns");
+        var view = new OptionsView { DataContext = vm };
+        view.DataTemplates.Add(new ViewLocator());
+        view.Resources["Str.Options.Addins.Overview"] = "Add-in overview guidance";
+        view.Resources["Str.Options.Node.NoAddins"] = "No add-ins";
+        var window = new Window { Content = view, Width = 720, Height = 520 };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            var texts = view.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
+            texts.Should().Contain("Add-in overview guidance");
+            texts.Should().Contain(Path.Combine(AppContext.BaseDirectory, "addins"));
+            if (installed)
+                texts.Count(t => t == SampleAddin.Title).Should().Be(2, "the tree and the overview both list the add-in");
+            else
+                texts.Should().Contain("No add-ins");
+        }
+        finally { window.Close(); }
     }
 
     [AvaloniaTheory]
@@ -372,7 +429,7 @@ public class OptionsViewIntegrationTests
         var frame = window.CaptureRenderedFrame();
         frame.Should().NotBeNull();
         var path = Path.Combine(Path.GetTempPath(), name);
-        frame!.Save(path);
+        frame!.Save(path, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
         window.Close();
         return path;
     }

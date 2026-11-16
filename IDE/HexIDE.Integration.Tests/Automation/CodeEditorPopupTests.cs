@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -82,7 +83,9 @@ public class CodeEditorPopupTests : IDisposable
         var vm = new CodeEditorViewModel(
             Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
             eventBus, client ?? lsp, settings, Substitute.For<IStatusBarService>(), new BookmarkService(), new BreakpointService(),
-            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>());
+            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader());
         made.Add(vm);
         var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "Module1", ModuleKind.StandardModule);
         module.UpdateCode("Option Explicit\r\n\r\nPrivate Sub Foo()\r\n    M\r\nEnd Sub\r\n");
@@ -104,6 +107,28 @@ public class CodeEditorPopupTests : IDisposable
     {
         for (var i = 0; i < 10; i++)
             Dispatcher.UIThread.RunJobs();
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Ms", 2, 0)]
+    [InlineData("Ms", 1, 0)]
+    [InlineData("Ms", 0, 0)]
+    [InlineData("c.Ms", 4, 2)]
+    [InlineData("c.", 2, 2)]
+    [InlineData("UBound(Ms", 9, 7)]
+    [InlineData("UBound(", 7, 7)]
+    public async Task Completion_requests_the_start_of_the_word(string source, int caret, int start)
+    {
+        var (_, view, editor) = Show();
+        editor.Text = "Option Explicit\n" + source;
+        editor.CaretOffset = editor.Document.GetOffset(2, caret + 1);
+        lsp.ClearReceivedCalls();
+
+        view.TriggerCompletion();
+        Pump();
+
+        await lsp.Received(1).RequestCompletionAsync(Arg.Any<string>(), new Position(1, start),
+            Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -279,6 +304,107 @@ public class CodeEditorPopupTests : IDisposable
         selected.Success.Should().BeTrue(selected.Error);
         CodeEditorView.OpenPopupsOf(editor).OfType<CompletionWindow>().Single().CompletionList.SelectedItem
             .Should().BeOfType<VbCompletionData>().Which.Text.Should().Be("Mid");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("' Typed on Wayland: Hello_1 (ok)! [a+b]")]
+    [InlineData("Rem Typed on Wayland")]
+    [InlineData("Rem: Typed on Wayland")]
+    [InlineData("x = \"Typed on Wayland\"")]
+    [InlineData("x = \"a \"\" on Wayland\"")]
+    public void Typing_free_text_does_not_accept_completions(string typed)
+    {
+        lsp.RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>()).Returns(
+            [new CompletionItem("On Error", CompletionItemKind.Keyword)]);
+        lsp.RequestSignatureHelpAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>(), Arg.Any<string?>())
+            .Returns(Task.FromResult<SignatureHelp?>(null));
+        var (window, view, editor) = Show();
+        var vm = (CodeEditorViewModel)view.DataContext!;
+        vm.ReplaceBody("");
+        editor.CaretOffset = editor.Document.TextLength;
+        foreach (var ch in typed)
+        {
+            if (ch == ' ') window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+            window.KeyTextInput(ch.ToString());
+            if (ch == ' ') window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+            Pump();
+        }
+        vm.BufferBody.Should().Be(typed);
+        CodeEditorView.OpenPopupsOf(editor).Should().BeEmpty();
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Rem", false)]
+    [InlineData("Rem ", true)]
+    [InlineData("x.Rem ", false)]
+    public void Typing_Rem_only_suppresses_completion_after_a_comment_delimiter(string typed, bool freeText)
+    {
+        lsp.RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>()).Returns(
+            [new CompletionItem("Remove", CompletionItemKind.Method)]);
+        var (window, view, editor) = Show();
+        editor.Text = "";
+        foreach (var ch in typed)
+        {
+            window.KeyTextInput(ch.ToString());
+            Pump();
+        }
+        view.TriggerCompletion();
+        Pump();
+        CodeEditorView.OpenPopupsOf(editor).Any().Should().Be(!freeText);
+        editor.Text.Should().Be(typed);
+    }
+
+    // Measured: docs/vb6-fidelity-oracle/a-lone-cr-or-lf-in-vb6-source.md and
+    // docs/vb6-fidelity-oracle/line-continuations-and-statement-separators.md.
+    [AvaloniaTheory]
+    [InlineData("' note _\n")]
+    [InlineData("' note _\r")]
+    [InlineData("' note _\r\n")]
+    [InlineData("Rem note _\n")]
+    [InlineData("Rem note _\r")]
+    [InlineData("Rem note _\r\n")]
+    [InlineData("Debug.Print \"note _\n")]
+    [InlineData("Debug.Print \"note _\r")]
+    [InlineData("Debug.Print \"note _\r\n")]
+    public void Typing_in_continued_free_text_preserves_words(string prefix)
+    {
+        lsp.RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>()).Returns(
+            [new CompletionItem("On Error", CompletionItemKind.Keyword)]);
+        var (window, view, editor) = Show();
+        var vm = (CodeEditorViewModel)view.DataContext!;
+        vm.ReplaceBody(prefix);
+        editor.CaretOffset = editor.Document.TextLength;
+        foreach (var ch in "on Wayland")
+        {
+            if (ch == ' ') window.KeyPress(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+            window.KeyTextInput(ch.ToString());
+            if (ch == ' ') window.KeyRelease(Key.Space, RawInputModifiers.None, PhysicalKey.Space, null);
+            Pump();
+        }
+        vm.BufferBody.ReplaceLineEndings("\n").Should().Be(prefix.ReplaceLineEndings("\n") + "on Wayland");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("' on")]
+    [InlineData("x = \"on")]
+    public async Task Late_completion_reply_does_not_open_in_free_text(string freeText)
+    {
+        var reply = new TaskCompletionSource<CompletionItem[]>();
+        lsp.RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>())
+            .Returns(reply.Task);
+        var (window, view, editor) = Show();
+        var vm = (CodeEditorViewModel)view.DataContext!;
+        vm.ReplaceBody(freeText + "\non");
+        editor.CaretOffset = editor.Text.Length;
+        window.KeyTextInput("e");
+        Pump();
+        var pending = CodeEditorView.PendingKeyRequestsOf(editor);
+        pending.Should().NotBeNull();
+        editor.CaretOffset = vm.BufferPrefixLength + freeText.Length;
+        reply.SetResult([new CompletionItem("On Error", CompletionItemKind.Keyword)]);
+        await pending!;
+        Pump();
+        CodeEditorView.OpenPopupsOf(editor).Should().BeEmpty();
     }
 
     // VB6 SP6 key measurements: #3056, issuecomment-6633933454.

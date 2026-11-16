@@ -75,11 +75,28 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     }
 
     /// <summary>
-    /// The manifest id of the add-in whose project type opened this project, or null for a project HexIDE read itself. A
-    /// contributed project's file is its add-in's program's to write: HexIDE saves its modules, never the project file, and
-    /// changes its membership only as the add-in reports a change.
+    /// The manifest id of the add-in whose project type opened this project, or null for a project HexIDE read itself. It
+    /// says who the project belongs to, for messages and logs. What the IDE may do with it is <see cref="Offers"/>.
     /// </summary>
     public string? ContributedBy { get; init; }
+
+    /// <summary>
+    /// What this project's type lets the IDE do with it. A project the IDE read itself offers everything. Set again when the
+    /// type that opened it is withdrawn, which leaves it offering nothing.
+    /// </summary>
+    public ProjectOffers Offers { get; set; } = ProjectOffers.Everything;
+
+    /// <summary>
+    /// What reads and renders this project's forms, where that isn't the IDE's own format. Every read and render of one of
+    /// its forms goes through this, so a project an add-in opened never has a form read or written as a VB6 file.
+    /// </summary>
+    public HexIDE.IDE.IFormFileFormat? FormFormat { get; init; }
+
+    /// <summary>
+    /// What renders this project's own file, where that isn't the IDE's own format. Every render of the project file goes
+    /// through this, so a project an add-in opened never has its file written as a <c>.vbp</c>.
+    /// </summary>
+    public HexIDE.IDE.IProjectFileWriter? ProjectFileWriter { get; init; }
 
     /// <summary>The title of the add-in that opened this project, for display; null when <see cref="ContributedBy"/> is.</summary>
     public string? ContributorTitle { get; init; }
@@ -155,6 +172,46 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     // Unknown key=value lines from the .vbp file (before any [Section] header), preserved verbatim.
     // PositionHint = count of recognised keys seen before each unknown line.
     public List<(int PositionHint, string RawLine)> UnknownPreSectionLines { get; } = new();
+
+    /// <summary>
+    /// Read a <c>key=value</c> line the project loader kept verbatim.
+    /// </summary>
+    /// <remarks>
+    /// These keys are deliberately read from the preserved lines rather than promoted into the project
+    /// model. Modelling a key means the writer owns emitting it, and the <c>.vbp</c> currently round-trips
+    /// byte-for-byte against VB6's own files — not worth risking that gate to read a caption.
+    /// </remarks>
+    public string? PreSectionValue(string key)
+    {
+        foreach (var (_, raw) in UnknownPreSectionLines)
+        {
+            var line = raw.TrimStart();
+            if (!line.StartsWith(key + "=", System.StringComparison.OrdinalIgnoreCase)) continue;
+
+            var value = line[(key.Length + 1)..].Trim();
+
+            // Quoted titles read back without either quote under F5 and compiled p-code (#2413).
+            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                value = value[1..^1];
+            else if (value.Length >= 1 && value[0] == '"')
+                value = value[1..];
+
+            return value;
+        }
+        return null;
+    }
+
+    /// <summary>The key of a project's Conditional Compilation Arguments in its <c>.vbp</c>.</summary>
+    public const string ConditionalArgumentsKey = "CondComp";
+
+    /// <summary>
+    /// The project's Conditional Compilation Arguments, by name in any case, or null where vb6.exe refuses its
+    /// <c>CondComp</c> line. No line, or an empty one, is no arguments.
+    /// </summary>
+    public IReadOnlyDictionary<string, short>? ConditionalArguments() =>
+        HexIDE.Language.ConditionalCompilation.TryParseArguments(PreSectionValue(ConditionalArgumentsKey), out var arguments)
+            ? arguments
+            : null;
 
     /// <summary>
     /// The position hint of an <c>Object=</c> line the Components dialog added, which the writer resolves to just after the

@@ -59,7 +59,7 @@ public sealed class RecoveryOffers : IRecoveryOffers
     public RecoveryOffers(IRecoveryService recovery, IProjectService projects, IProjectManager projectManager,
         IWindowManager windowManager, ILocalizationService localization, IDocumentDockService dock,
         IFileBaselineStore baselineStore, IClock clock, IEventBus eventBus, IStatusBarService statusBar,
-        IHeaderRefresher headerRefresher)
+        IHeaderRefresher headerRefresher, IProjectFileFormat format)
     {
         this.recovery = recovery;
         this.projects = projects;
@@ -69,7 +69,7 @@ public sealed class RecoveryOffers : IRecoveryOffers
         this.dock = dock;
         this.baselineStore = baselineStore;
         this.clock = clock;
-        reloader = new FileReloader(projects, eventBus, statusBar, localization, headerRefresher);
+        reloader = new FileReloader(projects, eventBus, statusBar, localization, headerRefresher, format);
         eventBus.Subscribe<ProjectOpenedEvent>(e => OfferForAsync(e.Project).ListenErrors());
     }
 
@@ -341,7 +341,7 @@ public sealed class RecoveryOffers : IRecoveryOffers
         foreach (var document in backup.Documents)
         {
             var target = Find(project, document);
-            if (target is null && project.ContributedBy is null && document.Path is { } path && File.Exists(path))
+            if (target is null && project.Offers.ChangesMembership && document.Path is { } path && File.Exists(path))
                 target = await AddExistingAsync(project, document, path);
             if (document.Content is not { } content)
                 continue;

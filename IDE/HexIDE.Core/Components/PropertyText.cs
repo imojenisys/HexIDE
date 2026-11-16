@@ -59,6 +59,9 @@ public static partial class PropertyText
             return TryParseEnum(type, text, out value);
         if (type == typeof(VBFont))
             return TryParseFont(text, current is VBFont font ? font : VBFont.Default, isKnownFace, out value, out reason);
+        // "(None)" is how a picture with none is shown, and it clears one. No other text reads as a picture (#2872).
+        if (IsPicture(property))
+            return string.Equals(text.Trim(), "(None)", StringComparison.OrdinalIgnoreCase);
 
         try
         {
@@ -96,9 +99,9 @@ public static partial class PropertyText
                    + "number or a style word, such as \"Wingdings 2\", is taken as a face when it is the control's own, "
                    + "installed here, or a Windows font vb6.exe takes by name, such as \"MS Shell Dlg 2\"; otherwise it "
                    + "reads as a face and a size or style without their comma";
-        if (property == VBProperties.PictureProperty || property == VBProperties.IconProperty
-            || property == VBProperties.DragIconProperty || property == VBProperties.MouseIconProperty)
-            return "no text: use the picture row's ... button in the Properties window; answer_next_file_dialog can answer its file picker";
+        if (IsPicture(property))
+            return "(None), which clears it, and no other text: to load a picture use its row's ... button in the Properties "
+                   + "window; answer_next_file_dialog can answer its file picker";
         if (type == typeof(byte[]))
             return "no text: it is loaded through the Properties window's dialog, and no automation route reaches it yet";
         if (type == typeof(bool))
@@ -109,6 +112,10 @@ public static partial class PropertyText
             return "a number, with '.' for decimals";
         return $"a value the Properties window accepts for a {type.Name}";
     }
+
+    private static bool IsPicture(PropertyClass property) =>
+        property == VBProperties.PictureProperty || property == VBProperties.IconProperty
+        || property == VBProperties.DragIconProperty || property == VBProperties.MouseIconProperty;
 
     /// <summary>A stored value as a reply shows it: an enum as its number and name, anything else as written.</summary>
     public static string Display(object? value) => value switch
@@ -181,7 +188,7 @@ public static partial class PropertyText
         {
             if (!component.TryGetBoxedProperty(p, out _) && RawOf(component, p.Name) is { } unread)
                 return new PropertyRow(p.Name, unread, false,
-                    "the file holds this, which HexIDE could not read, so the Properties window shows the default; the "
+                    "the file holds this, which " + HexIDE.IDE.Distribution.DisplayName + " could not read, so the Properties window shows the default; the "
                     + "save keeps the file's text unless the property is set");
             var held = component.GetBoxedPropertyOrDefault(p);
             var shown = Shown(p, held);
@@ -197,7 +204,7 @@ public static partial class PropertyText
         var unmodelled = component.UnknownRawProperties
             .Where(raw => !type.PropertiesByName.ContainsKey(raw.Name))
             .Select(raw => new PropertyRow(raw.Name, RawText(raw), false,
-                "not modelled by HexIDE, so not in the Properties window: the file's own text, which the save keeps"));
+                "not modelled by HexIDE, so read-only in the Properties window: the file's own text, which the save keeps"));
         return [.. modelled.Concat(unmodelled).OrderBy(r => r.Name)];
     }
 

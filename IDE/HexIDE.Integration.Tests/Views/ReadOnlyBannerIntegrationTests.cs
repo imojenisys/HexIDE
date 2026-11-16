@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Linq;
 using Avalonia;
@@ -64,7 +65,7 @@ public class ReadOnlyBannerIntegrationTests
             Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
             Substitute.For<HexIDE.Debugging.IRunScope>(),
-            localization);
+            localization, new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader());
     }
 
     private static T Render<T>(T view, int w = 900, int h = 700) where T : Control
@@ -84,7 +85,7 @@ public class ReadOnlyBannerIntegrationTests
     [AvaloniaFact]
     public void CodeEditor_ForAnUnfaithfulForm_IsReadOnlyAndShowsTheBanner()
     {
-        var vm = MakeCodeEditorViewModel();
+        using var vm = MakeCodeEditorViewModel();
         vm.Initialize(MakeForm(faithful: false));
 
         var view = Render(new CodeEditorView { DataContext = vm });
@@ -131,7 +132,7 @@ public class ReadOnlyBannerIntegrationTests
         english.Should().NotContainEquivalentOf("this form",
             "a UserControl's or a PropertyPage's code window shows the same banner");
 
-        var vm = MakeCodeEditorViewModel();
+        using var vm = MakeCodeEditorViewModel();
         vm.Initialize(MakeForm(faithful: false));
         var view = new CodeEditorView { DataContext = vm };
         // The pack's own text, supplied where the binding looks first: the headless app merges no language
@@ -153,7 +154,7 @@ public class ReadOnlyBannerIntegrationTests
     [AvaloniaFact]
     public void CodeEditor_ForAnOrdinaryForm_StaysEditableWithNoBanner()
     {
-        var vm = MakeCodeEditorViewModel();
+        using var vm = MakeCodeEditorViewModel();
         vm.Initialize(MakeForm(faithful: true));
 
         var view = Render(new CodeEditorView { DataContext = vm });
@@ -179,7 +180,7 @@ public class ReadOnlyBannerIntegrationTests
     public async System.Threading.Tasks.Task CodeEditor_WhenAReloadFlipsTheVerdict_FollowsIt(bool startFaithful)
     {
         var form = MakeForm(startFaithful);
-        var vm = MakeCodeEditorViewModel();
+        using var vm = MakeCodeEditorViewModel();
         vm.Initialize(form);
         vm.Document.Insert(vm.Document.TextLength, "\r\nPrivate Sub Form_Load()\r\nEnd Sub\r\n");
         var view = Render(new CodeEditorView { DataContext = vm });
@@ -195,7 +196,7 @@ public class ReadOnlyBannerIntegrationTests
         });
         var reloader = new FileReloader(projectService, Substitute.For<IEventBus>(),
             Substitute.For<IStatusBarService>(), Substitute.For<ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), format: new Vb6ProjectFileFormat());
         form.UpdateCode(vm.BufferBody);
 
         await reloader.ReloadAsync(new WatchedFileTarget("Form1.frm", form, null, vm, null));
