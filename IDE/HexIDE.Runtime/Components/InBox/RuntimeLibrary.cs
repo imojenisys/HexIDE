@@ -60,7 +60,18 @@ public sealed class RuntimeLibrary
     public IReadOnlyList<LibraryClass> Classes { get; } = [];
 
     // #2265 and oracle PR #3956: measured names; Tab is qualified only.
-    internal IReadOnlyList<string> ControlClasses { get; init; } = [];
+    public IReadOnlyList<string> ControlClasses { get; internal init; } = [];
+
+    /// <summary>An existing component model for a declared control, including controls outside the toolbox.</summary>
+    public ComponentBaseClass? FindComponentClass(string name)
+    {
+        if (!Controls.ContainsKey(name)) return null;
+        if (name.Equals("TreeView", StringComparison.OrdinalIgnoreCase)) return TreeViewComponentClass.Instance;
+        return InBoxComponentClass.Implemented.Concat(
+                [TabStripComponentClass.Instance, ToolbarComponentClass.Instance, DTPickerComponentClass.Instance,
+                    MonthViewComponentClass.Instance, MaskedEdBoxComponentClass.Instance])
+            .FirstOrDefault(c => c.ControlClassName.Equals(name, StringComparison.OrdinalIgnoreCase));
+    }
 
     public bool IsNamedBy(VbReference reference) =>
         Guid.Equals(reference.Guid, StringComparison.OrdinalIgnoreCase) && Version == reference.Version;
