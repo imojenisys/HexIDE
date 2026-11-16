@@ -313,14 +313,17 @@ internal static class ServerOptions
     /// into bands — note that between about 94 and 120 columns the option lines do not themselves wrap,
     /// so those rows are a real cost rather than a free one.
     /// </remarks>
-    public static string HelpText(ConsoleTarget target) => HelpText(target, Distribution.Current);
+    public static string HelpText(ConsoleTarget target) => HelpText(target, Distribution.Current, InvocationName(Environment.ProcessPath, OperatingSystem.IsWindows()));
 
-    internal static string HelpText(ConsoleTarget target, DistributionIdentity identity)
+    internal static string InvocationName(string? processPath, bool isWindows)
+    {
+        var name = Path.GetFileName(processPath) ?? "HexIDE";
+        return isWindows && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+    }
+
+    internal static string HelpText(ConsoleTarget target, DistributionIdentity identity, string invocation)
     {
         var width = Options.Max(o => Spelling(o).Length);
-        var invocation = identity.IsStock
-            ? "HexIDE.Desktop"
-            : Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? identity.Name;
         var heading = identity.IsStock
             ? "HexIDE - an open, cross-platform IDE for Visual Basic 6 & VBA."
             : identity.Tagline is { } tagline ? $"{identity.Name} - {tagline}" : identity.Name;
