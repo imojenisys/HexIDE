@@ -8,7 +8,7 @@
              x:DataType="vm:FontDialogViewModel"
              x:Class="HexIDE.Forms.Views.FontDialog"
              Width="460">
-    <Grid Margin="8" RowDefinitions="Auto,Auto,*,Auto,Auto,Auto">
+    <Grid Margin="8" RowDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto">
 
         <!-- Column header labels -->
         <Grid Grid.Row="0" ColumnDefinitions="*,160,80" Margin="0,0,0,4">
@@ -18,7 +18,7 @@
             <Label Target="{CompiledBinding #FontStyleBox}" Grid.Column="1" Padding="0" Margin="4,0">
                 <AccessText x:Name="StyleCaption" Text="{DynamicResource Str.Dialog.Font.Label.FontStyle}" />
             </Label>
-            <Label Target="{CompiledBinding #SizeList}" Grid.Column="2" Padding="0" Margin="4,0">
+            <Label Target="{CompiledBinding #FontSizeBox}" Grid.Column="2" Padding="0" Margin="4,0">
                 <AccessText x:Name="SizeCaption" Text="{DynamicResource Str.Dialog.Font.Label.Size}" />
             </Label>
         </Grid>
@@ -28,6 +28,9 @@
                      AutomationProperties.Name="{CompiledBinding #FontCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}" Margin="4,0" />
             <TextBox x:Name="FontStyleBox" Grid.Column="1" Text="{CompiledBinding StyleText}" AutomationProperties.LabeledBy="{CompiledBinding #StyleCaption}"
                      AutomationProperties.Name="{CompiledBinding #StyleCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}" Margin="4,0" />
+            <TextBox x:Name="FontSizeBox" Grid.Column="2" Text="{CompiledBinding SizeText}"
+                     AutomationProperties.LabeledBy="{CompiledBinding #SizeCaption}"
+                     AutomationProperties.Name="{CompiledBinding #SizeCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}" Margin="4,0" />
         </Grid>
 
         <!-- Selection lists -->
@@ -42,7 +45,7 @@
                      Margin="4,0" />
             <ListBox x:Name="SizeList" Focusable="True" AutomationProperties.LabeledBy="{CompiledBinding #SizeCaption}"
                      AutomationProperties.Name="{CompiledBinding #SizeCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}" Grid.Column="2" ItemsSource="{CompiledBinding FontSizes}"
-                     SelectedItem="{CompiledBinding SelectedSize}"
+                     SelectedItem="{CompiledBinding SelectedSizeItem}"
                      Margin="4,0" />
         </Grid>
 
@@ -72,8 +75,20 @@
                        TextTrimming="CharacterEllipsis" />
         </Border>
 
+        <StackPanel Grid.Row="5" Margin="4,0,4,8" Spacing="4" IsVisible="{CompiledBinding CanEditCharset}">
+            <Label Target="{CompiledBinding #ScriptBox}" Padding="0">
+                <AccessText x:Name="ScriptCaption" Text="{DynamicResource Str.Dialog.Font.Label.Script}" />
+            </Label>
+            <ComboBox x:Name="ScriptBox" PlaceholderText="{DynamicResource Str.Shell.NotImplemented}" SelectedIndex="{CompiledBinding SelectedScriptIndex}"
+                      AutomationProperties.LabeledBy="{CompiledBinding #ScriptCaption}"
+                      AutomationProperties.Name="{CompiledBinding #ScriptCaption.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}"
+                      HorizontalAlignment="Stretch">
+                <ComboBoxItem Content="{DynamicResource Str.Dialog.Font.Script.Western}" />
+            </ComboBox>
+        </StackPanel>
+
         <!-- Buttons -->
-        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right"
+        <StackPanel Grid.Row="6" Orientation="Horizontal" HorizontalAlignment="Right"
                     Spacing="8" Margin="0,0,4,4">
             <Button x:Name="OkButton" Content="{DynamicResource Str.Dialog.Font.Button.Ok}" MinWidth="75" IsDefault="True" Click="OkClick" />
             <Button Content="{DynamicResource Str.Dialog.Font.Button.Cancel}" MinWidth="75" Click="CancelClick" IsCancel="True" />

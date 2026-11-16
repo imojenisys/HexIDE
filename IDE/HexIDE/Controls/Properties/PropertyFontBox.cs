@@ -35,7 +35,7 @@ public class PropertyFontBox : TemplatedControl
     }
 
     internal FontDialogResult InitialFont => new(new FontFamily(Font.FontFamilyName), Font.ToFontStyle(), Font.ToFontWeight(), Font.Size,
-        Font.Underline, Font.Strikethrough);
+        Font.Underline, Font.Strikethrough, Font.Charset);
 
     private void OnButtonClick(object? sender, RoutedEventArgs e)
     {
@@ -52,8 +52,8 @@ public class PropertyFontBox : TemplatedControl
     /// <summary>
     /// The font the dialog's answer makes of <paramref name="font"/> (#910). The size is kept whole, 8.25 and 9.6 included,
     /// where a cast to int made them 8 and 9. Effects are taken from the dialog when supplied. A weight it shows as
-    /// neither bold nor regular is kept unless Bold was changed; nor does it change the charset,
-    /// which is kept while the family is, and a new family starts at 0, as it did before.
+    /// neither bold nor regular is kept unless Bold was changed. Charset comes from the dialog when supplied;
+    /// otherwise it is kept while the family is, with a new family starting at 0.
     /// </summary>
     internal static VBFont Chosen(VBFont font, FontDialogResult result)
     {
@@ -62,7 +62,7 @@ public class PropertyFontBox : TemplatedControl
         var sameFamily = string.Equals(family, font.FontFamilyName, System.StringComparison.OrdinalIgnoreCase);
         return new VBFont(family, result.Size,
             italic: result.Style == FontStyle.Italic,
-            charset: sameFamily ? font.Charset : 0,
+            charset: result.Charset ?? (sameFamily ? font.Charset : 0),
             underline: result.Underline ?? font.Underline,
             strikethrough: result.Strikethrough ?? font.Strikethrough,
             weight: bold == font.Bold ? font.Weight : bold ? VBFont.BoldWeight : VBFont.NormalWeight);

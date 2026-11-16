@@ -1,3 +1,5 @@
+using System;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.Interactivity;
@@ -18,8 +20,16 @@ public partial class FontDialog : UserControl
         }, DispatcherPriority.Loaded);
     }
 
-    private void OkClick(object? sender, RoutedEventArgs e) =>
-        (DataContext as FontDialogViewModel)?.Accept();
+    internal Func<string, Task>? ShowSizeError { get; set; }
+
+    private async void OkClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not FontDialogViewModel vm) return;
+        var error = vm.Accept();
+        if (error == null) return;
+        if (ShowSizeError != null) await ShowSizeError(error);
+        FontSizeBox.Focus();
+    }
 
     private void CancelClick(object? sender, RoutedEventArgs e) =>
         (DataContext as FontDialogViewModel)?.Cancel();

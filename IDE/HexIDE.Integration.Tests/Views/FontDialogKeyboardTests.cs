@@ -75,7 +75,7 @@ public class FontDialogKeyboardTests
             lists.Select(l => ControlAutomationPeer.CreatePeerForElement(l)!.GetName()).Should().BeEquivalentTo("Font:", "Font style:", "Size:");
             var checkBoxes = view.GetLogicalDescendants().OfType<CheckBox>().ToArray();
             checkBoxes.Select(c => ControlAutomationPeer.CreatePeerForElement(c)!.GetName()).Should().BeEquivalentTo("Strikeout", "Underline");
-            foreach (var (key, target) in new[] { ("F", "FontNameBox"), ("Y", "FontStyleBox"), ("S", "SizeList") })
+            foreach (var (key, target) in new[] { ("F", "FontNameBox"), ("Y", "FontStyleBox"), ("S", "FontSizeBox") })
             {
                 UiAutomationDriver.PressKey(view.FindControl<Button>("OkButton")!, key, "Alt").Success.Should().BeTrue();
                 Dispatcher.UIThread.RunJobs();
@@ -93,12 +93,12 @@ public class FontDialogKeyboardTests
         {
             using var stream = AssetLoader.Open(new Uri($"avares://HexIDE/Localization/Packs/{pack.Id}.json"));
             var strings = JsonSerializer.Deserialize(stream, LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
-            var captions = new[] { "Label.Font", "Label.FontStyle", "Label.Size", "Strikeout", "Underline" }
+            var captions = new[] { "Label.Font", "Label.FontStyle", "Label.Size", "Strikeout", "Underline", "Label.Script" }
                 .Select(key => strings["Str.Dialog.Font." + key]).ToArray();
             var mnemonicKeys = captions.Where(c => c.Contains('_')).Select(c => char.ToUpperInvariant(c[c.IndexOf('_') + 1])).ToArray();
             mnemonicKeys.Should().OnlyHaveUniqueItems($"{pack.Id} font controls need distinct access keys");
             if (pack.Id is not ("ar" or "bg" or "el" or "he" or "ko" or "ru" or "th" or "uk"))
-                mnemonicKeys.Should().HaveCount(5, $"{pack.Id} uses caption mnemonics");
+                mnemonicKeys.Should().HaveCount(6, $"{pack.Id} uses caption mnemonics");
         }
     }
 

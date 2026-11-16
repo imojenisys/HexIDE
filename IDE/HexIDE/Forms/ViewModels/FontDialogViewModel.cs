@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
+using System.Numerics;
 using Avalonia.Media;
 using HexIDE.IDE;
+using HexIDE.Runtime.BuiltinTypes;
 using PropertyChanged.SourceGenerator;
 
 namespace HexIDE.Forms.ViewModels;
@@ -14,6 +17,13 @@ public partial class FontDialogViewModel
     [Notify] private string _familyText;
     [Notify] private string _styleText;
     [Notify] private double _selectedSize;
+    [Notify] private double? _selectedSizeItem;
+    [Notify] private string _sizeText;
+    [Notify] private int _selectedScriptIndex;
+    private readonly double _initialSize;
+    private readonly int? _initialCharset;
+    private bool _sizeEdited;
+    private bool _synchronizingSize;
     [Notify] private bool _underline;
     [Notify] private bool _strikethrough;
 
@@ -40,6 +50,7 @@ public partial class FontDialogViewModel
 
     // Runtime CommonDialog's choice contract does not yet carry effects (#1084).
     public bool CanEditEffects { get; }
+    public bool CanEditCharset => _initialCharset != null;
 
     public IReadOnlyList<string> FontFamilies { get; }
     public IReadOnlyList<string> FontStyles { get; } = ["Regular", "Bold", "Italic", "Bold Italic"];
@@ -70,6 +81,11 @@ public partial class FontDialogViewModel
             families.Add(_selectedFamily);
         FontFamilies = families.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
         _selectedSize   = initial?.Size ?? 12;
+        _initialSize = _selectedSize;
+        _selectedSizeItem = _selectedSize;
+        _sizeText = Math.Round(_selectedSize, MidpointRounding.AwayFromZero).ToString(CultureInfo.InvariantCulture);
+        _initialCharset = initial?.Charset;
+        _selectedScriptIndex = _initialCharset is null or 0 ? 0 : -1;
         FontSizes = StandardSizes.Contains(_selectedSize) ? StandardSizes : [.. StandardSizes.Append(_selectedSize).Order()];
         _selectedStyle  = initial != null ? ToStyleName(initial.Style, initial.Weight) : "Regular";
         _familyText = _selectedFamily;
@@ -91,14 +107,61 @@ public partial class FontDialogViewModel
     private void OnSelectedFamilyChanged() => FamilyText = SelectedFamily;
     private void OnSelectedStyleChanged() => StyleText = SelectedStyle;
 
-    public void Accept()
+    private void OnSizeTextChanged()
     {
+        if (_synchronizingSize) return;
+        _sizeEdited = true;
+        _synchronizingSize = true;
+        try
+        {
+            SelectedSizeItem = FontSizes.Select(size => (double?)size).FirstOrDefault(size =>
+                size!.Value.ToString(CultureInfo.InvariantCulture) == SizeText);
+            if (BigInteger.TryParse(SizeText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var typed)
+                && typed >= 1 && typed <= 2236)
+                SelectedSize = VBFontExtensions.SnapDialogSize((double)typed);
+        }
+        finally { _synchronizingSize = false; }
+    }
+
+    private void OnSelectedSizeItemChanged()
+    {
+        if (_synchronizingSize || SelectedSizeItem is not { } size) return;
+        _synchronizingSize = true;
+        try
+        {
+            SelectedSize = size;
+            SizeText = size.ToString(CultureInfo.InvariantCulture);
+            _sizeEdited = false;
+        }
+        finally { _synchronizingSize = false; }
+    }
+
+    // The dialog's 96-dpi measurements are in #4153. An untouched fractional font must survive OK.
+    public string? Accept()
+    {
+        if (SelectedScriptIndex is < -1 or > 0)
+            throw new NotImplementedException("Font dialog scripts other than Western are not measured (#4153).");
+        var size = SelectedSize;
+        if (_sizeEdited)
+        {
+            if (string.IsNullOrEmpty(SizeText)) size = _initialSize;
+            else
+            {
+                if (!BigInteger.TryParse(SizeText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var typed))
+                    return "Str.Dialog.Font.SizeNotNumber";
+                if (typed == 0) size = _initialSize;
+                else if (typed < 1 || typed > 2236) return "Str.Dialog.Font.SizeOutOfRange";
+                else size = VBFontExtensions.SnapDialogSize((double)typed);
+            }
+        }
         var result = new FontDialogResult(
             new FontFamily(_selectedFamily),
             _selectedStyle.Contains("Italic") ? FontStyle.Italic : FontStyle.Normal,
             _selectedStyle.Contains("Bold")   ? FontWeight.Bold   : FontWeight.Normal,
-            _selectedSize, _underline, _strikethrough);
+            size, _underline, _strikethrough,
+            CanEditCharset && SelectedScriptIndex == 0 ? 0 : null);
         AcceptRequested?.Invoke(result);
+        return null;
     }
 
     public void Cancel() => CancelRequested?.Invoke();
