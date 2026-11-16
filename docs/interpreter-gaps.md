@@ -35,6 +35,26 @@ not a general rule. The interpreter is unchanged, including #1930's Error 28 gua
 rows (2466, 3139, 3665, 4040, 5891, 6045, 6112) pin that guard in `ExpressionDepthGuardTests`, not VB6 behaviour;
 VB6 refuses those modules before running them. No language-support inventory counts change.
 
+## 64-bit VBA7 integers (#1548)
+
+[#4302](https://github.com/hexide-io/HexIDE/issues/4302) implements the Excel x64 rows recorded in that issue
+(measuring PR #3965): LongLong/LongPtr declarations, conversions, arithmetic, Variant overflow, literals,
+comparison and formatting, plus DefLngLng/DefLngPtr. VB6 keeps the measured unknown-name errors
+(measuring PR #4247), at execution where necessary, and user-defined names still win.
+
+Still unmeasured and explicitly refused under #1548: 32-bit VBA7; LongLong array bounds and For counters;
+Len/LenB/Get/Put of a UDT containing LongLong; and conversions to LongLong from source types other than
+Integer, Long, Byte, LongLong, Single, Double and measured decimal/hexadecimal strings. Named arguments
+and unmeasured argument counts for the conversions also refuse under #1548. These are missing
+measurements, not a language-analysis boundary. Intrinsic arguments containing LongLong are limited to the
+measured first-argument calls listed in MISSING_LANGUAGE; other intrinsics/positions, LenB of a Variant,
+and Or/Xor/Eqv/Imp/Not also refuse under #1548 rather than inherit a 32-bit helper's answer. Minimum-value
+negation and integer division/Mod by -1, and out-of-range or unmeasured `^` literal forms, likewise refuse
+until their VBA7 diagnostics are measured. Non-Double comparison partners and LongLong Select Case
+selectors likewise refuse under #1548 until their domains are measured. Non-integral partners in
+LongLong integer/bitwise operations, and LongLong multiplication with Date, also remain refused. The bundled LSP grammar still lacks the `^` suffix;
+its VBA7 syntax/diagnostics follow-up remains outside #4302, under #1548.
+
 ## Slot lifetime (#79)
 
 Procedure activations reclaim their allocated slots after scope-exit reference releases, including on error

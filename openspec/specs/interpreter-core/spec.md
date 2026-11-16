@@ -30,6 +30,25 @@ worse than one that is obviously incomplete.
 
 ## Requirements
 
+### Requirement: Measured 64-bit VBA7 integer support
+
+The runtime SHALL implement the 64-bit VBA7 rows measured in
+[#4302](https://github.com/hexide-io/HexIDE/issues/4302) (measuring PR #3965), selected by `VbaBitness.Bit64`.
+VB6 SHALL retain its measured errors and user-name precedence (measuring PR #4247), at execution where
+necessary. Unmeasured LongLong array bounds, For counters and UDT layouts SHALL refuse naming #1548.
+
+#### Scenario: Single with LongLong
+- **WHEN** a 64-bit project adds CLngLng(5) and CSng(1)
+- **THEN** the value is Double 6
+
+#### Scenario: Variant overflow
+- **WHEN** a Variant holding LongLong 9223372036854775807 is incremented
+- **THEN** it becomes Double without error, while the measured typed overflow raises 6
+
+#### Scenario: User-defined conversion name
+- **WHEN** either a VB6 or a 64-bit VBA7 project defines Function CLngLng
+- **THEN** a call uses the user function before the built-in
+
 ### Requirement: Source-class default members SHALL resolve at async value boundaries
 
 The engine SHALL collect the name and kind of a source class's default member and read its Function,

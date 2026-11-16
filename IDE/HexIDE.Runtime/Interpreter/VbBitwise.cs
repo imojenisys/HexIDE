@@ -26,6 +26,7 @@ internal static class VbBitwise
         Byte    = 1,
         Integer = 2,
         Long    = 3,
+        LongLong = 4,
     }
 
     /// <summary>
@@ -66,6 +67,12 @@ internal static class VbBitwise
         {
             bits = (int)value.Value!;
             width = Width.Integer;
+            return true;
+        }
+        if (value.Type == Vb6Value.ValueType.LongLong)
+        {
+            bits = (long)value.Value!;
+            width = Width.LongLong;
             return true;
         }
         if (value.Type == Vb6Value.ValueType.Long)
@@ -126,6 +133,7 @@ internal static class VbBitwise
     /// <summary>Report a result at the given width, truncating to it as VB6 does.</summary>
     internal static Vb6Value Pack(long bits, Width width) => width switch
     {
+        Width.LongLong => Vb6Value.NewLongLong(bits),
         Width.Boolean => (Vb6Value)(bits != 0),
         Width.Byte    => new Vb6Value((byte)(bits & 0xFF)),
         Width.Integer => (Vb6Value)(int)(short)(bits & 0xFFFF),
@@ -136,5 +144,6 @@ internal static class VbBitwise
     /// <c>Not</c> keeps its operand's own width rather than promoting — which is why
     /// <c>Not CByte(5)</c> is 250 (eight-bit complement) and not -6.
     /// </summary>
-    internal static Vb6Value Not(long bits, Width width) => Pack(~bits, width);
+    internal static Vb6Value Not(long bits, Width width) => width == Width.LongLong
+        ? throw new NotImplementedException("Not of a LongLong is unmeasured (#1548)") : Pack(~bits, width);
 }

@@ -19,7 +19,7 @@ public partial class VB6BuiltIns
     // explicitly until an oracle probe supplies them. #2516, #2523, #2524 (SLN/SYD) and #2622 likewise measure only
     // positional calls, as does #2515.
     private static readonly HashSet<string> UnmeasuredNamedArguments = new(StringComparer.OrdinalIgnoreCase)
-    { "AscB", "CallByName", "ChrB", "CurDir", "Dir", "FileAttr", "FileDateTime", "FileLen", "FormatCurrency", "FormatDateTime", "FormatNumber", "FormatPercent", "FV", "GetAttr", "IMEStatus", "InStrB", "IPmt", "IRR", "LeftB", "MidB", "MIRR", "NPer", "NPV", "ObjPtr", "Partition", "Pmt", "PPmt", "PV", "Rate", "RightB", "SLN", "StrPtr", "SYD", "VarPtr" };
+    { "AscB", "CLngLng", "CLngPtr", "CallByName", "ChrB", "CurDir", "Dir", "FileAttr", "FileDateTime", "FileLen", "FormatCurrency", "FormatDateTime", "FormatNumber", "FormatPercent", "FV", "GetAttr", "IMEStatus", "InStrB", "IPmt", "IRR", "LeftB", "MidB", "MIRR", "NPer", "NPV", "ObjPtr", "Partition", "Pmt", "PPmt", "PV", "Rate", "RightB", "SLN", "StrPtr", "SYD", "VarPtr" };
 
     private static readonly Dictionary<string, IntrinsicParameters> NamedParameterTable = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -227,7 +227,9 @@ public partial class VB6BuiltIns
         if (NamedArguments.Any(args))
         {
             if (UnmeasuredNamedArguments.Contains(name))
-                throw new NotImplementedException($"Named arguments to {name} are not implemented yet");
+                throw new NotImplementedException(IsLongLongConversion(name)
+                    ? $"Named arguments to {name} are unmeasured (#1548)"
+                    : $"Named arguments to {name} are not implemented yet");
             if (TakesNoNamedArguments.Contains(name))
                 throw new VBCompileErrorException("Syntax error");
             if (NoParameters.TryGetValue(name, out var noParameters))
