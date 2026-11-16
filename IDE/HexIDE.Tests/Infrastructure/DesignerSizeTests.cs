@@ -94,7 +94,12 @@ public class DesignerSizeTests
             success.Should().Be(size >= 0);
             if (size < 0)
             {
-                if (route != "grid") error.Should().Contain("Invalid property value").And.Contain("589");
+                if (route != "grid")
+                {
+                    error.Should().Contain("Invalid property value").And.Contain("589")
+                        .And.Contain("a-negative-or-zero-control-size.md");
+                    error.Should().Contain(route == "add" ? "No control was created" : "remains at");
+                }
                 control.Instance.GetPropertyOrDefault(property).Should().Be(before);
                 control.RelativeLeft.Should().Be(10);
                 designer.AllComponents.Count.Should().Be(count);
