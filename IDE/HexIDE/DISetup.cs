@@ -44,6 +44,19 @@ public partial class DISetup
         DI.Setup()
             .Bind<ILogFolderOpener>().As(Singleton).To<PlatformLogFolderOpener>()
             .Bind().As(Singleton).To<ToolBoxToolViewModel>()
+            // Preserve the runtime constructor: 2.5.7 otherwise selects the previewer-only overload (#4213).
+            .Bind<FormEditViewModel>().To(ctx =>
+            {
+                ctx.Inject<ToolBoxToolViewModel>(out var toolbox);
+                ctx.Inject<IEventBus>(out var events);
+                ctx.Inject<IProjectService>(out var projects);
+                ctx.Inject<IEditorService>(out var editors);
+                ctx.Inject<IWindowManager>(out var windows);
+                ctx.Inject<ISettingsService>(out var settings);
+                ctx.Inject<ILocalizationService>(out var localization);
+                ctx.Inject<IProjectFileFormat>(out var format);
+                return new FormEditViewModel(toolbox, events, projects, editors, windows, settings, localization, format);
+            })
             .Bind().As(Singleton).To<PropertiesToolViewModel>()
             .Bind().As(Singleton).To(ctx =>
             {
