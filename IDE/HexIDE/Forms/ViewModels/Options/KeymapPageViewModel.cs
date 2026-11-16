@@ -173,7 +173,8 @@ public partial class KeymapPageViewModel : ObservableObject, IOptionsPage
         .Replace("OemPlus", "+").Replace("OemMinus", "-").Replace("OemComma", ",")
         .Replace("OemPeriod", ".").Replace("OemQuestion", "/").Replace("OemSemicolon", ";")
         .Replace("OemQuotes", "'").Replace("OemOpenBrackets", "[").Replace("OemCloseBrackets", "]")
-        .Replace("OemPipe", "\\").Replace("OemTilde", "`").Replace("Return", Text("Str.Options.Keymap.Enter"));
+        .Replace("OemPipe", "\\").Replace("OemTilde", "`").Replace("Return", Text("Str.Options.Keymap.Enter"))
+        .Replace("Pause", Text("Str.Options.Keymap.Break"));
 
     internal string ExportJson() => KeymapService.SerializeOverrides(_overrides);
 
