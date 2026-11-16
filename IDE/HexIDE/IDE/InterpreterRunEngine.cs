@@ -84,8 +84,16 @@ public sealed class InterpreterRunEngine : IRunEngine
     }
 
     /// <inheritdoc />
-    public RunStart Prepare(ProjectDefinition project) =>
-        project.StartsAtSubMain ? PrepareSubMain(project) : PrepareForm(project.StartupForm!);
+    public RunStart Prepare(ProjectDefinition project) => Prepare(project, Distribution.Current);
+
+    internal RunStart Prepare(ProjectDefinition project, DistributionIdentity distribution)
+    {
+        // A branded IDE gives the user's program the runner's neutral icon, not either product's mark (#4187).
+        VBLoader.DefaultFormIcon = distribution.IsStock
+            ? null
+            : new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico")));
+        return project.StartsAtSubMain ? PrepareSubMain(project) : PrepareForm(project.StartupForm!);
+    }
 
     private RunStart PrepareForm(FormDefinition form)
     {

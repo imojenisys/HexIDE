@@ -7,7 +7,7 @@ namespace HexIDE.Runtime.AvaloniaInterop;
 /// <summary>What a form's file says about its icon: nothing, (None), or an icon of its own.</summary>
 internal enum FormIconKind
 {
-    /// <summary>No Icon line: VB6 gives the window its default form icon. HexIDE gives its own mark.</summary>
+    /// <summary>No Icon line: VB6 gives the window its default form icon. The host chooses HexIDE's mark or the neutral runner icon.</summary>
     Default,
 
     /// <summary><c>Icon</c> saved as (None), an empty picture: the window has no icon at all.</summary>
