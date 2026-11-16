@@ -14,6 +14,14 @@ the mechanism.
 
 ## Requirements
 
+### Requirement: Templated language choices SHALL expose display names
+The Language and Region combo box item containers in Options SHALL expose
+an automation name equal to the item's `DisplayName`, without changing the item's string representation.
+
+#### Scenario: A screen reader opens a language or region list
+- **WHEN** a Language or Region dropdown opens in Options
+- **THEN** each item automation peer reports its display name rather than record details
+
 ### Requirement: Program results about IDE-owned text SHALL be English
 Refusals of edits to text only the IDE changes, and a save's notes about text it rewrote, SHALL be
 English when returned to a program, including automation replies and add-in results. Where they name a
