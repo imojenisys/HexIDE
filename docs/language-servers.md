@@ -598,6 +598,12 @@ imports the project with `rdcore.importProject`:
 }
 ```
 
+RDCore's language server needs .NET 11 from RDCore `d6496d6fb` on
+([#4058](https://github.com/hexide-io/HexIDE/issues/4058)). If .NET 11 is installed somewhere other than
+its default location, add `"environment": { "DOTNET_ROOT": "<that folder>" }` to the entry. RDCore starts
+its own helper processes, which find .NET through `DOTNET_ROOT` or the default location, never through
+PATH. Do not set `DOTNET_ROOT` for HexIDE itself.
+
 `restartOnProjectChange` is enabled here because RDCore advertised folder-change notifications but did
 not load a folder added after startup in the [#261 measurement](https://github.com/hexide-io/HexIDE/issues/261)
 (main `90334dd6`, 2026-11-14). HexIDE keeps one connection for the group and restarts it after the project-change
