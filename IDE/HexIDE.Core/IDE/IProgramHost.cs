@@ -4,7 +4,7 @@ namespace HexIDE.IDE;
 
 /// <summary>
 /// What a run engine asks of the IDE that hosts a running program (#4066, step 2a of the run side of #3411's split): the
-/// CommonDialog's dialogs, a program's MsgBox and InputBox, and the engine's two failure texts. The form host, operation
+/// CommonDialog's dialogs, a program's MsgBox and InputBox, and the engine's failure texts. The form host, operation
 /// 1, follows in #4068.
 /// </summary>
 /// <remarks>
@@ -37,4 +37,7 @@ public interface IProgramHost
 
     /// <summary>The heading for a construct the engine doesn't implement yet, in the IDE's language.</summary>
     string NotImplementedYet { get; }
+
+    /// <summary>The compile diagnostic for a Declare missing PtrSafe in 64-bit VBA7 (#4245).</summary>
+    string VbaPtrSafeRequired(string declaration);
 }

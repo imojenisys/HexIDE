@@ -2,6 +2,7 @@
   "name": "Latvian",
   "direction": "ltr",
   "strings": {
+    "Str.ProjectRunner.VbaPtrSafeRequired": "Deklarācijai Declare '{0}' 64 bitu VBA7 ir nepieciešams PtrSafe.",
     "Str.ProjectFile.ReplaceModel": "Lietojot projekta faila tekstu, tiks aizstāti projekta {0} nesaglabātie iestatījumi. Vai turpināt?",
     "Str.MemberOrigin.HexIde": "HexIDE paplašinājums; nav pieejams VB6.",
     "Str.Dock.Host": "Dokošanas resursdators",

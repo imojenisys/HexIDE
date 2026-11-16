@@ -32,6 +32,8 @@ public class PrePass : VB6BaseVisitor<object?>
     /// <summary>True for a class or a form: an object module, where VB6 refuses some Public members outright.</summary>
     public bool ObjectModule { get; init; }
 
+    public VbaBitness VbaBitness { get; init; }
+
     internal const string PublicMemberOfObjectModule =
         "Constants, fixed-length strings, arrays, user-defined types and Declare statements not allowed as Public members of object modules";
     // Each module-level Const by name: its declaration, and whether another module can see it (Public or Global; one
@@ -470,6 +472,11 @@ public class PrePass : VB6BaseVisitor<object?>
         // CALL to it raises the clean "Sub or Function not defined" error. This lets a module that merely declares
         // an API (a near-universal pattern in real VB6) load and run its non-API code.
     {
+        // #4245: only active declarations reach this walk. P1/P2 were measured in Excel x64.
+        if (VbaBitness == VbaBitness.None && context.PTRSAFE() != null)
+            throw new VBCompileErrorException("Expected: Sub or Function");
+        if (VbaBitness == VbaBitness.Bit64 && context.PTRSAFE() == null)
+            throw new VbaPtrSafeRequiredException(context.ambiguousIdentifier().GetText());
         if (ObjectModule && context.visibility()?.PUBLIC() != null)
             throw new VBCompileErrorException(PublicMemberOfObjectModule);
         declared = true;

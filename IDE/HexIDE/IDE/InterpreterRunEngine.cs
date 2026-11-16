@@ -48,7 +48,7 @@ public sealed class InterpreterRunEngine : IRunEngine
         // meets, rather than VB6's separate compile-error box with OK and Help, because #754 already sends Sub
         // Main's compile errors through this dialog and two routes would answer the same error differently.
         // The run carries on, with the handler abandoned, as it does after a run-time error.
-        VBWindowContext.CompileError += (_, e) => ErrorMet?.Invoke(new RunFailure(e.Message, ErrorLocation.Of(e)));
+        VBWindowContext.CompileError += (_, e) => ErrorMet?.Invoke(new RunFailure(Describe(e), ErrorLocation.Of(e)));
     }
 
     /// <inheritdoc />
@@ -218,7 +218,7 @@ public sealed class InterpreterRunEngine : IRunEngine
     private string DescribeFailedStart(Exception e, string? formName)
     {
         if (e is VBCompileErrorException)
-            return e.Message;
+            return Describe(e);
         Serilog.Log.Error(e, "The project failed to load, at {Form}", formName ?? "Sub Main");
         var described = Describe(e);
         return formName is null
@@ -229,6 +229,7 @@ public sealed class InterpreterRunEngine : IRunEngine
     private string Describe(Exception e) => e switch
     {
         VBRunTimeException runTime => RunErrorText.For(runTime),
+        VbaPtrSafeRequiredException ptrSafe => programHost.VbaPtrSafeRequired(ptrSafe.Declaration),
         VBCompileErrorException compile => compile.Message,
         _ => DescribeFault(e),
     };

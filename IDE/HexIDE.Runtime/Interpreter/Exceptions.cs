@@ -63,6 +63,13 @@ public class VBCompileErrorException : Exception
     }
 }
 
+/// <summary>VBA's wording was not measured (#4245); the IDE presents its own localized diagnostic.</summary>
+public sealed class VbaPtrSafeRequiredException(string declaration) : VBCompileErrorException(
+    $"Declare '{declaration}' requires PtrSafe in 64-bit VBA7")
+{
+    public string Declaration { get; } = declaration;
+}
+
 public class VBSubOrFunctionNotDefinedException : VBCompileErrorException
 {
     public VBSubOrFunctionNotDefinedException(string ident) : base("Sub or Function not defined (" + ident + ")") {}

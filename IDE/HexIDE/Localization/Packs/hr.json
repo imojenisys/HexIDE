@@ -2,6 +2,7 @@
   "name": "Croatian",
   "direction": "ltr",
   "strings": {
+    "Str.ProjectRunner.VbaPtrSafeRequired": "Deklaracija Declare '{0}' zahtijeva PtrSafe u 64-bitnom VBA7.",
     "Str.ProjectFile.ReplaceModel": "Primjena teksta projektne datoteke zamijenit će nespremljene postavke projekta {0}. Nastaviti?",
     "Str.AIChat.Title": "AI chat",
     "Str.AIChat.Menu": "AI _chat",

@@ -2,6 +2,7 @@
   "name": "Swedish",
   "direction": "ltr",
   "strings": {
+    "Str.ProjectRunner.VbaPtrSafeRequired": "Declare '{0}' kräver PtrSafe i 64-bitars VBA7.",
     "Str.ProjectFile.ReplaceModel": "Om projektfilens text tillämpas ersätts osparade projektinställningar för {0}. Fortsätta?",
     "Str.MemberOrigin.HexIde": "HexIDE-tillägg; inte tillgängligt i VB6.",
     "Str.Dock.Host": "Dockningsvärd",

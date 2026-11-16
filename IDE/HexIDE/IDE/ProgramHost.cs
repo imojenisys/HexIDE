@@ -23,6 +23,9 @@ public sealed class ProgramHost(IWindowManager windowManager, ILocalizationServi
     public string StartupFormFailedToLoad(string formName, string description) =>
         string.Format(localization.GetString("Str.ProjectRunner.StartupFormFailedToLoad"), formName, description);
 
+    public string VbaPtrSafeRequired(string declaration) =>
+        string.Format(localization.GetString("Str.ProjectRunner.VbaPtrSafeRequired"), declaration);
+
     public string NotImplementedYet => localization.GetString("Str.ProjectRunner.NotImplementedYet");
 
     public async Task<VbFileDialogAnswer?> FileDialog(VbFileDialogRequest request)
