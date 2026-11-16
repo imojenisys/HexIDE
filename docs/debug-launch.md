@@ -157,8 +157,9 @@ stack, then report the top frame's source path and line, running, or ended. An a
 includes its message and says whether stopped inspection was kept. `set_next_statement` uses
 `gotoTargets` then `goto` when supported, resolving its module name to the saved document's file
 path; an unsaved target is refused. The interpreter's top-level-statement restriction does not
-apply to the adapter. `run_to_cursor` refuses external sessions because the external route has
-no one-shot breakpoint support; set a breakpoint in the editor and continue instead.
+apply to the adapter. `run_to_cursor` requires a stopped session and a saved target document.
+It uses the temporary breakpoint route described above, reports the actual stop, and says when
+execution stopped before reaching the cursor target.
 
 If an adapter does not answer **End** and must be killed after cleanup waits, Immediate shows one
 localized notice with its name and elapsed wait in seconds. Any nonempty standard-error tail follows

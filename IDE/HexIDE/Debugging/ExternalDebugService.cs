@@ -252,7 +252,7 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
         {
             if (update.Event?.Event is "stopped" or "terminated" ||
                 update.Snapshot.State is DapSessionState.Ended or DapSessionState.Faulted)
-                await await Dispatcher.UIThread.InvokeAsync(() => RemoveCursorBreakpointAsync(current));
+                await await Dispatcher.UIThread.InvokeAsync<Task>(() => RemoveCursorBreakpointAsync(current));
             // Capture only immutable protocol data across this dispatch.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {

@@ -122,14 +122,15 @@ public class ExternalRunControlTests : CompositionTestBase
     }
 
     [AvaloniaTheory]
-    [InlineData("cursor", 19)]
-    [InlineData("cursor-first", 19)]
-    [InlineData("cursor-first", 6)]
-    [InlineData("cursor-end", 19)]
-    [InlineData("cursor", 20)]
-    [InlineData("cursor", 10)]
-    [InlineData("resume-refusal", 19)]
-    public async Task Run_to_cursor_preserves_user_conditions_and_cleans_up_on_every_outcome(string mode, int target)
+    [InlineData("cursor", 19, false)]
+    [InlineData("cursor-first", 19, false)]
+    [InlineData("cursor-first", 6, false)]
+    [InlineData("cursor-end", 19, false)]
+    [InlineData("cursor", 20, false)]
+    [InlineData("cursor", 10, false)]
+    [InlineData("resume-refusal", 19, false)]
+    [InlineData("cursor", 19, true)]
+    public async Task Run_to_cursor_preserves_user_conditions_and_cleans_up_on_every_outcome(string mode, int target, bool linkedSource)
     {
         var composition = Composition;
         var external = composition.ExternalDebugger;
@@ -137,9 +138,11 @@ public class ExternalRunControlTests : CompositionTestBase
         capture.ArmsEveryConnection = true;
         var directory = Path.Combine(Path.GetTempPath(), "hexide-cursor-" + Guid.NewGuid());
         Directory.CreateDirectory(directory);
+        var link = directory + "-link";
+        if (linkedSource) Directory.CreateSymbolicLink(link, directory);
         var project = TestHelpers.CreateProjectWithModule("Target", "Callee");
         var module = project.Modules[0];
-        module.AbsolutePath = Path.Combine(directory, "Callee.bas");
+        module.AbsolutePath = Path.Combine(linkedSource ? link : directory, "Callee.bas");
         module.UpdateCode(string.Join(Environment.NewLine, Enumerable.Repeat("' target", 25)));
         var document = HexIDE.Runtime.ProjectElements.DocumentIdentity.For(module);
         composition.BreakpointService.SetDocument(document, [6]);
@@ -167,6 +170,7 @@ public class ExternalRunControlTests : CompositionTestBase
             {
                 reply.Note.Should().Contain("Callee.bas").And.Contain(mode == "cursor-first" ? "line 6" : "line 19");
                 if (mode == "cursor-first" && target != 6) reply.Note.Should().Contain("before reaching");
+                if (mode == "cursor") reply.Note.Should().NotContain("before reaching");
             }
             await capture.DrainAsync();
             var requests = capture.Snapshot(id).Where(entry => entry.Kind == ConversationEntryKind.Request).ToArray();
@@ -187,6 +191,7 @@ public class ExternalRunControlTests : CompositionTestBase
         {
             await external.StopAsync();
             await run.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            if (linkedSource) Directory.Delete(link);
             Directory.Delete(directory, true);
         }
     }
