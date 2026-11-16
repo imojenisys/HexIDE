@@ -720,6 +720,70 @@ public class AddinServerRegistrationTests : IDisposable
         router.Connections.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("probe")]
+    [InlineData(".")]
+    [InlineData("probe .")]
+    [InlineData("editor.")]
+    [InlineData("EDITOR.private.")]
+    [InlineData("vscode.")]
+    [InlineData("VSCode.private.")]
+    [InlineData("hexide.")]
+    [InlineData("HexIDE.private.")]
+    public void AnInvalidOrReservedCommandPrefix_IsRefused(string prefix)
+    {
+        var router = Router();
+        var registering = () => Contributions(router).Register(
+            new AddinLanguageServer(PipeEntry("probe", "unused")) { CommandPrefix = prefix }, "My Add-in");
+
+        registering.Should().Throw<ArgumentException>();
+        router.Connections.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(null, "probe.run")]
+    [InlineData("probe.", "other.run")]
+    [InlineData("probe.", "probe.")]
+    [InlineData("probe.", "Probe.run")]
+    public void ACommandWithoutItsPrefix_IsRefused(string? prefix, string command)
+    {
+        var router = Router();
+        var registering = () => Contributions(router).Register(new AddinLanguageServer(PipeEntry("probe", "unused"))
+        {
+            CommandPrefix = prefix,
+            ClientCommands = new Dictionary<string, AddinClientCommand> { [command] = (_, _) => Task.CompletedTask },
+        }, "My Add-in");
+
+        registering.Should().Throw<ArgumentException>();
+        router.Connections.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CommandClaims_AreCopiedAtRegistration_AndBelongToThatConnectionOnly()
+    {
+        var pipeName = PipeName();
+        await using var pipe = new ProbePipe(pipeName, () => new ProbeServer());
+        var (contributions, router) = WiredContributions();
+        var commands = new Dictionary<string, AddinClientCommand> { ["probe.run"] = (_, _) => Task.CompletedTask };
+        await using var connection = contributions.Register(new AddinLanguageServer(PipeEntry("probe", pipeName))
+        {
+            CommandPrefix = "probe.",
+            ClientCommands = commands,
+        }, "My Add-in");
+
+        commands.Clear();
+        commands["other.run"] = (_, _) => Task.CompletedTask;
+        await router.OpenDocumentAsync("file:///c:/p/README.md", "# hi", Token);
+
+        var client = (VBLspClient)connection.Client!;
+        client.HasClaimedCommand("probe.run").Should().BeTrue();
+        client.HasClaimedCommand("other.run").Should().BeFalse();
+        client.HasClaimedCommand("Probe.run").Should().BeFalse();
+        await using var other = new VBLspClient(Substitute.For<ILspTransport>(),
+            _loggerFactory.CreateLogger<VBLspClient>(), "markdown");
+        other.HasClaimedCommand("probe.run").Should().BeFalse();
+    }
+
     /// <summary>
     /// Every method of the Language Server Protocol 3.17, its requests and its notifications, as its meta-model lists
     /// them. <c>initialize</c>, <c>initialized</c>, <c>shutdown</c> and <c>exit</c> have no namespace, and a prefix,

@@ -1175,6 +1175,21 @@ answer a protocol method in its place, and the IDE's model of the connection wou
 - **WHEN** a contribution's prefix is in a namespace the protocol uses, or it claims or sends a method outside its prefix
 - **THEN** it is refused
 
+### Requirement: A contributed server's command claims SHALL be checked at registration
+A contribution MAY register a command prefix and client-side handlers. The prefix SHALL be a nonempty name
+followed by `.`, without whitespace. Prefixes under `editor.`, `vscode.` or `hexide.` SHALL be refused,
+case-insensitively. Commands SHALL be below the exact, case-sensitive prefix; claims without a prefix SHALL be
+refused. Registration SHALL copy claims before checking them and install that copy on each client it creates,
+independently of other servers.
+
+#### Scenario: A contribution claims a reserved command namespace
+- **WHEN** an add-in registers `HexIDE.private.` as its command prefix
+- **THEN** registration is refused before the server is added
+
+#### Scenario: The add-in changes its dictionary after registration
+- **WHEN** an add-in removes a checked command and adds an unchecked one after registering
+- **THEN** clients created for the registration retain the original claim and do not acquire the unchecked one
+
 ### Requirement: A document SHALL be routed by extension, and each server told the identifier it declared
 Routing SHALL key on the document's extension. Where a document is offered to more than one server, each
 server SHALL be told the language identifier **that server declared**, rather than a single identifier

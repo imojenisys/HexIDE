@@ -2275,6 +2275,15 @@ public sealed class VBLspClient : ILspClient
     public void Claim(IReadOnlyDictionary<string, HexIDE.Addins.AddinServerMethod> methods) =>
         _claimed = new Dictionary<string, HexIDE.Addins.AddinServerMethod>(methods, StringComparer.Ordinal);
 
+    private IReadOnlyDictionary<string, HexIDE.Addins.AddinClientCommand> _claimedCommands =
+        new Dictionary<string, HexIDE.Addins.AddinClientCommand>(StringComparer.Ordinal);
+
+    /// <summary>Copies the contributing add-in's checked client-side command claims before the client starts.</summary>
+    public void ClaimCommands(IReadOnlyDictionary<string, HexIDE.Addins.AddinClientCommand> commands) =>
+        _claimedCommands = new Dictionary<string, HexIDE.Addins.AddinClientCommand>(commands, StringComparer.Ordinal);
+
+    internal bool HasClaimedCommand(string command) => _claimedCommands.ContainsKey(command);
+
     /// <summary>
     /// Sends a request an add-in owns over this connection, and returns the server's result as it was sent. Captured as
     /// any other request is.

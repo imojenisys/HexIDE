@@ -1492,6 +1492,20 @@ the latest `didChange` alone does not establish a baseline.
 `ServerApplyEditFocusTests` checks the production dock with two code windows: editing the other
 member keeps keyboard focus and the originating caret without a focus loss.
 
+### Contributed server command registration (#4258)
+
+`AddinLanguageServer` accepts a `CommandPrefix` and a `ClientCommands` map of `AddinClientCommand`
+handlers alongside its message claims. Registration checks a nonempty name followed by `.`, without
+whitespace; `editor.`, `vscode.` and `hexide.` (including nested prefixes) are reserved, ignoring case.
+Every command must have a name below the exact, case-sensitive prefix. Claims without a prefix are
+refused. Registration copies the map before checking it and installs those claims on each client it
+creates, so later dictionary changes cannot introduce unchecked claims or remove checked ones.
+`AddinServerRegistrationTests` checks these refusals and the connection's independent copy.
+
+This is registration infrastructure only. Code actions and lenses do not yet dispatch these claims,
+and `IAddinServerConnection` does not yet expose checked edit application. Both remain part of #4258;
+the existing execute-command routing and server edit permissions described above are unchanged.
+
 ### Server questions (#2908)
 
 The client declares `window.showMessage.messageActionItem`, including additional property support.
