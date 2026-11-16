@@ -41,6 +41,7 @@ public partial class ProjectService : IProjectService
     private readonly IProjectFileFormat format;
     private readonly IComponentRegistry componentRegistry;
     private readonly IReadOnlyRegionWriter regionWriter;
+    private readonly IDocumentDockService? documents;
 
     public ProjectService(IReadOnlyRegionWriter regionWriter, Func<NewProjectViewModel> newProjectVm,
         IWindowManager windowManager,
@@ -56,8 +57,10 @@ public partial class ProjectService : IProjectService
         IComponentRegistry componentRegistry,
         ArchiveProjectService? archives = null,
         Func<ILspClient>? lspClient = null,
-        ContributedProjects? contributed = null)
+        ContributedProjects? contributed = null,
+        IDocumentDockService? documents = null)
     {
+        this.documents = documents;
         this.contributed = contributed;
         if (contributed is not null)
             contributed.TypeWithdrawn += OnTypeWithdrawn;
@@ -237,6 +240,7 @@ public partial class ProjectService : IProjectService
 
     public async Task UnloadAllProjects()
     {
+        await ResolveProjectFileTabs();
         if (projectManager.LoadedProjects.Count == 0)
         {
             if (archives != null) await archives.Close();
@@ -320,6 +324,7 @@ public partial class ProjectService : IProjectService
 
     public async Task UnloadProject(ProjectDefinition project)
     {
+        project = await ResolveProjectFileTab(project);
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
 
         var changedFilesVm = new SaveChangesViewModel();
@@ -1312,6 +1317,9 @@ public partial class ProjectService : IProjectService
     // which the user chose to lose, aren't. Then it's opened again from the file as it now is.
     private async Task ReopenFromDisk(ProjectDefinition project, string path, Action? beforeReopen = null)
     {
+        if (ProjectFileTab(project) is { Applying: false, IsModified: true } tab
+            && !await ConfirmProjectFileClose(tab))
+            throw new OperationCanceledException();
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
         var changed = new SaveChangesViewModel();
         foreach (var form in project.Forms.Where(IsDirty))
@@ -1911,6 +1919,7 @@ public partial class ProjectService : IProjectService
 
     public async Task SaveProject(ProjectDefinition project, bool saveAs)
     {
+        project = await ResolveProjectFileTab(project);
         // try/finally so the drain runs even when the batch is abandoned part-way. A dismissed picker throws
         // OperationCanceledException, which skipped the report and left every refusal banked — to surface
         // during the next unrelated save, naming files that were not in it. That is the leak #145 fixed for
@@ -1935,6 +1944,7 @@ public partial class ProjectService : IProjectService
 
     public Task SaveProjectToDirectory(ProjectDefinition project, string directory) => WithSaveRefusals(async () =>
     {
+        project = await ResolveProjectFileTab(project);
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
 
         // Refused before anything is written, and reported here rather than banked. This method has no drain
@@ -2371,6 +2381,7 @@ public partial class ProjectService : IProjectService
 
     public async Task SaveAllProjects(bool saveAs)
     {
+        await ResolveProjectFileTabs();
         var files = projectManager.LoadedProjects.SelectMany(project => FilesOf(project, saveAs)).ToList();
         if (projectManager.CurrentGroup is { } group)
             files.Add((group, saveAs));
