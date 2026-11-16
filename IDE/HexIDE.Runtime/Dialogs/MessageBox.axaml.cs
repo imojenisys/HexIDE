@@ -75,6 +75,7 @@ public partial class MessageBox : UserControl
         if (IsProgramDialog)
             window.FlowDirection = (Layout & MessageBoxLayout.RtlReading) != 0
                 ? FlowDirection.RightToLeft : FlowDirection.LeftToRight;
+        ApplyWindowStyles(window);
         var current = window;
         AcceptRequest += r =>
         {
@@ -105,6 +106,7 @@ public partial class MessageBox : UserControl
             CanResize = false,
             WindowStartupLocation = WindowStartupLocation.CenterScreen,
         };
+        ApplyWindowStyles(again);
         current = again;
         window.Close();
         var closed = Watch(again);
@@ -114,6 +116,21 @@ public partial class MessageBox : UserControl
         await closed;
         owner.Closed -= OnOwnerClosed;
         return Answer;
+    }
+
+    private void ApplyWindowStyles(Window window)
+    {
+        var callback = WindowStylesCallback(OperatingSystem.IsWindows());
+        if (callback is not null)
+            Win32Properties.AddWindowStylesCallback(window, callback);
+    }
+
+    internal Win32Properties.CustomWindowStylesCallback? WindowStylesCallback(bool isWindows)
+    {
+        // #3973 / measuring PR #3958: keep native mirroring here for the Windows live check.
+        if (!isWindows || !IsProgramDialog || (Layout & MessageBoxLayout.RtlReading) == 0)
+            return null;
+        return (style, exStyle) => (style, exStyle | 0x00400000u); // WS_EX_LAYOUTRTL
     }
 
     /// <summary>
