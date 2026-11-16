@@ -2,6 +2,7 @@
   "name": "Romanian",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "A fost solicitat wayland, dar nu s-a putut accesa niciun afișaj Wayland: {0}. Folosiți --platform x11 sau --platform auto în această sesiune.",
     "Str.ProjectFile.ReplaceModel": "Aplicarea textului fișierului de proiect va înlocui setările nesalvate ale proiectului {0}. Continuați?",
     "Str.MemberOrigin.HexIde": "Extensie HexIDE; indisponibilă în VB6.",
     "Str.Dock.Host": "Gazdă de andocare",

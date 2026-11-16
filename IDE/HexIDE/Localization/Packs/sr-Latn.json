@@ -2,6 +2,7 @@
   "name": "Serbian (Latin)",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Zahtevan je wayland, ali nije moguće pristupiti Wayland ekranu: {0}. U ovoj sesiji koristite --platform x11 ili --platform auto.",
     "Str.ProjectFile.ReplaceModel": "Primena teksta datoteke projekta zameniće nesačuvane postavke projekta {0}. Nastaviti?",
     "Str.MemberOrigin.HexIde": "HexIDE proširenje; nije dostupno u VB6.",
     "Str.Dock.Host": "Domaćin usidravanja",

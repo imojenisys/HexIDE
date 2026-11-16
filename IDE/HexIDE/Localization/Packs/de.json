@@ -2,6 +2,7 @@
   "name": "German",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "wayland wurde angefordert, aber kein Wayland-Display war erreichbar: {0}. Verwenden Sie in dieser Sitzung --platform x11 oder --platform auto.",
     "Str.ProjectFile.ReplaceModel": "Das Anwenden des Projektdateitexts ersetzt ungespeicherte Projekteinstellungen für {0}. Fortfahren?",
     "Str.AIChat.Title": "KI-Chat",
     "Str.AIChat.Menu": "KI-_Chat",

@@ -2,6 +2,7 @@
   "name": "Ukrainian",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Потрібен wayland, але підключитися до дисплея Wayland не вдалося: {0}. Використовуйте --platform x11 або --platform auto в цьому сеансі.",
     "Str.ProjectFile.ReplaceModel": "Застосування тексту файлу проєкту замінить незбережені налаштування проєкту {0}. Продовжити?",
     "Str.MemberOrigin.HexIde": "Розширення HexIDE; недоступне у VB6.",
     "Str.Dock.Host": "Контейнер закріплення",

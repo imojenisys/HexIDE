@@ -2,6 +2,7 @@
   "name": "Lithuanian",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Buvo reikalaujama wayland, bet nepavyko pasiekti jokio Wayland ekrano: {0}. Šiame seanse naudokite --platform x11 arba --platform auto.",
     "Str.ProjectFile.ReplaceModel": "Pritaikius projekto failo tekstą bus pakeistos neįrašytos projekto {0} nuostatos. Tęsti?",
     "Str.MemberOrigin.HexIde": "HexIDE plėtinys; VB6 nepasiekiamas.",
     "Str.Dock.Host": "Prijungimo pagrindinis elementas",

@@ -2,6 +2,7 @@
   "name": "English",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "wayland was required, but no Wayland display could be reached: {0}. Use --platform x11 or --platform auto on this session.",
     "Str.ProjectFile.ReplaceModel": "Applying the project file text will replace unsaved project settings for {0}. Continue?",
     "Str.MemberOrigin.HexIde": "HexIDE extension; not available in VB6.",
     "Str.Dock.Host": "Dock host",

@@ -2,6 +2,7 @@
   "name": "Catalan",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Es requeria wayland, però no s’ha pogut accedir a cap pantalla Wayland: {0}. Feu servir --platform x11 o --platform auto en aquesta sessió.",
     "Str.ProjectFile.ReplaceModel": "Aplicar el text del fitxer de projecte substituirà la configuració no desada de {0}. Voleu continuar?",
     "Str.AIChat.Title": "Xat d’IA",
     "Str.AIChat.Menu": "_Xat d’IA",

@@ -2,6 +2,7 @@
   "name": "Thai",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "กำหนดให้ใช้ wayland แต่ไม่สามารถเชื่อมต่อจอแสดงผล Wayland ได้: {0} ใช้ --platform x11 หรือ --platform auto ในเซสชันนี้",
     "Str.ProjectFile.ReplaceModel": "การใช้ข้อความในไฟล์โครงการจะแทนที่การตั้งค่าโครงการที่ยังไม่ได้บันทึกของ {0} ต้องการดำเนินการต่อหรือไม่",
     "Str.MemberOrigin.HexIde": "ส่วนขยายของ HexIDE; ไม่มีใน VB6",
     "Str.Dock.Host": "โฮสต์การเทียบชิด",

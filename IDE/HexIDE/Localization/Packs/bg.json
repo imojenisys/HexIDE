@@ -2,6 +2,7 @@
   "name": "Bulgarian",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Изисква се wayland, но няма достъпен Wayland дисплей: {0}. Използвайте --platform x11 или --platform auto в тази сесия.",
     "Str.ProjectFile.ReplaceModel": "Прилагането на текста на проектния файл ще замени незаписаните настройки на проекта {0}. Продължаване?",
     "Str.AIChat.Title": "AI чат",
     "Str.AIChat.Menu": "AI чат",

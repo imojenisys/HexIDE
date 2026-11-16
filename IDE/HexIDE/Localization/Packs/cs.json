@@ -2,6 +2,7 @@
   "name": "Czech",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Byl vyžadován wayland, ale nebylo možné připojit se k displeji Wayland: {0}. V této relaci použijte --platform x11 nebo --platform auto.",
     "Str.ProjectFile.ReplaceModel": "Použití textu souboru projektu nahradí neuložená nastavení projektu {0}. Pokračovat?",
     "Str.AIChat.Title": "Chat AI",
     "Str.AIChat.Menu": "_Chat AI",

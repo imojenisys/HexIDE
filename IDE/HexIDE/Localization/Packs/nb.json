@@ -2,6 +2,7 @@
   "name": "Norwegian Bokmål",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "wayland var påkrevd, men ingen Wayland-skjerm kunne nås: {0}. Bruk --platform x11 eller --platform auto i denne økten.",
     "Str.ProjectFile.ReplaceModel": "Bruk av prosjektfilens tekst erstatter ulagrede prosjektinnstillinger for {0}. Fortsette?",
     "Str.MemberOrigin.HexIde": "HexIDE-utvidelse; ikke tilgjengelig i VB6.",
     "Str.Dock.Host": "Forankringsvert",

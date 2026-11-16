@@ -2,6 +2,7 @@
   "name": "Galician",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "Requiríase wayland, pero non se puido acceder a ningunha pantalla Wayland: {0}. Use --platform x11 ou --platform auto nesta sesión.",
     "Str.ProjectFile.ReplaceModel": "Aplicar o texto do ficheiro do proxecto substituirá a configuración sen gardar de {0}. Continuar?",
     "Str.AIChat.Title": "Chat de IA",
     "Str.AIChat.Menu": "_Chat de IA",

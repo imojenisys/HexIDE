@@ -237,7 +237,10 @@ macOS keep their normal backend regardless of this choice.
 
 - `x11`: the existing X11 path, through XWayland in a Wayland session.
 - `auto`: try native Wayland, falling back to X11 when it cannot start.
-- `wayland`: require native Wayland; a startup failure is not hidden by falling back.
+- `wayland`: require native Wayland. If Avalonia cannot start it, Desktop and Standalone exit 2
+  without falling back or dumping core. A single localized diagnostic on stderr includes Avalonia’s
+  reason and suggests `--platform x11` or `--platform auto`; the same line is written to the IDE
+  log directory (`logs/ide`). Standalone selects the backend through `HEXIDE_PLATFORM`.
 
 Serilog records the actual windowing implementation after startup. Native Wayland needs
 libwayland-client, libwayland-cursor and libxkbcommon; GPU rendering additionally needs libEGL and

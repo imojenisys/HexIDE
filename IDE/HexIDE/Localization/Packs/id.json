@@ -2,6 +2,7 @@
   "name": "Indonesian",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "wayland diperlukan, tetapi tidak ada tampilan Wayland yang dapat dijangkau: {0}. Gunakan --platform x11 atau --platform auto pada sesi ini.",
     "Str.ProjectFile.ReplaceModel": "Menerapkan teks berkas proyek akan mengganti pengaturan proyek {0} yang belum disimpan. Lanjutkan?",
     "Str.MemberOrigin.HexIde": "Ekstensi HexIDE; tidak tersedia di VB6.",
     "Str.Dock.Host": "Host penambatan",

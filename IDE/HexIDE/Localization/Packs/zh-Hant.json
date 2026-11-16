@@ -2,6 +2,7 @@
   "name": "Chinese (Traditional)",
   "direction": "ltr",
   "strings": {
+    "Str.Startup.WaylandUnavailable": "要求使用 wayland，但無法連線至 Wayland 顯示：{0}。請在此工作階段使用 --platform x11 或 --platform auto。",
     "Str.ProjectFile.ReplaceModel": "套用專案檔案文字將取代 {0} 尚未儲存的專案設定。是否繼續？",
     "Str.AIChat.Title": "AI 聊天",
     "Str.AIChat.Menu": "AI 聊天(_C)",
