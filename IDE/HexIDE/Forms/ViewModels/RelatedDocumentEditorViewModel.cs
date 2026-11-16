@@ -234,6 +234,16 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindo
         EventHandler stateChanged = (_, _) => uiThread.Post(() => LanguageServerStateChanged?.Invoke());
         lspClient.StateChanged += stateChanged;
         AutoDispose(new ActionDisposable(() => lspClient.StateChanged -= stateChanged));
+        AutoDispose(new EditorAnalysisRefresh(lspClient, () => DocumentUri, async token =>
+        {
+            if (DocumentUri is not { } uri) return;
+            await FlushDocumentAsync(token);
+            await Task.WhenAll(lspClient.RequestSemanticTokensAsync(uri, token),
+                settings.ShowInlayHints
+                    ? lspClient.RequestInlayHintsAsync(uri, new HexIDE.Lsp.Messages.Range(new Position(0, 0),
+                        new Position(Document.LineCount - 1, Document.Lines[^1].Length)), token)
+                    : Task.CompletedTask);
+        }));
         session.Start();
     }
 
