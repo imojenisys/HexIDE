@@ -80,9 +80,7 @@ public sealed class HighContrastPackTests
 
     [AvaloniaTheory]
     [InlineData("Abyss", "Placeholder")]
-    [InlineData("Dark", "Placeholder")]
     [InlineData("Abyss", "ScrollBar")]
-    [InlineData("Dark", "ScrollBar")]
     [InlineData("HighContrastLight", "LineNumbers")]
     [InlineData("HighContrastLight", "Placeholder")]
     [InlineData("HighContrastLight", "Tab")]

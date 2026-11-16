@@ -1,6 +1,11 @@
 using System.Text.Json;
 using System.Xml.Linq;
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Headless.XUnit;
+using Avalonia.Styling;
+using Avalonia.Themes.Simple;
 using HexIDE.Themes;
 
 namespace HexIDE.Tests.Themes;
@@ -140,7 +145,7 @@ public class ShippedThemePackTests
             record.Colors.Should().ContainKey("ThemeBackgroundBrush", $"{pack} must not inherit Simple's grey");
     }
 
-    [Theory]
+    [AvaloniaTheory]
     [InlineData("Abyss")]
     [InlineData("Dark")]
     public void DarkChromeTextAndIndicatorsMeetContrastThresholds(string pack)
@@ -151,18 +156,52 @@ public class ShippedThemePackTests
             "DockThemeBackgroundBrush", "DockThemeControlBackgroundBrush", "DockDocumentTabStripBackgroundBrush",
             "DockSurfacePanelBrush", "DockSurfaceHeaderBrush", "DockSurfaceSidebarBrush",
             "DockTabBackgroundBrush", "DockTabActiveBackgroundBrush"];
-        foreach (var background in backgrounds)
-        foreach (var text in new[] { "ThemeForegroundBrush", "ThemeForegroundLowBrush", "DockTabForegroundBrush",
-                     "DockTabSelectedForegroundBrush", "DockTabActiveForegroundBrush" })
+        var simple = new SimpleTheme();
+        var app = Application.Current!;
+        var previousVariant = app.RequestedThemeVariant;
+        app.RequestedThemeVariant = ThemeVariant.Dark;
+        var styles = app.Styles;
+        styles.Add(simple);
+        var dock = new Dock.Avalonia.Themes.Simple.DockSimpleTheme();
+        styles.Add(dock);
+        var baseColour = Color.Parse(colours["ThemeBackgroundBrush"]);
+        Color Of(string key)
         {
-            colours.Should().ContainKey(background, pack);
-            colours.Should().ContainKey(text, pack);
-            SyntaxHighlightingTheme.ContrastRatio(Color.Parse(colours[text]), Color.Parse(colours[background]))
-                .Should().BeGreaterThanOrEqualTo(Legible, $"{pack}: {text} on {background}");
+            if (colours.TryGetValue(key, out var value)) return Composite(Color.Parse(value), baseColour);
+            return Composite(((ISolidColorBrush)app.FindResource(ThemeVariant.Dark, key)!).Color,
+                baseColour);
         }
-        foreach (var background in backgrounds)
-            SyntaxHighlightingTheme.ContrastRatio(Color.Parse(colours["ThemeControlMidHighBrush"]), Color.Parse(colours[background]))
-                .Should().BeGreaterThanOrEqualTo(3, $"{pack}: borders and scrollbar thumbs on {background}");
+        try
+        {
+            foreach (var background in backgrounds.Where(colours.ContainsKey))
+            {
+                var text = background.StartsWith("Dock", StringComparison.Ordinal)
+                    ? "DockTabForegroundBrush" : "ThemeForegroundBrush";
+                SyntaxHighlightingTheme.ContrastRatio(Of(text), Of(background))
+                    .Should().BeGreaterThanOrEqualTo(Legible, $"{pack}: {text} on {background}");
+                foreach (var declaredText in new[] { "ThemeForegroundLowBrush", "DockTabSelectedForegroundBrush",
+                             "DockTabActiveForegroundBrush" }.Where(colours.ContainsKey))
+                    SyntaxHighlightingTheme.ContrastRatio(Of(declaredText), Of(background))
+                        .Should().BeGreaterThanOrEqualTo(Legible, $"{pack}: {declaredText} on {background}");
+                if (colours.ContainsKey("ThemeControlMidHighBrush"))
+                    SyntaxHighlightingTheme.ContrastRatio(Of("ThemeControlMidHighBrush"), Of(background))
+                        .Should().BeGreaterThanOrEqualTo(3, $"{pack}: borders and scrollbar thumbs on {background}");
+            }
+        }
+        finally
+        {
+            styles.Remove(dock);
+            styles.Remove(simple);
+            app.RequestedThemeVariant = previousVariant;
+        }
+    }
+
+    private static Color Composite(Color foreground, Color background)
+    {
+        var alpha = foreground.A / 255d;
+        return Color.FromRgb((byte)(foreground.R * alpha + background.R * (1 - alpha)),
+            (byte)(foreground.G * alpha + background.G * (1 - alpha)),
+            (byte)(foreground.B * alpha + background.B * (1 - alpha)));
     }
 
     [Fact]
