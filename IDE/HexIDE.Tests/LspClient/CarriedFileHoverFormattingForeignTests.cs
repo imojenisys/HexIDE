@@ -13,11 +13,16 @@ namespace HexIDE.Tests.LspClient;
 
 public class CarriedFileHoverFormattingForeignTests
 {
-    public static bool HasCpp => ForeignServer.Cpp.Find() is not null;
+    [ForeignServerFact("cpp")]
+    public Task ClangdHoverAndFormattingReachCarriedFile() =>
+        Avalonia.Headless.HeadlessUnitTestSession.GetOrStartForAssembly(typeof(TestApp).Assembly)
+            .Dispatch<bool>(async () =>
+            {
+                await RunClangdHoverAndFormattingAsync();
+                return true;
+            }, TestContext.Current.CancellationToken);
 
-    // Avalonia owns the UI lifetime; HasCpp supplies the foreign-server availability gate.
-    [AvaloniaFact(Skip = "No clangd available; RequiredServersTests enforces availability in CI.", SkipUnless = nameof(HasCpp))]
-    public async Task ClangdHoverAndFormattingReachCarriedFile()
+    private static async Task RunClangdHoverAndFormattingAsync()
     {
         var token = TestContext.Current.CancellationToken;
         var directory = Path.Combine(Path.GetTempPath(), "hexide-carried-clangd-" + Guid.NewGuid().ToString("N"));

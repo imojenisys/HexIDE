@@ -102,6 +102,31 @@ public sealed class CarriedFileHoverFormattingTests : IDisposable
         await client.DidNotReceive().RequestHoverAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>());
     }
 
+    [AvaloniaFact]
+    public async Task LeavingTextBeforeDwellSendsNoHoverRequest()
+    {
+        var editor = Show();
+        Hover(editor);
+        window!.MouseMove(new Point(895, 595));
+        await Task.Delay(650, TestContext.Current.CancellationToken);
+        ToolTip.GetIsOpen(editor).Should().BeFalse();
+        await client.DidNotReceive().RequestHoverAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public async Task ReattachedViewRequestsHoverOnlyOnce()
+    {
+        var editor = Show();
+        var view = window!.Content;
+        window.Content = null;
+        window.Content = view;
+        Dispatcher.UIThread.RunJobs();
+        Hover(editor);
+        await Task.Delay(650, TestContext.Current.CancellationToken);
+        ToolTip.GetIsOpen(editor).Should().BeTrue();
+        await client.Received(1).RequestHoverAsync(Arg.Any<string>(), new Position(0, 0), Arg.Any<CancellationToken>());
+    }
+
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
@@ -161,7 +186,7 @@ public sealed class CarriedFileHoverFormattingTests : IDisposable
             .Returns(_ => reply.Task);
         var editor = Show();
         ApplicationCommands.FormatDocumentCommand.Execute(null, editor.TextArea);
-        await client.Received(1).RequestFormattingAsync(Arg.Any<string>(), Arg.Any<FormattingOptions>(), Arg.Any<CancellationToken>());
+        client.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILspClient.RequestFormattingAsync)).Should().Be(1);
         if (detach) window!.Content = null;
         else editor.Document.Insert(0, "changed");
         var before = editor.Text;
@@ -179,7 +204,7 @@ public sealed class CarriedFileHoverFormattingTests : IDisposable
         var editor = Show();
         Hover(editor);
         await Task.Delay(650, TestContext.Current.CancellationToken);
-        await client.Received(1).RequestHoverAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>());
+        client.ReceivedCalls().Count(call => call.GetMethodInfo().Name == nameof(ILspClient.RequestHoverAsync)).Should().Be(1);
         var view = window!.Content;
         window.Content = null;
         window.Content = view;
