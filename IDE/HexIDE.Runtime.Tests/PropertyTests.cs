@@ -10,7 +10,7 @@ namespace HexIDE.Runtime.Tests;
 /// </summary>
 public class PropertyTests : BaseVBTestFixture
 {
-    // Measured on vb6.exe SP6, native and p-code: issue #177's final supervisor comment
+    // Measured on vb6.exe SP6, native and p-code: https://github.com/hexide-io/HexIDE/issues/177
     // (oracle PR #4042). Index arguments precede the assigned value.
     private const string IndexedItem = """
         Private m(5) As Variant
