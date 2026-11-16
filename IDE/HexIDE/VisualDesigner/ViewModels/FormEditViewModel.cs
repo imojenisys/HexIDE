@@ -1654,13 +1654,14 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         if (formDefinition is null || !HasWindowFrame)
             return;
 
-        VBFormRuntime? preview = null;
+        Window? preview = null;
         try
         {
-            preview = FormComponentClass.Instance.InstantiateWindow(Form.Instance, VBLoader.HasMenuBar(formDefinition));
+            var form = FormComponentClass.Instance.InstantiateWindow(Form.Instance, VBLoader.HasMenuBar(formDefinition));
+            preview = form;
             // No SetCode, PrepareForm or Start: events have no interpreter to dispatch to (#2003).
-            preview.Content = VBLoader.SpawnComponents(formDefinition, preview.Context.ExecutionContext,
-                preview.Context.RootEnv, new StandaloneStandardLib(preview));
+            preview.Content = VBLoader.SpawnComponents(formDefinition, form.Context.ExecutionContext,
+                form.Context.RootEnv, new StandaloneStandardLib(preview));
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
                 preview.Show(owner);
             else
