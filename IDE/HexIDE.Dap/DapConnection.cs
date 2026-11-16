@@ -42,7 +42,7 @@ public sealed class DapConnection : IAsyncDisposable
         _events = Channel.CreateBounded<DapEvent>(new BoundedChannelOptions(_options.EventCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = true,
+            SingleWriter = false,
             AllowSynchronousContinuations = false,
         });
         _capture?.Note("DAP connection opened.");
@@ -129,6 +129,19 @@ public sealed class DapConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>Enqueues a local barrier behind events already read, for the final consumer to acknowledge.</summary>
+    public Task QueueDeliveryBarrierAsync()
+    {
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_sync)
+        {
+            ThrowIfClosed();
+            if (!_events.Writer.TryWrite(new(0, "", JsonSerializer.SerializeToElement(new { })) { DeliveryBarrier = delivered }))
+                throw new IOException("DAP event queue is full; cannot queue a delivery barrier.");
+        }
+        return delivered.Task;
+    }
+
     private void ThrowIfClosed()
     {
         if (_closed) throw new IOException("DAP connection is closed.", _failure);
@@ -182,8 +195,9 @@ public sealed class DapConnection : IAsyncDisposable
                     case "event":
                         var name = Text(message, "event");
                         RecordFrame();
-                        if (!_events.Writer.TryWrite(new(sequence, name, message)))
-                            throw new IOException("DAP event queue overflowed; the consumer is not keeping up.");
+                        lock (_sync)
+                            if (!_events.Writer.TryWrite(new(sequence, name, message)))
+                                throw new IOException("DAP event queue overflowed; the consumer is not keeping up.");
                         break;
                     case "request":
                         var reverseCommand = Text(message, "command");

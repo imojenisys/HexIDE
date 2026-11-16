@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,7 +15,8 @@ using HexIDE.Localization;
 namespace HexIDE.Debugging;
 
 public sealed record ExternalVariable(string Name, string Value, string Type, int Reference);
-public sealed record ExternalEvaluation(string Text, bool Expired = false);
+// Immediate receives Output events separately; automation also needs their text in its reply.
+public sealed record ExternalEvaluation(string Text, bool Expired = false, string? Error = null, string PrintedOutput = "");
 
 /// <summary>One external run. Public state and events belong to the UI thread; wire reads never block it.</summary>
 public sealed partial class ExternalDebugService(ConversationLog capture, ILocalizationService? localization = null, IBreakpointService? breakpoints = null)
@@ -250,6 +252,14 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
     {
         await foreach (var update in current.Updates.ReadAllAsync())
         {
+            if (update.Event?.DeliveryBarrier is { } delivered)
+            {
+                // Both queues preserve order. Reaching this UI job means every event read before the
+                // barrier (including output preceding an evaluate response) has reached its UI consumer.
+                // Acknowledge delivery only; the update reader must never await a DAP response (#4249).
+                await Dispatcher.UIThread.InvokeAsync(() => { delivered.TrySetResult(); });
+                continue;
+            }
             // Start Run To Cursor's clean-up ahead of this update's dispatch, so the temporary line leaves the set before
             // anything reacts to the stop. Never wait for its round trip here: Updates is bounded, and a reader held up
             // by an adapter's reply lets a chatty program overflow it, which faults the session.
@@ -376,12 +386,16 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
             throw new InvalidOperationException("No stopped external frame is available for evaluation.");
         var version = selectionVersion;
         var frameId = frame.GetProperty("id").GetInt32();
+        var printed = new StringBuilder();
+        void CollectOutput(string text) { if (session == current) printed.Append(text); }
+        Output += CollectOutput;
         IsEvaluating = true;
         Changed?.Invoke();
         bool IsSelected() => session == current && current.IsCurrent(stop) && selectionVersion == version;
         try
         {
             string text;
+            string? error = null;
             try
             {
                 var reply = await current.EvaluateAsync(stop, frameId, expression);
@@ -389,16 +403,23 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
             }
             catch (Exception exception)
             {
-                text = exception.Message;
+                text = error = exception.Message;
             }
+            try
+            {
+                if (session == current && current.Snapshot.State is not (DapSessionState.Ended or DapSessionState.Faulted))
+                    await current.WaitForDeliveryAsync();
+            }
+            catch (System.IO.IOException) when (!IsSelected()) { }
             // REPL statements can mutate variables even when they ultimately fail. Refresh whichever
             // frame is now selected, but never publish the old reply as that frame's evaluation.
             if (session == current && current.IsCurrent(stop) && SelectedFrame is { } selected)
                 await RefreshSelectedFrameAsync(current, stop, selected.GetProperty("id").GetInt32());
-            return IsSelected() ? new(text) : new("", Expired: true);
+            return IsSelected() ? new(text, Error: error, PrintedOutput: printed.ToString()) : new("", Expired: true);
         }
         finally
         {
+            Output -= CollectOutput;
             if (session == current) { IsEvaluating = false; Changed?.Invoke(); }
         }
     }
