@@ -7,6 +7,20 @@ namespace HexIDE.Integration.Tests.Views;
 
 public class SliderFileTests
 {
+    [AvaloniaFact]
+    public async Task Saved_corpus_retains_the_reviewed_runtime_values_and_read_only_error()
+    {
+        // #1091's 10-28 live check, retained by the latest merge-refresh brief.
+        var form = System.IO.File.ReadAllText(System.IO.Path.Join(RepoTree.Root(),
+            "corpus", "inbox-controls", "saved", "slider", "Form1.frm"));
+        var (_, _, ctx, env) = ContainerRuntimeHarness.Spawn(form);
+        var printed = await ContainerRuntimeHarness.Run(ctx, env,
+            "Debug.Print Slider1.Min, Slider1.Max, Slider1.Value, Slider1.SelLength, Slider3.Orientation, Slider4.Value, Slider5.Value\r\n"
+            + "On Error Resume Next\r\nSlider2.GetNumTicks = 3\r\nDebug.Print Err.Number");
+        printed.Select(v => Convert.ToString(v.Value, System.Globalization.CultureInfo.InvariantCulture) ?? "")
+            .Should().Equal("-5", "50", "30", "12", "1", "6", "0", "450");
+    }
+
     [AvaloniaTheory]
     [InlineData("Value = 30\nMax = 50", "0", "50", "30", "30", "0", "0")]
     [InlineData("Max = 50\nValue = 99", "0", "50", "50", "50", "0", "0")]

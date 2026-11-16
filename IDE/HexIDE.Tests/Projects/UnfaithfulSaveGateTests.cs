@@ -199,7 +199,8 @@ public class UnfaithfulSaveGateTests : IDisposable
             events, Substitute.For<HexIDE.Lsp.ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
-            Substitute.For<HexIDE.Localization.ILocalizationService>()).Initialize(form);
+            Substitute.For<HexIDE.Localization.ILocalizationService>(), new Vb6ProjectFileFormat(),
+            new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader()).Initialize(form);
         editor.IsReadOnly.Should().BeFalse("the corpus must open without the read-only banner");
         editor.ReadOnlyReason.Should().BeNull();
         const string edit = "' edited code\r\n";
