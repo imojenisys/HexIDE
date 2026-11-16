@@ -18,6 +18,27 @@ and apply here unchanged.
 
 ## Requirements
 
+### Requirement: Arrays declared As New create each element lazily
+The interpreter SHALL keep project-class and Collection array elements declared `As New` as Nothing
+until an expression reads that element, then make and retain its instance through the existing auto-instance
+request path. Set to Nothing SHALL release the element without making an instance. Erase of a fixed array
+SHALL release made elements and leave them available for lazy creation again. For Each SHALL enumerate
+untouched elements as Nothing without making them. Non-Static local arrays SHALL release their elements on return.
+These rules follow [#4150's measured rows](https://github.com/hexide-io/HexIDE/issues/4150) and the
+[As New oracle](../../../docs/vb6-fidelity-oracle/as-new.md).
+
+#### Scenario: Each use makes only the element it reads
+- **WHEN** `Dim a(3) As New Class1` is declared and `a(1).X = 5` executes
+- **THEN** only a(1) has been made
+- **AND** `a(2) Is Nothing` makes a(2) and reads False
+- **AND** after `Set a(1) = Nothing`, its next use makes a fresh instance with X back at zero
+
+#### Scenario: Enumeration observes storage without creating objects
+- **WHEN** For Each with a Variant variable enumerates an As New array containing untouched elements
+- **THEN** it visits every element and sees each untouched element as Nothing
+- **AND** it makes no instances
+
+
 ### Requirement: Chained named-member writes preserve their owner's semantics
 The interpreter SHALL resolve module-qualified UDT field writes against the module-owned record,
 including an indexed record, and SHALL resolve a chained `Set` prefix before storing the final reference.
