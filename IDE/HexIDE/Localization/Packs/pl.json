@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Nowy",
     "Str.AIChat.InputPlaceholder": "Zapytaj o swój kod…",
     "Str.AIChat.NewTip": "Nowy czat (historia zostaje zachowana)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekty {0} współdzielą folder {1}; zapisywany lub importowany jest tylko {2}."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekty {0} współdzielą folder {1}; zapisywany lub importowany jest tylko {2}.",
+    "Str.PropDesc.Index": "Indeks elementu tablicy kontrolek lub pusty dla pojedynczej kontrolki.",
+    "Str.ControlArray.InvalidIndex": "Nieprawidłowa wartość właściwości. Index musi być liczbą całkowitą od 0 do 32767 lub pusty. VB6 nie wczyta Index spoza zakresu.",
+    "Str.ControlArray.DuplicateIndex": "Nieprawidłowa wartość właściwości. '{0}' ma już ten Index lub nie ma Index. VB6 odrzuca powielone indeksy; mieszanie kontrolek z indeksem i bez zapisuje brak Index w dzienniku.",
+    "Str.ControlArray.ClearRefused": "Nie można wyczyścić Index: '{0}' ma tę samą nazwę. Wniosek z pomiaru z kontrolką indeksowaną na początku: VB6 zapisuje brak Index i ładuje zwykłą kontrolkę poza tablicą (Index zgłasza 343). Odwrotnej kolejności i komunikatów IDE nie zmierzono."
   }
 }

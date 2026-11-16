@@ -1311,6 +1311,10 @@
     "Str.AIChat.ApiKeyRequired": "API key required. Set the HEXIDE_AI_API_KEY environment variable, or apiKey in chat-settings.json.",
     "Str.AIChat.PrivacyNotice": "ℹ Privacy: your messages, the active file's contents (for a form, its layout and captions too), and its diagnostics are sent to {0} — a third-party service you configured in AI Chat settings.",
     "Str.AIChat.PrivacyKeyTip": "Tip: set the HEXIDE_AI_API_KEY environment variable to avoid storing your API key in a file.",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projects {0} share folder {1}; only {2} is written or imported."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projects {0} share folder {1}; only {2} is written or imported.",
+    "Str.PropDesc.Index": "The control array element's index, or empty for a plain control.",
+    "Str.ControlArray.InvalidIndex": "Invalid property value. Index must be an integer from 0 to 32767, or empty. VB6 will not load an out-of-range Index.",
+    "Str.ControlArray.DuplicateIndex": "Invalid property value. '{0}' already holds this Index or has no Index. VB6 refuses duplicate indexes; mixing indexed and unindexed controls logs a missing Index.",
+    "Str.ControlArray.ClearRefused": "Cannot clear Index: '{0}' shares the name. Reasoned from the measured indexed-first form: VB6 logs a missing Index and loads the plain control outside the array (Index raises 343). Reverse order and IDE prompts are unmeasured."
   }
 }

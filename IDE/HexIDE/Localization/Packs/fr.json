@@ -1311,6 +1311,10 @@
     "Str.AIChat.PrivacyNotice": "ℹ Confidentialité : vos messages, le contenu du fichier actif (pour un formulaire, sa disposition et ses légendes aussi) et ses diagnostics sont envoyés à {0} — un service tiers configuré dans les paramètres du chat IA.",
     "Str.AIChat.PrivacyKeyTip": "Conseil : définissez la variable d’environnement HEXIDE_AI_API_KEY pour éviter de stocker votre clé API dans un fichier.",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Les projets {0} partagent le dossier {1} ; seul {2} est écrit ou importé.",
-    "Str.MemberOrigin.HexIde": "Extension HexIDE ; non disponible dans VB6."
+    "Str.MemberOrigin.HexIde": "Extension HexIDE ; non disponible dans VB6.",
+    "Str.PropDesc.Index": "Indice de l’élément du tableau de contrôles, ou vide pour un contrôle simple.",
+    "Str.ControlArray.InvalidIndex": "Valeur de propriété incorrecte. Index doit être un entier de 0 à 32767, ou vide. VB6 ne charge pas un Index hors limites.",
+    "Str.ControlArray.DuplicateIndex": "Valeur de propriété incorrecte. « {0} » possède déjà cet Index ou n’a pas d’Index. VB6 refuse les doublons ; mélanger des contrôles indexés et non indexés signale un Index manquant.",
+    "Str.ControlArray.ClearRefused": "Impossible de vider Index : « {0} » porte le même nom. Déduction de la mesure avec le contrôle indexé en premier : VB6 signale un Index manquant et charge le contrôle simple hors du tableau (Index lève 343). Ordre inverse et messages de l’IDE non mesurés."
   }
 }

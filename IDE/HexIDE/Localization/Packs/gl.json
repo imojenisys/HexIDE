@@ -1311,6 +1311,10 @@
     "Str.AIChat.PrivacyNotice": "ℹ Privacidade: as súas mensaxes, o contido do ficheiro activo (nun formulario, tamén a disposición e os títulos) e os seus diagnósticos envíanse a {0}, un servizo de terceiros configurado nos axustes do chat de IA.",
     "Str.AIChat.PrivacyKeyTip": "Consello: estableza a variable de contorno HEXIDE_AI_API_KEY para evitar gardar a clave API nun ficheiro.",
     "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Os proxectos {0} comparten o cartafol {1}; só se escribe ou importa {2}.",
-    "Str.MemberOrigin.HexIde": "Extensión de HexIDE; non dispoñible en VB6."
+    "Str.MemberOrigin.HexIde": "Extensión de HexIDE; non dispoñible en VB6.",
+    "Str.PropDesc.Index": "Índice do elemento da matriz de controis, ou baleiro para un control simple.",
+    "Str.ControlArray.InvalidIndex": "Valor de propiedade non válido. Index debe ser un enteiro de 0 a 32767, ou baleiro. VB6 non carga un Index fóra do intervalo.",
+    "Str.ControlArray.DuplicateIndex": "Valor de propiedade non válido. '{0}' xa ten este Index ou non ten Index. VB6 rexeita índices duplicados; mesturar controis con e sen índice rexistra un Index ausente.",
+    "Str.ControlArray.ClearRefused": "Non se pode baleirar Index: '{0}' comparte o nome. Deducido da medición co control indexado primeiro: VB6 rexistra un Index ausente e carga o control simple fóra da matriz (Index xera 343). A orde inversa e as mensaxes do IDE non se mediron."
   }
 }

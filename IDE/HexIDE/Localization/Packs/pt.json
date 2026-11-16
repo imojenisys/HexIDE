@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Nova",
     "Str.AIChat.InputPlaceholder": "Pergunte sobre o seu código…",
     "Str.AIChat.NewTip": "Nova conversa (o histórico é preservado)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Os projetos {0} partilham a pasta {1}; apenas {2} é escrito ou importado."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Os projetos {0} partilham a pasta {1}; apenas {2} é escrito ou importado.",
+    "Str.PropDesc.Index": "Índice do elemento da matriz de controlos, ou vazio para um controlo simples.",
+    "Str.ControlArray.InvalidIndex": "Valor de propriedade inválido. Index deve ser um inteiro de 0 a 32767, ou vazio. VB6 não carrega um Index fora do intervalo.",
+    "Str.ControlArray.DuplicateIndex": "Valor de propriedade inválido. '{0}' já tem este Index ou não tem Index. VB6 recusa índices duplicados; misturar controlos com e sem índice regista um Index em falta.",
+    "Str.ControlArray.ClearRefused": "Não é possível limpar Index: '{0}' partilha o nome. Deduzido da medição com o controlo indexado primeiro: VB6 regista um Index em falta e carrega o controlo simples fora da matriz (Index gera 343). Ordem inversa e mensagens do IDE não medidas."
   }
 }

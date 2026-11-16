@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Jauna",
     "Str.AIChat.InputPlaceholder": "Jautājiet par savu kodu…",
     "Str.AIChat.NewTip": "Jauna saruna (vēsture tiek saglabāta)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekti {0} koplieto mapi {1}; tiek ierakstīts vai importēts tikai {2}."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekti {0} koplieto mapi {1}; tiek ierakstīts vai importēts tikai {2}.",
+    "Str.PropDesc.Index": "Vadīklu masīva elementa indekss vai tukšs atsevišķai vadīklai.",
+    "Str.ControlArray.InvalidIndex": "Nederīga rekvizīta vērtība. Index jābūt veselam skaitlim no 0 līdz 32767 vai tukšam. VB6 neielādē Index ārpus diapazona.",
+    "Str.ControlArray.DuplicateIndex": "Nederīga rekvizīta vērtība. '{0}' jau ir šis Index vai nav Index. VB6 noraida atkārtotus indeksus; vadīklu ar indeksu un bez tā sajaukums reģistrē trūkstošu Index.",
+    "Str.ControlArray.ClearRefused": "Index nevar notīrīt: '{0}' ir tāds pats nosaukums. Secinājums no mērījuma ar indeksēto vadīklu pirmo: VB6 reģistrē trūkstošu Index un ielādē atsevišķo vadīklu ārpus masīva (Index izraisa 343). Pretējā secība un IDE uzvednes nav mērītas."
   }
 }

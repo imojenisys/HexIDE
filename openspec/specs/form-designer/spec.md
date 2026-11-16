@@ -34,8 +34,9 @@ Matching SHALL use a case-insensitive substring of the property name, independen
 
 ### Requirement: Unmodelled properties remain visible and read-only
 
-The Properties window SHALL append every raw property carried by the selected modelled component after
-its modelled properties in both tabs, as greyed read-only rows included in name filtering. Text values
+The Properties window SHALL append every raw property carried by the selected modelled component
+that has no editable design-time adapter after its modelled properties in both tabs, as greyed
+read-only rows included in name filtering. Text values
 SHALL retain the file's textual representation; a property with a binary record or companion citation
 SHALL show a localized `(binary)` marker instead. Displaying these rows SHALL NOT alter the saved form
 or companion bytes. This is the presentation contract decided in [#158](https://github.com/hexide-io/HexIDE/issues/158).
@@ -500,3 +501,31 @@ This rendering substitution SHALL NOT change Caption/Text readback or permit set
 - **THEN** the displayed text contains U+1F4A3 followed by U+263A
 - **AND** the access-key underline follows the two-unit U+1F4A3 and marks U+263A
 - **AND** Caption still reads `M&J`
+
+### Requirement: Edit a control array's design-time Index
+
+The Properties window and `set_control_property` SHALL share an editable Index for each modelled
+control. Edits SHALL support undo and form save/load. Invalid edits SHALL be refused before mutation
+or saving. Automation replies SHALL name the resulting element or plain control.
+
+#### Scenario: Create and move a one-element array
+- **WHEN** a plain control's initially empty Index is set to an integer from 0 through 32767
+- **THEN** it becomes that element of the array bearing its name
+- **AND WHEN** Index is changed to another free value in that range
+- **THEN** the element moves and the saved form reloads with its new Index
+
+#### Scenario: Refuse an invalid array edit
+- **WHEN** Index is set to -1, 32768, non-integer text, or an index a same-name sibling holds
+- **THEN** the edit is refused without changing the model or saving
+- **AND** the refusal explains the VB6 file-load rule measured in
+  [#2701 / measuring PR #4074](https://github.com/hexide-io/HexIDE/issues/2701), for the
+  [control-array oracle](../../../docs/vb6-fidelity-oracle/control-arrays.md)
+
+#### Scenario: Clear an element
+- **WHEN** a lone element's Index is cleared
+- **THEN** it becomes a plain control and undo restores its Index
+- **BUT WHEN** same-name siblings remain
+- **THEN** clearing is refused, explaining that this is reasoned from the indexed-first mixed form
+  measurement (missing-Index log, plain control outside the array, Index raises 343), not measured VB6
+  IDE behaviour; reverse file order and IDE prompts remain unmeasured
+- **AND** event procedure signatures remain unchanged; renaming to join an array remains #1397

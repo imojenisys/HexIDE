@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Mới",
     "Str.AIChat.InputPlaceholder": "Hỏi về mã của bạn…",
     "Str.AIChat.NewTip": "Cuộc trò chuyện mới (lịch sử được giữ lại)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Các dự án {0} dùng chung thư mục {1}; chỉ {2} được ghi hoặc nhập."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Các dự án {0} dùng chung thư mục {1}; chỉ {2} được ghi hoặc nhập.",
+    "Str.PropDesc.Index": "Chỉ số phần tử mảng điều khiển, hoặc để trống cho điều khiển đơn.",
+    "Str.ControlArray.InvalidIndex": "Giá trị thuộc tính không hợp lệ. Index phải là số nguyên từ 0 đến 32767, hoặc để trống. VB6 không tải Index ngoài phạm vi.",
+    "Str.ControlArray.DuplicateIndex": "Giá trị thuộc tính không hợp lệ. '{0}' đã có Index này hoặc không có Index. VB6 từ chối chỉ số trùng; trộn điều khiển có và không có chỉ số sẽ ghi nhận thiếu Index.",
+    "Str.ControlArray.ClearRefused": "Không thể xóa Index: '{0}' có cùng tên. Suy luận từ phép đo với điều khiển có chỉ số đứng trước: VB6 ghi nhận thiếu Index và tải điều khiển đơn ngoài mảng (Index gây lỗi 343). Thứ tự ngược và thông báo IDE chưa được đo."
   }
 }

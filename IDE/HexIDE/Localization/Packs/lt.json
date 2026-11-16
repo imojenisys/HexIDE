@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Naujas",
     "Str.AIChat.InputPlaceholder": "Klauskite apie savo kodą…",
     "Str.AIChat.NewTip": "Naujas pokalbis (istorija išsaugoma)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projektai {0} bendrina aplanką {1}; įrašomas arba importuojamas tik {2}."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projektai {0} bendrina aplanką {1}; įrašomas arba importuojamas tik {2}.",
+    "Str.PropDesc.Index": "Valdiklių masyvo elemento indeksas arba tuščia atskiram valdikliui.",
+    "Str.ControlArray.InvalidIndex": "Netinkama ypatybės reikšmė. Index turi būti sveikasis skaičius nuo 0 iki 32767 arba tuščias. VB6 neįkelia Index už diapazono ribų.",
+    "Str.ControlArray.DuplicateIndex": "Netinkama ypatybės reikšmė. „{0}“ jau turi šį Index arba neturi Index. VB6 atmeta pasikartojančius indeksus; valdiklių su indeksu ir be jo derinys žurnale įrašo trūkstamą Index.",
+    "Str.ControlArray.ClearRefused": "Index negalima išvalyti: „{0}“ turi tą patį pavadinimą. Išvada iš matavimo su indeksuotu valdikliu pirmoje vietoje: VB6 įrašo trūkstamą Index ir įkelia atskirą valdiklį už masyvo ribų (Index sukelia 343). Atvirkštinė tvarka ir IDE pranešimai neišmatuoti."
   }
 }

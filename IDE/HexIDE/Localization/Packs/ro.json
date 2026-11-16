@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Nou",
     "Str.AIChat.InputPlaceholder": "Întrebați despre codul dvs.…",
     "Str.AIChat.NewTip": "Conversație nouă (istoricul este păstrat)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Proiectele {0} partajează dosarul {1}; doar {2} este scris sau importat."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Proiectele {0} partajează dosarul {1}; doar {2} este scris sau importat.",
+    "Str.PropDesc.Index": "Indicele elementului din tabloul de controale, sau gol pentru un control simplu.",
+    "Str.ControlArray.InvalidIndex": "Valoare de proprietate nevalidă. Index trebuie să fie un întreg de la 0 la 32767, sau gol. VB6 nu încarcă un Index în afara intervalului.",
+    "Str.ControlArray.DuplicateIndex": "Valoare de proprietate nevalidă. '{0}' are deja acest Index sau nu are Index. VB6 refuză indicii duplicați; amestecul controalelor cu și fără indice înregistrează un Index lipsă.",
+    "Str.ControlArray.ClearRefused": "Index nu poate fi golit: '{0}' are același nume. Deducție din măsurarea cu controlul indexat primul: VB6 înregistrează un Index lipsă și încarcă controlul simplu în afara tabloului (Index generează 343). Ordinea inversă și mesajele IDE nu sunt măsurate."
   }
 }

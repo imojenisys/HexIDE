@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Ny",
     "Str.AIChat.InputPlaceholder": "Spør om koden din…",
     "Str.AIChat.NewTip": "Ny samtale (historikken beholdes)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Prosjektene {0} deler mappen {1}; bare {2} skrives eller importeres."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Prosjektene {0} deler mappen {1}; bare {2} skrives eller importeres.",
+    "Str.PropDesc.Index": "Indeksen til elementet i kontrollmatrisen, eller tom for en enkelt kontroll.",
+    "Str.ControlArray.InvalidIndex": "Ugyldig egenskapsverdi. Index må være et heltall fra 0 til 32767, eller tom. VB6 laster ikke en Index utenfor intervallet.",
+    "Str.ControlArray.DuplicateIndex": "Ugyldig egenskapsverdi. '{0}' har allerede denne Index eller mangler Index. VB6 avviser duplikater; blandede kontroller med og uten indeks logger en manglende Index.",
+    "Str.ControlArray.ClearRefused": "Index kan ikke tømmes: '{0}' deler navnet. Utledet fra målingen med indeksert kontroll først: VB6 logger en manglende Index og laster enkeltkontrollen utenfor matrisen (Index gir 343). Omvendt rekkefølge og IDE-spørsmål er ikke målt."
   }
 }

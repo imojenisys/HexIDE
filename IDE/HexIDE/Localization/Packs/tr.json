@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Yeni",
     "Str.AIChat.InputPlaceholder": "Kodunuz hakkında soru sorun…",
     "Str.AIChat.NewTip": "Yeni sohbet (geçmiş korunur)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "{0} projeleri {1} klasörünü paylaşıyor; yalnızca {2} yazılır veya içe aktarılır."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "{0} projeleri {1} klasörünü paylaşıyor; yalnızca {2} yazılır veya içe aktarılır.",
+    "Str.PropDesc.Index": "Denetim dizisi öğesinin dizini; tek denetim için boş bırakılır.",
+    "Str.ControlArray.InvalidIndex": "Geçersiz özellik değeri. Index 0 ile 32767 arasında bir tam sayı veya boş olmalıdır. VB6 aralık dışındaki Index değerini yüklemez.",
+    "Str.ControlArray.DuplicateIndex": "Geçersiz özellik değeri. '{0}' zaten bu Index değerine sahip veya Index değeri yok. VB6 yinelenen dizinleri reddeder; dizinli ve dizinsiz denetimlerin karışımı eksik Index kaydı oluşturur.",
+    "Str.ControlArray.ClearRefused": "Index temizlenemiyor: '{0}' aynı adı paylaşıyor. Dizinli denetimin önce olduğu ölçümden çıkarılmıştır: VB6 eksik Index kaydeder ve tek denetimi dizinin dışında yükler (Index 343 hatası verir). Ters sıra ve IDE iletileri ölçülmemiştir."
   }
 }

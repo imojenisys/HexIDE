@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Ny",
     "Str.AIChat.InputPlaceholder": "Fråga om din kod…",
     "Str.AIChat.NewTip": "Ny chatt (historiken bevaras)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekten {0} delar mappen {1}; endast {2} skrivs eller importeras."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekten {0} delar mappen {1}; endast {2} skrivs eller importeras.",
+    "Str.PropDesc.Index": "Index för elementet i kontrollmatrisen, eller tomt för en enskild kontroll.",
+    "Str.ControlArray.InvalidIndex": "Ogiltigt egenskapsvärde. Index måste vara ett heltal från 0 till 32767, eller tomt. VB6 läser inte in ett Index utanför intervallet.",
+    "Str.ControlArray.DuplicateIndex": "Ogiltigt egenskapsvärde. '{0}' har redan detta Index eller saknar Index. VB6 avvisar dubbla index; blandade kontroller med och utan index loggar ett saknat Index.",
+    "Str.ControlArray.ClearRefused": "Index kan inte rensas: '{0}' har samma namn. Härlett från mätningen med indexerad kontroll först: VB6 loggar ett saknat Index och läser in den enskilda kontrollen utanför matrisen (Index ger 343). Omvänd ordning och IDE-frågor är inte uppmätta."
   }
 }

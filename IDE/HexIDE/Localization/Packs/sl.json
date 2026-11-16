@@ -1311,6 +1311,10 @@
     "Str.AIChat.New": "Nov",
     "Str.AIChat.InputPlaceholder": "Vprašajte o svoji kodi…",
     "Str.AIChat.NewTip": "Nov klepet (zgodovina se ohrani)",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekti {0} si delijo mapo {1}; zapiše ali uvozi se samo {2}."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Projekti {0} si delijo mapo {1}; zapiše ali uvozi se samo {2}.",
+    "Str.PropDesc.Index": "Indeks elementa polja kontrolnikov ali prazno za samostojen kontrolnik.",
+    "Str.ControlArray.InvalidIndex": "Neveljavna vrednost lastnosti. Index mora biti celo število od 0 do 32767 ali prazno. VB6 ne naloži Index zunaj obsega.",
+    "Str.ControlArray.DuplicateIndex": "Neveljavna vrednost lastnosti. '{0}' že ima ta Index ali nima Index. VB6 zavrne podvojene indekse; mešanje kontrolnikov z indeksom in brez njega zabeleži manjkajoči Index.",
+    "Str.ControlArray.ClearRefused": "Index ni mogoče počistiti: '{0}' ima isto ime. Sklep iz meritve z indeksiranim kontrolnikom na prvem mestu: VB6 zabeleži manjkajoči Index in naloži samostojni kontrolnik zunaj polja (Index sproži 343). Obratni vrstni red in pozivi IDE niso izmerjeni."
   }
 }

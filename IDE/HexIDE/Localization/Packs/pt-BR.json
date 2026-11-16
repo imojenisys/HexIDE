@@ -182,6 +182,9 @@
     "Str.Dock.ToolTabStripItemDockAsDocument": "Acoplar como documento em aba",
     "Str.AIChat.PrivacyNotice": "ℹ Privacidade: suas mensagens, o conteúdo do arquivo ativo (em um formulário, também o layout e as legendas) e seus diagnósticos são enviados para {0}, um serviço de terceiros configurado nas definições do chat de IA.",
     "Str.AIChat.PrivacyKeyTip": "Dica: defina a variável de ambiente HEXIDE_AI_API_KEY para evitar salvar sua chave API em um arquivo.",
-    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Os projetos {0} compartilham a pasta {1}; apenas {2} é gravado ou importado."
+    "Str.Tool.LanguageServers.Problem.SharedProjectFolder": "Os projetos {0} compartilham a pasta {1}; apenas {2} é gravado ou importado.",
+    "Str.PropDesc.Index": "Índice do elemento da matriz de controles, ou vazio para um controle simples.",
+    "Str.ControlArray.DuplicateIndex": "Valor de propriedade inválido. '{0}' já tem este Index ou não tem Index. VB6 recusa índices duplicados; misturar controles com e sem índice registra um Index ausente.",
+    "Str.ControlArray.ClearRefused": "Não é possível limpar Index: '{0}' compartilha o nome. Deduzido da medição com o controle indexado primeiro: VB6 registra um Index ausente e carrega o controle simples fora da matriz (Index gera 343). Ordem inversa e mensagens do IDE não medidas."
   }
 }
