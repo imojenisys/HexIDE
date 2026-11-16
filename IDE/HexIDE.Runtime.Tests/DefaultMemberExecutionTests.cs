@@ -60,36 +60,35 @@ public class DefaultMemberExecutionTests : BaseVBTestFixture
         AssertDebugLog([new Vb6Value(expected)]);
     }
 
-    // Pinned divergence: #174's round-four measurements distinguish early/late binding here.
-    // Until #211 handles mixed String comparisons, refuse rather than return a wrong value or trappable 13.
+    // Measured: an-object-used-as-a-value.md, "A default member's value compared with a String".
+    // #211 compares the resolved value using its typed or Variant origin.
     [Theory]
-    [InlineData("Long", "w", "=", "42")]
-    [InlineData("Long", "w", ">", "5")]
-    [InlineData("Long", "w", "=", "42.0")]
-    [InlineData("Long", "w", "=", "abc")]
-    [InlineData("Integer", "w", "=", "42")]
-    [InlineData("Integer", "w", ">", "5")]
-    [InlineData("Double", "w", ">", "5")]
-    [InlineData("Property", "w", ">", "5")]
-    [InlineData("Property", "w", "=", "abc")]
-    [InlineData("Variant", "w", ">", "5")]
-    [InlineData("Variant", "w", "=", "abc")]
-    [InlineData("Long", "o", ">", "5")]
-    [InlineData("Long", "o", "=", "abc")]
-    [InlineData("String", "w", "=", "42")]
-    [InlineData("String", "w", ">", "5")]
-    public async Task Mixed_String_default_comparisons_refuse_in_both_orders(
-        string type, string variable, string comparison, string operand)
+    [InlineData("Long", "w = \"42\"", true, 0)]
+    [InlineData("Long", "w > \"5\"", true, 0)]
+    [InlineData("Long", "w = \"42.0\"", true, 0)]
+    [InlineData("Long", "\"5\" < w", true, 0)]
+    [InlineData("Long", "w = \"abc\"", false, 13)]
+    [InlineData("Integer", "w = \"42\"", true, 0)]
+    [InlineData("Integer", "w > \"5\"", true, 0)]
+    [InlineData("Integer", "w = \"abc\"", false, 13)]
+    [InlineData("Double", "w > \"5\"", true, 0)]
+    [InlineData("Property", "w > \"5\"", true, 0)]
+    [InlineData("Property", "w = \"abc\"", false, 13)]
+    [InlineData("Variant", "w > \"5\"", false, 0)]
+    [InlineData("Variant", "w = \"abc\"", false, 0)]
+    [InlineData("Long", "o > \"5\"", false, 0)]
+    [InlineData("Long", "o = \"abc\"", false, 0)]
+    [InlineData("String", "w = 42", true, 0)]
+    [InlineData("String", "w > 5", true, 0)]
+    public async Task Mixed_String_default_comparisons_follow_the_members_type(
+        string type, string expression, bool expected, int error)
     {
         var source = type == "Property" ? Property : Widget.Replace("As Long", "As " + type);
         if (type == "String")
             source = source.Replace("Value = 42", "Value = \"42\"");
-        var other = type == "String" ? operand : "\"" + operand + "\"";
-        foreach (var expression in new[] { $"{variable} {comparison} {other}", $"{other} {comparison} {variable}" })
-        {
-            var run = () => Probe($"On Error Resume Next\nc = {expression}\n", source);
-            (await run.Should().ThrowAsync<NotImplementedException>()).WithMessage("*#211*#174*");
-        }
+        var output = error == 0 ? "Debug.Print c" : "Debug.Print Err.Number";
+        await Probe($"On Error Resume Next\nc = {expression}\n{output}\n", source);
+        AssertDebugLog([error == 0 ? new Vb6Value(expected) : new Vb6Value((long)error)]);
     }
 
     [Fact]
