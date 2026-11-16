@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using System.Net.Sockets;
 using HexIDE.IDE;
 using HexIDE.Localization;
@@ -19,9 +20,13 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
 
     public List<MenuViewModel> Deleted { get; } = new();
 
+    private MenuViewModel blankMenu = null!;
+    internal IEnumerable<MenuViewModel> ItemsToApply => FlatMenu.Where(menu => menu != blankMenu);
+
     public MenuEditorViewModel()
     {
-
+        AddBlankRow();
+        SelectedMenu = blankMenu;
     }
 
     public MenuEditorViewModel(FormEditViewModel form, ILocalizationService? localization = null)
@@ -41,6 +46,25 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
         }
         foreach (var menu in form.TopLevelMenu)
             AddRecur(menu.Instance, 0);
+        AddBlankRow();
+        SelectedMenu = blankMenu;
+    }
+
+    private void AddBlankRow()
+    {
+        blankMenu = new MenuViewModel();
+        blankMenu.PropertyChanged += OnBlankCaptionChanged;
+        FlatMenu.Add(blankMenu);
+    }
+
+    private void OnBlankCaptionChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(MenuViewModel.Caption) || string.IsNullOrEmpty(blankMenu.Caption))
+            return;
+
+        // The caption promotes this row; the next blank starts at level zero until Next reaches it (#4141).
+        blankMenu.PropertyChanged -= OnBlankCaptionChanged;
+        AddBlankRow();
     }
 
     public void Accept()
@@ -62,12 +86,16 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
         if (indexOf >= FlatMenu.Count)
             indexOf = 0;
 
-        SelectedMenu = FlatMenu[indexOf];
+        var next = FlatMenu[indexOf];
+        if (next == blankMenu)
+            next.Indent = selectedMenu.Indent;
+        SelectedMenu = next;
     }
 
     public void Insert()
     {
         var indexOf = selectedMenu == null ? Math.Max(0, FlatMenu.Count - 1) : FlatMenu.IndexOf(selectedMenu) + 1;
+        indexOf = Math.Min(indexOf, FlatMenu.Count - 1);
         var newMenu = new MenuViewModel();
         FlatMenu.Insert(indexOf, newMenu);
         newMenu.Indent = selectedMenu?.Indent ?? 0;
@@ -76,7 +104,7 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
 
     public void Delete()
     {
-        if (selectedMenu == null)
+        if (selectedMenu == null || selectedMenu == blankMenu)
             return;
 
         var indexOf = FlatMenu.IndexOf(selectedMenu);
@@ -107,7 +135,7 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
 
     public void MoveUp()
     {
-        if (selectedMenu == null)
+        if (selectedMenu == null || selectedMenu == blankMenu)
             return;
 
         var indexOf = FlatMenu.IndexOf(selectedMenu);
@@ -123,7 +151,7 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
             return;
 
         var indexOf = FlatMenu.IndexOf(selectedMenu);
-        if (indexOf < FlatMenu.Count - 1)
+        if (indexOf < FlatMenu.Count - 2)
         {
             FlatMenu.Move(indexOf, indexOf + 1);
         }
