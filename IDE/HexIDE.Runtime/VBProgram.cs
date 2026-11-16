@@ -328,16 +328,17 @@ public sealed class VBProgram : IFormProgram
     }
 
     /// <summary>
-    /// Hide a form. While a modal form is displayed only the innermost one can be hidden: any other is 402, "Must close or
-    /// hide topmost modal form first", a modal form beneath it included (measured, #822).
+    /// Hide a form. While a modal form is displayed, hiding any form other than the innermost raises 402, "Must close or
+    /// hide topmost modal form first", after hiding it (#4032). Visible = False hides without that error (#3936).
     /// </summary>
-    internal void Hide(IFormView view)
+    internal void Hide(IFormView view, bool reportModalError = true)
     {
-        if (modals.Count > 0 && !ReferenceEquals(modals[^1], view.Context))
-            throw new VBRunTimeException(VBStandardError.CodeMustCloseTopmostModalFormFirst);
+        var modalError = reportModalError && modals.Count > 0 && !ReferenceEquals(modals[^1], view.Context);
         var next = ReferenceEquals(active, view.Context) ? NextShown(view.Context) : null;
         view.HideForm();
         ActivateNext(next);
+        if (modalError)
+            throw new VBRunTimeException(VBStandardError.CodeMustCloseTopmostModalFormFirst);
     }
 
     private VBWindowContext? NextShown(VBWindowContext leaving) =>

@@ -26,7 +26,7 @@ internal static class VBVisibility
             if (view.Context.Program is { } program)
             {
                 if (visible) program.Show(view);
-                else program.Hide(view);
+                else program.Hide(view, reportModalError: false);
             }
             else if (visible) view.ShowForm();
             else view.HideForm();
