@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:HexIDE.Controls"
              xmlns:vm="using:HexIDE.Forms.ViewModels"
              xmlns:converters="clr-namespace:HexIDE.Converters"
              x:Class="HexIDE.Forms.Views.FindReplaceView"
@@ -49,9 +50,9 @@
                 <!-- Direction -->
                 <TextBlock Grid.Row="3" Margin="0,8,6,0" Text="{DynamicResource Str.Dialog.FindReplace.Label.Direction}" VerticalAlignment="Center" />
                 <StackPanel Grid.Row="3" Grid.Column="1" Margin="0,8,0,0" Orientation="Horizontal" Spacing="12">
-                    <RadioButton Content="{DynamicResource Str.Dialog.FindReplace.Direction.Up}" GroupName="Direction"
+                    <controls:IdeRadioButton Content="{DynamicResource Str.Dialog.FindReplace.Direction.Up}" GroupName="Direction"
                                  IsChecked="{CompiledBinding Direction, Converter={x:Static vm:FindDirectionConverters.IsUp}}" />
-                    <RadioButton Content="{DynamicResource Str.Dialog.FindReplace.Direction.Down}" GroupName="Direction"
+                    <controls:IdeRadioButton Content="{DynamicResource Str.Dialog.FindReplace.Direction.Down}" GroupName="Direction"
                                  IsChecked="{CompiledBinding Direction, Converter={x:Static vm:FindDirectionConverters.IsDown}}" />
                 </StackPanel>
             </Grid>
