@@ -23,12 +23,15 @@ see each project for its authors and full license text.
 
 **MIT**
 - **Avalonia UI** and its `Desktop`, `Skia`, `Browser`, `Themes.Simple`, `Controls.ColorPicker`,
-  `Controls.DataGrid` packages — © The Avalonia Project
+  `Controls.DataGrid`, `Wayland` packages — © The Avalonia Project
+- **NWayland** — © 2014 Steven Kirk — MIT. <https://github.com/kekekeks/NWayland>
 - **AvaloniaEdit** (a port of ICSharpCode AvalonEdit) — © the AvaloniaUI community
 - **Avalonia.Labs** — the experimental `RoutedCommand`/`CommandManager` **vendored** into
   `IDE/HexIDE/AvaloniaLabs.CommandManager/` — © The Avalonia Project; the MIT notice ships in that
   folder's `LICENSE`. <https://github.com/AvaloniaUI/Avalonia.Labs>
-- **Dock** (`Avalonia`, `Model`, `Model.Avalonia`, `Model.MVVM`, `Serializer`, `Themes.Simple`) — © Wiesław Šoltés
+- **Dock** (`Avalonia`, `Model`, `Model.Avalonia`, `Model.MVVM`, `Themes.Simple`) — © Wiesław Šoltés.
+  `IDE/HexIDE/Themes/ToolChrome.axaml` adapts its 12.0.0.2 tool-header template; the MIT notice is retained
+  in that file. <https://github.com/wieslawsoltes/Dock>
 - **Classic.Avalonia** (Theme, CommonControls) — © the Avalonia community
 - **CommunityToolkit.Mvvm** — © .NET Foundation and Contributors
 - **R3** — © Cysharp, Inc.
@@ -53,7 +56,8 @@ Upstream fork: HexIDE is a derived work of **AvaloniaVisualBasic6** by Bartosz K
 <https://github.com/BAndysc/AvaloniaVisualBasic6>. Icons: see **Icons** below.
 
 *Build- and test-time only (not redistributed in the app):* Antlr4BuildTasks, Svg.Skia, xUnit,
-NSubstitute, AwesomeAssertions, coverlet, Microsoft.NET.Test.Sdk, Avalonia.Headless.
+NSubstitute, AwesomeAssertions, Avalonia.Headless, Microsoft.CodeAnalysis.CSharp,
+Microsoft.Testing.Extensions.HangDump.
 The MCP automation server (`ModelContextProtocol.AspNetCore`) is compiled in for **Debug only** and is
 excluded from Release binaries.
 

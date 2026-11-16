@@ -21,13 +21,28 @@ namespace HexIDE.Lsp.Providers;
 /// case-sensitive: a camelCase file loads as an empty project.
 /// </para>
 /// <para>
-/// <c>Version</c> must be no newer than the server reading it, and is written before any server has said what it is, so
-/// it is the oldest version RDCore reports unless settings give one.
+/// <c>Version</c> names the file's format, not a server's version. RDCore reads and writes format <c>1.0</c>, and from
+/// <c>6c1ed90d</c> on it opens a file of any version. A build older than that refuses a version newer than its own,
+/// <c>0.1.0</c>, so settings can stamp that for one.
+/// </para>
+/// <para>
+/// <c>SourceProject</c> names the <c>.vbp</c> a VB6 project was made from, as RDCore's own import writes it. RDCore has
+/// said it will take VB6 from it when the client names no language, which <c>3f095c2d</c> does not yet do (#3317). Until
+/// then, a VB6 workspace names the language in its entry's <c>initializationOptions</c>.
+/// </para>
+/// <para>
+/// RDCore's specification (RD-VBAL 2.2.3) has <c>SourceProject</c> relative to the folder of the <c>.rdproj</c>. RDCore
+/// reads its <c>.rdproj</c> only at the workspace root, so that folder is
+/// <see cref="WorkspaceArtifactContext.WorkspaceRoot"/>; a provider is not told where its file goes. The path is computed
+/// between two host paths and written with <c>/</c>, so it means the same on every host: the <c>.rdproj</c> is RDCore's
+/// JSON, not a VB6 file, so a VB6 project file's backslashes don't apply. A <c>.vbp</c> on another drive has no relative
+/// path, so nothing is written. A project defined by anything other than a <c>.vbp</c>, or not yet saved, has no
+/// <c>SourceProject</c>.
 /// </para>
 /// </remarks>
 public sealed class RdcoreProjectProvider : IWorkspaceArtifactProvider
 {
-    private const string DefaultVersion = "0.1.0";
+    private const string DefaultVersion = "1.0";
 
     public string Name => "rdcore";
 
@@ -52,15 +67,29 @@ public sealed class RdcoreProjectProvider : IWorkspaceArtifactProvider
             .OrderBy(a => a.Key, StringComparer.OrdinalIgnoreCase))
             constants[name] = value.ToString(CultureInfo.InvariantCulture);
         return JsonSerializer.Serialize(
-            new RdcoreProjectFile(version, [], new(context.Project.Name, references, modules, [], [], constants)),
+            new RdcoreProjectFile(version, [],
+                new(context.Project.Name, references, modules, [], [], SourceProjectOf(context), constants)),
             RdcoreProjectJsonContext.Default.RdcoreProjectFile);
+    }
+
+    private static string? SourceProjectOf(WorkspaceArtifactContext context)
+    {
+        if (context.Project.DefinitionPath is not { } definition
+            || !definition.EndsWith(".vbp", StringComparison.OrdinalIgnoreCase))
+            return null;
+        // RDCore reads its .rdproj only at the workspace root, so the root is the .rdproj's folder.
+        var rdprojFolder = context.WorkspaceRoot;
+        var relative = Path.GetRelativePath(rdprojFolder, definition);
+        return Path.IsPathRooted(relative) ? null : relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 }
 
 internal sealed record RdcoreProjectFile(string Version, string[] Configuration, RdcoreProjectInfo ProjectInfo);
 
 internal sealed record RdcoreProjectInfo(string Name, RdcoreReference[] References, RdcoreFile[] Modules,
-    RdcoreFile[] OtherFiles, string[] Folders, Dictionary<string, string> PrecompilerConstants);
+    RdcoreFile[] OtherFiles, string[] Folders,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SourceProject,
+    Dictionary<string, string> PrecompilerConstants);
 
 internal sealed record RdcoreReference(string Name, string? AbsolutePath, Guid? Guid, int? Major, int? Minor,
     string? TypeLibInfoPath = null, bool IsUnremovable = false);

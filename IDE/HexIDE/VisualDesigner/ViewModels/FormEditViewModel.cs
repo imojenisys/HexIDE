@@ -42,6 +42,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     private readonly IWindowManager windowManager;
     private readonly ISettingsService settingsService;
     private readonly ILocalizationService localization;
+    private readonly IProjectFileFormat format;
     public ToolBoxToolViewModel ToolsBoxToolViewModel { get; }
     public ISettingsService Settings => settingsService;
     protected override string ComputeTitle()
@@ -74,11 +75,17 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     [Notify]
     private ComponentInstanceViewModel? selectedComponent;
 
+    private void OnSelectedComponentChanged()
+    {
+        if (selectedComponent is { HasDesignerPreview: false })
+            SelectedComponent = Form;
+    }
+
     public IReadOnlyList<ComponentInstanceViewModel> SelectedComponents { get; private set; } = [];
 
     public void SetSelectedComponents(IEnumerable<ComponentInstanceViewModel> components)
     {
-        SelectedComponents = [.. components];
+        SelectedComponents = [.. components.Where(c => c.HasDesignerPreview)];
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(SelectedComponents)));
         CommandManager.InvalidateRequerySuggested();
     }
@@ -96,6 +103,24 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     public bool CanMakeSameSize(object? parameter) => HasMultipleSelectedControls;
 
     public ObservableCollection<ComponentInstanceViewModel> AllComponents { get; } = new();
+    public ObservableCollection<ComponentInstanceViewModel> SelectableComponents { get; } = new();
+
+    internal void RefreshPreviewSelection()
+    {
+        OnSelectedComponentChanged();
+        SetSelectedComponents(SelectedComponents);
+        var selectable = AllComponents.Where(c => c.HasDesignerPreview).ToList();
+        foreach (var item in SelectableComponents.Except(selectable).ToList())
+            SelectableComponents.Remove(item);
+        for (var i = 0; i < selectable.Count; i++)
+        {
+            var oldIndex = SelectableComponents.IndexOf(selectable[i]);
+            if (oldIndex < 0)
+                SelectableComponents.Insert(i, selectable[i]);
+            else if (oldIndex != i)
+                SelectableComponents.Move(oldIndex, i);
+        }
+    }
 
     /// <summary>
     /// The view-model wrapping a given model component, for the walks that start from the model tree — the
@@ -140,6 +165,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     // is deleted, and comes back with it on undo. No other change can alter the boxes.
     private void OnAllComponentsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        RefreshPreviewSelection();
         static bool HoldsAny(IList? items) =>
             items?.OfType<ComponentInstanceViewModel>().Any(c => c.Instance.PreservedChildSubtrees.Count > 0) == true;
 
@@ -236,6 +262,13 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public string? ReadOnlyReason => formDefinition?.UnfaithfulSaveReason;
 
+    /// <summary>
+    /// Whether it is read-only because the add-in that read it can't write it back, which the banner has its own words for:
+    /// its type has nothing that writes, or its format refused it.
+    /// </summary>
+    public bool IsReadByAddin => formDefinition is { } form
+        && (form.UnfaithfulSaveCauses & (UnfaithfulSaveCause.ReadByAddin | UnfaithfulSaveCause.RefusedByFormat)) != 0;
+
     public DesignerUndoStack UndoStack { get; private set; } = null!;
     public DelegateCommand UndoCommand { get; private set; } = null!;
     public DelegateCommand RedoCommand { get; private set; } = null!;
@@ -250,8 +283,10 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         IEditorService editorService,
         IWindowManager windowManager,
         ISettingsService settingsService,
-        ILocalizationService localization) : this()
+        ILocalizationService localization,
+        IProjectFileFormat format) : this()
     {
+        this.format = format;
         this.eventBus = eventBus;
         this.projectService = projectService;
         this.editorService = editorService;
@@ -276,6 +311,16 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             RedoCommand.RaiseCanExecutedChanged();
             RefreshModified();
         };
+        // Made read-only, or writable, without a reload: as when the add-in that writes it is taken out.
+        AutoDispose(this.eventBus.Subscribe<FormReadOnlyChangedEvent>(e =>
+        {
+            if (formDefinition is not null && ReferenceEquals(e.Designer, formDefinition))
+            {
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadByAddin)));
+            }
+        }));
         AutoDispose(this.eventBus.Subscribe<DocumentSavedEvent>(e =>
         {
             if ((e.Form is not null && ReferenceEquals(e.Form, formDefinition))
@@ -390,7 +435,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     private static bool IsMenu(ComponentInstanceViewModel component) => component.Instance.BaseClass is MenuComponentClass;
 
-    private static bool IsWindowless(IComponentClass type) => type is ComponentBaseClass { IsWindowless: true };
+    internal static bool IsWindowless(IComponentClass type) => type is IDesignerComponentClass { IsWindowless: true };
 
     private bool IsContentOf(ComponentInstanceViewModel component, ComponentInstance container) =>
         !IsMenu(component) && ReferenceEquals(ParentOf(component.Instance), container);
@@ -478,7 +523,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     /// <summary>The children a container's block holds, in the order a save writes them, as the writer reads them.</summary>
     private IReadOnlyList<ComponentInstance> WrittenChildren(ComponentInstance container, IReadOnlyList<ComponentInstance> fileOrder) =>
-        ReferenceEquals(container, Form.Instance) ? FormSerializer.RootChildren(fileOrder, container) : container.ContainedControls;
+        ReferenceEquals(container, Form.Instance) ? format.RootChildren(fileOrder, container) : container.ContainedControls;
 
     /// <summary>
     /// Where a save puts each container's carried blocks among the children it writes, from how many of them each child
@@ -629,6 +674,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         // watches, so the banner and the disabled surface would keep the old answer until the tab was reopened.
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadByAddin)));
         // As the code window's reload does: clean after a reload from disk, edited after a crash recovery restore (#499).
         RefreshModified();
     }
@@ -678,6 +724,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             .SetProperty(VBProperties.CaptionProperty, "Form1"));
         AllComponents.Add(Form);
         eventBus = null!;
+        format = null!;
         projectService = null!;
         editorService = null!;
         windowManager = null!;
@@ -691,9 +738,9 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     /// nearest grid line when Align to Grid is on, as VB6 puts it (measured, #929: a 1215 x 495 button on a 6000 x 4500
     /// form went to 2400, 2040, where its centre is 2392.5, 2002.5). A position exactly between two lines goes to the
     /// higher: 12.5 grid units became 13 (measured), where the default to-even rounding gives 12. Its size is its class's
-    /// <see cref="ComponentBaseClass.AddedSize"/>, the one VB6 gives it (measured, #1473).
+    /// <see cref="IDesignerComponentClass.AddedSize"/>, the one VB6 gives it (measured, #1473).
     /// </summary>
-    public void SpawnControlCenter(ComponentBaseClass componentClass, RuntimeLibrary? library = null)
+    public void SpawnControlCenter(IDesignerComponentClass componentClass, RuntimeLibrary? library = null)
     {
         if (componentClass is StatusBarComponentClass)
         {
@@ -836,7 +883,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     /// For an in-box control, the library it is placed from, when the toolbox offers it from an older library than its
     /// class's newest: a ProgressBar from COMCTL32.OCX is <c>ComctlLib.ProgressBar</c> (#1103).
     /// </param>
-    public void SpawnControlAt(ComponentBaseClass baseClass, Rect rect, Point? pressedAt = null,
+    public void SpawnControlAt(IDesignerComponentClass baseClass, Rect rect, Point? pressedAt = null,
         RuntimeLibrary? library = null)
     {
         var container = pressedAt is { } press ? ContainerAt(press) : null;
@@ -845,7 +892,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         SpawnControl(baseClass, rect, container, library);
     }
 
-    private void SpawnControl(ComponentBaseClass baseClass, Rect rect, ComponentInstanceViewModel? container,
+    private void SpawnControl(IDesignerComponentClass baseClass, Rect rect, ComponentInstanceViewModel? container,
         RuntimeLibrary? library)
     {
         var newName = FreeName(baseClass);
@@ -920,7 +967,8 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             settingsService.AlignToGrid && grid > 0 ? Math.Floor(pixels / grid) * grid : pixels;
     }
 
-    public void BringToFront()
+    // Separate command names avoid the typed-overload preference in AvaloniaUI/Avalonia#21867.
+    public void BringSelectedToFront()
     {
         if (selectedComponent != null)
             BringToFront(selectedComponent);
@@ -958,7 +1006,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void BringToFront(ComponentInstanceViewModel instance) => MoveInPlane(instance, toFront: true, "Bring to Front");
 
-    public void SendToBack()
+    public void SendSelectedToBack()
     {
         if (selectedComponent != null)
             SendToBack(selectedComponent);
@@ -1500,7 +1548,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     /// <summary>
     /// Record a property just set on <paramref name="target"/> as one undoable change, with what VB6's designer changes
-    /// along with it, which this applies (<see cref="ComponentBaseClass.ApplyDesignerConsequences"/>). Returns those.
+    /// along with it, which this applies (<see cref="IComponentClass.ApplyDesignerConsequences"/>). Returns those.
     /// </summary>
     public IReadOnlyList<PropertyChange> PushSetPropertyCommand(ComponentInstance target, PropertyClass property, object? before, object? after)
     {
@@ -1632,7 +1680,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public async Task EditMenu()
     {
-        var vm = new MenuEditorViewModel(this);
+        var vm = new MenuEditorViewModel(this, localization);
         if (!await windowManager.ShowDialog(vm))
             return;
 

@@ -22,7 +22,11 @@ public static class OpenDialogs
     /// </summary>
     public static List<Window> Among(IEnumerable<Window> windows) =>
         [.. windows.Where(w => w.IsVisible
-            && (w.IsDialog || w.Content is HexIDE.Runtime.Dialogs.MessageBox or HexIDE.Runtime.Dialogs.InputBox))];
+            && (w.IsDialog || IsBox(w.Content)))];
+
+    internal static bool IsBox(object? content) =>
+        content is HexIDE.Dialogs.MessageBox or HexIDE.Dialogs.InputBox
+        || HexIDE.IDE.ProgramDialogs.IsRuntimeBox(content);
 
     // The watch of the call under way, for the wait for a program to record the dialog it named.
     private static readonly AsyncLocal<DialogWatch?> Current = new();
@@ -73,20 +77,24 @@ public static class OpenDialogs
     // its title alone does not tell the reset prompt from the run-time error dialog: both are 'HexIDE' (#1365, #1975).
     // The buttons listed are the ways to answer it, so a toggle is not one: a check box and a radio button are buttons to
     // Avalonia, and Options listed "Prompt for project" beside OK and Cancel (#2079).
+    // Repeat buttons and other template parts operate their owning control rather than answer the dialog (#3671).
     internal static string DescriptionOf(Window dialog)
     {
         var controls = dialog.GetVisualDescendants().OfType<Control>().ToList();
         var content = dialog.Content;
         var kind = content switch
         {
-            HexIDE.Runtime.Dialogs.MessageBox => "a message box",
+            HexIDE.Dialogs.MessageBox => "a message box",
+            _ when HexIDE.IDE.ProgramDialogs.IsRuntimeMessageBox(content) => "a message box",
             HexIDE.Forms.Views.RuntimeErrorView => "the run-time error dialog",
             Control { DataContext: HexIDE.Forms.ViewModels.RuntimeErrorViewModel } => "the run-time error dialog",
             HexIDE.Forms.ViewModels.RuntimeErrorViewModel => "the run-time error dialog",
             _ => null,
         };
         var buttons = string.Join("/", controls.OfType<Button>()
-            .Where(b => b is not Avalonia.Controls.Primitives.ToggleButton && b.IsEffectivelyVisible)
+            .Where(b => b is not Avalonia.Controls.Primitives.ToggleButton
+                && b is not RepeatButton
+                && b.TemplatedParent is null && b.IsEffectivelyVisible)
             .Select(b => ControlAutomationPeer.CreatePeerForElement(b)?.GetName()?.Replace("_", ""))
             .Where(name => !string.IsNullOrWhiteSpace(name)));
         var details = new List<string>();

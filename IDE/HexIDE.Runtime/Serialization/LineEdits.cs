@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using HexIDE.Language;
 
 namespace HexIDE.Runtime.Serialization;
-
-/// <summary>A replacement of <see cref="Length"/> characters at <see cref="Offset"/> with <see cref="Text"/>.</summary>
-public readonly record struct TextChange(int Offset, int Length, string Text);
 
 /// <summary>What a reduction kept and what it had to leave out.</summary>
 /// <param name="Changes">The changes to apply, in ascending order of offset and not overlapping.</param>
@@ -40,8 +38,12 @@ public static class LineEdits
     /// Trim protected lines first, then take a described run with a whole-line deletion of its logical
     /// declaration (#1890). Other hunks keep the usual anchor protection.
     /// </summary>
+    /// <param name="before">The buffer as it stands.</param>
+    /// <param name="after">The buffer as the formatting would leave it.</param>
+    /// <param name="regions">The read-only regions of <paramref name="before"/>.</param>
+    /// <param name="runs">Those of <paramref name="regions"/> that hang from a line, a member's attribute runs.</param>
     public static Reduction ReduceFormatting(string before, string after, IReadOnlyList<TextRegion> regions,
-        IReadOnlyList<MemberRun> runs)
+        IReadOnlyList<HangingRegion> runs)
     {
         // Defer the anchor check until the kept hunks can be matched to declarations. The protected lines
         // themselves still trim exactly as before; widening cannot overlap another kept hunk inside a run.
@@ -53,13 +55,12 @@ public static class LineEdits
         var dropped = trimmed.DroppedLines;
         foreach (var change in trimmed.Changes)
         {
-            MemberRun? deleted = null;
+            HangingRegion? deleted = null;
             if (change.Text.Length == 0 && change.Length > 0)
             {
                 foreach (var run in runs)
                 {
-                    if (run.DescribesMember && change.Offset <= run.DescribedStart
-                        && change.Offset + change.Length == run.Region.Start)
+                    if (change.Offset <= run.LineStart && change.Offset + change.Length == run.Region.Start)
                     {
                         deleted = run;
                         break;

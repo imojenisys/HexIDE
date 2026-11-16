@@ -53,16 +53,18 @@ public sealed class ContributedProjectTests : IDisposable
         var strings = Substitute.For<ILocalizationService>();
         strings.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>() switch
         {
+            "Str.Project.AlreadyOpen" => "Projet {0} déjà ouvert.",
             "Str.ContributedProject.OpenError" => "Could not open {0} with {1}: {2}",
             "Str.ContributedProject.NoReader" => "Str.ContributedProject.NoReader {0}",
             var key => key + " {0} {1}",
         });
         var dock = Substitute.For<IDocumentDockService>();
         dock.OpenDocuments.Returns(new List<HexIDE.Forms.ViewModels.BaseEditorWindowViewModel>());
-        _service = new ProjectService(() => throw new InvalidOperationException("no new-project dialog"), _windows,
+        _service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), () => throw new InvalidOperationException("no new-project dialog"), _windows,
             _events, projects, _recent,
             Substitute.For<IReferenceLibraryService>(), sidecar, _baselines, strings,
-            new HeaderRefresher(new EventBus(), dock, new BreakpointService(), new BookmarkService()),
+            new HeaderRefresher(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), new EventBus(), dock, new BreakpointService(), new BookmarkService(), new Vb6ProjectFileFormat()),
+            new Vb6ProjectFileFormat(), new ComponentRegistry(),
             contributed: _types);
     }
 
@@ -200,8 +202,9 @@ public sealed class ContributedProjectTests : IDisposable
         await _service.EditProjectComponents(project);
 
         await _windows.DidNotReceive().ShowDialog(Arg.Any<IDialog>());
-        await _windows.Received(3).MessageBox(Arg.Is<string>(text => text == "Str.ContributedProject.SettingsReadOnly Ledger RDCore for HexIDE"),
-            Arg.Any<string?>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>(), Arg.Any<Avalonia.Controls.Window?>(), Arg.Any<bool>());
+        foreach (var dialog in new[] { "Properties", "References", "Components" })
+            await _windows.Received(1).MessageBox(Arg.Is<string>(text => text == $"Str.ContributedProject.{dialog}ReadOnly Ledger RDCore for HexIDE"),
+                Arg.Any<string?>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>(), Arg.Any<Avalonia.Controls.Window?>(), Arg.Any<bool>());
     }
 
     [AvaloniaFact]
@@ -457,6 +460,20 @@ public sealed class ContributedProjectTests : IDisposable
             Arg.Any<string?>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>(), Arg.Any<Avalonia.Controls.Window?>(), Arg.Any<bool>());
     }
 
+    [AvaloniaFact]
+    public async Task A_contributed_project_already_open_shows_the_localized_message()
+    {
+        using var type = Contribute();
+        await Opened();
+
+        Func<Task> reopen = () => _service.OpenProject(ProjectFile);
+
+        await reopen.Should().ThrowAsync<OperationCanceledException>();
+        _loaded.Should().ContainSingle();
+        await _windows.Received(1).MessageBox("Projet .rdproj déjà ouvert.",
+            Arg.Any<string?>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>(), Arg.Any<Avalonia.Controls.Window?>(), Arg.Any<bool>());
+    }
+
     [WindowsOnlyFact]
     public async Task A_contributed_project_already_open_is_refused_when_opened_again_with_different_drive_and_folder_case()
     {
@@ -471,7 +488,7 @@ public sealed class ContributedProjectTests : IDisposable
 
         await reopen.Should().ThrowAsync<OperationCanceledException>();
         _loaded.Should().ContainSingle();
-        await _windows.Received(1).MessageBox("Project .rdproj is already opened.",
+        await _windows.Received(1).MessageBox("Projet .rdproj déjà ouvert.",
             Arg.Any<string?>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>(), Arg.Any<Avalonia.Controls.Window?>(), Arg.Any<bool>());
     }
 
@@ -513,12 +530,12 @@ public sealed class ContributedProjectTests : IDisposable
     [InlineData(false)]
     public void HexIDE_s_interpreter_starts_only_a_project_HexIDE_read_itself(bool contributed)
     {
-        var project = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = contributed ? "RDCore projects" : null };
+        var project = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = contributed ? "RDCore projects" : null, Offers = contributed ? ProjectOffers.Nothing : ProjectOffers.Everything };
         var projects = Substitute.For<IProjectManager>();
         projects.StartupProject.Returns(project);
         var events = Substitute.For<IEventBus>();
-        var interpreter = Substitute.For<IDebugController>();
-        var runner = new HexIDE.IDE.ProjectRunnerService(events, _windows, projects, Substitute.For<ILocalizationService>(),
+        var interpreter = Substitute.For<IDebugGate>();
+        var runner = HexIDE.IDE.TestRunners.WithInterpreter(events, _windows, projects, Substitute.For<ILocalizationService>(),
             interpreter, Substitute.For<IBreakpointService>(), new WatchService(), new RunScope());
 
         runner.CanStartDefaultProject.Should().Be(!contributed);

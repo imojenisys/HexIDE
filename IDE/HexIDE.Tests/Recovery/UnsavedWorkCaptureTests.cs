@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.IO;
 using System.Text;
 using HexIDE.Events;
@@ -32,6 +33,8 @@ public sealed class UnsavedWorkCaptureTests : IDisposable
     public void Dispose()
     {
         foreach (var vm in created) vm.Dispose();
+        // A window closed with unsaved typing leaves its session held until the project closes.
+        foreach (var project in loaded) bus.Publish(new ProjectUnloadedEvent(project));
         try { Directory.Delete(dir, recursive: true); } catch (IOException) { }
     }
 
@@ -46,7 +49,7 @@ public sealed class UnsavedWorkCaptureTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
+        return new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
             () => throw new InvalidOperationException("new-project dialog must not be reached"),
             Substitute.For<IWindowManager>(),
             bus,
@@ -56,7 +59,8 @@ public sealed class UnsavedWorkCaptureTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(),
+            new Vb6ProjectFileFormat(), new ComponentRegistry());
     }
 
     /// <summary>A saved project of a form and two modules, opened and saved again so every baseline is this build's.</summary>
@@ -89,12 +93,12 @@ public sealed class UnsavedWorkCaptureTests : IDisposable
         bus, Substitute.For<ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
         Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
         Substitute.For<IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
-        Substitute.For<ILocalizationService>()).Initialize(module));
+        Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader()).Initialize(module));
 
     private FormEditViewModel Designer(IProjectService service, FormDefinition form) => Made(new FormEditViewModel(
-        new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(), Substitute.For<IComponentRegistry>(),
+        new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(), new ComponentRegistry(),
             Substitute.For<ILocalizationService>()),
-        bus, service, null!, null!, Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>())
+        bus, service, null!, null!, Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat())
         .Initialize(form));
 
     [Fact]

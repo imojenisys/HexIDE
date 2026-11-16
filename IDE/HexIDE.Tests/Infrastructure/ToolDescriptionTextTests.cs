@@ -69,11 +69,29 @@ public class ToolDescriptionTextTests
         ToolSource.Unparsed.Should().BeEmpty();
     }
 
+    [Theory]
+    [InlineData("type_text")]
+    [InlineData("press_key")]
+    public void Keyboard_tools_explain_observed_code_window_refusals(string tool)
+    {
+        ToolSource.Tools.Single(t => t.Name == tool).Description
+            .Should().Contain("refused by the code window")
+            .And.Contain("status bar").And.Contain("caret");
+    }
+
     [Fact]
     public void Type_texts_mode_names_the_characters_it_presses_as_Enter_and_Tab()
     {
         ToolSource.Tools.Single(t => t.Name == "type_text").Parameters.Single(p => p.Name == "mode").Description
             .Should().Contain(@"per character, \n as Enter and \t as Tab");
+    }
+
+    [Theory]
+    [InlineData("type_text")]
+    [InlineData("press_key")]
+    public void Typing_names_the_editor_work_it_waits_for(string tool)
+    {
+        ToolSource.Tools.Single(t => t.Name == tool).AllText.Should().Contain("on-type formatting");
     }
 
     [Fact]

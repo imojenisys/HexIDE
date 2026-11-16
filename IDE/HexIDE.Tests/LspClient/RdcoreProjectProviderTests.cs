@@ -56,10 +56,10 @@ public sealed class RdcoreProjectProviderTests
     }
 
     [Theory]
-    [InlineData(null, "0.1.0")]
-    [InlineData("""{"version":"1.0.0"}""", "1.0.0")]
-    [InlineData("""{"version":3}""", "0.1.0")]
-    public void VersionIsTheOldestRDCoreReportsUnlessSettingsSayOtherwise(string? settings, string expected)
+    [InlineData(null, "1.0")]
+    [InlineData("""{"version":"0.1.0"}""", "0.1.0")]
+    [InlineData("""{"version":3}""", "1.0")]
+    public void VersionIsTheFormatRDCoreWritesUnlessSettingsSayOtherwise(string? settings, string expected)
     {
         using var json = Produce(new("Probe", null, [File("Main.bas", WorkspaceProjectFileKind.Module)], []), settings);
         json.RootElement.GetProperty("Version").GetString().Should().Be(expected);
@@ -124,6 +124,38 @@ public sealed class RdcoreProjectProviderTests
         WorkspaceProjectFile[] files = carried ? [File("probe.c", WorkspaceProjectFileKind.Carried)] : [];
         new RdcoreProjectProvider().Produce(new WorkspaceArtifactContext(Root, new("Probe", null, files, [])))
             .Should().BeNull();
+    }
+
+    [Fact]
+    public void AVbpInTheRootIsTheSourceProjectByItsName()
+    {
+        using var json = Produce(new("Probe", Path.Combine(Root, "Probe.vbp"),
+            [File("Main.bas", WorkspaceProjectFileKind.Module)], []));
+        var info = json.RootElement.GetProperty("ProjectInfo");
+        info.GetProperty("SourceProject").GetString().Should().Be("Probe.vbp");
+        info.EnumerateObject().Select(p => p.Name).Should().Equal(
+            "Name", "References", "Modules", "OtherFiles", "Folders", "SourceProject", "PrecompilerConstants");
+    }
+
+    [Theory]
+    [InlineData("sub", "App.vbp", "sub/App.vbp")]
+    [InlineData("..", "App.VBP", "../App.VBP")]
+    public void AVbpElsewhereIsRelativeToTheRootWithForwardSlashesOnEveryHost(string folder, string file, string expected)
+    {
+        using var json = Produce(new("App", Path.GetFullPath(Path.Combine(Root, folder, file)),
+            [File("Main.bas", WorkspaceProjectFileKind.Module)], []));
+        json.RootElement.GetProperty("ProjectInfo").GetProperty("SourceProject").GetString().Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Probe.rdproj")]
+    [InlineData("Probe.vbg")]
+    public void OnlyAVbpIsASourceProject(string? definition)
+    {
+        using var json = Produce(new("Probe", definition is null ? null : Path.Combine(Root, definition),
+            [File("Main.bas", WorkspaceProjectFileKind.Module)], []));
+        json.RootElement.GetProperty("ProjectInfo").TryGetProperty("SourceProject", out _).Should().BeFalse();
     }
 
     [Fact]

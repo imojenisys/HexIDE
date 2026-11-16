@@ -213,6 +213,12 @@ The strip SHALL remain excluded from the designer's container classes.
 - **THEN** a running form reports the not-implemented error through its event queue
 - **AND** it does not substitute a guessed layout
 
+#### Scenario: Designer drawing outside the supported slice
+
+- **WHEN** the designer previews a strip with an unsupported drawing layout
+- **THEN** it SHALL show the view-only placeholder with the control name and refusal reason
+- **AND** the saved block remains unchanged
+
 ### Requirement: TabStrip saved property bags
 
 An MSComctlLib.TabStrip SHALL write its measured own-property order, with `_Version` after the
@@ -398,7 +404,8 @@ caption mnemonic from a child SHALL switch to its enabled visible tab and then f
 ### Requirement: SSTab previews its saved strip in the designer
 The designer SHALL apply the implemented saved strip properties and select the saved Tab, without
 running the runtime-only ControlEnabled tab-zero load quirk. The initial preview SHALL leave saved child
-positions and page metadata unchanged. Per-tab picture binding remains a later slice of #2301.
+positions and page metadata unchanged. Per-tab picture binding is not built: `TabPicture` SHALL be refused as not
+implemented at run time until it is (#3426).
 
 #### Scenario: Preview a saved nonzero page
 - **GIVEN** an SSTab saved with tab one showing and custom captions
@@ -424,3 +431,23 @@ in the measured page order. A page switch SHALL add no undo entry until VB6 desi
 - **WHEN** a child is cut from tab one and pasted with tab zero showing
 - **THEN** it belongs to tab zero and follows tab zero on subsequent switches
 - **AND** saving removes its old reference and writes its new reference
+
+### Requirement: Runtime PictureBox bitmap assignment honors AutoSize
+A running AutoSize PictureBox SHALL fit an assigned bitmap plus its measured border. It SHALL retain dimensions on load, when cleared with LoadPicture(), and when AutoSize is enabled without a picture. Explicit Width SHALL hold until the next picture assignment. [Measurements](../../../docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md).
+
+#### Scenario: Assigning and clearing a bitmap
+- **GIVEN** an AutoSize PictureBox with the default border
+- **WHEN** code assigns a 40 by 30 pixel bitmap with LoadPicture
+- **THEN** Width reads 660 twips and Height reads 510 twips
+- **AND** with no border they read 600 and 450 twips
+- **WHEN** code assigns Width 3000 and clears the picture with LoadPicture()
+- **THEN** Width remains 3000 and Height stays unchanged
+
+#### Scenario: An unmeasured sizing case
+- **WHEN** AutoSize would fit a non-bitmap picture or a flat Fixed Single border
+- **THEN** the runtime refuses as not implemented before replacing the picture
+- **AND** other unmeasured Picture assignment conversions refuse as not implemented
+
+#### Scenario: Turning AutoSize on with a picture already present
+- **WHEN** code enables AutoSize with a picture already present
+- **THEN** the runtime refuses the unmeasured transition as not implemented before changing AutoSize

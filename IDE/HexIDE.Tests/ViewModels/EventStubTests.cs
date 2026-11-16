@@ -74,7 +74,9 @@ public class EventStubTests : IDisposable
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            Substitute.For<HexIDE.Debugging.IRunScope>(), Substitute.For<ILocalizationService>());
+            Substitute.For<HexIDE.Debugging.IRunScope>(), Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader());
         made.Add(vm);
         return vm.Initialize(form);
     }
@@ -162,6 +164,52 @@ public class EventStubTests : IDisposable
             : BlankLineIn(vm, "Private Sub Command1_Click()\r\n"));
         if (handlerExists) vm.Document.Text.Should().Be(before);
         else vm.Document.Text.Should().EndWith("Private Sub Command1_Click()\r\n\r\nEnd Sub\r\n");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Event_navigation_skips_a_member_attribute_naming_the_handler(bool dropdown, bool handlerExists)
+    {
+        var source = FormWithCode.Replace("Private Sub Zeta()\r\n",
+            "Private Sub Zeta()\r\nAttribute Zeta.VB_Description = \"Undoes what Sub Command1_Click did\"\r\n");
+        if (handlerExists) source += "\r\nPrivate Sub Command1_Click()\r\n\r\nEnd Sub\r\n";
+        var form = new FormDeserializer().Deserialize(Project, source, NullSink.Instance)!;
+        var vm = Open(form);
+        var before = vm.Document.Text;
+
+        if (dropdown)
+        {
+            vm.SelectedObject = "Command1";
+            vm.SelectedProcedure = "Click";
+        }
+        else navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click"));
+
+        var declaration = vm.Document.Text.IndexOf("Private Sub Command1_Click()", StringComparison.Ordinal);
+        declaration.Should().BeGreaterThan(0);
+        vm.CaretOffset.Should().Be(dropdown && handlerExists
+            ? vm.Document.GetLineByOffset(declaration).EndOffset
+            : BlankLineIn(vm, "Private Sub Command1_Click()\r\n"));
+        vm.IsReadOnlyRegion(vm.CaretOffset, 0).Should().BeFalse();
+        if (handlerExists) vm.Document.Text.Should().Be(before);
+        else vm.Document.Text.Should().EndWith("Private Sub Command1_Click()\r\n\r\nEnd Sub\r\n");
+    }
+
+    [AvaloniaFact]
+    public void A_double_click_navigates_past_the_handlers_member_attributes()
+    {
+        var source = FormWithCode + "\r\nPrivate Sub Command1_Click()\r\n"
+            + "Attribute Command1_Click.VB_Description = \"Clicks\"\r\n"
+            + "    Debug.Print 2\r\nEnd Sub\r\n";
+        var form = new FormDeserializer().Deserialize(Project, source, NullSink.Instance)!;
+        var vm = Open(form);
+
+        navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click"));
+
+        vm.CaretOffset.Should().Be(vm.Document.Text.IndexOf("    Debug.Print 2", StringComparison.Ordinal));
+        vm.IsReadOnlyRegion(vm.CaretOffset, 0).Should().BeFalse();
     }
 
     // A UserControl's root offers its own events, with the arguments VB6's stubs declare (measured on VB6 SP6, #1632). It

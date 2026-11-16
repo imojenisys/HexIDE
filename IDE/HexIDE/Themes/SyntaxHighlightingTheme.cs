@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Xml;
+using HexIDE.IDE;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Platform;
@@ -25,11 +26,8 @@ namespace HexIDE.Themes;
 /// Nothing is duplicated, so a new rule added to the xshd cannot silently drift — it simply keeps its
 /// light colour until a dark entry is added here.</para>
 ///
-/// <para><b>Keyed to the theme variant, not the pack.</b> Dark and Abyss both declare
-/// <c>themeVariant: "Dark"</c>, so <c>ThemeService</c> leaves <c>RequestedThemeVariant</c> unchanged
-/// when switching between them and no notification is raised. One dark palette that clears AA on both
-/// packs' backgrounds therefore needs no per-pack hook. A bespoke per-pack scheme would require
-/// <c>IThemeService</c> to grow a real theme-changed event first.</para>
+/// <para>User colours are applied after the light/dark fallback, keyed by theme name. ThemeService
+/// notifies even when switching between packs with the same variant.</para>
 ///
 /// <para><b>Mutation is global and does not repaint.</b> Every rule holds the same
 /// <see cref="HighlightingColor"/> instance that <c>HighlightingManager</c> hands to every editor and
@@ -85,6 +83,34 @@ public static class SyntaxHighlightingTheme
     /// <summary>The darker of the two dark editor backgrounds, and therefore the binding constraint.</summary>
     private static readonly Color DarkEditorBackground = Color.Parse("#252526");
 
+    private static readonly Dictionary<string, HighlightingBrush?> BackgroundPalette = new(StringComparer.Ordinal);
+    private static ISettingsService? _settings;
+    private static IThemeService? _themes;
+
+    /// <summary>Connect persisted per-theme overrides to the shared lexical palette.</summary>
+    public static void Configure(ISettingsService settings, IThemeService themes)
+    {
+        if (_settings is not null) _settings.PropertyChanged -= SettingsChanged;
+        if (_themes is not null) _themes.ThemeChanged -= Refresh;
+        _settings = settings;
+        _themes = themes;
+        settings.PropertyChanged += SettingsChanged;
+        themes.ThemeChanged += Refresh;
+        EnsureRegistered();
+        Refresh();
+    }
+
+    private static void SettingsChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ISettingsService.EditorColorOverrides)) Refresh();
+    }
+
+    private static void Refresh()
+    {
+        _appliedDark = null;
+        if (Application.Current is { } app && Dispatcher.UIThread.CheckAccess()) ApplyPalette(app);
+    }
+
     private static IHighlightingDefinition? _definition;
     private static bool? _appliedDark;
 
@@ -136,7 +162,10 @@ public static class SyntaxHighlightingTheme
                 foreach (var color in definition.NamedHighlightingColors)
                 {
                     if (color.Name is not null)
+                    {
                         LightPalette[color.Name] = color.Foreground;
+                        BackgroundPalette[color.Name] = color.Background;
+                    }
                 }
 
                 _definition = definition;
@@ -212,7 +241,9 @@ public static class SyntaxHighlightingTheme
                 foreach (var color in definition.NamedHighlightingColors)
                 {
                     if (color.Name is null || !light.TryGetValue(color.Name, out var original)) continue;
-                    color.Foreground = dark ? DeriveForDarkBackground(original) : original;
+                    color.Foreground = HighContrastBackground is { } background
+                        ? DeriveForHighContrast(original, background)
+                        : dark ? DeriveForDarkBackground(original) : original;
                 }
             }
         }
@@ -249,6 +280,35 @@ public static class SyntaxHighlightingTheme
         return new SimpleHighlightingBrush(color);
     }
 
+    private static Color? HighContrastBackground => _themes?.ActiveTheme switch
+    {
+        "HighContrastLight" => Colors.White,
+        "HighContrastDark" => Colors.Black,
+        _ => null
+    };
+
+    private static HighlightingBrush? DeriveForHighContrast(HighlightingBrush? original, Color background)
+    {
+        if (original?.GetColor(null!) is not { } color) return original;
+        var hsl = color.ToHsl();
+        var lightness = hsl.L;
+        var direction = background == Colors.Black ? 1 : -1;
+        color = Color.FromRgb(color.R, color.G, color.B);
+        for (var i = 0; i < 100 && ContrastRatio(color, background) < 7; i++)
+        {
+            lightness = Math.Clamp(lightness + direction * 0.01, 0, 1);
+            color = new HslColor(1, hsl.H, hsl.S, lightness).ToRgb();
+        }
+        return new SimpleHighlightingBrush(color);
+    }
+
+    private static void ApplyHighContrast(IHighlightingDefinition definition)
+    {
+        if (HighContrastBackground is not { } background) return;
+        foreach (var color in definition.NamedHighlightingColors)
+            color.Foreground = DeriveForHighContrast(color.Foreground, background);
+    }
+
     /// <summary>WCAG relative-luminance contrast ratio between two opaque colours.</summary>
     internal static double ContrastRatio(Color a, Color b)
     {
@@ -266,6 +326,24 @@ public static class SyntaxHighlightingTheme
             return s <= 0.03928 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
         }
         return 0.2126 * Channel(c.R) + 0.7152 * Channel(c.G) + 0.0722 * Channel(c.B);
+    }
+
+    internal static IHighlightingDefinition CreatePreviewDefinition()
+    {
+        EnsureRegistered();
+        using var stream = AssetLoader.Open(new Uri("avares://HexIDE/Resources/TextHighlighting/VB6.xshd.xml"));
+        using var reader = XmlReader.Create(stream);
+        var definition = HighlightingLoader.Load(reader, HighlightingManager.Instance);
+        foreach (var color in definition.NamedHighlightingColors)
+        {
+            color.Foreground = LightPalette.GetValueOrDefault(color.Name);
+            color.Background = BackgroundPalette.GetValueOrDefault(color.Name);
+            if (Application.Current?.ActualThemeVariant != ThemeVariant.Dark) continue;
+            foreach (var (name, hex) in DarkPalette)
+                if (name == color.Name) color.Foreground = new SimpleHighlightingBrush(Color.Parse(hex));
+        }
+        ApplyHighContrast(definition);
+        return definition;
     }
 
     private static void ApplyPalette(Application app)
@@ -295,6 +373,22 @@ public static class SyntaxHighlightingTheme
                 if (color.Name is not null && LightPalette.TryGetValue(color.Name, out var brush))
                     color.Foreground = brush;
             }
+        }
+
+        ApplyHighContrast(_definition);
+
+        var overrides = _settings?.EditorColorOverrides;
+        Dictionary<string, EditorTokenColors>? tokens = null;
+        if (_themes is not null) overrides?.TryGetValue(_themes.ActiveTheme, out tokens);
+        foreach (var color in _definition.NamedHighlightingColors)
+        {
+            if (color.Name is null) continue;
+            color.Background = BackgroundPalette.GetValueOrDefault(color.Name);
+            if (tokens?.GetValueOrDefault(color.Name) is not { } choice) continue;
+            if (Color.TryParse(choice.Foreground, out var foreground))
+                color.Foreground = new SimpleHighlightingBrush(foreground);
+            if (Color.TryParse(choice.Background, out var background))
+                color.Background = new SimpleHighlightingBrush(background);
         }
 
         ApplyToAdopted(dark);

@@ -93,7 +93,7 @@ public class RunFaultTests
         public List<string> StartFailed { get; } = new();
         public List<string> RunFailed { get; } = new();
         // Where each RunFailed error was raised, as the runner says while it reports it (#955).
-        public List<HexIDE.Runtime.Interpreter.ErrorLocation?> RunFailedAt { get; } = new();
+        public List<ErrorLocation?> RunFailedAt { get; } = new();
     }
 
     private static Run Build(ProjectDefinition project)
@@ -108,7 +108,7 @@ public class RunFaultTests
         // nested-event test below fail on a busy box and pass on an idle one. Since #766 the raiser waits, so these run
         // with the slice at its most disruptive rather than off.
         var controller = new DebugController { TimeSliceMs = -1 };
-        var runner = new ProjectRunnerService(
+        var runner = TestRunners.WithInterpreter(
             Substitute.For<IEventBus>(), windowManager, Substitute.For<IProjectManager>(),
             localization, controller, Substitute.For<IBreakpointService>(), new WatchService(), new RunScope());
         var run = new Run { Runner = runner, Controller = controller, WindowManager = windowManager, Project = project };
@@ -605,7 +605,7 @@ public class RunFaultTests
 
         run.RunFailed.Should().ContainSingle().Which.Should().StartWith(expected);
         // Line 3 of the file: a module's file begins with its Attribute VB_Name line, which the code window numbers too.
-        run.RunFailedAt.Should().Equal([new HexIDE.Runtime.Interpreter.ErrorLocation("Module1", 3)], "where it was raised (#955)");
+        run.RunFailedAt.Should().Equal([new ErrorLocation("Module1", 3)], "where it was raised (#955)");
         run.Runner.FailureLocation.Should().BeNull("read only while the failure is reported");
         _ = run.WindowManager.DidNotReceiveWithAnyArgs().MessageBox(default!);
         AssertNothingIsRunning(run);

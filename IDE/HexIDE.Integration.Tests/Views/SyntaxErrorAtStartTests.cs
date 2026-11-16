@@ -51,7 +51,7 @@ public class SyntaxErrorAtStartTests
         localization.GetString("Str.ProjectRunner.StartupFormFailedToLoad")
             .Returns("Form '{0}' could not be loaded, so the project did not start.\n\n{1}");
         localization.GetString("Str.ProjectRunner.NotImplementedYet").Returns("HexIDE does not implement this yet:\n\n{0}");
-        var runner = new ProjectRunnerService(
+        var runner = TestRunners.WithInterpreter(
             Substitute.For<IEventBus>(), windows, projects, localization, controller, Substitute.For<IBreakpointService>(),
             new WatchService(), new RunScope());
         var reported = new List<string>();
@@ -84,6 +84,37 @@ public class SyntaxErrorAtStartTests
         h.Runner.RunningProject.Should().BeNull("a project that never started must not stay claimed");
         h.Controller.IsSessionActive.Should().BeFalse();
         return h.Reported.Should().ContainSingle("the failure is reported once, before the start call returns").Subject;
+    }
+
+    // #3960: the same whole-file line the code window shows, through a real failed start.
+    [AvaloniaTheory]
+    [InlineData("bas", "x = = 1", 3)]
+    [InlineData("bas", "x += 2", 3)]
+    [InlineData("cls", "x = = 1", 15)]
+    [InlineData("cls", "x += 2", 15)]
+    [InlineData("frm", "x = = 1", 9)]
+    [InlineData("frm", "x += 2", 9)]
+    public void A_parse_failure_reports_its_file_location(string kind, string statement, int line)
+    {
+        var project = kind == "frm" ? FormProject("    " + statement + "\r\n") : SubMainProject();
+        if (kind != "frm")
+            AddModule(project, "Broken", kind == "bas" ? ModuleKind.StandardModule : ModuleKind.ClassModule,
+                "Sub Main()\r\n    " + statement + "\r\nEnd Sub\r\n");
+        if (kind == "cls")
+            AddModule(project, "Entry", ModuleKind.StandardModule, "Sub Main()\r\nEnd Sub\r\n");
+        var h = Runner(project);
+        ErrorLocation? seen = null;
+        h.Runner.StartFailed += _ => seen = h.Runner.FailureLocation;
+
+        h.Runner.RunProject(project);
+
+        var message = AssertAStartThatNeverRan(h).ReplaceLineEndings("\n");
+        if (statement == "x += 2")
+            message.Should().Be("Compile error:\n\n+= isn't part of VB6, VBA or VBScript, so this interpreter doesn't run it.");
+        else
+            message.Should().Be($"Compile error:\n\nno viable alternative at input 'x = =' in {(kind == "frm" ? "Form1" : "Broken")}, line {line}:8\nOffending symbol: =");
+        seen.Should().Be(new ErrorLocation(kind == "frm" ? "Form1" : "Broken", line));
+        h.Runner.FailureLocation.Should().BeNull("only available while reporting");
     }
 
     [AvaloniaFact]

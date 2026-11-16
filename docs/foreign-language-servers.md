@@ -4,6 +4,9 @@ HexIDE's test suite drives real, third-party language servers. This note explain
 they are obtained, and — because one of them is GPL-licensed — exactly why that is consistent with a
 100%-MIT tree.
 
+The DAP client has the same independent check: see [foreign debug adapters](foreign-debug-adapters.md)
+for the adapter pins, licences, acquisition and complete-session assertions.
+
 ## Why third-party servers at all
 
 A client and a server written by the same hand converge on their shared assumptions rather than on the
@@ -63,6 +66,26 @@ vscode-json-language-server 4.10.0 returned `result:null` for all four spellings
 `ShutdownWireShapeTests` asserts member absence on the raw frames, covering all four spellings without
 relying on a permissive server. StreamJsonRpc's null argument object in its parameter-object overload
 omits the member; it does not serialize `"params":null`.
+
+## Snippet completion negotiation (2026-11-13, #3483)
+
+A paired stdio probe toggled only `completionItem.snippetSupport`, keeping insert/replace support,
+both insertion modes, `asIs` as default, and the indentation list default enabled. These are sampled
+sites, not a survey of every completion a server can produce:
+
+| Server | Site | Without snippets | With snippets |
+|---|---|---|---|
+| clangd 22.1.6 | `tw` in `int main() { tw }`, after declaring `int twice(int n);` and waiting for parsing | 12 plain items | 12 snippet items; `twice(${1:int n})` replaces `tw` |
+| vscode-json-language-server 4.10.0 | Property in a document using the package.json schema | No completion provider advertised | 65 snippet-formatted items; the sampled `name` edit contains literal quoted text |
+| texlab 5.26.0 | `\sec` inside an article document | 50 plain items | 50 plain items |
+| rumdl 0.2.79 | Link target in Markdown | Empty list | Empty list |
+| ruff 0.16.7 | `os.pa` after `import os` | No completion provider | No completion provider |
+
+No sampled reply supplied insert/replace edits, insertion modes or list defaults. clangd can answer
+with lexical fallback items while parsing is pending; those were plain even with snippets enabled.
+`CompletionForeignTests` therefore waits for the opened document's diagnostics, then requests clangd's
+function completion through the shipping client, inserts it in the editor, edits its argument stop,
+and checks Tab's final caret. This test uses headless Avalonia and runs on Linux too.
 
 ## Normal teardown and document close (2026-11-04, #491)
 
@@ -134,8 +157,8 @@ Three findings the table does not carry:
 
 Currently unexercised by anything real: the `pipe` and `websocket` transports (both supported, both tested
 only against fakes), a server that genuinely defers its analysis to save, and **workspace-wide pull
-diagnostics** (`workspace/diagnostic`), which HexIDE does not implement (#284) and which neither ruff nor
-rumdl advertises.
+diagnostics** (`workspace/diagnostic`), which HexIDE does not implement (it pulls per document, #284) and
+which neither ruff nor rumdl advertises.
 
 ## The reference implementation, and why it costs a runtime dependency
 
@@ -183,14 +206,19 @@ Downloaded on demand, once, at a pinned version, with a SHA-256 verified before 
 `artifacts/foreign-lsp/`. Not committed: several megabytes per platform against a repository whose whole
 history is a fraction of that, and every version bump would add the same again permanently.
 
+Release and specification-model downloads make up to three attempts for HTTP 5xx responses, timeouts
+or dropped connections, with 250 ms and 500 ms backoffs (#3489). Other HTTP errors and checksum
+mismatches do not retry. Exhausting the attempts leaves the server unavailable; required-server guards
+still fail. npm acquisition continues to use `npm ci`.
+
 Linux uses musl builds where offered, so one binary runs on any distribution.
 
 The advisory `build-ide (windows-arm, advisory)` job runs on `windows-11-arm` (#3139).
 For rumdl, texlab, clangd and ruff, `win-arm64` deliberately selects the existing Windows x64
 archive under Windows' emulation, retaining its digest and provenance. The JSON server uses the
 Node runtime installed by `actions/setup-node` and the same npm lockfile. The leg keeps
-`HEXIDE_REQUIRE_FOREIGN_LSP=1`; an unavailable server fails visibly. Execution on Arm awaits
-its first CI run; the Linux asset tests check the pin choices, not emulation.
+`HEXIDE_REQUIRE_FOREIGN_LSP=1`; an unavailable server fails visibly. The leg has run on main
+(it passed on 2026-11-07); the Linux asset tests check the pin choices, not emulation.
 
 A checksum mismatch deletes the download and records the expected and actual digests. The affected
 foreign-server tests skip with a checksum-specific reason; an ordinary test in `RequiredServersTests`
@@ -204,6 +232,10 @@ fails even when `HEXIDE_REQUIRE_FOREIGN_LSP` is unset. Discovery never throws fo
   against*: it still catches a corrupted transfer, a replaced asset, or an unannounced rebuild under the
   same tag. It does **not** attest provenance. If the release had already been tampered with when it was
   first fetched, the digest records that faithfully.
+- **clangd** publishes no checksum file either, so its digests were computed here, with texlab's limits.
+- **ruff** releases a `.sha256` beside every asset, so its digests are publisher-attested, as rumdl's are.
+- **vscode-json-language-server** has no digest of its own here: `npm ci` installs it from the committed
+  lockfile, whose registry-attested integrity hashes npm checks.
 
 That distinction is trust-on-first-use versus attestation, and the code names it per server rather than
 letting a row of hex imply they are the same thing.

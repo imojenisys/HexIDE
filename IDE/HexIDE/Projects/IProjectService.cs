@@ -5,7 +5,8 @@ namespace HexIDE.Projects;
 
 public interface IProjectService
 {
-    Task CreateNewProject();
+    /// <summary>Shows the project chooser, unloading existing projects only after confirmation when requested.</summary>
+    Task CreateNewProject(bool replaceExisting = false);
     Task CreateNewProject(IProjectTemplate template);
     Task UnloadAllProjects();
     Task UnloadProject(ProjectDefinition project);
@@ -121,6 +122,15 @@ public interface IProjectService
 
     /// <summary>The module counterpart: whether saving would change what was last loaded or saved.</summary>
     bool HasUnsavedChanges(ModuleDefinition module);
+
+    /// <summary>
+    /// Asked before an add-in is turned off or its consent withdrawn, while its format can still write: whether any form,
+    /// UserControl or PropertyPage it reads has unsaved changes, and if so what to do, as closing a project asks. Save writes
+    /// them now, Don't Save lets them go, and Cancel keeps the add-in.
+    /// </summary>
+    /// <param name="addinId">The add-in's manifest id.</param>
+    /// <returns>True when the add-in may be taken out: nothing was unsaved, they were saved, or the user let them go.</returns>
+    Task<bool> ConfirmAddinWithdrawal(string addinId);
 
     /// <summary>
     /// Every loaded project that has something unsaved, with what a save would write for each of its unsaved files,

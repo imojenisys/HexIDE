@@ -10,6 +10,9 @@ namespace HexIDE.Lsp;
 /// <summary>Owns all writes; providers only produce content. A changed file relinquishes ownership.</summary>
 public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDisposable
 {
+    public event Action<string, int>? FileChanged;
+    public event Action? ConfigurationProblemsChanged;
+
     private readonly IWorkspaceArtifactWorkspace _workspace;
     private readonly IWorkspaceArtifactProviderRegistry _providers;
     private readonly IWorkspaceArtifactConsent _consent;
@@ -24,6 +27,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
     private bool _disposed;
     private readonly Dictionary<string, Func<WorkspaceArtifactContext, CancellationToken, Task>> _imports = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Func<CancellationToken, Task>> _folderUpdates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string[]> _projectMembership = new(StringComparer.Ordinal);
     private readonly string? _stateFile;
     private readonly ConversationLog? _capture;
     private readonly IWorkspaceLibraryNames? _libraryNames;
@@ -65,7 +69,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
             if (_disposed) return;
             _active[server.Id] = server;
             _folderUpdates[server.Id] = update;
-            _ = _workspace.Projects; // Begin observing membership even without artefacts or imports.
+            _projectMembership[server.Id] = ProjectMembership(); // Also begins observing projects without artefacts or imports.
         }
         finally { _gate.Release(); }
     }
@@ -81,6 +85,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
             _active.Remove(server.Id);
             _imports.Remove(server.Id);
             _folderUpdates.Remove(server.Id);
+            _projectMembership.Remove(server.Id);
             _lastNote.Remove(server.Id);
         }
         finally { _gate.Release(); }
@@ -109,7 +114,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
             // A regeneration regenerates only the servers still here; a launch is what makes one active.
             if (changed is not null && !IsActive(server)) return;
             _active[server.Id] = server;
-            foreach (var project in _workspace.Projects)
+            foreach (var project in ProjectFolders().Select(group => group.First()))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 try
@@ -140,9 +145,27 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
             if (regenerating && !IsActive(server)) return;
             _active[server.Id] = server;
             _imports[server.Id] = import;
-            foreach (var project in _workspace.Projects) await import(project, cancellationToken);
+            foreach (var project in ProjectFolders().Select(group => group.First())) await import(project, cancellationToken);
         }
         finally { _gate.Release(); }
+    }
+
+    // One descriptor/import per resolved folder; load order decides which project survives a collision (#261).
+    private IEnumerable<IGrouping<string, WorkspaceArtifactContext>> ProjectFolders() =>
+        _workspace.Projects.GroupBy(project => Resolve(Path.GetFullPath(project.WorkspaceRoot)),
+            OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    public IReadOnlyList<LanguageServerConfigProblem> GetConfigurationProblems(LanguageServerRegistration server)
+    {
+        if (server.WorkspaceArtifact is null && server.ProjectImport is null) return [];
+        return ProjectFolders().Where(group => group.Skip(1).Any()).Select(group =>
+        {
+            var names = string.Join(", ", group.Select(project => project.Project.Name));
+            var first = group.First().Project.Name;
+            return new LanguageServerConfigProblem(server.Id,
+                $"Projects {names} share folder {group.Key}; only {first} is written or imported.", false)
+                .WithDetails("SharedProjectFolder", names, group.Key, first);
+        }).ToArray();
     }
 
     /// <returns>Whether the file on disk changed: written new or different, or taken back.</returns>
@@ -196,7 +219,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
         var bytes = Encoding.UTF8.GetBytes(content);
         if (bytes.Length > MaxArtifactLength)
         {
-            Note(server, $"Workspace artefact {spec.RelativePath} not written: larger than any artefact HexIDE writes.");
+            Note(server, $"Workspace artefact {spec.RelativePath} not written: larger than any artefact {HexIDE.IDE.Distribution.DisplayName} writes.");
             return false;
         }
         Directory.CreateDirectory(Path.GetDirectoryName(target)!);
@@ -219,6 +242,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
                 if (existing.AsSpan().SequenceEqual(bytes)) return false;
             }
         }
+        var existed = File.Exists(target);
         var temporary = Path.Combine(Path.GetDirectoryName(target)!, ".hexide-artifact-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -237,7 +261,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
         _hashes[target] = Convert.ToHexString(SHA256.HashData(bytes));
         _lastNote.Remove(server.Id);
         SaveOwnership();
-        // #456: regeneration deliberately sends no didChangeWatchedFiles in this phase.
+        FileChanged?.Invoke(target, existed ? 2 : 1);
         return true;
     }
 
@@ -268,6 +292,7 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
                 return false;
             }
             File.Delete(target);
+            FileChanged?.Invoke(target, 3);
         }
         _hashes.Remove(target);
         SaveOwnership();
@@ -377,11 +402,26 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
         (LanguageServerRegistration Server, Func<WorkspaceArtifactContext, CancellationToken, Task>? Import,
             Func<CancellationToken, Task>? Folders)[] servers = [];
         var changed = new HashSet<string>(StringComparer.Ordinal);
+        var membershipChanged = new HashSet<string>(StringComparer.Ordinal);
+        var refreshProblems = false;
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(300), _timeProvider, token);
+            refreshProblems = true;
             await _gate.WaitAsync(token);
-            try { servers = _active.Values.Select(server => (server, _imports.GetValueOrDefault(server.Id), _folderUpdates.GetValueOrDefault(server.Id))).ToArray(); }
+            try
+            {
+                servers = _active.Values.Select(server => (server, _imports.GetValueOrDefault(server.Id),
+                    _folderUpdates.GetValueOrDefault(server.Id))).ToArray();
+                var membership = ProjectMembership();
+                foreach (var (server, _, _) in servers)
+                {
+                    if (_projectMembership.TryGetValue(server.Id, out var previous)
+                        && !previous.SequenceEqual(membership) && server.RestartOnProjectChange)
+                        membershipChanged.Add(server.Id);
+                    _projectMembership[server.Id] = membership;
+                }
+            }
             finally { _gate.Release(); }
             foreach (var (server, import, folders) in servers)
             {
@@ -395,9 +435,24 @@ public sealed class WorkspaceArtifactService : IWorkspaceArtifactService, IDispo
         catch (Exception ex) { _log.LogWarning(ex, "Workspace artefact regeneration failed."); }
         finally
         {
-            foreach (var server in servers.Select(s => s.Server).Where(s => changed.Contains(s.Id))) RequestRestart(server);
+            if (refreshProblems && !_disposed) ConfigurationProblemsChanged?.Invoke();
+            foreach (var server in servers.Select(s => s.Server))
+            {
+                if (!_disposed && membershipChanged.Contains(server.Id))
+                {
+                    Note(server, "Project membership changed; restarting the server to load the group.", fault: false);
+                    RestartRequested?.Invoke(server);
+                }
+                else if (changed.Contains(server.Id)) RequestRestart(server);
+            }
         }
     }
+
+    // A project's file identifies membership independently of deduplicated folders and source-list edits.
+    // An unsaved project contributes its chosen root; repeated roots still count as separate projects.
+    private string[] ProjectMembership() => _workspace.Projects
+        .Select(project => project.Project.DefinitionPath ?? project.WorkspaceRoot)
+        .Order(StringComparer.Ordinal).ToArray();
 
     /// <summary>
     /// Asks for a restart of a server that reads its artefact only when it starts and said so (#2072): it would otherwise

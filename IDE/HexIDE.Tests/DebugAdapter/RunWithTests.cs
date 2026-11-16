@@ -26,6 +26,7 @@ public class RunWithTests : IAsyncDisposable
     private readonly DebugLaunchService _launches;
     private readonly ProjectRunnerService _runner;
     private readonly List<string> _interpreterStarts = [];
+    private readonly StandInRunEngine _engine = new() { StartFailure = new RunFailure("No startup form", null) };
     private readonly TaskCompletionSource<AddinProjectInfo> _asked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public RunWithTests()
@@ -35,11 +36,10 @@ public class RunWithTests : IAsyncDisposable
         _projects.StartupProject.Returns(_project);
         var strings = Substitute.For<ILocalizationService>();
         strings.GetString("Str.Debug.RunWith.Unavailable").Returns("{0} isn't available");
-        _runner = new ProjectRunnerService(Substitute.For<IEventBus>(), Substitute.For<IWindowManager>(), _projects, strings,
+        _runner = TestRunners.WithEngine(_engine, Substitute.For<IEventBus>(), _projects, strings,
             Substitute.For<IDebugController>(), Substitute.For<IBreakpointService>(), new WatchService(), new RunScope(), debugger,
             debugLaunches: _launches, runChoices: _choices, statusBar: _status);
-        // The test project has no startup form, so the interpreter's start fails at once and says so: that is how a
-        // test sees that F5 went to the interpreter.
+        // The stand-in engine fails its start at once and says so: that is how a test sees that F5 went to the engine.
         _runner.StartFailed += _interpreterStarts.Add;
     }
 
@@ -134,7 +134,7 @@ public class RunWithTests : IAsyncDisposable
     [InlineData("chosen, no longer claims it", false)]
     public void F5_starts_a_project_an_add_in_read_only_with_the_launch_its_user_chose_for_it(string state, bool starts)
     {
-        var contributed = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = "RDCore projects" };
+        var contributed = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = "RDCore projects", Offers = ProjectOffers.Nothing };
         _projects.StartupProject.Returns(contributed);
         if (state != "chosen, gone") Contribute(claims: _ => state != "chosen, no longer claims it");
         if (state != "no choice") _choices.Set(contributed, Key);
@@ -150,7 +150,7 @@ public class RunWithTests : IAsyncDisposable
     // it is asked whether it runs the project.
     private (ProjectDefinition Project, ModuleDefinition Module) ContributedAndChosen(Func<bool>? answer = null)
     {
-        var contributed = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = "RDCore projects" };
+        var contributed = new ProjectDefinition(VBProjectType.EXE, "Ledger") { ContributedBy = "RDCore projects", Offers = ProjectOffers.Nothing };
         var module = new ModuleDefinition(contributed, "Startup", ModuleKind.StandardModule);
         contributed.AddModule(module);
         _projects.StartupProject.Returns(contributed);
@@ -257,7 +257,7 @@ public class RunWithTests : IAsyncDisposable
                 break;
             case "the launch registered again": Reregister(); break;
             case "another startup project":
-                var other = new ProjectDefinition(VBProjectType.EXE, "Other") { ContributedBy = "RDCore projects" };
+                var other = new ProjectDefinition(VBProjectType.EXE, "Other") { ContributedBy = "RDCore projects", Offers = ProjectOffers.Nothing };
                 _choices.Set(other, Key);
                 _projects.StartupProject.Returns(other);
                 break;

@@ -65,7 +65,7 @@ internal sealed class ServerMessagePrompt
             2 => MessageBoxIcon.Warning,
             _ => MessageBoxIcon.Information
         };
-        message.Children.Add(HexIDE.Runtime.Dialogs.MessageBox.BuildIconElement(icon));
+        message.Children.Add(HexIDE.Dialogs.MessageBox.BuildIconElement(icon));
         message.Children.Add(new TextBlock { Text = request.Message, TextWrapping = TextWrapping.Wrap, MaxWidth = 480 });
         content.Children.Add(message);
         content.Children.Add(buttons);
@@ -73,7 +73,7 @@ internal sealed class ServerMessagePrompt
         {
             Classes = { "ideDialog" },
             Title = title, Content = content, FlowDirection = owner.FlowDirection, SizeToContent = SizeToContent.WidthAndHeight,
-            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
+            CanResize = false, CanMinimize = false, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.CenterOwner
         };
         window.KeyDown += (_, e) =>
         {

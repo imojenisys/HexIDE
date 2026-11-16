@@ -29,7 +29,9 @@ public class ProjectToolViewModelTests
     {
         var localization = Substitute.For<ILocalizationService>();
         localization.GetString("Str.Tool.Project.RemoveFormFormat").Returns("Remove {0}");
-        localization.GetString("Str.Tool.Project.Title").Returns("Project Group - Group1");
+        localization.GetString("Str.Tool.Project.TitleEmpty").Returns("Project Group - Group1");
+        localization.GetString("Str.Tool.Project.TitleGroup").Returns("Project Group - {0}");
+        localization.GetString("Str.Tool.Project.TitleProject").Returns("Project - {0}");
         return new(projectManager, eventBus, projectService, editorService, localization);
     }
 
@@ -43,6 +45,121 @@ public class ProjectToolViewModelTests
         return vm;
     }
 
+    [Fact]
+    public void GroupAccessibleName_UsesTheLocalizedDisplayNameAndFollowsRename()
+    {
+        var group = new ProjectGroupDefinition("Group1");
+        projectManager.CurrentGroup.Returns(group);
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString("Str.Tool.Project.TitleGroup").Returns("Projektgruppe - {0}");
+        var vm = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, localization);
+        var root = vm.RootItems.Should().ContainSingle().Which.Should().BeOfType<ProjectGroupViewModel>().Subject;
+        var node = root.Should().BeAssignableTo<IProjectTreeElement>().Subject;
+        node.AccessibleName.Should().Be(root.DisplayName).And.Be("Projektgruppe - Group1");
+        var notifications = new List<string?>();
+        node.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+
+        group.Name = "Renamed";
+
+        notifications.Should().Contain(nameof(IProjectTreeElement.AccessibleName));
+        node.AccessibleName.Should().Be(root.DisplayName).And.Be("Projektgruppe - Renamed");
+    }
+
+    [Fact]
+    public void GroupRename_NotifiesTheExistingRootNode()
+    {
+        var group = new ProjectGroupDefinition("Group1");
+        projectManager.CurrentGroup.Returns(group);
+        var vm = CreateVm();
+        var root = vm.RootItems.Should().ContainSingle().Subject.Should().BeOfType<ProjectGroupViewModel>().Subject;
+        var notifications = new List<string?>();
+        var observable = root as System.ComponentModel.INotifyPropertyChanged;
+        observable.Should().NotBeNull();
+        observable!.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+
+        group.Name = "OuterGroup";
+
+        notifications.Should().Contain("DisplayName");
+        root.DisplayName.Should().Be("Project Group - OuterGroup");
+        vm.RootItems.Should().ContainSingle().Which.Should().BeSameAs(root);
+    }
+
+    [Fact]
+    public void GroupRootNode_UsesTheLocalizedTitle()
+    {
+        projectManager.CurrentGroup.Returns(new ProjectGroupDefinition("Group1"));
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString(Arg.Any<string>()).Returns("");
+        localization.GetString("Str.Tool.Project.TitleGroup").Returns("Projektgruppe - {0}");
+
+        var vm = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, localization);
+
+        vm.RootItems.Should().ContainSingle().Which.Should().BeOfType<ProjectGroupViewModel>()
+            .Which.DisplayName.Should().Be("Projektgruppe - Group1");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PaneTitle_FollowsLoadedNameAndRename(bool grouped)
+    {
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString("Str.Tool.Project.TitleEmpty").Returns("Project Group - Group1");
+        localization.GetString("Str.Tool.Project.TitleGroup").Returns("Project Group - {0}");
+        localization.GetString("Str.Tool.Project.TitleProject").Returns("Project - {0}");
+        var project = TestHelpers.CreateProject("FirstProject");
+        projectManager.LoadedProjects.Returns(new List<ProjectDefinition> { project });
+        var group = new ProjectGroupDefinition("FirstGroup");
+        if (grouped) projectManager.CurrentGroup.Returns(group);
+        var vm = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, localization);
+        vm.Title.Should().Be(grouped ? "Project Group - FirstGroup" : "Project - FirstProject");
+        var notifications = new List<string?>();
+        vm.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+
+        if (grouped) group.Name = "Renamed";
+        else project.Name = "Renamed";
+
+        vm.Title.Should().Be(grouped ? "Project Group - Renamed" : "Project - Renamed");
+        notifications.Should().Contain("Title");
+        localization.GetString("Str.Tool.Project.TitleGroup").Returns("Grupa projektów - {0}");
+        localization.GetString("Str.Tool.Project.TitleProject").Returns("Projekt - {0}");
+        localization.LanguageChanged += Raise.Event<Action>();
+        vm.Title.Should().Be(grouped ? "Grupa projektów - Renamed" : "Projekt - Renamed");
+    }
+
+    [Fact]
+    public void PaneTitle_FollowsGroupCreationClearingAndProjectUnloading()
+    {
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString("Str.Tool.Project.TitleEmpty").Returns("Project Group - Group1");
+        localization.GetString("Str.Tool.Project.TitleGroup").Returns("Project Group - {0}");
+        localization.GetString("Str.Tool.Project.TitleProject").Returns("Project - {0}");
+        var vm = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, localization);
+        vm.Title.Should().Be("Project Group - Group1");
+        localization.GetString("Str.Tool.Project.TitleEmpty").Returns("Grupo de proxectos - Grupo1");
+        localization.LanguageChanged += Raise.Event<Action>();
+        vm.Title.Should().Be("Grupo de proxectos - Grupo1");
+        localization.GetString("Str.Tool.Project.TitleEmpty").Returns("Project Group - Group1");
+        var project = TestHelpers.CreateProject("OnlyProject");
+        projectManager.ProjectLoaded += Raise.Event<Action<ProjectDefinition>>(project);
+        vm.Title.Should().Be("Project - OnlyProject");
+        var group = new ProjectGroupDefinition("MadeGroup");
+        projectManager.CurrentGroup.Returns(group);
+        projectManager.PropertyChanged += Raise.Event<System.ComponentModel.PropertyChangedEventHandler>(
+            projectManager, new System.ComponentModel.PropertyChangedEventArgs("CurrentGroup"));
+        vm.Title.Should().Be("Project Group - MadeGroup");
+        projectManager.CurrentGroup.Returns((ProjectGroupDefinition?)null);
+        projectManager.PropertyChanged += Raise.Event<System.ComponentModel.PropertyChangedEventHandler>(
+            projectManager, new System.ComponentModel.PropertyChangedEventArgs("CurrentGroup"));
+        vm.Title.Should().Be("Project - OnlyProject");
+        group.Name = "Detached";
+        vm.Title.Should().Be("Project - OnlyProject");
+        projectManager.ProjectUnloaded += Raise.Event<Action<ProjectDefinition>>(project);
+        vm.Title.Should().Be("Project Group - Group1");
+        project.Name = "Detached";
+        vm.Title.Should().Be("Project Group - Group1");
+    }
+
     // TestHelpers projects are unsaved (null AbsolutePath), so every member renders at the
     // project root of the filesystem tree.
     private static FormViewModel FirstForm(ProjectViewModel projVm) =>
@@ -50,6 +167,24 @@ public class ProjectToolViewModelTests
 
     private static ModuleViewModel FirstModule(ProjectViewModel projVm) =>
         projVm.Elements.OfType<ModuleViewModel>().First();
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Remove_is_offered_where_the_type_offers_membership_whoever_opened_the_project(bool offered)
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "P")
+        {
+            ContributedBy = offered ? "addin" : null,
+            Offers = offered ? ProjectOffers.Everything : ProjectOffers.Everything with { ChangesMembership = false },
+        };
+        project.AddModule(new ModuleDefinition(project, "Module1", ModuleKind.StandardModule));
+        var vm = CreateVmWithLoadedProject(project, out var projectVm);
+
+        vm.SelectedItem = FirstModule(projectVm);
+
+        vm.HasRemovableSelection.Should().Be(offered);
+    }
 
     [Theory]
     [InlineData(false)]
@@ -228,8 +363,9 @@ public class ProjectToolViewModelTests
 
         CreateVmWithLoadedProject(proj, out var projVm);
 
-        var dir = projVm.Elements.Should().ContainSingle().Subject
-            .Should().BeOfType<DirectoryViewModel>().Subject;
+        projVm.Elements.Should().HaveCount(2);
+        projVm.Elements[0].Should().BeOfType<ProjectFileViewModel>();
+        var dir = projVm.Elements[1].Should().BeOfType<DirectoryViewModel>().Subject;
         dir.Name.Should().Be("Forms");
         dir.Children.Should().ContainSingle().Which.Should().BeOfType<FormViewModel>();
     }
@@ -242,11 +378,15 @@ public class ProjectToolViewModelTests
         proj.AbsolutePath = Path.Combine(root, "App.vbp");
         proj.Forms[0].AbsolutePath = Path.Combine(root, "Main.frm");
         CreateVmWithLoadedProject(proj, out var projVm);
-        projVm.Elements.Should().ContainSingle().Which.Should().BeOfType<FormViewModel>();
+        projVm.Elements.Should().HaveCount(2);
+        projVm.Elements[0].Should().BeOfType<ProjectFileViewModel>();
+        projVm.Elements[1].Should().BeOfType<FormViewModel>();
 
         proj.Forms[0].AbsolutePath = Path.Combine(root, "Forms", "Main.frm");
 
-        projVm.Elements.Should().ContainSingle().Which.Should().BeOfType<DirectoryViewModel>();
+        projVm.Elements.Should().HaveCount(2);
+        projVm.Elements[0].Should().BeOfType<ProjectFileViewModel>();
+        projVm.Elements[1].Should().BeOfType<DirectoryViewModel>();
     }
 
     // ── Command can-execute ───────────────────────────────────────
@@ -407,7 +547,7 @@ public class ProjectToolViewModelTests
         }
         vm.SelectedItem = null;
         command.CanExecute(null).Should().BeFalse();
-        var contributed = new ProjectDefinition(VBProjectType.EXE, "Contributed") { ContributedBy = "addin" };
+        var contributed = new ProjectDefinition(VBProjectType.EXE, "Contributed") { Offers = ProjectOffers.Nothing };
         projectManager.ProjectLoaded += Raise.Event<Action<ProjectDefinition>>(contributed);
         vm.SelectedItem = vm.LoadedProjects.Last();
         command.CanExecute(null).Should().BeFalse();

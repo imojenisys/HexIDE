@@ -69,6 +69,31 @@ public class InspectItemCountTests
         finally { window.Close(); }
     }
 
+    // selectionItems describes a list's selection, so a row's own was empty whichever it was (#2863).
+    [AvaloniaFact]
+    public void A_row_says_whether_it_is_selected_and_what_has_no_such_state_does_not()
+    {
+        var list = new ListBox { ItemsSource = new[] { "one", "two" }, SelectedIndex = 1 };
+        var button = new Button { Content = "Go" };
+        var window = new Window { Width = 300, Height = 300, Content = new StackPanel { Children = { list, button } } };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            UiAutomationDriver.Inspect(list.ContainerFromIndex(1)!, "Window/List/ListItem[two]", window).IsSelected.Should().BeTrue();
+            UiAutomationDriver.Inspect(list.ContainerFromIndex(0)!, "Window/List/ListItem[one]", window).IsSelected.Should().BeFalse();
+            UiAutomationDriver.Inspect(list, "Window/List", window).IsSelected.Should().BeNull("a list has a selection, and is not one");
+            UiAutomationDriver.Inspect(button, "Window/Button", window).IsSelected.Should().BeNull();
+
+            list.SelectedIndex = 0;
+            Dispatcher.UIThread.RunJobs();
+
+            UiAutomationDriver.Inspect(list.ContainerFromIndex(0)!, "Window/List/ListItem[one]", window).IsSelected.Should().BeTrue();
+            UiAutomationDriver.Inspect(list.ContainerFromIndex(1)!, "Window/List/ListItem[two]", window).IsSelected.Should().BeFalse();
+        }
+        finally { window.Close(); }
+    }
+
     // A menu counts separators and hidden items a dump does not show, so its count could not be reconciled with the dump.
     [AvaloniaFact]
     public void A_menu_reports_no_count()
@@ -230,7 +255,7 @@ public class InspectItemCountTests
         project.AddForm(form);
         var vm = new HexIDE.VisualDesigner.FormEditViewModel(null!, NSubstitute.Substitute.For<HexIDE.IDE.IEventBus>(),
             NSubstitute.Substitute.For<HexIDE.Projects.IProjectService>(), null!, null!, null!,
-            NSubstitute.Substitute.For<HexIDE.Localization.ILocalizationService>()).Initialize(form);
+            NSubstitute.Substitute.For<HexIDE.Localization.ILocalizationService>(), new Vb6ProjectFileFormat()).Initialize(form);
         var view = new HexIDE.VisualDesigner.Views.PropertiesToolView();
         var window = new Window { Width = 400, Height = 600, Content = view };
         window.Show();
@@ -278,7 +303,7 @@ public class InspectItemCountTests
         project.AddForm(form);
         var vm = new HexIDE.VisualDesigner.FormEditViewModel(null!, NSubstitute.Substitute.For<HexIDE.IDE.IEventBus>(),
             NSubstitute.Substitute.For<HexIDE.Projects.IProjectService>(), null!, null!, null!,
-            NSubstitute.Substitute.For<HexIDE.Localization.ILocalizationService>()).Initialize(form);
+            NSubstitute.Substitute.For<HexIDE.Localization.ILocalizationService>(), new Vb6ProjectFileFormat()).Initialize(form);
         var view = new HexIDE.VisualDesigner.Views.PropertiesToolView();
         var window = new Window { Width = 400, Height = 600, Content = view };
         window.Show();

@@ -48,8 +48,15 @@ cd IDE
 dotnet test HexIDE.Runtime.Tests/                        # VB6 interpreter
 dotnet test HexIDE.Tests/                                # IDE view-models
 dotnet test HexIDE.Integration.Tests/                    # headless Avalonia UI
+dotnet test HexIDE.Runtime.Integration.Tests/            # headless Avalonia, the runtime as a made program runs it
 cd ../LspServer && dotnet test HexIDE.VbLspServer.Tests/ # LSP server
 ```
+
+Test assemblies that reference the IDE or runtime redirect `UserDataPath` in a module initializer to a
+fresh temporary profile for each test process, with best-effort deletion at process exit. Settings,
+layout, recent projects and language-server configuration must never come from or overwrite the
+contributor's own IDE profile (#3805). Seed any profile state a test needs explicitly; tests of redirect
+rules use private `UserDataRoot` instances rather than moving the process-wide root.
 
 > **First-party add-ins:** the Desktop build only signs/bundles the bundled add-ins when a first-party
 > signing key is present; a normal clone has none, so the build simply skips that step and prints a note.
@@ -286,6 +293,8 @@ cannot rebuild the signed packages. That does not stop you working on an add-in.
 
 1. Start the IDE with `--developer-mode`. This only works in a Debug build.
 2. Tick **Options → Developer → Load unsigned add-in packages**, then restart.
+
+AI Chat loads unsigned this way under its own id, `com.hexide.aichat`.
 
 The add-in then loads and is marked as unsigned. This is the setting for testing your own changes. It is
 not a way to ship an add-in. To ship a **third-party** add-in, send the maintainer your public key,

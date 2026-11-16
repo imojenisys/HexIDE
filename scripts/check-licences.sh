@@ -33,12 +33,14 @@ while IFS= read -r f; do
   [ -n "$f" ] && note "Rubberduck GPL grammar file present: $f"
 done < <(git ls-files -- . "${EXCLUDE[@]}" | grep -Ei '(VBALexer|VBAParser|VBAConditionalCompilationParser)\.g4$')
 
-# 2. No GPL-named licence files (basename contains "gpl": COPYING.GPL, LICENSE-GPLv3, gpl-3.0.txt…).
+# 2. No GPL-named licence files (COPYING.GPL, LICENSE-GPLv3, gpl-3.0.txt…).
+#    Require a licence-file shape and a GPL-family token, not the middle of TestingPlatform or gplot.
 #    A bare COPYING (a BSD/MIT dep may ship one) is intentionally NOT flagged by name — check 4
 #    catches any actual GPL licence file by its embedded text instead.
 while IFS= read -r f; do
   [ -n "$f" ] && note "GPL-named licence file present: $f"
-done < <(git ls-files -- . "${EXCLUDE[@]}" | grep -Ei 'gpl[^/]*$')
+done < <(git ls-files -- . "${EXCLUDE[@]}" | grep -Ei '(^|/)((COPYING|LICEN[CS]E)[^/]*|[^/]*\.txt)$' |
+  grep -Ei '(^|[^a-z])l?a?gpl(v[0-9]|[^a-z/]|$)[^/]*$')
 
 # 3. No GPL SPDX headers in tracked source (matches GPL / AGPL / LGPL variants).
 while IFS= read -r hit; do
@@ -50,15 +52,15 @@ while IFS= read -r hit; do
   [ -n "$hit" ] && note "GNU GPL licence text: $hit"
 done < <(git grep -nI 'GNU GENERAL PUBLIC LICENSE' -- . "${EXCLUDE[@]}")
 
-# 5. No downloaded foreign language server may become tracked.
+# 5. No downloaded foreign language server or debug adapter may become tracked.
 #    The foreign-backend tests fetch real third-party servers at run time into a gitignored cache. One of
 #    them is GPL-licensed, which is fine to DRIVE — a separate process across a protocol boundary is not a
 #    derivative work, and nothing is redistributed — and not fine to SHIP. That distinction rests entirely
 #    on the binary never entering the tree, so it is enforced here rather than left to .gitignore, which a
 #    `git add -f` or a re-scoped ignore rule would quietly defeat.
 while IFS= read -r f; do
-  [ -n "$f" ] && note "downloaded language server is tracked (it must never be committed): $f"
-done < <(git ls-files -- artifacts/ 'IDE/HexIDE.Tests/[Tt]ools/' | grep -Ei '(rumdl|texlab|clangd)|\.(exe|tar\.gz|zip)$')
+  [ -n "$f" ] && note "downloaded server or adapter is tracked (it must never be committed): $f"
+done < <(git ls-files -- artifacts/ 'IDE/HexIDE.Tests/[Tt]ools/' | grep -Ei '(rumdl|texlab|clangd)|^artifacts/foreign-dap/|\.(exe|tar\.gz|zip)$')
 
 # 6. Every centrally-managed package must have a RECORDED, PERMITTED licence.
 #

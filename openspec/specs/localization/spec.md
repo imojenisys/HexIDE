@@ -14,6 +14,37 @@ the mechanism.
 
 ## Requirements
 
+### Requirement: Program results about IDE-owned text SHALL be English
+Refusals of edits to text only the IDE changes, and a save's notes about text it rewrote, SHALL be
+English when returned to a program, including automation replies and add-in results. Where they name a
+format's regions they SHALL use the format's English phrase, or "read-only text" when none is supplied.
+
+#### Scenario: An add-in's range edit is refused in a non-English IDE
+- **GIVEN** the IDE uses a non-English language
+- **WHEN** an add-in's range edit is refused because it would change read-only text
+- **THEN** the entire result is English, including the sentence around the format's findings
+
+#### Scenario: A program replaces a file held read-only in a German IDE
+- **GIVEN** the IDE uses German and holds the entire file read-only
+- **WHEN** a program attempts to replace its content
+- **THEN** the refusal is entirely English and the buffer is unchanged
+
+#### Scenario: An add-in inserts a line break before read-only text in a German IDE
+- **GIVEN** the IDE uses German
+- **WHEN** an add-in inserts a line break that would separate a line from its hanging read-only text
+- **THEN** the refusal and its advice are entirely English and the buffer is unchanged
+
+### Requirement: People SHALL see the IDE's own words for IDE-owned text
+A message a person sees about text only the IDE changes SHALL use a localization key in the active
+language, in the IDE's own words, naming no format's parts. This includes a refused rename, a refused
+breakpoint or bookmark, Find skipping matches, and Replace All reporting skipped matches.
+
+#### Scenario: Find skips read-only matches in a non-English IDE
+- **GIVEN** the IDE uses a non-English language
+- **WHEN** Find finds matches only in read-only text
+- **THEN** its message uses the active language and explains that only the IDE changes that text
+- **AND** it names no format's parts
+
 ### Requirement: Every user-facing string SHALL be addressed by a key
 Text shown to the user SHALL be referenced by a stable key resolved at display time, and SHALL NOT be
 written as a literal at the point of use.
@@ -25,6 +56,11 @@ set of translatable strings is enumerable, which is what every other guarantee h
 #### Scenario: Adding a new piece of interface text
 - **WHEN** interface text is added
 - **THEN** it is added as a key with a canonical English value, not as a literal
+
+#### Scenario: Empty document area
+- **WHEN** no document is open
+- **THEN** the document dock resolves `Str.Dock.NoDocumentsOpen` in the active language
+- **AND** changing language updates the empty text, including in split document docks
 
 #### Scenario: Renaming a symbol in the code window
 - **WHEN** the code window opens the Rename input dialog
@@ -210,7 +246,7 @@ controls to the other side of a form whose layout they did not change.
 - **WHEN** Arabic or Hebrew is active and the IDE opens About, InputBox, MessageBox, Font, Color or Print
 - **THEN** the shared dialog window SHALL take the active language pack's flow direction
 - **AND** its content SHALL inherit that right-to-left direction (#2874)
-- **AND** program MessageBox and InputBox windows and their content SHALL remain left-to-right: their prompts belong to the program, and Windows lays out MessageBox left-to-right unless the program requests RTL reading (#3014)
+- **AND** program MessageBox and InputBox windows and their content SHALL remain left-to-right by default, independently of the IDE language. A program MessageBox SHALL honour `vbMsgBoxRight` by right-aligning the prompt and `vbMsgBoxRtlReading` by mirroring the icon and button order; both together place the prompt beside the icon on the right (#3014, measured in #3958). Native title-bar placement remains platform-owned, and on Windows the title bar does not yet mirror (#3973)
 - **AND** Font, Color and Print SHALL stay mirrored even when opened by a running program’s CommonDialog: they stand in for system dialogs, follow the interface language, and use IDE language-pack text
 - **NOTE** this is the chosen scope, not a measurement on Hebrew Windows; neither dialog distinction has been measured there
 
@@ -226,6 +262,18 @@ controls to the other side of a form whose layout they did not change.
 
 Scissors, magnifiers and other non-navigation icons retain their existing inherited mirroring; no additional
 exceptions are selected here (#40).
+
+### Requirement: IDE prompts own their dialog controls
+The IDE SHALL use its own message-box and input-box controls, separate from the running program's
+`HexIDE.Runtime.Dialogs` controls (#3513). They SHALL retain their existing language resources, theme
+keys, automation names and visible behavior. Only the built-in engine's program-dialog boundary SHALL
+name the runtime dialog namespace in IDE product code. Color and Print controls SHALL belong to the IDE.
+
+#### Scenario: An IDE prompt while a program is running
+- **WHEN** the IDE asks its own question or requests text
+- **THEN** it uses an IDE-owned control and the active interface language and direction
+- **AND** the program's MsgBox and InputBox continue to use runtime-owned controls with their existing behavior
+- **AND** automation recognizes both kinds of box
 
 ### Requirement: A pseudo-localized mode SHALL exist to find untranslated text
 The IDE SHALL provide a generated pseudo-localized mode covering every canonical key, in both directions,
@@ -279,3 +327,43 @@ resolved last would decide where the IDE ended up. That could leave the IDE in a
 - **WHEN** a language confirmation opens while Options is open, regardless of which window is active
 - **THEN** the gate is owned by the topmost visible window in the main window's ownership chain
 - **AND** Options cannot accept Language or Region input until the gate closes
+
+### Requirement: Brand text resolves per entry
+A brand's tagline and each additional credit SHALL accept a string or a `text`/`translations` object.
+About SHALL resolve each through the UI locale, its neutral pack (including Chinese script mappings),
+`en`, then required `text`. Translations SHALL use the plain entries' validation limits.
+Credits SHALL remain append-only after HexIDE's protected upstream credits.
+
+#### Scenario: A region translates only the tagline
+- **WHEN** a brand has a French tagline and credits, a Canadian French tagline, and an untranslated sponsor credit
+- **AND** the user opens About in Canadian French
+- **THEN** the Canadian tagline, French credits and fallback sponsor text appear
+- **AND** HexIDE's own credits remain first
+
+### Requirement: Docking chrome follows the active language
+The IDE SHALL localize all 36 user-facing docking menu and drag-preview resource strings
+from its language packs, including access keys, at startup and on every language switch.
+Developer-only docking debug labels are excluded.
+
+#### Scenario: Switching docking menus to a pseudo language
+- **WHEN** the user switches to Pseudo (LTR)
+- **THEN** tool-pane, document-tab, pinned-tool and tool-tab menus and drag-preview labels use bracketed pseudo text
+
+#### Scenario: Dragging a document tab with a translated status
+- **WHEN** a document tab is dragged in any shipped language
+- **THEN** its preview widens beyond the tab's preferred width as needed to fit the title and reserved status allowance
+- **AND** Dock, Float and None status labels fit in full alongside the title (#3802)
+
+### Requirement: Owned add-in keys resolve as IDE chrome keys
+The IDE SHALL resolve an allowed add-in title key through the same localization service as its own chrome,
+including shipped, profile and user text and Pseudo transformation. Registration SHALL verify the key against
+the canonical pack and its add-in owner allow-list before display. AI Chat's pane and Tools item SHALL use
+translated keys in every shipped neutral pack.
+
+#### Scenario: Language changes with an add-in pane open
+- **WHEN** the user switches from English to German with AI Chat registered
+- **THEN** its pane and Tools item show `KI-Chat` without reinitializing the add-in
+
+#### Scenario: Pseudo coverage
+- **WHEN** Pseudo is active
+- **THEN** AI Chat's pane title and Tools label are bracketed like other IDE chrome keys

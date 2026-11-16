@@ -100,6 +100,7 @@ public class AIChatWholeFileTests : IDisposable
     [AvaloniaFact]
     public async Task TheAssistantsEditIsRefused()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         // Both halves of the requirement: the assistant is told, through the tool result, and so is the developer
         // who approved the edit, in the transcript. The transcript said only "Using tool" until the 3.19 review.
         editor.TrySetContent("Form1", Arg.Any<string>(), Arg.Is<string?>(p => p == null)).Returns(new AddinEditResult(false, HeaderRefusal));
@@ -143,9 +144,10 @@ public class AIChatWholeFileTests : IDisposable
         _ = editor.Received(1).TrySetContent("Form1", code, "Orders");
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ApplyingABlockTheIdeRefuses()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         // Both halves again: the developer sees it, and the assistant is told, where before only the transcript said
         // and the assistant's next turn went on as though its code were in the file.
         editor.TrySetContent("Form1", Arg.Any<string>(), "Orders").Returns(new AddinEditResult(false, HeaderRefusal));
@@ -180,6 +182,7 @@ public class AIChatWholeFileTests : IDisposable
     [AvaloniaFact]
     public async Task AnApprovedEditTheIdeAcceptsSaysSoInTheTranscript()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         editor.TrySetContent("Form1", "Option Explicit\r\n", null).Returns(new AddinEditResult(true, HeaderKept: true));
         var chat = new ChatViewModel(host, settingsDir);
 
@@ -193,6 +196,7 @@ public class AIChatWholeFileTests : IDisposable
     [AvaloniaFact]
     public async Task AReadToolAddsNothingToTheTranscriptButItsStatusLine()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         var chat = new ChatViewModel(host, settingsDir);
 
         await chat.RunToolCallAsync(Call("get_active_file", new { }));
@@ -246,9 +250,10 @@ public class AIChatWholeFileTests : IDisposable
         reply["error"]!.GetValue<string>().Should().Be(ambiguous);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ABlockTheIdeAcceptsIsReportedInTheTranscriptAndToTheAssistant()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         editor.TrySetContent("Form1", "Option Explicit", "Orders").Returns(new AddinEditResult(true, HeaderKept: true));
         var chat = new ChatViewModel(host, settingsDir);
 
@@ -260,9 +265,10 @@ public class AIChatWholeFileTests : IDisposable
         chat.SessionLog.Last().Content.Should().Contain("accepted").And.Contain("keeping the file's own header");
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ABlockAppliedWithNoCodeWindowActiveSaysSo()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         editor.GetActiveDocument().Returns((AddinDocument?)null);
         var chat = new ChatViewModel(host, settingsDir);
 
@@ -303,9 +309,10 @@ public class AIChatWholeFileTests : IDisposable
         shown.RawContent.Should().Contain(HeaderRefusal);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task ABlockWhoseWriteThrowsSaysSoRatherThanVanishing()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         // The Apply button discards the task this returns, so an exception escaping it would be seen by nobody.
         editor.TrySetContent(default!, default!, default).ReturnsForAnyArgs(Task.FromException<AddinEditResult>(new InvalidOperationException("boom")));
         var chat = new ChatViewModel(host, settingsDir);
@@ -367,42 +374,33 @@ public class AIChatWholeFileTests : IDisposable
     }
 
     [Fact]
-    public async Task ReadingAFileInTheProjectNamedOpensThatOneAndReturnsIt()
+    public async Task ReadingAFileInTheProjectNamedLeavesTheActiveDocumentAlone()
     {
         TwoProjectsLoaded();
-        const string stock = "Attribute VB_Name = \"Module1\"\r\nOption Explicit\r\n";
         editor.TryNavigateTo("Module1", 1, 1, "Stock").Returns(new AddinEditResult(true));
-        editor.GetActiveDocument().Returns(new AddinDocument("Module1", @"C:\s\Module1.bas", stock, AddinDocumentKind.Module, "Stock"));
+        const string stock = "Attribute VB_Name = \"Module1\"\r\nOption Explicit\r\n";
+        editor.TryGetDocument("Module1", "Stock").Returns(new AddinDocumentResult(
+            new AddinDocument("Module1", @"C:\s\Module1.bas", stock, AddinDocumentKind.Module, "Stock")));
 
         var reply = await Execute("get_file_content", new { file_name = "Module1", project = "Stock" });
 
+        reply["error"].Should().BeNull();
         reply["content"]!.GetValue<string>().Should().Be(stock);
         reply["project"]!.GetValue<string>().Should().Be("Stock");
+        _ = editor.DidNotReceiveWithAnyArgs().TryNavigateTo(default!, default, default, default);
+        editor.DidNotReceive().GetActiveDocument();
     }
 
     [Fact]
-    public async Task ReadingAFileThatDidNotComeToTheFrontIsRefusedRatherThanAnsweredWithAnother()
-    {
-        // The file is read as the active document. When the window in front is another file, that file's content
-        // came back under the name asked for.
-        TwoProjectsLoaded();
-        editor.TryNavigateTo("Module1", 1, 1, "Stock").Returns(new AddinEditResult(true));
-
-        var reply = await Execute("get_file_content", new { file_name = "Module1", project = "Stock" });
-
-        reply["content"].Should().BeNull("Form1 is in front, and its content is not Module1's");
-        reply["error"]!.GetValue<string>().Should().Contain("Could not read Module1").And.Contain("holds Form1 in project Orders");
-    }
-
-    [Fact]
-    public async Task ReadingAFileTheIdeCannotOpenSaysWhy()
+    public async Task ReadingAFileTheIdeCannotReadSaysWhy()
     {
         TwoProjectsLoaded();
-        editor.TryNavigateTo("Form1", 1, 1, "Orders").Returns(new AddinEditResult(false, "No code window could be opened on Orders/Form1."));
+        editor.TryNavigateTo("Form1", 1, 1, "Orders").Returns(new AddinEditResult(false, "Navigation is unavailable."));
+        editor.TryGetDocument("Form1", "Orders").Returns(new AddinDocumentResult(null, "Reading is unavailable."));
 
         var reply = await Execute("get_file_content", new { file_name = "Form1" });
 
-        reply["error"]!.GetValue<string>().Should().Be("Could not open Form1: No code window could be opened on Orders/Form1.");
+        reply["error"]!.GetValue<string>().Should().Be("Could not read Form1: Reading is unavailable.");
     }
 
     [Fact]
@@ -546,9 +544,10 @@ public class AIChatWholeFileTests : IDisposable
 
     // ── What leaves the machine ─────────────────────────────────────────────────────────────────────────────
 
-    [Fact]
+    [AvaloniaFact]
     public void TheEgressNoticeSaysTheActiveFilesContentsAreSent()
     {
+        new HexIDE.Localization.LocalizationService().Apply("en");
         var chat = new ChatViewModel(host, settingsDir);
 
         chat.MaybeShowEgressNotice();

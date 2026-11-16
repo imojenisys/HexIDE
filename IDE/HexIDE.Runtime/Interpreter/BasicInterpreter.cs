@@ -21,6 +21,8 @@ public interface IBasicStandardLibrary
     /// <summary>The screen the <c>Screen</c> object describes (#2431): see <see cref="IVbDisplay"/>.</summary>
     IVbDisplay Display => throw new NotImplementedException("This host has no screen for the Screen object to describe (#2431)");
     Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon);
+    Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxLayout layout)
+        => MsgBox(text, caption, buttons, icon);
     Task<string?> InputBox(string prompt, string? title, string defaultText);
 
     /// <summary>
@@ -82,12 +84,12 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     /// real-path project-scope hoist.</summary>
     public ModuleRegistry Modules { get; } = new();
 
-    private Debugging.IDebugController? debugController;
+    private Debugging.IDebugGate? debugController;
 
     /// <summary>The debug session driving step-through, or null for a non-debugged / headless run (tests, the
     /// Standalone runner). Set by the IDE right after construction (the shared per-session controller); read by the
     /// StatementExecutor's pause-gate. Null ⇒ zero debug overhead (the gate is skipped entirely).</summary>
-    public Debugging.IDebugController? DebugController
+    public Debugging.IDebugGate? DebugController
     {
         get => debugController;
         set
@@ -99,16 +101,59 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     }
 
     // Origin survives a controller reset or detachment: static run events must still name the run that made us (#761).
-    private (Debugging.IDebugController Controller, int Session)? RunSession { get; set; }
+    private (Debugging.IDebugGate Controller, int Session)? RunSession { get; set; }
 
     /// <summary>Whether this interpreter belongs to the named run, even after its debugger has detached.</summary>
-    public bool IsInDebugSession(Debugging.IDebugController controller, int session) => RunSession == (controller, session);
+    public bool IsInDebugSession(Debugging.IDebugGate controller, int session) => RunSession == (controller, session);
 
     /// <summary>
     /// The run's event pump, when the program runs in a window: what keeps its handlers one at a time (#766). Null for code
     /// run with no window, as a module test's is, where nothing can interleave.
     /// </summary>
     public EventPump? Events { get; set; }
+
+    // Measured uses: docs/vb6-fidelity-oracle/an-object-used-as-a-value.md (#174).
+    internal async Task<Vb6Value> ResolveDefaultMember(Vb6Value value, string? use = null,
+        Stack<List<Vb6Value>>? callerFrames = null)
+    {
+        if (value.Value is not VbObject obj || obj.ClassDef.PrePass.DefaultMember is not { } member)
+            return value;
+        if (member.Kind == PrePass.DefaultMemberKind.Sub)
+            throw new NotImplementedException("A Sub default member used as a value is unmeasured (#174)");
+        if (member.Kind == PrePass.DefaultMemberKind.Function)
+        {
+            if (use is "Format" or "Abs")
+            {
+                if (!value.HeldAsVariant)
+                    throw new NotImplementedException("Typed Format/Abs of a Function default member is unmeasured (#174)");
+                throw new VBRunTimeException(VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment);
+            }
+            if (use == "Case" || use == "Not" && value.HeldAsVariant)
+                throw new VBRunTimeException(VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment);
+        }
+        Vb6Value result;
+        if (member.Kind == PrePass.DefaultMemberKind.Variable)
+        {
+            var (found, field) = await ReadVariable(obj.InstanceEnv, member.Name);
+            if (!found)
+                throw new NotImplementedException("Default member storage is unavailable (#174)");
+            result = field;
+        }
+        else
+        {
+            var proc = member.Kind == PrePass.DefaultMemberKind.Function
+                ? obj.ClassDef.PrePass.Procedures.GetValueOrDefault(member.Name)
+                : obj.ClassDef.PrePass.Properties.GetValueOrDefault(member.Name)?.Get;
+            if (proc is null || proc.Parameters.Any(p => !p.Optional && !p.ParamArray))
+                throw new NotImplementedException("A default member requiring arguments is not implemented (#174)");
+            result = await RunProcedure(obj.ClassDef, proc, [], obj.InstanceEnv, value, callerFrames)
+                ?? throw new NotImplementedException("A default member without a value is not implemented (#174)");
+        }
+        if (result.Type == Vb6Value.ValueType.Object || result.Type == Vb6Value.ValueType.Control
+            || result.Type == Vb6Value.ValueType.CSharpProxyObject || result.Type == Vb6Value.ValueType.Nothing)
+            throw new NotImplementedException("Nested default members are unmeasured (#174)");
+        return result;
+    }
 
     /// <summary>
     /// A built-in call. With a pump, a built-in that waits (MsgBox, InputBox) is a suspension the pump is told of, and
@@ -131,6 +176,9 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     internal async Task<Vb6Value?> CallProxy(ICSharpProxy proxy, string name, List<Vb6Value> args)
     {
+        if (proxy is VbErr && name.Equals("Raise", StringComparison.OrdinalIgnoreCase))
+            for (var i = 0; i < Math.Min(3, args.Count); i++)
+                args[i] = await ResolveDefaultMember(args[i]);
         if (proxy is not ICSharpAsyncProxy asyncProxy)
         {
             proxy.Call(name, args);
@@ -282,6 +330,40 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     public VbUdt NewUdt(string typeName) => NewUdt(typeName, 0);
 
+    internal ModuleInfo? ProjectClassFor(string typeName) =>
+        Modules.TryGet(typeName, out var module) && module.Kind == InterpreterModuleKind.Class ? module : null;
+
+    /// <summary>
+    /// Whether a type name the interpreter has no class, UDT or enum for is still a type a declaration may name (#822
+    /// review). It is when it is:
+    /// <list type="bullet">
+    /// <item>one of VB's own, read out of the in-box type libraries (<see cref="VB6InBoxTypes"/>);</item>
+    /// <item>a form, this one or another of the project's, none of which is a class;</item>
+    /// <item>qualified by a library the interpreter can't read, such as <c>ADODB.Connection</c>;</item>
+    /// <item>or unqualified, in a project that references such a library, which may well declare it.</item>
+    /// </list>
+    /// The last two are a missing input, not a missing name: without the library there is no telling, and the slot is
+    /// Nothing either way. A typo then runs on until the variable is used. With nothing referenced, a name nobody
+    /// declares stays VB6's "User-defined type not defined".
+    /// </summary>
+    internal bool IsObjectTypeWithoutClass(string? qualifier, string typeName, out Vb6Value.ValueType? aliasScalar)
+    {
+        aliasScalar = null;
+        if (LibraryClassFor(qualifier is null ? typeName : qualifier + "." + typeName) is not null)
+            return true;
+        if (VB6InBoxTypes.TryResolve(qualifier, typeName, out var inbox))
+        {
+            aliasScalar = inbox.Scalar;
+            return true;
+        }
+        if (qualifier is null && (ProjectFormNames.Contains(typeName)
+                                  || Modules.TryGet(typeName, out var m) && m.Kind == InterpreterModuleKind.Form))
+            return true;
+        if (qualifier is not null)
+            return !Modules.Contains(qualifier) && !VB6InBoxLibraries.IsLibrary(qualifier);
+        return ReferencesOtherLibraries;
+    }
+
     /// <summary>Instantiate a UDT resolved from a specific module's point of view — so `Module2.Point`
     /// gets Module2's Point rather than whichever one loaded last into the program-wide table.</summary>
     public VbUdt NewUdt(string typeName, string? qualifier, ModuleInfo? from)
@@ -320,6 +402,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         var typedFields = new Dictionary<string, Vb6Value.ValueType>(StringComparer.OrdinalIgnoreCase);
         var variantFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var autoNewFields = new Dictionary<string, AutoNew>(StringComparer.OrdinalIgnoreCase);
+        var objectFields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in def.Fields)
         {
             if (f.IsArray)
@@ -344,6 +427,29 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                 autoNewFields[f.Name] = new AutoNew(made, f.Name);
                 continue;
             }
+            if (f.UdtTypeName is { } className && !Types.ContainsKey(className) && !Enums.ContainsKey(className)
+                && ProjectClassFor(className) is { } projectClass)
+            {
+                fields[f.Name] = Vb6Value.Nothing;
+                objectFields[f.Name] = projectClass.Name;
+                continue;
+            }
+            if (f.UdtTypeName is { } slotType
+                && (slotType.Equals("Object", StringComparison.OrdinalIgnoreCase) || ExpressionExecutor.IsCollectionType(slotType)))
+            {
+                fields[f.Name] = Vb6Value.Nothing;
+                objectFields[f.Name] = ExpressionExecutor.IsCollectionType(slotType) ? "Collection" : "Object";
+                continue;
+            }
+            if (f.UdtTypeName is { } objectName && !Types.ContainsKey(objectName) && !Enums.ContainsKey(objectName))
+            {
+                var dot = objectName.LastIndexOf('.');
+                var qualifier = dot < 0 ? null : objectName[..dot];
+                var name = objectName[(dot + 1)..];
+                if (ExpressionExecutor.IsCollectionType(objectName)
+                    || IsObjectTypeWithoutClass(qualifier, name, out var aliasScalar) && aliasScalar is null)
+                    throw new NotImplementedException($"Object field '{f.Name}' inside Type '{typeName}' is not implemented (#3924): its VB6 behaviour is unmeasured");
+            }
             // An Enum field is a typed Long, as an Enum variable is (measured, #1005).
             if (f.ScalarType is { } declared && VbNumeric.IsDeclarableScalar(declared))
                 typedFields[f.Name] = declared;
@@ -360,7 +466,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             else
                 fields[f.Name] = Vb6Value.Variant;
         }
-        return new VbUdt(typeName, fields, typedFields, variantFields, autoNewFields);
+        return new VbUdt(typeName, fields, typedFields, variantFields, autoNewFields, objectFields);
     }
 
     /// <summary>
@@ -634,7 +740,9 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         this.compilationConstants = compilationConstants ?? CompilationConstants.Vb6;
         BuiltIns = new VB6BuiltIns(stdLib)
         {
+            ResolveDefaultForUse = (value, use) => ResolveDefaultMember(value, use),
             AppTitle = () => App.TitleOrNull,
+            ProjectResources = () => Resources,
             ErrObject = () => Err,
             WatchRunEnd = () =>
             {
@@ -779,7 +887,10 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     // window and every save keep the module as written.
     private ModuleInfo BuildModule(string name, InterpreterModuleKind kind, string moduleCode, ExecutionEnvironment env) => ParseStack.Run(() =>
     {
-        var pp = new PrePass(env, ExecutionContext.State);
+        var pp = new PrePass(env, ExecutionContext.State, allowIndexedLet: kind == InterpreterModuleKind.Standard)
+        {
+            ObjectModule = kind != InterpreterModuleKind.Standard
+        };
         pp.Visit(Parse(ConditionalCompiler.Preprocess(moduleCode, compilationConstants, name).Text, name));
         return new ModuleInfo(name, kind, pp, env);
     });
@@ -797,12 +908,26 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         parsingModule = moduleName;
         try
         {
-            var parser = new VB6Parser(NextCounterList.Tokens(lexer));
+            var tokens = NextCounterList.Tokens(lexer);
+            OtherDialectRefusal.Check(tokens, source);
+            var parser = new VB6Parser(tokens);
             parser.RemoveErrorListeners();
             parser.AddErrorListener(this);
-            var tree = ParseWithFallback(parser, p => p.startRule(), moduleName: moduleName);
-            ModuleParsePredictionMode = parser.Interpreter.PredictionMode;
-            return tree;
+            try
+            {
+                var tree = ParseWithFallback(parser, p => p.startRule(), moduleName: moduleName);
+                ModuleParsePredictionMode = parser.Interpreter.PredictionMode;
+                return tree;
+            }
+            catch (VBCompileErrorException)
+            {
+                OtherDialectRefusal.Check(tokens, source, wordOperators: true);
+                throw;
+            }
+        }
+        catch (VBCompileErrorException e) when (e.Line is { } line && ErrorLocation.Note(e, moduleName, line))
+        {
+            throw;
         }
         finally
         {
@@ -1373,18 +1498,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         ExecutionEnvironment? callerEnv = null, Stack<List<Vb6Value>>? callerFrames = null)
     {
         if (TryResolveProcedure(name, currentModule, out var owner, out var proc))
-        {
-            // A bare call that resolves to a method OWNED by a class module (i.e. a sibling method called from
-            // inside the same class — implicit Me) must run on the CURRENT instance, not a clone of the class
-            // template. The instance is `Me` in the caller's env.
-            if (owner.Kind is InterpreterModuleKind.Class or InterpreterModuleKind.Form)
-            {
-                if (callerEnv != null && ExecutionContext.TryGetVariable(callerEnv, "Me", out var me) && me.Value is VbObject self)
-                    return await RunProcedure(owner, proc, args, self.InstanceEnv, me, callerFrames);
-                throw new VBRunTimeException((Antlr4.Runtime.ParserRuleContext?)null, VBStandardError.ObjectVariableOrWithBlockVariableNotSet);
-            }
-            return await RunProcedure(owner, proc, args, callerFrames: callerFrames);
-        }
+            return await RunNamed(owner, proc, args, callerEnv, callerFrames);
 
         if (GlobalMember(name) is { } global)
         {
@@ -1401,6 +1515,20 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         if (!ignoreMissing)
             throw new VBCompileErrorException("Sub or Function not defined (" + name + ')');
         return null;
+    }
+
+    /// <summary>Run a procedure a bare name resolved to. One that a class or form owns, a sibling named from inside it, is
+    /// implicit Me, so it runs on the CURRENT instance, the caller's <c>Me</c>, not on a clone of the class template.</summary>
+    internal async Task<Vb6Value?> RunNamed(ModuleInfo owner, ProcedureInfo proc, IReadOnlyList<CallArg> args,
+        ExecutionEnvironment? callerEnv, Stack<List<Vb6Value>>? callerFrames)
+    {
+        if (owner.Kind is InterpreterModuleKind.Class or InterpreterModuleKind.Form)
+        {
+            if (callerEnv != null && ExecutionContext.TryGetVariable(callerEnv, "Me", out var me) && me.Value is VbObject self)
+                return await RunProcedure(owner, proc, args, self.InstanceEnv, me, callerFrames);
+            throw new VBRunTimeException((Antlr4.Runtime.ParserRuleContext?)null, VBStandardError.ObjectVariableOrWithBlockVariableNotSet);
+        }
+        return await RunProcedure(owner, proc, args, callerFrames: callerFrames);
     }
 
     /// <summary>Run an already-resolved procedure in its owning module. Clones a base scope at call time
@@ -1663,6 +1791,23 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             : proc.ReturnsObject ? Vb6Value.Nothing
             : new Vb6Value(proc.ReturnType);
 
+    // A module's procedure by name, or the Get of its property. A module's own properties are its names whatever its kind,
+    // so a class's or form's own wins over a standard module's Public one; another module's are reached only in a standard
+    // module (measured, #977).
+    internal static bool TryGetModuleProcedure(ModuleInfo module, string name, out ProcedureInfo procedure, bool own = false)
+    {
+        if (module.PrePass.Procedures.TryGetValue(name, out procedure!))
+            return true;
+        if ((own || module.Kind == InterpreterModuleKind.Standard)
+            && module.PrePass.Properties.TryGetValue(name, out var property) && property.Get is { } getter)
+        {
+            procedure = getter;
+            return true;
+        }
+        procedure = null!;
+        return false;
+    }
+
     private static Vb6Value ObjectArrayReturn(string? declaredClass)
     {
         var value = new Vb6Value(new Vb6Value.ValueType(Vb6Value.ValueType.Object, true));
@@ -1676,7 +1821,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     /// call). Returns false when no user procedure matches, so the caller falls through to builtins.</summary>
     public bool TryResolveProcedure(string name, ModuleInfo currentModule, out ModuleInfo owner, out ProcedureInfo proc)
     {
-        if (currentModule.PrePass.Procedures.TryGetValue(name, out proc!))
+        if (TryGetModuleProcedure(currentModule, name, out proc!, own: true))
         {
             owner = currentModule;
             return true;
@@ -1690,7 +1835,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         {
             if (ReferenceEquals(m, currentModule) || m.Kind != InterpreterModuleKind.Standard)
                 continue;
-            if (m.PrePass.Procedures.TryGetValue(name, out var p) && !p.IsPrivate)
+            if (TryGetModuleProcedure(m, name, out var p) && !p.IsPrivate)
             {
                 if (found != null)
                     throw new VBCompileErrorException("Ambiguous name detected: " + name);
@@ -1701,6 +1846,39 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         if (found != null) { owner = found; proc = foundProc!; return true; }
         return false;
     }
+
+    /// <summary>A property by name, as an assignment to it resolves it: the current module's own, whatever its kind, then
+    /// another standard module's with an accessor that is not Private, two of them being "Ambiguous name detected", as
+    /// <see cref="TryResolveProcedure"/> resolves a procedure. A property needs no Get: a Let alone is assigned to
+    /// (measured, #977).</summary>
+    internal bool TryResolveProperty(string name, ModuleInfo currentModule, out ModuleInfo owner, out PropertyInfo property)
+    {
+        owner = currentModule;
+        if (currentModule.PrePass.Properties.TryGetValue(name, out property!))
+            return true;
+        ModuleInfo? found = null;
+        PropertyInfo? foundProperty = null;
+        if (!currentModule.PrePass.Procedures.ContainsKey(name))
+        {
+            foreach (var m in Modules.All)
+            {
+                if (ReferenceEquals(m, currentModule) || m.Kind != InterpreterModuleKind.Standard
+                    || !m.PrePass.Properties.TryGetValue(name, out var p) || !IsVisibleOutside(p))
+                    continue;
+                if (found != null)
+                    throw new VBCompileErrorException("Ambiguous name detected: " + name);
+                found = m;
+                foundProperty = p;
+            }
+        }
+        if (found != null) { owner = found; property = foundProperty!; return true; }
+        property = null!;
+        return false;
+    }
+
+    // Whether another module can name the property: one of its accessors is not Private.
+    internal static bool IsVisibleOutside(PropertyInfo property) =>
+        property.Get is { IsPrivate: false } || property.Let is { IsPrivate: false } || property.Set is { IsPrivate: false };
 
     /// <summary>
     /// Resolve a UDT name as seen from <paramref name="from"/>, honouring module scope.
@@ -1917,7 +2095,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
                     // passed to a declared scalar parameter stands for its default member (ObjectAsValue); a Variant
                     // or object parameter takes the object itself (measured).
                     var passed = p.DeclaredType is { } declared && VbNumeric.IsDeclarableScalar(declared)
-                        ? ObjectAsValue.Scalar(arg.Value, proc.Body as Antlr4.Runtime.ParserRuleContext)
+                        ? ObjectAsValue.Scalar(await ResolveDefaultMember(arg.Value), proc.Body as Antlr4.Runtime.ParserRuleContext)
                         : arg.Value;
                     // Converted as a store into a variable of the type converts, before the procedure runs, so a value
                     // that will not convert raises in the caller (measured, #874: `B "abc"` with `ByVal x As Boolean` is

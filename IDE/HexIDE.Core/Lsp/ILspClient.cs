@@ -210,6 +210,9 @@ public interface ILspClient : IAsyncDisposable
     /// </remarks>
     Task CloseDocumentForRenameAsync(string uri, CancellationToken cancellationToken = default);
 
+    /// <summary>Reports a completed disk write directly; type is LSP Created (1), Changed (2) or Deleted (3).</summary>
+    void NotifyWatchedFile(string path, int type) { }
+
     /// <summary>
     /// Tells the servers holding this document that it has been written to disk.
     ///
@@ -254,6 +257,9 @@ public interface ILspClient : IAsyncDisposable
 
     /// <summary>The completion triggers advertised for this document.</summary>
     IReadOnlyList<string> CompletionTriggerCharacters(string uri) => [];
+
+    /// <summary>The signature-help triggers advertised for this document.</summary>
+    IReadOnlyList<string> SignatureHelpTriggerCharacters(string uri) => [];
 
     /// <summary>Requests completion only from claimants advertising this trigger.</summary>
     Task<CompletionItem[]> RequestCompletionForTriggerAsync(string uri, Position position,
@@ -320,6 +326,11 @@ public interface ILspClient : IAsyncDisposable
 
     /// <summary>Sends textDocument/rename and returns edits, a refusal, or null for no change.</summary>
     Task<RenameResult?> RequestRenameAsync(string uri, Position position, string newName, CancellationToken cancellationToken = default);
+
+    /// <summary>Whether a running document claimant declares this on-type formatting trigger.</summary>
+    bool SupportsOnTypeFormatting(string uri, string trigger);
+    /// <summary>Requests edits from one claimant declaring the trigger, with a short cancellation budget.</summary>
+    Task<TextEdit[]> RequestOnTypeFormattingAsync(string uri, Position position, string trigger, FormattingOptions options, CancellationToken cancellationToken = default);
 
     /// <summary>Whether an open document has a running claimant advertising range formatting.</summary>
     bool SupportsRangeFormatting(string uri);

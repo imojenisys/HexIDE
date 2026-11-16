@@ -105,7 +105,9 @@ public sealed class BreakpointByNameTests : IDisposable
         var vm = new CodeEditorViewModel(
             Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
             eventBus, lsp, settings, Substitute.For<IStatusBarService>(), bookmarks, breakpoints,
-            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>());
+            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader());
         made.Add(vm);
         return vm.Initialize(form);
     }
@@ -200,19 +202,20 @@ public sealed class BreakpointByNameTests : IDisposable
     }
 
     [AvaloniaFact]
-    public async Task Interpreter_conditions_stop_unconditionally_and_notice_once_per_run()
+    public async Task Interpreter_conditions_apply_at_launch_and_when_edited_live()
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
-        var form = new FormDeserializer().Deserialize(project, Frm, NullSink.Instance)!;
+        var form = new FormDeserializer().Deserialize(project, Frm.Replace("    Debug.Print 1\r\n",
+            "    Debug.Print 1\r\n    Debug.Print 2\r\n    Debug.Print 3\r\n", StringComparison.Ordinal), NullSink.Instance)!;
         project.AddForm(form);
         var store = new BreakpointService();
         var document = DocumentIdentity.For(form);
-        store.SetDocument(document, [Line]);
+        store.SetDocument(document, [Line, Line + 1, Line + 2, Line + 3]);
         store.SetCondition(document, Line, "False");
         var debugger = new DebugController();
         var strings = Substitute.For<ILocalizationService>();
         strings.GetString("Str.Debug.Conditions.InterpreterIgnored").Returns("conditions ignored");
-        var runner = new ProjectRunnerService(Substitute.For<IEventBus>(), Substitute.For<IWindowManager>(),
+        var runner = TestRunners.WithInterpreter(Substitute.For<IEventBus>(), Substitute.For<IWindowManager>(),
             Substitute.For<IProjectManager>(), strings, debugger, store, new WatchService(), new RunScope());
         var notices = new List<string>();
         void Capture(string text) { if (text.Contains("conditions ignored", StringComparison.Ordinal)) notices.Add(text); }
@@ -228,10 +231,21 @@ public sealed class BreakpointByNameTests : IDisposable
                 {
                     runner.RunProject(project);
                     var at = await stopped.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-                    at.Line.Should().Be(Line);
+                    at.Line.Should().Be(Line + 1);
                     at.Reason.Should().Be(StopReason.Breakpoint);
-                    store.SetCondition(document, Line, "1 = 0");
-                    notices.Should().HaveCount(iteration + 1);
+                    notices.Should().BeEmpty();
+                    store.SetCondition(document, Line + 2, "False");
+                    var nextStop = new TaskCompletionSource<StoppedInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    void NextStopped(StoppedInfo info) => nextStop.TrySetResult(info);
+                    debugger.Stopped += NextStopped;
+                    try
+                    {
+                        debugger.Continue();
+                        var next = await nextStop.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+                        next.Line.Should().Be(Line + 3);
+                    }
+                    finally { debugger.Stopped -= NextStopped; }
+                    store.SetCondition(document, Line + 2, null);
                 }
                 finally
                 {
@@ -257,7 +271,9 @@ public sealed class BreakpointByNameTests : IDisposable
         var breakpoints = new BreakpointService();
         var bookmarks = new BookmarkService();
         // Written as the IDE writes it, on the change, with the delay taken out so the test need not wait it.
-        var sidecar = new UserSidecarService(bookmarks, breakpoints, projectManager) { Debounce = _ => Task.CompletedTask };
+        var sidecar = new UserSidecarService(bookmarks, breakpoints, projectManager,
+            new Vb6ProjectFileFormat(),
+            new Vb6ReadOnlyRegionReader()) { Debounce = _ => Task.CompletedTask };
 
         var window = OpenCodeWindow(form, breakpoints, bookmarks);
         var editor = Show(window);
@@ -280,7 +296,7 @@ public sealed class BreakpointByNameTests : IDisposable
 
         // ---- pushed to the next run ----
         var debugger = new DebugController();
-        var runner = new ProjectRunnerService(
+        var runner = TestRunners.WithInterpreter(
             Substitute.For<IEventBus>(), Substitute.For<IWindowManager>(), projectManager,
             Substitute.For<ILocalizationService>(), debugger, breakpoints, new WatchService(), new RunScope());
         var stopped = new TaskCompletionSource<StoppedInfo>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -316,7 +332,9 @@ public sealed class BreakpointByNameTests : IDisposable
         names.Should().Equal(["Form1"], "the sidecar names the document as the IDE does, and never as the caller spelled it");
 
         var reloaded = new BreakpointService();
-        await new UserSidecarService(new BookmarkService(), reloaded, projectManager).LoadAsync(project);
+        await new UserSidecarService(new BookmarkService(), reloaded, projectManager,
+            new Vb6ProjectFileFormat(),
+            new Vb6ReadOnlyRegionReader()).LoadAsync(project);
         reloaded.GetBreakpoints(DocumentIdentity.For(form)).Should().Equal([Line], "the next session finds it on Form1");
     }
 }

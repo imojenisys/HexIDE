@@ -37,14 +37,14 @@ public class ResultsLayoutRenderTests
 
         // ToolBoxToolViewModel loads Avalonia bitmaps in its ctor; bypass since the tree never renders.
         var toolBox = toolbox ?? (ToolBoxToolViewModel)RuntimeHelpers.GetUninitializedObject(typeof(ToolBoxToolViewModel));
-        var properties = new PropertiesToolViewModel(docDock, eventBus, windowManager, loc);
+        var properties = new PropertiesToolViewModel(docDock, eventBus, windowManager, loc, new Vb6ProjectFileFormat());
         var formLayout = new FormLayoutToolViewModel(docDock, eventBus, loc);
         var immediate = new ImmediateToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
         var locals = new LocalsToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
         var watches = new WatchesToolViewModel(loc, new HexIDE.Debugging.WatchService(), Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.IDE.IWindowManager>());
         var callStack = new CallStackToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
         var projectExplorer = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, loc);
-        var colorPalette = new ColorPaletteToolViewModel(docDock);
+        var colorPalette = new ColorPaletteToolViewModel(docDock, loc);
         var objectBrowser = new ObjectBrowserToolViewModel(projectManager, Substitute.For<ILspClient>(),
             editorService, Substitute.For<IComponentRegistry>(), Substitute.For<ITypeLibraryService>(),
             Substitute.For<IFocusedProjectUtil>(), loc,
@@ -70,7 +70,7 @@ public class ResultsLayoutRenderTests
             toolBox, projectExplorer, properties, formLayout,
             immediate, locals, watches, callStack, colorPalette, objectBrowser, translationEditor,
             languageServers, protocolInspector, wss, new DockFactoryReference(), new HexIDE.Tools.OutlineToolViewModel(
-                Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IDocumentDockService>()));
+                Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IDocumentDockService>()), loc);
         return (factory, immediate);
     }
 
@@ -114,7 +114,7 @@ public class ResultsLayoutRenderTests
         var documents = Substitute.For<IDocumentDockService>();
         documents.OpenDocuments.Returns([]);
         var references = new FindReferencesToolViewModel(Substitute.For<ILspClient>(),
-            Substitute.For<IEditorService>(), projects, documents, loc);
+            Substitute.For<IEditorService>(), projects, documents, loc, format: new Vb6ProjectFileFormat());
         var calls = new CallHierarchyToolViewModel(Substitute.For<ILspClient>(), Substitute.For<IEditorService>(), loc);
         ResultsToolViewModel results = hierarchy ? calls : references;
         var host = new Dock.Avalonia.Controls.DockControl { Layout = root, Factory = factory };

@@ -13,13 +13,53 @@ That is a deliberate divergence from VB6, and it follows the project's fidelity 
 departing from it: what VB6 intended was that the developer not edit these lines, and that is reproduced;
 that the developer could not see them was a limitation of its code window, and that is not.
 
-> **Known divergence.** The requirements below state intended behaviour. One sentence is not met: "A document
-> with no file yet SHALL hold the header its first save will write." A form the IDE has just created and not yet
-> saved, such as a new project's `Form1`, shows no header in its code window until its first committed designer
-> change, save or reload. Tracked in [#885](https://github.com/hexide-io/HexIDE/issues/885). The sentence is
-> stated as intended rather than removed, because the code is incomplete here, not the intent.
-
 ## Requirements
+
+### Requirement: Split code window
+Window → Split SHALL toggle two vertically stacked, resizable editor views over the same document
+and undo stack (#70). Each pane SHALL retain its own caret, selection and scroll position. Navigation
+and editor commands SHALL use the active pane, and navigation or activating the window's tab SHALL give
+keyboard focus to the active pane. Removing the split SHALL retain the document's edits.
+The split and its pane sizes SHALL survive switching to the designer and back, including view recreation.
+
+#### Scenario: Navigation does not transfer selections between panes
+- **WHEN** one pane has selected text and navigation focuses the other pane
+- **THEN** a caret-only navigation clears the destination pane's selection and leaves the other pane's selection alone
+- **AND** Find selects its match only in the destination pane
+
+#### Scenario: Navigation keeps focus in the pane it moves
+- **WHEN** the lower pane last had focus and the developer goes to a line of that document from elsewhere in the IDE
+- **THEN** the lower pane moves and has keyboard focus, and the top pane keeps its caret
+
+#### Scenario: Dragging the splitter returns editor focus
+- **WHEN** the developer finishes dragging the splitter
+- **THEN** keyboard focus returns to the previously active pane and Window → Split remains available
+
+#### Scenario: Edit two parts of one module
+- **WHEN** the developer splits a code window and scrolls one pane
+- **THEN** the other pane retains its scroll position
+- **AND** edits and undo from either pane appear in both
+- **AND** invoking Split again returns to one pane without losing edits
+
+#### Scenario: Undo and redo preserve the other pane's caret
+- **WHEN** either pane invokes undo or redo for an edit made in either pane
+- **THEN** the invoking pane's caret SHALL move to the undone or redone edit
+- **AND** the other pane's caret SHALL retain its position apart from shifts caused by the text change
+- **AND** undo SHALL retain the filtering of designer and header edits
+
+#### Scenario: Reopen after resizing
+- **WHEN** the developer drags the splitter, removes the split and enables it again
+- **THEN** removing the split resets all three rows to their unsplit sizes
+- **AND** enabling it again gives each editor an equal share of the available height
+
+#### Scenario: Commands in the lower pane
+- **WHEN** the lower pane has focus and the developer invokes an editor command by key or menu
+- **THEN** the command uses that pane's caret and selection
+- **AND** commands using the document's shared navigation state observe the focused pane
+
+#### Scenario: Return from the designer
+- **WHEN** the developer resizes a split code window, switches to the designer and returns
+- **THEN** the code window retains its split and both pane sizes even if its view was recreated
 
 ### Requirement: Selection scrolling does not re-enter itself
 The code and Immediate editors SHALL allow pointer selection when the viewport cannot fit the caret
@@ -92,6 +132,12 @@ A document with no file yet SHALL hold the header its first save will write.
 - **THEN** the code window's text afterwards is the text of the file that was written
 - **AND** that update is not something the developer can undo, and does not mark the document as edited
 
+#### Scenario: Saving a module with no name attribute
+- **WHEN** a loaded module has no `Attribute VB_Name` and saving adds it (#3823)
+- **THEN** the model and an open code window SHALL adopt the written header without reopening
+- **AND** breakpoints and bookmarks SHALL move with the code below it
+- **AND** opening the module alone SHALL leave it clean; a save may normalise an unedited file
+
 ### Requirement: Syntax colours SHALL meet the editor contrast bar
 Every named VB6 syntax foreground SHALL be a solid colour with a WCAG AA contrast ratio of at least
 4.5:1 against Classic's editor background in the light palette and against both Dark and Abyss editor
@@ -112,8 +158,11 @@ marks it as not the developer's to edit, meeting the same contrast requirement a
 theme. It SHALL NOT be editable.
 
 The header is the class `VERSION` and `BEGIN … END` block, or the `VERSION` line, object references and
-designer block of a form, UserControl or PropertyPage — followed, for every kind, by the run of `Attribute`
-lines that opens the code.
+designer block of a form, UserControl or PropertyPage, followed by their leading `Attribute` run.
+For a module whose format reports `PrefixCarriesName`, the header SHALL end at the composed prefix:
+leading `Attribute` lines typed into its code SHALL remain editable, even while incomplete (#3798).
+Member attribute runs SHALL retain their existing read-only behaviour. Refused typing SHALL explain
+in the status bar that the text belongs to the IDE and is read-only.
 
 The fold is what keeps the window recognisable to somebody who never saw the header in VB6: a form's code
 still starts at the top of what they see. A fold that reopened whenever the document was reformatted or
@@ -181,6 +230,35 @@ fold that starts at the end of the line it describes hides them the way VB6 did 
 file. Making the run follow its line is what stops an ordinary edit leaving an attribute describing something
 that is no longer there — which read-only text would otherwise do, because a deletion is carved around it.
 
+A member attribute line receiving an accepted text entry, paste, Backspace or Delete in the code window
+SHALL remain the developer's to finish or delete until the caret and any selection leave that line, or the
+document is saved or reloaded (#3819). During that edit the region reader SHALL exclude the line from member
+runs, including the runs used to place Enter and Shift+Enter. Leaving the line SHALL invalidate the cached
+regions even when the text has not changed. An IDE write SHALL NOT start this tracking, and moving onto an
+already read-only attribute line SHALL NOT make it editable. The file's leading run SHALL keep its existing rules.
+
+A multi-line paste at a described declaration's end SHALL keep the final pasted line editable under the
+same ownership rule. Breakpoint and bookmark admission SHALL inspect the unblanked member regions, so a
+tracked attribute line SHALL refuse a new mark, including through `set_breakpoints` (#3871).
+
+A paste over a selection reaching into read-only text SHALL replace only its editable portions, as typing
+and Delete do. Undo and Redo SHALL restore text without starting typed-line ownership; restoring a
+half-typed member attribute line after leaving it SHALL keep that line locked. These are HexIDE editing
+decisions, not measured VB6 behaviour (#3871).
+
+A Cut over a selection reaching into read-only text SHALL put only the deletable portions on the
+clipboard, concatenated in selection order exactly as they stood, and SHALL remove those same portions
+(#3892). With no deletable text, Cut SHALL refuse and leave the clipboard unchanged, including a whole-line
+Cut on a protected line. Copy SHALL continue to copy the whole selection, including read-only text.
+This is a HexIDE editing decision, not measured VB6 behaviour.
+
+A refused Cut, Delete Line, Indent or Outdent over protected text SHALL give the read-only
+sentence without Backspace or typing advice (#3899). Automation SHALL still quote the code window's
+status-bar message when one was posted. Typing and Backspace SHALL retain their existing advice, with
+Backspace's advice limited to Backspace rather than inferred from a selection ending at the caret.
+The shared localized sentence SHALL describe the text's read-only status without naming an edit command:
+“This text is read-only: only the IDE changes it.” in English (#3923).
+
 An attribute line left describing nothing SHALL be preserved, not removed: it is inert text, and the IDE does
 not know what the developer meant by it. A run of attribute lines describes a member when it sits directly
 under that member's declaration, with any lines continued into it, and VB6 reads every line of it as that
@@ -208,6 +286,11 @@ whole buffer while leaving the caret at the declaration's end; Shift+Left SHALL 
 character before that point. Select-to-document-end from above the run SHALL select only to the declaration's
 end. This edge case is retained by decision #1019; the measured VB6-saved files all have a final line break.
 
+#### Scenario: Typing a member attribute one key at a time
+- **WHEN** a developer types `Attribute Bar.VB_UserMemId = -4` under Bar's declaration and then types `5`
+- **THEN** every key writes, leaving `-45`, and the line can still be finished or deleted
+- **AND** once the caret and selection leave the line it becomes read-only if it belongs to the member's run
+
 #### Scenario: Pasting a comment before a replacement declaration
 - **WHEN** the developer selects a described declaration's text through its end and pastes a comment followed
   by a compatible declaration
@@ -218,6 +301,19 @@ end. This edge case is retained by decision #1019; the measured VB6-saved files 
 - **WHEN** a module containing a procedure with an `Attribute <Name>.VB_Description` line is opened
 - **THEN** the attribute is folded into the end of the procedure's declaration line, and cannot be edited
 
+#### Scenario: Splitting a described declaration's trailing comment
+- **WHEN** Enter, Shift+Enter, a paste, Insert File or automation's `type_text` puts a line break before or
+  inside a trailing comment on a described declaration
+- **THEN** the attribute run SHALL stay directly under the declaration, and the remaining comment text SHALL
+  move after the run, with the caret before that moved text
+- **AND** Enter SHALL use the declaration's physical line's indent without re-casing or adding a closer
+- **AND** an add-in's range edit putting a line break there SHALL be refused as a whole
+
+This settles #1037's option 2: the tail moves as if the folded run were absent. Spaces and tabs alone after
+the caret keep the existing rule and stay on the declaration's row. Comment boundaries come from the same
+lexer that reads declarations, so an apostrophe inside a string does not qualify. VB6's gesture and save
+after it remain unmeasured; this is the editor's placement contract.
+
 #### Scenario: Deleting a described procedure
 - **WHEN** the developer selects a procedure including its declaration line and deletes it
 - **THEN** its attribute lines go with it, and none is left behind
@@ -226,6 +322,11 @@ end. This edge case is retained by decision #1019; the measured VB6-saved files 
 - **WHEN** a run of `Attribute` lines sits where VB6 gives it to no member: under a blank line, a comment or a
   statement, or under a declaration its lines do not belong to
 - **THEN** it is shown and edited as ordinary text, and the file keeps it
+
+#### Scenario: Cut refused inside an attribute line
+- **WHEN** the developer cuts a selection wholly inside a protected member attribute line
+- **THEN** the document and clipboard SHALL remain unchanged
+- **AND** the refusal SHALL NOT advise deleting text before the caret or the line above the read-only text
 
 ### Requirement: Only the IDE SHALL change a read-only region
 A read-only region is the file's header, or a run of attribute lines describing a member. A document the IDE
@@ -292,16 +393,47 @@ one visible line, so a mark set there would land on a line the developer cannot 
 
 #### Scenario: An add-in replaces a document's content
 - **WHEN** an add-in replaces a document's content with text whose header differs from the document's
-- **THEN** the replacement is refused and the add-in is told why
+- **THEN** the replacement is refused and the add-in is told why in English
 
 #### Scenario: An add-in replaces a document's content, changing a member's attribute lines
 - **WHEN** an add-in replaces a document's content with text that changes, adds or drops a member's attribute
   lines, other than by moving or renaming them with that member or deleting them with its declaration
-- **THEN** the replacement is refused and the add-in is told which member
+- **THEN** the replacement is refused and the add-in is told which member in English
 
 #### Scenario: A breakpoint in a form the IDE cannot save faithfully
 - **WHEN** the developer sets a breakpoint on a line of code in such a form
 - **THEN** it is set, because the document being read-only as a whole is not a read-only region
+
+#### Scenario: A line command cannot write protected text
+- **GIVEN** an edit in a procedure body has been undone, leaving Redo available
+- **WHEN** Delete Line or whole-line Cut targets a protected attribute line, or Indent or Outdent targets only protected lines
+- **THEN** the code window SHALL refuse with its shared read-only message before changing the selection or starting a document update
+- **AND** the text, caret, selection, Undo and Redo SHALL remain as they were
+- **AND** Redo SHALL still restore the undone body edit
+- **AND** deleting a declaration with its attribute run SHALL retain its existing behaviour
+
+### Requirement: Writes to an unsaveable form SHALL be refused
+Replace, Replace All, formatting (including on save), Insert File, undo, redo, whole-content replacements and
+add-in range edits SHALL refuse before changing text or undo history when a form cannot be saved faithfully.
+Refusals SHALL use `Str.CodeEditor.FileNotSaved.Banner`. Automation SHALL refuse even with no code window open.
+When the active document is the only document in scope, Replace All SHALL report refusal rather than zero
+replacements (#701). With other documents in scope, it SHALL replace in the writable documents and leave
+unsaveable forms, including the active form, and their undo histories untouched. Its closing message SHALL
+report how many files were left out and why, separately from header or Attribute matches skipped.
+
+#### Scenario: A writer changes only ordinary code in an unsaveable form
+- **WHEN** a programmatic writer targets ordinary code outside the protected regions of such a form
+- **THEN** the write is refused with the whole-file explanation and the text and undo history are unchanged
+
+#### Scenario: Replace All spans writable and unsaveable files
+- **WHEN** project-wide Replace All includes an opened or unopened unsaveable form and a writable module
+- **THEN** the module is changed and the form and its undo history are untouched
+- **AND** the message counts the omitted form without counting its matches as protected-region skips
+
+#### Scenario: Undo or redo is requested while a form is read-only
+- **WHEN** undo or redo is requested with history available on such a form
+- **THEN** no history is replayed or removed
+- **AND** the history remains available when the form stops being read-only
 
 ### Requirement: A designer change SHALL reach the header without becoming a code edit
 A committed change in a form's designer — a property, a control added or removed, a move, the menu editor, the
@@ -361,9 +493,9 @@ nowhere else.
 
 ### Requirement: Find SHALL NOT match inside a read-only region
 Find, Find Next and Replace SHALL search only text outside read-only regions.
-If matches exist only in those regions within the selected scope, Find SHALL explain that the text is in the
-header or a procedure's Attribute lines, which only the IDE changes. Replace All SHALL report the number of
-matches skipped in those regions beside the number of replacements made, including when none were made.
+If matches exist only in those regions within the selected scope, Find SHALL explain that the matches are in
+read-only text, which only the IDE changes, without naming any format's parts. Replace All SHALL report the
+number of matches skipped in those regions beside the number of replacements made, including when none were made.
 
 VB6's Find never searched the header, because the header was not in its code window. A search that now stopped
 inside a folded designer block would land the developer on text they cannot change, in a region they cannot
@@ -375,11 +507,11 @@ see.
 
 #### Scenario: Search text exists only in protected regions
 - **WHEN** Find Next finds no searchable match but the selected scope contains a match in a read-only region
-- **THEN** the message explains why Find skips the header and procedure Attribute lines instead of saying not found
+- **THEN** the localized message explains that Find skips read-only text because only the IDE changes it, instead of saying not found
 
 #### Scenario: Replace All leaves protected matches alone
 - **WHEN** Replace All encounters matches in the header or procedure Attribute lines within the selected scope
-- **THEN** its message reports both the replacements made and the matches skipped, using the selected search options
+- **THEN** its localized message reports both the replacements made and the matches skipped in read-only text, using the selected search options and naming no format's parts
 
 ### Requirement: Event-handler searches SHALL start after the header
 Both designer double-click navigation and the Object/Procedure boxes SHALL search for an event handler starting
@@ -501,6 +633,23 @@ closer at the opener's indentation (#2669).
 - **THEN** the body is respectively 2 or 8 spaces deeper than the opener
 - **AND** the closer retains the opener's indentation
 
+### Requirement: Auto-close preserves existing block closers
+
+Enter at the end of a block opener SHALL insert a closer only when the block has no matching
+closer ahead (#471). The syntactic scan SHALL count nested openers of the same kind, accept
+closer keyword prefixes such as `Next i`, `Loop While x` and `End If ' comment`, and stop at
+an enclosing procedure boundary. A module-level `#If` SHALL be allowed to enclose procedures.
+Body statements and comments SHALL NOT hide an existing closer.
+
+#### Scenario: Add a line to an existing procedure
+- **WHEN** Enter is pressed at the end of `Sub Foo()` above a body and `End Sub`
+- **THEN** a line break is inserted without a second `End Sub`
+- **AND** one undo restores the original text
+
+#### Scenario: A nested block is closed but its parent is not
+- **WHEN** Enter is pressed at an opener whose only following closer belongs to a nested block
+- **THEN** auto-close inserts the parent's missing closer
+
 ### Requirement: Indentation guides
 
 The code window SHALL draw vertical guides at each complete indentation level, using the configured tab width and tab stops. The innermost indentation block containing the caret SHALL use the active-guide theme colour; other guides SHALL use the normal-guide theme colour. Blank lines SHALL continue indentation shared by the surrounding nonblank lines. Options → Editor → General SHALL offer a persisted Show indent guides toggle, enabled by default.
@@ -619,7 +768,12 @@ Replace All, including plain text, patterns, either direction and wrapping.
 ### Requirement: Replace All SHALL confirm changes across files
 Before Replace All changes matches in more than one document, it SHALL ask for confirmation.
 Refusal SHALL leave every buffer unchanged and SHALL NOT open closed editors for replacement.
-Accepted replacement SHALL edit live editor buffers, leaving saving to the developer.
+Accepted replacement SHALL edit live editor buffers, leaving saving to the developer. All replacements
+in each window SHALL form one undo step; each window SHALL keep its own undo history.
+
+#### Scenario: Undo after replacement across files
+- **WHEN** Replace All changes several matches in each of two windows
+- **THEN** one Undo in either window restores all its replacements, leaving the other window unchanged
 
 #### Scenario: Cross-file replacement is cancelled
 - **WHEN** matches exist in multiple files and the developer refuses confirmation
@@ -700,3 +854,14 @@ visible lenses, and advertised code-lens refresh requests SHALL invalidate lense
 - **THEN** the view reuses the document's answers without requesting tokens, folds, hints or lenses again
 - **AND WHEN** the developer edits the code after the re-dock
 - **THEN** the document sends didChange and requests fresh analysis after debounce
+
+### Requirement: Completion indentation retains relative nesting
+For a completion requesting `adjustIndentation`, the editor SHALL prefix every later inserted line
+with the caret line's leading whitespace up to the caret, retaining the inserted line's own indentation.
+It SHALL preserve tabs and spaces exactly without conversion, and keep snippet stops on their text.
+For snippets, adjustment SHALL precede variable resolution so multiline variable values retain their original whitespace.
+
+#### Scenario: A completion inserts a nested block
+- **WHEN** a multiline completion with two nested indentation levels is accepted at an indented caret
+- **THEN** each later line retains its indentation after the caret line's prefix
+- **AND** the innermost placeholder remains selected and editable

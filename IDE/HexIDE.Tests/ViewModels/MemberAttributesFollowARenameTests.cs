@@ -55,7 +55,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
     {
         Directory.CreateDirectory(dir);
         dock.OpenDocuments.Returns(_ => open.Cast<BaseEditorWindowViewModel>().ToList());
-        refresher = new HeaderRefresher(bus, dock, new BreakpointService(), new BookmarkService());
+        refresher = new HeaderRefresher(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), bus, dock, new BreakpointService(), new BookmarkService(), new Vb6ProjectFileFormat());
     }
 
     public void Dispose()
@@ -67,6 +67,8 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
 
     private ProjectService MakeService()
     {
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning)
+            .Returns(MessageBoxResult.Yes);
         var projectManager = Substitute.For<IProjectManager>();
         projectManager.LoadedProjects.Returns(_ => loaded);
         projectManager.When(m => m.AddProject(Arg.Any<ProjectDefinition>()))
@@ -76,7 +78,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
+        return new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
             () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windows,
             bus,
@@ -86,7 +88,8 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<ILocalizationService>(),
-            refresher);
+            refresher,
+            new Vb6ProjectFileFormat(), new ComponentRegistry());
     }
 
     /// <summary>A code window on the document, on the same bus as the save, and open as far as the dock knows.</summary>
@@ -100,7 +103,10 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<IBookmarkService>(), Substitute.For<IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            Substitute.For<IRunScope>(), Substitute.For<ILocalizationService>());
+            Substitute.For<IRunScope>(), Substitute.For<ILocalizationService>(),
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader(), regionRules: new Vb6ReadOnlyRegionRules(),
+                regionWriter: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter());
         made.Add(vm);
         open.Add(vm);
         return document.Module is { } module ? vm.Initialize(module) : vm.Initialize(document.Form!);
@@ -800,7 +806,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
         editor.Document.Text.Should().Be(written);
         bus.Publish(new ApplyAllUnsavedChangesEvent());
         service.HasUnsavedChanges(form).Should().BeFalse("the rewrite is the save's, not an edit");
-        new DirtyDetector(new FileBaselineStore(), service)
+        new DirtyDetector(new FileBaselineStore(), service, new Vb6ProjectFileFormat())
             .Classify(new WatchedFileTarget(form.AbsolutePath!, form, null, editor, null))
             .Should().Be(ReloadDecision.CleanReload);
 

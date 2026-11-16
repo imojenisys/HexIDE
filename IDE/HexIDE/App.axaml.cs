@@ -10,7 +10,6 @@ using Avalonia.Media;
 using Avalonia.Media.Fonts;
 using Avalonia.Controls;
 using HexIDE.Infrastructure;
-using HexIDE.Runtime.Interpreter;
 using HexIDE.Keymaps;
 using HexIDE.Themes;
 using HexIDE.VisualDesigner;
@@ -31,7 +30,7 @@ public partial class App : Application
         // A running program formats and reads text in the user's regional settings, as VB6 does (#777). Taken on
         // the line before the pin below, because from that line on the main thread's culture reads as invariant.
         // The pin stays: it keeps the IDE's language out of what a program computes, and source literals rely on it.
-        VbLocale.Default = CultureInfo.CurrentCulture;
+        IDE.UserRegion.Culture = CultureInfo.CurrentCulture;
         Localization.LocalizationService.OsUICulture = CultureInfo.CurrentUICulture;
         CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
@@ -47,6 +46,7 @@ public partial class App : Application
         LoggingSetup.ObserveCrashes();
 #if DEBUG
         DebugCrashHook.ArmFromEnvironment();
+        HexIDE.Automation.UiAutomationDriver.TrackWindows();
 #endif
 
         var envLevel = Environment.GetEnvironmentVariable("HEXIDE_LOG_LEVEL") ?? "Information";
@@ -65,10 +65,21 @@ public partial class App : Application
             _diSetup.KeymapService.Apply(_diSetup.SettingsService.ActiveKeymap);
         }
 
+        if (PlatformSettings is { } platform)
+        {
+            var themes = (HexIDE.Themes.ThemeService)_diSetup.ThemeService;
+            var settings = (SettingsService)_diSetup.SettingsService;
+            themes.FollowPlatform(platform, settings, () =>
+            {
+                if (Static.Profile is { } currentProfile) themes.Apply(currentProfile, settings);
+                else themes.Apply(settings.ActiveTheme);
+            });
+        }
+
         // Register the VB6 highlighting definition and subscribe it to theme changes before any editor
         // is built, so the first paint is already correct rather than light-until-you-switch. Must
         // follow ThemeService.Apply above, which is what sets the variant this reads.
-        SyntaxHighlightingTheme.EnsureRegistered();
+        SyntaxHighlightingTheme.Configure(_diSetup.SettingsService, _diSetup.ThemeService);
         // Localization: apply the saved language pack. The default "system" follows the OS UI culture
         // each launch; a specific id pins that language. A pack-selector string only — does NOT touch
         // thread culture (the invariant lock set in Initialize() stands). Applied before the views are

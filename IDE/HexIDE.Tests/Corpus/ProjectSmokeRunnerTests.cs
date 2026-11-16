@@ -24,6 +24,9 @@ internal sealed record SmokeStage(string Status, string? Detail = null)
 {
     public bool Failed => Status == "crashed";
     public static SmokeStage FromException(Exception exception) => exception is NotImplementedException
+        // Two evidence projects under corpus/member-attributes keep a Public Const in a class, which vb6.exe's
+        // IDE saves and its compiler refuses (#3335, #3350). Refusing them is the right answer, not a crash.
+        || exception is VBCompileErrorException && exception.Message.Contains(PrePass.PublicMemberOfObjectModule)
         ? new("refused", exception.Message) : new("crashed", exception.ToString());
 }
 
@@ -217,7 +220,7 @@ public class ProjectSmokeRunnerTests
         // Match the Standalone host's theme and runtime control resources.
         Application.Current!.Styles.Add(new SimpleTheme());
         VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Standalone/form.ico")));
-        foreach (var dictionary in new[] { "VBLabel.axaml", "Resources.axaml" })
+        foreach (var dictionary in new[] { "SystemColors.axaml", "VBLabel.axaml", "Resources.axaml" })
             Application.Current.Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://HexIDE.Standalone/"))
             {
                 Source = new Uri("avares://HexIDE.Runtime/BuiltinControls/" + dictionary)

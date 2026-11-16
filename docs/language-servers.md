@@ -1,7 +1,7 @@
 # Attaching a language server
 
 HexIDE ships a language server for VB6 and will talk to others you attach yourself. Servers are
-configuration, not code: you add one by writing a file, and the bundled VB6 server is an ordinary entry in
+configuration, not code: you add one in Tools → Language & Debug Servers or by writing a file, and the bundled VB6 server is an ordinary entry in
 that file's defaults rather than a special case beside it — so you can replace it, or switch it off.
 
 ## Where the file lives
@@ -21,12 +21,50 @@ instead, which is the way to try a server without changing the configuration you
 > [#280](https://github.com/hexide-io/HexIDE/issues/280) fixed that: the paths above are now what HexIDE
 > actually uses, and setting `XDG_CONFIG_HOME` is a preference rather than a workaround.
 
-It does not exist until you create it. **Deleting it restores the defaults**, which is the intended way
+It does not exist until you create it or save an entry in the window. **Deleting it restores the defaults**, which is the intended way
 to undo an experiment that went wrong: the bundled server is compiled in, so no edit to this file can
 leave you without VB6 support permanently.
 
 Changes take effect on restart. Data applies live in HexIDE — themes, keymaps, languages — and code does
 not; a language server is a process, so it belongs to the second group.
+
+Each server row offers **Restart**, including a stopped or failed server. It stops that entry if
+necessary, starts it with the registration loaded when HexIDE started, and sends it the open documents
+it claims. Other entries keep running. The protocol inspector records that you requested the restart.
+Restart does not reload `lsp-servers.json`; configuration edits still take effect when HexIDE next starts.
+
+## Editing in the window
+
+Tools → Language & Debug Servers offers **Add** and **Edit** for user entries, and **Customize** for
+bundled entries. The same form covers the entry fields below, including capture limits, workspace-file
+and project-import declarations. Field names use the JSON spelling so they match this reference.
+Fields marked JSON accept JSON values (including `null`); other fields accept plain text. Clearing a
+populated value writes `null`. When customizing, untouched fields inherit their defaults, while clearing
+a populated field writes an explicit `null` override. A new field left blank stays absent.
+Existing entry ids are read-only.
+
+Opening the form focuses its first field. Only the fields scroll; validation problems, the command
+preview and Save stay below them while you edit. Cancel or Save returns to the server list.
+
+Validation uses the same loader and configuration-problem messages as the file. Invalid JSON names
+the field using its form label, followed by 1-based line and character column (`field:line:column`).
+Transport, connection roles and trace use dropdowns with the documented choices and an empty choice
+for an unset value (inherited when left untouched during Customize). An existing unrecognized value
+remains selected and is reported as a problem. Only the selected transport’s fields are shown; hiding
+a field preserves its value. The form shows the full
+command with arguments and environment, resolving pipe placeholders against the current project. Without
+a project folder, workspace placeholders stay visible with an explanation. Nothing starts from the form.
+**Save** is consent to the displayed command and remembers its command identity, including arguments and
+environment. Changes take effect on restart.
+
+A bundled entry is read-only. Customize writes only the fields changed from its defaults, plus its id;
+normal layering rules still apply. Saving patches only changed values: other entries, unknown fields,
+and comments remain as written, including unknown fields inside the nested declarations. If the file
+changes while the form is open, saving refuses to overwrite it and asks you to reopen the form.
+New entries put each property on its own line, using the surrounding indentation, with `id` first
+and the remaining fields in the order below. New properties added to existing entries also use their
+own lines and documentation order. New entries use inline arrays when neighboring entries do.
+Cancel writes nothing. Test connection and automatic refresh of hand-edits are not available yet.
 
 ## A worked example
 
@@ -68,22 +106,25 @@ and the JSON path. Non-ASCII text before the fault counts as characters, rather 
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Identifies the entry. Reusing a default's id **replaces** that default wholesale, keeping its position. |
+| `id` | yes | Identifies the entry. Reusing a default's id with a complete entry replaces that default wholesale, keeping its position and inheriting nothing. Only an entry that omits required fields adjusts the default: unwritten fields inherit; explicit `null` clears a field. Objects and arrays replace the whole field, rather than merging their contents (#1209). |
 | `extensions` | yes | The file extensions this server **serves**. This is what routing reads, and the only thing it reads. |
 | `languageId` | yes | What this server wants those files **called**, in the protocol sense. It routes nothing, except that `vb6` lets a `.cls` claim take the project's class modules; see below. |
-| `transport` | yes | `stdio`, `pipe` or `websocket`. A pipe entry without `command` owns only its connection; closing it leaves the server running. |
-| `command` | for `stdio` | The executable to launch. Optional on `pipe` — see *Starting the server yourself* below. |
+| `transport` | yes | `stdio`, `pipe`, `websocket` or `tcp`. A pipe entry without `command` owns only its connection; closing it leaves the server running. |
+| `command` | for `stdio` | The executable to launch. Optional on `pipe` or `tcp` — see *Starting the server yourself* below. |
 | `arguments` | no | Command-line string or array of strings. Part of the command's identity — see *A command you have not run before*. |
 | `environment` | no | Map of environment variable names to string values, layered over the inherited environment for a launched stdio or pipe server. |
 | `workingDirectory` | no | Empty means the server runs in whichever project is open, which is usually what you want. |
-| `pipeName` / `pipeRole` | for `pipe` | `pipeRole` is `connect` (default) or `listen`, ignoring case and surrounding whitespace. An unrecognised value produces a warning and falls back to `connect`. |
-| `endpoint` | for `websocket` | e.g. `ws://localhost:1234/`. |
+| `pipeName` / `pipeRole` | for `pipe` | `pipeRole` is `connect` (default) or `listen`, ignoring case and surrounding whitespace. An unrecognised value produces a warning and falls back to `connect`. On Linux and macOS, an absolute `pipeName` is used verbatim as a Unix domain socket path; a bare name becomes `/tmp/CoreFxPipe_<name>`. |
+| `endpoint` | for `websocket` or `tcp` | e.g. `ws://localhost:1234/` or `tcp://localhost:6005`. |
+| `tcpRole` | for `tcp` | `connect` (default) or `listen`; other values reject the entry. |
 | `websocketRole` | for `websocket` | `connect` (default) dials the server; `listen` waits for the server to dial HexIDE. |
 | `displayName` | no | Shown wherever servers are listed. Defaults to the id. |
+| `initializationOptions` | no | Server-specific JSON passed unchanged in the `initialize` request. Omitted or null means the field is absent from the handshake; an empty object is sent as `{}`. |
 | `trace` | no | How much this server should say about its own work: `off` (default), `messages` or `verbose`. It travels in the handshake, so it sets what the server *starts* at; changing it on a running server is a separate thing the IDE does for you. Misspell it and the server still starts, with tracing off and a warning. |
 | `priority` | no | Breaks ties for features that cannot merge two answers, such as formatting and rename. Higher wins. The bundled server sits *below* the default, so your own server wins without you having to know this field exists. |
 | `enabled` | no | `false` switches an entry off entirely — no process, no registration. |
 | `capture` | no | How much of this server's conversation the protocol capture may hold. See *Giving one server a bigger record* below. |
+| `restartOnProjectChange` | no | `true` restarts this connection when projects join or leave the group, reopening its documents. Off by default; use for servers that ignore workspace-folder notifications. |
 | `workspaceArtifact` | no | A workspace-relative `path`, registered `provider` id and provider-owned `settings`. Generation requires consent; see [Generated workspace files](#generated-workspace-files). |
 
 Use the array form when quoting matters: `"arguments": ["host", "server --stdio"]` passes two arguments
@@ -94,10 +135,10 @@ interactive SSH prompts are unavailable. Pipe placeholders also work within each
 
 ### Adding arguments to a server without replacing it
 
-Replacing an entry means writing its whole command, and the bundled VB6 server's command is something HexIDE
-finds when it starts: its path differs between a build from source and an installed copy. So to give that
-server, or any other, a few more arguments, name its id in the file's top-level `arguments` rather than in
-`servers`:
+The bundled VB6 server's command is something HexIDE finds when it starts: its path differs between a
+build from source and an installed copy. An incomplete user entry with the same id can adjust individual fields
+without copying that command. To append arguments instead of replacing the arguments field, name the id
+in the file's top-level `arguments`:
 
 ```jsonc
 {
@@ -203,6 +244,41 @@ only.
 gigabytes and you get the ceiling, with a line in the servers window naming the field and the value used.
 Nothing here can stop the IDE starting.
 
+## TCP language servers
+
+Use `"transport": "tcp"` with `"endpoint": "tcp://localhost:6005"` to connect to a running
+server. Set `"tcpRole": "listen"` to wait for a server to dial HexIDE instead. Use `localhost`
+for the default loopback listener (IPv4), or name an explicit IPv4 or IPv6 bind address. A listener
+requires `localhost` or an IP literal; connect also accepts DNS names. Port 0 on a listener asks the
+OS for a free port. Connect requires a nonzero port. Credentials, paths, queries and fragments are
+not accepted in a TCP endpoint.
+
+**Naming a non-loopback address exposes the language-server connection to that network.**
+For example, `tcp://0.0.0.0:6005` accepts connections on every IPv4 interface. TCP has no TLS
+or authentication here; only use such a bind deliberately on a trusted network. Even on loopback, any process on this machine can dial a listener first. HexIDE talks to whichever connects first, and accepts only that one.
+
+An optional `command` launches the server, as for pipes, with `arguments`, `workingDirectory`
+and `environment`. `{host}` and `{port}` in arguments receive the endpoint host and actual bound
+port; `{pid}`, `{workspaceUri}` and `{workspaceDir}` work as for pipes. HexIDE binds before
+launching in listen mode, so a child can dial immediately, including with port 0. In connect mode,
+a launched server is retried during the 30-second connection timeout while it starts listening.
+A failed connection names the endpoint. A server HexIDE launches has its stdout, stderr and exit
+reported and is stopped on teardown; an external server keeps running when HexIDE disconnects.
+Externally owned connections can reconnect; launched servers are one-shot.
+
+```json
+{
+  "id": "example.tcp",
+  "extensions": [".example"],
+  "languageId": "example",
+  "transport": "tcp",
+  "tcpRole": "listen",
+  "endpoint": "tcp://localhost:0",
+  "command": "example-language-server",
+  "arguments": ["--connect", "{host}:{port}"]
+}
+```
+
 ## Letting HexIDE start a pipe server
 
 A `pipe` entry connects to a server that is already running. Give it a `command` and HexIDE will start
@@ -219,6 +295,20 @@ only works if you remembered to launch the server first.
   "command": "C:/tools/example-server.exe",
   "arguments": "--pipe {pipe} --workspace {workspaceUri}",
   "workingDirectory": "C:/tools/example"
+}
+```
+
+For a server listening on a Unix domain socket on Linux or macOS, use an absolute path:
+
+```jsonc
+{
+  "id": "example-unix",
+  "extensions": [".bas"],
+  "languageId": "vba",
+  "transport": "pipe",
+  "pipeName": "/tmp/hexide-example.sock",
+  "command": "/usr/local/bin/example-server",
+  "arguments": "--pipe {pipe}"
 }
 ```
 
@@ -250,8 +340,9 @@ per entry. Substituting nothing would hand the server a flag with no value.
 `{pid}` lets a server that supports watching its owner exit when HexIDE crashes or is forcibly stopped.
 On Windows, HexIDE also assigns stdio and launched pipe servers to a kill-on-close job, so assigned
 processes and descendants they subsequently launch end with HexIDE even without cooperative PID
-watching. A descendant launched before assignment is not covered. Linux and macOS still rely on
-cooperation after an unclean shutdown; the planned watchdog is not shipped yet (#406).
+watching. A descendant launched before assignment is not covered. On Linux and macOS, each stdio or pipe server
+HexIDE launches runs under a guard process, `HexIDE.LspGuard`, which ends the server's process group when
+HexIDE exits, cleanly or not (#2147).
 Pass it using that server's owner-process argument. It works without an open project. HexIDE still kills
 the launched process tree on clean shutdown; passing a PID does not enforce cleanup if the server ignores it.
 A launched pipe server gets two seconds to exit before that kill, even during bring-up. Once `initialize`
@@ -320,7 +411,9 @@ are not using cannot spoil startup for you.
 
 In order of likelihood:
 
-1. **Check the log** — `%LocalAppData%/HexIDE/logs/ide/`. A malformed entry is reported there with the
+1. **Check the log** — Help → Open HexIDE Log Folder opens the build’s log folder (the name follows its
+   brand). IDE logs are in `ide/`, and bundled language-server logs are in `lsp/`. For the stock build,
+   the IDE logs are under `%LocalAppData%/HexIDE/logs/ide/`. A malformed entry is reported there with the
    reason, the field, and the line and column. A rejected entry does not stop the others from working.
 2. **Use forward slashes for Windows paths**, or double each backslash in JSON. An invalid escape
    names the offending field, such as `$.servers[0].command`, with the line and position and the two
@@ -352,7 +445,6 @@ verbatim after a translated explanation. Logs retain English messages.
 - **Per-project configuration.** Attaching a server is a decision about what code runs on your machine,
   and a per-project file is written by whoever wrote the project.
 - **Discovery of servers already installed.** Nothing scans your machine for language servers.
-- **A user interface.** Today this file is the whole of it.
 
 For an incoming WebSocket, set `"websocketRole": "listen"` and an endpoint with a trailing slash
 (e.g. `ws://localhost:1234/lsp/`). HexIDE owns that HTTP listener until teardown and accepts one
@@ -398,8 +490,10 @@ without which it analyses nothing. Current RDCore builds import the project inst
 It lists every form, module, class and user control the project carries by its path relative to the
 workspace root, including one in a subfolder or beside the project's folder, and carries the project's
 references and its Conditional Compilation Arguments. It lists no other files, because RDCore parses
-anything listed as code. `settings.version` sets the file's `Version`, which must be no newer than the
-server reading it; the default, `0.1.0`, suits every RDCore build so far. A `.rdproj` you wrote yourself
+anything listed as code. For a project saved as a `.vbp`, it records that file as `SourceProject`, relative
+to the workspace root and separated by `/`, as RDCore's import does ([below](#rdcore)).
+`settings.version` sets the file's `Version`, which names the file's format. The default is `1.0`, the format
+RDCore reads and writes, and RDCore opens a file of any version from `6c1ed90d` on. An older build refuses a version newer than its own, so set `settings.version` to `0.1.0` for one. A `.rdproj` you wrote yourself
 is left alone. For a build that reads the file only when it starts, the entry should also set
 `"restartOnChange": true`: then a module added while it runs is analysed after a restart, rather than from its
 next start.
@@ -436,8 +530,9 @@ writing into the workspace at that same moment could swap a parent folder for a 
 check and the write, and the write would follow it. Nothing in .NET closes that gap; it needs
 something already able to change the project's files.
 
-Forms, modules, carried files and reference changes trigger debounced regeneration. This phase sends
-no `workspace/didChangeWatchedFiles` (#456); clangd watches its own compilation database. No file is
+Forms, modules, carried files and reference changes trigger debounced regeneration. Completed writes
+and removals notify connections with matching `workspace/didChangeWatchedFiles` registrations (#456);
+clangd watches its own compilation database. No file is
 generated without a declaration, and core contains no backend schema.
 
 ### Project-import declarations
@@ -456,7 +551,7 @@ The template model replaces string values equal to `{uri}` or `{text}`, includin
 and arrays. Other values and property names remain literal; `overwrite` above is a JSON boolean,
 not a placeholder. Inserted text is JSON-escaped and is never substituted a second time.
 
-After initialization, HexIDE calls the declared command for each loaded project, using its saved `.vbp`
+After initialization, HexIDE calls the declared command for the first loaded project in each folder, using its saved `.vbp`
 URI and the current in-memory project serialization. Membership, reference and modeled project-setting
 changes repeat the import after the same 300 ms debounce used for generated workspace files. The command
 must also appear in the server's advertised `executeCommandProvider.commands`. A declared import replaces
@@ -471,6 +566,12 @@ cover registry startup and workspace-root replacement. Workspace-folder changes 
 the same debounce (#2364). Importing does not make HexIDE an artefact writer, so an entry that declares
 `projectImport` also receives the file-operation notifications its server asks for (#2248), whether or not it
 also declares `workspaceArtifact` (#2915).
+
+If two loaded projects share a folder, an entry declaring `workspaceArtifact` or `projectImport`
+reports a configuration problem in Tools → Language Servers naming both projects and the folder.
+Only the first project in load order is written or imported for that folder; the second never
+replaces it. The problem clears on the project-change debounce when the folders no longer collide.
+This also applies to RDCore, which uses one `.rdproj` per folder (#261).
 
 #### RDCore
 
@@ -489,6 +590,7 @@ imports the project with `rdcore.importProject`:
   "command": "path/to/RDCore.LanguageServer.exe",
   "arguments": "--pipe-name {pipe} --workspace {workspaceUri}",
   "priority": 10,
+  "restartOnProjectChange": true,
   "projectImport": {
     "command": "rdcore.importProject",
     "arguments": [{ "uri": "{uri}", "text": "{text}", "overwrite": true }]
@@ -496,7 +598,27 @@ imports the project with `rdcore.importProject`:
 }
 ```
 
+`restartOnProjectChange` is enabled here because RDCore advertised folder-change notifications but did
+not load a folder added after startup in the [#261 measurement](https://github.com/hexide-io/HexIDE/issues/261)
+(main `90334dd6`, 2026-11-14). HexIDE keeps one connection for the group and restarts it after the project-change
+debounce when membership changes. This setting is separate from `workspaceArtifact.restartOnChange`,
+which responds to changed generated file bytes; adding an outside source folder alone does not trigger it.
+Membership here uses the workspace's project snapshots: a project without a chosen folder gives a server no
+folder to load, so it counts from when its folder is chosen.
+
 Give `command` the absolute path of your build. The import needs a saved project: an unsaved one is reported
 in Tools → Language Servers rather than given an invented URI. If your build doesn't advertise
 `rdcore.importProject`, the same window reports the command as unavailable: use the
 [`rdcore` workspace-artefact provider](#generated-workspace-files) in place of `projectImport`.
+
+**A VB6 project.** RDCore gives a project VB6's implicit `VBRUN` and `VB` libraries only when it knows the
+project is VB6. Its default language is RD-VBA, so without that a form reports `VBC09311` for VB's own types.
+For a VB6 workspace, add this to the entry (#3317):
+
+```json
+"initializationOptions": { "language": "vb6" }
+```
+
+RDCore has said it will take VB6 from the `.vbp` a project file records as its `SourceProject` when the client
+names no language. RDCore's import records it, and so does the `rdcore` provider. Once RDCore does that, the
+entry won't need the option. A language the entry names still wins.

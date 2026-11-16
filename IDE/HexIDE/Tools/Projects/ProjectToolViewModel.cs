@@ -64,10 +64,10 @@ public partial class ProjectToolViewModel : Tool
         SelectedForm?.Name is { } n ? string.Format(localization.GetString("Str.Tool.Project.SaveFormFormat"), n) : "";
     public string SaveFormAsHeader =>
         SelectedForm?.Name is { } n ? string.Format(localization.GetString("Str.Tool.Project.SaveFormAsFormat"), n) : "";
-    // Not from a project an add-in opened: its membership is its add-in's program's to change.
+    // Not from a project whose type doesn't offer membership changes.
     public bool HasRemovableSelection =>
-        SelectedForm is { FormDefinition.Owner.ContributedBy: null }
-        || SelectedModule is { ModuleDefinition.Owner.ContributedBy: null };
+        SelectedForm is { FormDefinition.Owner.Offers.ChangesMembership: true }
+        || SelectedModule is { ModuleDefinition.Owner.Offers.ChangesMembership: true };
     public string RemoveFormHeader =>
         (SelectedForm?.Name ?? SelectedModule?.Name) is { } n ? string.Format(localization.GetString("Str.Tool.Project.RemoveFormFormat"), n) : "";
 
@@ -113,7 +113,6 @@ public partial class ProjectToolViewModel : Tool
         this.localization = localization;
         this.archives = archives;
         if (archives != null) archives.Changed += RebuildRootItems;
-        localization.BindTitle(this, "Str.Tool.Project.Title");
         localization.LanguageChanged += () =>
         {
             RebuildRootItems();
@@ -140,8 +139,9 @@ public partial class ProjectToolViewModel : Tool
                 editorService.EditCode(SelectedForm.FormDefinition);
             else if (SelectedModule != null)
                 editorService.EditCode(SelectedModule.ModuleDefinition);
+            else if (SelectedItem is ProjectFileViewModel file) editorService.EditProjectFile(file.Source);
             else if (SelectedItem is ArchiveTreeNode node) archives?.OpenDocument(node.Entry);
-        }, () => SelectedForm != null || SelectedModule != null || HasArchiveSelection);
+        }, () => SelectedForm != null || SelectedModule != null || HasArchiveSelection || SelectedItem is ProjectFileViewModel);
         FormPropertiesCommand = new DelegateCommand(() =>
         {
             ViewObjectCommand.Execute(null);
@@ -158,13 +158,13 @@ public partial class ProjectToolViewModel : Tool
                 projectService.SaveForm(SelectedForm.FormDefinition, true).ListenErrors();
         }, () => SelectedForm != null);
         AddFormCommand = new DelegateCommand(() => AddFormAsync(GetSelectedProject()!.Definition).ListenErrors(),
-            () => GetSelectedProject() is { Definition.ContributedBy: null });
+            () => GetSelectedProject() is { Definition.Offers.ChangesMembership: true });
         AddModuleCommand = new DelegateCommand(() => AddModuleAsync(GetSelectedProject()!.Definition, ModuleKind.StandardModule).ListenErrors(),
-            () => GetSelectedProject() is { Definition.ContributedBy: null });
+            () => GetSelectedProject() is { Definition.Offers.ChangesMembership: true });
         AddClassModuleCommand = new DelegateCommand(() => AddModuleAsync(GetSelectedProject()!.Definition, ModuleKind.ClassModule).ListenErrors(),
-            () => GetSelectedProject() is { Definition.ContributedBy: null });
+            () => GetSelectedProject() is { Definition.Offers.ChangesMembership: true });
         AddUserControlCommand = new DelegateCommand(() => AddUserControlAsync(GetSelectedProject()!.Definition).ListenErrors(),
-            () => GetSelectedProject() is { Definition.ContributedBy: null });
+            () => GetSelectedProject() is { Definition.Offers.ChangesMembership: true });
 
         projectManager.ProjectLoaded += OnProjectLoaded;
         projectManager.ProjectUnloaded += OnProjectUnloaded;
@@ -184,11 +184,24 @@ public partial class ProjectToolViewModel : Tool
 
     private void RebuildRootItems()
     {
+        var previousGroup = RootItems.OfType<ProjectGroupViewModel>().FirstOrDefault();
         var previous = RootItems.OfType<ArchiveTreeNode>().SelectMany(WalkArchive).ToDictionary(n => n.Entry.Identity);
         var selected = (SelectedItem as ArchiveTreeNode)?.Entry.Identity;
+        foreach (var group in RootItems.OfType<ProjectGroupViewModel>())
+        {
+            group.PropertyChanged -= OnTitleSourceChanged;
+            group.Dispose();
+        }
         RootItems.Clear();
         if (projectManager.CurrentGroup != null)
-            RootItems.Add(new ProjectGroupViewModel(projectManager.CurrentGroup, LoadedProjects));
+        {
+            var group = new ProjectGroupViewModel(projectManager.CurrentGroup, LoadedProjects,
+                localization.GetString("Str.Tool.Project.TitleGroup"));
+            if (previousGroup?.Group == group.Group)
+                group.IsExpanded = previousGroup.IsExpanded;
+            group.PropertyChanged += OnTitleSourceChanged;
+            RootItems.Add(group);
+        }
         else
             foreach (var p in LoadedProjects)
                 RootItems.Add(p);
@@ -201,9 +214,21 @@ public partial class ProjectToolViewModel : Tool
                     if (previous.TryGetValue(node.Entry.Identity, out var old)) node.IsExpanded = old.IsExpanded;
                 RootItems.Add(root);
             }
+        RefreshTitle();
         if (selected != null)
             SelectedItem = RootItems.OfType<ArchiveTreeNode>().SelectMany(WalkArchive)
                 .FirstOrDefault(n => n.Entry.Identity.Equals(selected));
+    }
+
+    private void OnTitleSourceChanged(object? sender, PropertyChangedEventArgs e) => RefreshTitle();
+
+    private void RefreshTitle()
+    {
+        Title = projectManager.CurrentGroup is { } group
+            ? string.Format(localization.GetString("Str.Tool.Project.TitleGroup"), group.Name)
+            : LoadedProjects.FirstOrDefault() is { } project
+                ? string.Format(localization.GetString("Str.Tool.Project.TitleProject"), project.Name)
+                : localization.GetString("Str.Tool.Project.TitleEmpty");
     }
 
     private static IEnumerable<ArchiveTreeNode> WalkArchive(ArchiveTreeNode node)
@@ -231,9 +256,24 @@ public partial class ProjectToolViewModel : Tool
     {
         var vm = new ProjectViewModel(this, obj);
         projectToViewModel[obj] = vm;
-        LoadedProjects.Add(vm);
+        // At the project's place in the manager's list, which a reloaded project keeps (#4009).
+        var index = IndexOf(projectManager.LoadedProjects, obj);
+        if (index >= 0 && index <= LoadedProjects.Count)
+            LoadedProjects.Insert(index, vm);
+        else
+            LoadedProjects.Add(vm);
+        vm.PropertyChanged += OnTitleSourceChanged;
+        RefreshTitle();
         if (projectManager.CurrentGroup == null)
             RootItems.Add(vm);
+    }
+
+    private static int IndexOf(IReadOnlyList<ProjectDefinition> projects, ProjectDefinition project)
+    {
+        for (var i = 0; i < projects.Count; i++)
+            if (ReferenceEquals(projects[i], project))
+                return i;
+        return -1;
     }
 
     private void OnProjectUnloaded(ProjectDefinition obj)
@@ -241,7 +281,9 @@ public partial class ProjectToolViewModel : Tool
         var vm = projectToViewModel[obj];
         LoadedProjects.Remove(vm);
         RootItems.Remove(vm);
+        vm.PropertyChanged -= OnTitleSourceChanged;
         vm.Dispose();
+        RefreshTitle();
         projectToViewModel.Remove(obj);
     }
 
@@ -262,6 +304,10 @@ public partial class ProjectToolViewModel : Tool
             else
                 editorService.EditCode(SelectedModule.ModuleDefinition);
         }
+        else if (selectedItem is ProjectFileViewModel file)
+        {
+            editorService.EditProjectFile(file.Source);
+        }
         else if (selectedItem is RelatedDocViewModel relatedDoc)
         {
             editorService.EditRelatedDocument(relatedDoc.Definition);
@@ -271,8 +317,7 @@ public partial class ProjectToolViewModel : Tool
             // Takes the double-click away from expand/collapse, which is what VB6 did here and what the
             // fallthrough below still does for every other container. Deliberate: the chevron is what
             // expansion is for, and fidelity does not extend to spending the primary gesture on a
-            // second way to do it. A project group keeps the old behaviour until it has something of
-            // its own to open into (.vbg is not read yet).
+            // second way to do it. A group root keeps expand/collapse; its file has its own child node.
             editorService.EditProject(SelectedProject.Definition);
         }
         else if (selectedItem is IProjectTreeElement projectTreeElement)

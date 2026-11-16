@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
+using CommunityToolkit.Mvvm.Input;
 using Avalonia.Threading;
 using Dock.Model.Mvvm.Controls;
 using HexIDE.Conversations;
@@ -55,10 +56,69 @@ public partial class LanguageServersToolViewModel : Document
     private readonly IProjectManager? _projects;
     private readonly HashSet<string> _pendingOutput = new(StringComparer.Ordinal);
 
+    // Taken when the window is built, on the UI thread, rather than asked for by the handlers below. They run on
+    // transport and RPC threads, and asking Dispatcher.UIThread there while it is cleared makes that thread the UI
+    // thread. Avalonia.Headless clears it as each test is set up, so an earlier test's connection hung the run (#2530).
+    private readonly Dispatcher _uiThread = Dispatcher.UIThread;
+
     internal event Action? LanguageChanged;
 
     public ObservableCollection<LanguageServerGroupViewModel> Groups { get; } = [];
     public ObservableCollection<LanguageServerConfigProblem> Problems { get; } = [];
+
+    private readonly LanguageServerEditorStore? _editorStore;
+    private readonly ILspWorkspace? _workspace;
+    public ObservableCollection<LanguageServerDefinitionViewModel> Definitions { get; } = [];
+    [Notify] private LanguageServerEditorViewModel? editor;
+
+    [RelayCommand]
+    private void AddServer() => OpenEditor(null, false);
+
+    private void OpenEditor(string? id, bool customise)
+    {
+        if (_editorStore is null) return;
+        try
+        {
+            Editor = new LanguageServerEditorViewModel(_editorStore, _localization, _workspace, id, customise, () =>
+            {
+                Editor = null;
+                RefreshDefinitions();
+            });
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+        {
+            RefreshDefinitions();
+        }
+    }
+
+    private void RefreshDefinitions()
+    {
+        if (_editorStore is null) return;
+        Definitions.Clear();
+        try
+        {
+            var text = _editorStore.Read();
+            var userIds = _editorStore.UserIds(text);
+            foreach (var id in _editorStore.Defaults.Select(e => e.Id!).Concat(userIds).Distinct(StringComparer.Ordinal))
+            {
+                var user = userIds.Contains(id);
+                Definitions.Add(new LanguageServerDefinitionViewModel(id, user,
+                    new HexIDE.Utils.DelegateCommand(() => OpenEditor(id, !user))));
+            }
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or System.IO.IOException
+            or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // The loader owns both the diagnostic wording and its location information.
+            foreach (var problem in _editorStore.Load().Problems)
+                Problems.Add(problem.Code is null ? problem : problem with
+                {
+                    Message = string.Format(CultureInfo.InvariantCulture,
+                        _localization.GetString($"Str.Tool.LanguageServers.Problem.{problem.Code}"), problem.Arguments),
+                });
+            HasProblems = Problems.Count > 0;
+        }
+    }
 
     [Notify] private bool hasProblems;
     [Notify] private bool hasNoServers;
@@ -89,7 +149,8 @@ public partial class LanguageServersToolViewModel : Document
 
     public LanguageServersToolViewModel(
         ILanguageConnectionRegistry registry, ILocalizationService localization, ConversationLog capture,
-        IEventBus events, Pseudonymiser pseudonyms, IProjectManager? projects = null)
+        IEventBus events, Pseudonymiser pseudonyms, IProjectManager? projects = null,
+        LanguageServerEditorStore? editorStore = null, ILspWorkspace? workspace = null)
     {
         _registry = registry;
         _localization = localization;
@@ -97,6 +158,8 @@ public partial class LanguageServersToolViewModel : Document
         _events = events;
         _pseudonyms = pseudonyms;
         _projects = projects;
+        _editorStore = editorStore;
+        _workspace = workspace;
 
         ShowAllMessagesCommand = new HexIDE.Utils.DelegateCommand(
             () => _events.Publish(new OpenProtocolInspectorEvent()));
@@ -112,6 +175,7 @@ public partial class LanguageServersToolViewModel : Document
         _capture.ArmingChanged += OnArmingChanged;
         _capture.Output.Changed += OnOutputChanged;
         Refresh();
+        RefreshDefinitions();
     }
 
     /// <summary>
@@ -126,8 +190,8 @@ public partial class LanguageServersToolViewModel : Document
     private void OnArmingChanged(object? sender, string? connectionId)
     {
         // Arming can come from the automation server's thread, and everything below touches a view.
-        if (Dispatcher.UIThread.CheckAccess()) Apply();
-        else Dispatcher.UIThread.Post(Apply);
+        if (_uiThread.CheckAccess()) Apply();
+        else _uiThread.Post(Apply);
 
         void Apply()
         {
@@ -155,7 +219,7 @@ public partial class LanguageServersToolViewModel : Document
             if (alreadyQueued) return;
         }
         // A noisy server must not queue one dispatcher job for every line.
-        Dispatcher.UIThread.Post(() =>
+        _uiThread.Post(() =>
         {
             string[] changed;
             lock (_pendingOutput)
@@ -170,13 +234,14 @@ public partial class LanguageServersToolViewModel : Document
 
     private void OnLanguageChanged()
     {
-        if (Dispatcher.UIThread.CheckAccess()) Apply();
-        else Dispatcher.UIThread.Post(Apply);
+        if (_uiThread.CheckAccess()) Apply();
+        else _uiThread.Post(Apply);
 
         void Apply()
         {
             foreach (var row in Groups.SelectMany(g => g.Rows)) row.LanguageChanged();
             RefreshProblems();
+            Editor?.LanguageChanged();
             LanguageChanged?.Invoke();
         }
     }
@@ -186,8 +251,8 @@ public partial class LanguageServersToolViewModel : Document
     private void OnConnectionsChanged(object? sender, EventArgs e)
     {
         // The registry raises this from transport and RPC callbacks, which are not the UI thread.
-        if (Dispatcher.UIThread.CheckAccess()) Refresh();
-        else Dispatcher.UIThread.Post(Refresh);
+        if (_uiThread.CheckAccess()) Refresh();
+        else _uiThread.Post(Refresh);
     }
 
     /// <summary>
@@ -201,7 +266,7 @@ public partial class LanguageServersToolViewModel : Document
 
         var rows = _registry.Connections
             .Select(c => (Connection: c,
-                          Row: new LanguageServerRowViewModel(c, _localization, _capture, _events)))
+                          Row: new LanguageServerRowViewModel(c, _localization, _capture, _events, _registry)))
             .ToList();
 
         // Highest priority first within a language: that is the order the registry itself picks in, for the
@@ -293,4 +358,12 @@ public partial class LanguageServersToolViewModel : Document
 
         return string.Join(Environment.NewLine, lines);
     }
+}
+
+public sealed class LanguageServerDefinitionViewModel(string id, bool isUser, System.Windows.Input.ICommand editCommand)
+{
+    public string Id { get; } = id;
+    public bool IsUser { get; } = isUser;
+    public bool IsBundled => !IsUser;
+    public System.Windows.Input.ICommand EditCommand { get; } = editCommand;
 }

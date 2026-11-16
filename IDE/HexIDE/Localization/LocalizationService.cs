@@ -30,6 +30,8 @@ public sealed class LocalizationService : ILocalizationService
     // The English canonical pack — the universal fallback. Loaded once, never mutated.
     private readonly Dictionary<string, string> _englishStrings;
 
+    internal bool HasCanonicalKey(string key) => _englishStrings.ContainsKey(key);
+
     // The per-user override tier, merged LAST in resolution. Optional so existing `new LocalizationService()`
     // tests still construct without it; when present, an override change live-re-applies the active language.
     private readonly IUserTranslationsService? _userTranslations;
@@ -141,6 +143,7 @@ public sealed class LocalizationService : ILocalizationService
 
             _currentLanguageDict = BuildResourceDictionary(map);
             _currentLanguageDict[FlowDirectionKey] = FlowDirection;
+            _currentLanguageDict["Ide.Language"] = id == "system" ? ResolvedLanguage : id;
             app.Resources.MergedDictionaries.Add(_currentLanguageDict);
         }
 
@@ -242,6 +245,65 @@ public sealed class LocalizationService : ILocalizationService
     /// </summary>
     internal bool TryResolveMap(string id, out Dictionary<string, string> map, out string direction)
     {
+        var resolved = TryResolveLayers(id, out map, out direction);
+        KeepUpstreamCredits(id, map);
+        if (!Distribution.Current.IsStock)
+            BrandText.Apply(map, Distribution.Current.Name, hasRepository: Distribution.Current.RepositoryUrl is not null);
+        return resolved;
+    }
+
+    /// <summary>
+    /// Restores HexIDE's own thanks if a profile or user override changed them. Jen (#2746): "a whitelabelled IDE
+    /// should _not_ get an API to remove HexIDE credits, only to add to them."
+    /// </summary>
+    private void KeepUpstreamCredits(string id, Dictionary<string, string> map)
+    {
+        // The pseudo packs are a transformation of canonical English, with no override tier to defend against.
+        if (id is "pseudo" or "pseudo-rtl")
+            return;
+
+        var language = id == "system" ? ResolveOsLanguage() : id;
+
+        // This runs on every resolve, and a pack is a large file to parse for a question that is nearly always no.
+        if (!IsCreditsOverridden(language))
+            return;
+
+        var shipped = ShippedCredits(language);
+        if (map.TryGetValue(BrandText.UpstreamCreditsKey, out var current) && current == shipped)
+            return;
+
+        Log.Warning("LocalizationService: An override of {Key} for '{Language}' was ignored: HexIDE's credits can be added to, not replaced",
+            BrandText.UpstreamCreditsKey, language);
+        map[BrandText.UpstreamCreditsKey] = shipped;
+    }
+
+    private bool IsCreditsOverridden(string language)
+    {
+        foreach (var layer in new[] { language, NeutralLanguageOf(language) })
+        {
+            if (_profileStrings.TryGetValue(layer, out var profile) && profile.ContainsKey(BrandText.UpstreamCreditsKey))
+                return true;
+            if (_userTranslations?.GetOverrides(layer)?.ContainsKey(BrandText.UpstreamCreditsKey) == true)
+                return true;
+        }
+
+        return false;
+    }
+
+    private string ShippedCredits(string language)
+    {
+        foreach (var layer in new[] { language, NeutralLanguageOf(language) })
+        {
+            if (layer != "en" && LoadPackOwnStrings(layer).TryGetValue(BrandText.UpstreamCreditsKey, out var text)
+                && !string.IsNullOrWhiteSpace(text))
+                return text;
+        }
+
+        return _englishStrings.GetValueOrDefault(BrandText.UpstreamCreditsKey, BrandText.UpstreamCreditsKey);
+    }
+
+    private bool TryResolveLayers(string id, out Dictionary<string, string> map, out string direction)
+    {
         direction = "ltr";
 
         if (id == "system")
@@ -260,7 +322,10 @@ public sealed class LocalizationService : ILocalizationService
         if (id is "pseudo" or "pseudo-rtl")
         {
             var rtl = id == "pseudo-rtl";
-            map = PseudoLocalizer.Transform(_englishStrings, rtl);
+            var source = new Dictionary<string, string>(_englishStrings);
+            if (!Distribution.Current.IsStock)
+                BrandText.Apply(source, Distribution.Current.Name, hasRepository: Distribution.Current.RepositoryUrl is not null);
+            map = PseudoLocalizer.Transform(source, rtl);
             direction = rtl ? "rtl" : "ltr";
             return true;
         }
@@ -371,7 +436,7 @@ public sealed class LocalizationService : ILocalizationService
     /// <summary>The neutral pack a region inherits: a script neutral for Chinese (see
     /// <see cref="ScriptNeutrals"/>), else the language prefix (<c>fr</c> from <c>fr-CA</c>), else the id
     /// itself when it has no region part.</summary>
-    private static string NeutralLanguageOf(string id)
+    internal static string NeutralLanguageOf(string id)
     {
         if (ScriptNeutrals.TryGetValue(id, out var scriptNeutral))
             return scriptNeutral;
@@ -457,11 +522,12 @@ public sealed class LocalizationService : ILocalizationService
         }
     }
 
-    private static ResourceDictionary BuildResourceDictionary(Dictionary<string, string> strings)
+    private ResourceDictionary BuildResourceDictionary(Dictionary<string, string> strings)
     {
         var dict = new ResourceDictionary();
         foreach (var (key, value) in strings)
             dict[key] = value;
+        DockStrings.Populate(dict, this);
         return dict;
     }
 

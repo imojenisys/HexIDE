@@ -1,3 +1,5 @@
+using HexIDE.Runtime.Serialization;
+using HexIDE.Projects;
 using System;
 using System.Linq;
 using System.Threading;
@@ -62,7 +64,7 @@ public class UiSaveAnswerTimingTests
             {
                 // The same resolution and Execute as invoke_menu_item, without a transport or desktop lifetime.
                 var menu = window.GetVisualDescendants().OfType<Menu>().First();
-                var found = MenuPath.Resolve(menu.Items, "File/Save Project As...");
+                var found = MenuPath.Resolve(menu.Items, opensPicker ? "File/Save Project As..." : "File/Save Project");
                 found.Error.Should().BeNull();
                 found.Command.Should().NotBeNull();
                 found.Command!.CanExecute(found.CommandParameter).Should().BeTrue();
@@ -118,7 +120,7 @@ public class UiSaveAnswerTimingTests
             Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), composition.ProjectService,
             composition.EventBus, lsp, settings, Substitute.For<IStatusBarService>(), Substitute.For<IBookmarkService>(),
             Substitute.For<IBreakpointService>(), Substitute.For<IDebugController>(), new RunScope(),
-            Substitute.For<ILocalizationService>()).Initialize(form);
+            Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader()).Initialize(form);
         var view = new CodeEditorView { DataContext = vm };
         var window = new Window { Content = view, Width = 900, Height = 600 };
         window.Show();

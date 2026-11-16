@@ -34,6 +34,8 @@ internal sealed record CommandLineOption(
 
 internal static class ServerOptions
 {
+    public static string? Platform { get; private set; }
+
     public static int? Port { get; private set; }
     public static bool NewProject { get; private set; }
     public static bool NewProjectUnsaved { get; private set; }
@@ -156,6 +158,15 @@ internal static class ServerOptions
             "Print this message and exit. Also -h and /?.",
             _ => { HelpRequested = true; return false; },
             Aliases: ["-h", "/?", "-?"]),
+
+        new("platform", "<name>",
+            new HexIDE.Localization.LocalizationService().GetStringFrom("en", "Str.Startup.PlatformSummary"),
+            value =>
+            {
+                if (value is null || value.StartsWith('-') || value.StartsWith('/')) return false;
+                Platform = value;
+                return true;
+            }),
 
         new("newproject", null,
             "Create a Standard EXE and save it in a temporary directory.",
@@ -302,35 +313,47 @@ internal static class ServerOptions
     /// into bands — note that between about 94 and 120 columns the option lines do not themselves wrap,
     /// so those rows are a real cost rather than a free one.
     /// </remarks>
-    public static string HelpText(ConsoleTarget target)
+    public static string HelpText(ConsoleTarget target) => HelpText(target, Distribution.Current);
+
+    internal static string HelpText(ConsoleTarget target, DistributionIdentity identity)
     {
         var width = Options.Max(o => Spelling(o).Length);
+        var invocation = identity.IsStock
+            ? "HexIDE.Desktop"
+            : Path.GetFileNameWithoutExtension(Environment.ProcessPath) ?? identity.Name;
+        var heading = identity.IsStock
+            ? "HexIDE - an open, cross-platform IDE for Visual Basic 6 & VBA."
+            : identity.Tagline is { } tagline ? $"{identity.Name} - {tagline}" : identity.Name;
 
         string[] text =
         [
             "",
-            "HexIDE - an open, cross-platform IDE for Visual Basic 6 & VBA.",
+            heading,
             "",
             "Usage:",
-            "  HexIDE.Desktop [options] [<project>.vbp|.vbg|.twinproj]",
+            $"  {invocation} [options] [<project>.vbp|.vbg|.twinproj]",
             "",
             "Options:",
             .. Options.Select(o => $"  {Spelling(o).PadRight(width)}  {o.Summary}"),
         ];
 
-        var mark = target.Colour ? HelpMark.Colour() : HelpMark.Mono();
-        var body = ConsoleLayout.FitsBeside(target.Width, HelpMark.Width, text)
-            ? ConsoleLayout.Beside(mark, text, HelpMark.Width)
-            : ConsoleLayout.Stacked(mark, text);
+        // HexIDE's mark is HexIDE's. A distribution's help is the text alone.
+        IReadOnlyList<string> body = text;
+        if (identity.IsStock)
+        {
+            var mark = target.Colour ? HelpMark.Colour() : HelpMark.Mono();
+            body = ConsoleLayout.FitsBeside(target.Width, HelpMark.Width, text)
+                ? ConsoleLayout.Beside(mark, text, HelpMark.Width)
+                : ConsoleLayout.Stacked(mark, text);
+        }
 
         string[] tail =
         [
             "",
             "Both prefixes work: --newproject and /newproject are the same flag, matched",
-            "case-insensitively. An argument HexIDE does not recognise is ignored without",
+            $"case-insensitively. An argument {identity.Name} does not recognise is ignored without",
             "complaint, so a flag that appears to do nothing may simply be misspelled.",
-            "",
-            "Full reference: docs/command-line.md",
+            .. identity.IsStock ? (string[])["", "Full reference: docs/command-line.md"] : [],
         ];
 
         return string.Join(Environment.NewLine, [.. body, .. tail]);
@@ -340,8 +363,21 @@ internal static class ServerOptions
         !string.IsNullOrWhiteSpace(value) && !value.StartsWith('-') &&
         Match(value) == null && !value.Equals("/personality", StringComparison.OrdinalIgnoreCase);
 
-    internal static HexIDE.Profiles.ProfileSnapshot? ResolveProfile(string invocationDirectory, string userDataDirectory) =>
-        new HexIDE.Profiles.ProfileResolver(UserDataDirectory ?? userDataDirectory, invocationDirectory).Resolve(Profile);
+    internal static HexIDE.Profiles.ProfileSnapshot? ResolveProfile(string invocationDirectory, string userDataDirectory)
+    {
+        var (selector, directory) = SelectProfile(Profile, invocationDirectory, Distribution.Current, AppContext.BaseDirectory);
+        return new HexIDE.Profiles.ProfileResolver(UserDataDirectory ?? userDataDirectory, directory).Resolve(selector);
+    }
+
+    /// <summary>
+    /// What to resolve, and what a relative path in it is relative to. A <c>--profile</c> on the command line beats the
+    /// installation's default and is relative to where it was typed; the default is relative to the installation.
+    /// </summary>
+    internal static (string? Selector, string Directory) SelectProfile(string? explicitSelector, string invocationDirectory,
+        DistributionIdentity distribution, string installationDirectory) =>
+        explicitSelector == null && distribution.DefaultProfile is { } installationDefault
+            ? (installationDefault, installationDirectory)
+            : (explicitSelector, invocationDirectory);
 
     private static string Spelling(CommandLineOption option) =>
         option.TakesValue ? $"--{option.Name} {option.ValueName}" : $"--{option.Name}";

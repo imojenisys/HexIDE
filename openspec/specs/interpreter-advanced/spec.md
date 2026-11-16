@@ -17,13 +17,35 @@ semantics are verified against the original product rather than guessed, are spe
 and apply here unchanged.
 
 ## Requirements
+
+### Requirement: Chained named-member writes preserve their owner's semantics
+The interpreter SHALL resolve module-qualified UDT field writes against the module-owned record,
+including an indexed record, and SHALL resolve a chained `Set` prefix before storing the final reference.
+A field write through a UDT-returning property or function SHALL modify only the returned copy,
+evaluate the member once and never invoke a corresponding `Property Let`.
+
+#### Scenario: Qualified record store
+- **WHEN** `Module1.p.In1.Z = 42` executes against the module's nested UDT variable
+- **THEN** `p.In1.Z` reads 42
+
+#### Scenario: Chained object reference store
+- **WHEN** `Set Module1.o.H.Child = l` executes through class-instance fields
+- **THEN** `o.H.Child Is l` is True
+
+#### Scenario: Store into a returned record
+- **WHEN** `b.U.Z = 5` executes with `b.U` returning a copy of a record whose Z is 3
+- **THEN** the backing record's Z stays 3, the getter runs once and its Let accessor never runs
+
+Measurements: [#173](https://github.com/hexide-io/HexIDE/issues/173), vb6.exe SP6 native and p-code,
+2026-11-14. Class-typed UDT fields also support these chained stores (#3924, measured B3/B4).
+
 ### Requirement: The interpreter SHALL remain an approximation by design
 The interpreter SHALL be maintained as an out-of-the-box demonstrator rather than developed toward parity
 with a production VB6 runtime, and changes that increase completeness at the cost of that character SHALL be
 declined on principle rather than on quality.
 
 The reason to write this down is that every individual step toward completeness looks reasonable. Exhaustive
-quirk coverage, deterministic reference counting, a bytecode virtual machine, static checking — each is
+quirk coverage, a bytecode virtual machine, static checking — each is
 defensible alone, and together they are a second-rate reimplementation of something another engine already
 does properly behind the replaceable backend seam. The triage question is therefore whether a change keeps
 this a simple demonstrator, not whether it makes it more correct; a change can be entirely correct and still
@@ -50,8 +72,13 @@ surface is not advertised as compatible, and no part of it appears as planned wo
 
 #### Scenario: A construct from another implementation's extended surface
 - **WHEN** a program uses a language construct that no Microsoft-era release shipped
-- **THEN** the engine stops with an error identifying it as belonging to another implementation
-- **AND** it names that implementation as the place to run the program
+- **THEN** the engine stops before any statement runs with one compile error identifying the construct as outside VB6, VBA and VBScript
+- **AND** the error names no other implementation and does not describe the construct as planned work
+
+#### Scenario: Compound assignment is outside the classic dialects
+- **WHEN** a program uses `+=`, `-=`, `*=`, `/=`, `\=`, `^=` or `&=`
+- **THEN** the engine SHALL refuse it at load with the construct as typed and its line
+- **AND** the message reads `<construct> isn't part of VB6, VBA or VBScript, so this interpreter doesn't run it.`
 
 #### Scenario: Describing what the interpreter supports
 - **WHEN** the interpreter's language support is described

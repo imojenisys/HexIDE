@@ -40,7 +40,7 @@ public static class CaretPlacement
     public static bool Place(ISearchableDocument editor, int line, int column)
     {
         if (Refusal(editor.Document.Text, line, column) is not null) return false;
-        editor.CaretOffset = editor.Document.GetLineByNumber(line).Offset + column - 1;
+        editor.NavigateToOffset(editor.Document.GetLineByNumber(line).Offset + column - 1);
         return true;
     }
 
@@ -70,20 +70,12 @@ public static class CaretPlacement
     internal static string? Unwritable(CodeEditorViewModel code)
     {
         if (code.IsReadOnly)
-            return "Typing is refused anywhere in this window: HexIDE cannot yet reproduce this file faithfully, so it will "
+            return "Typing is refused anywhere in this window: " + HexIDE.IDE.Distribution.DisplayName + " cannot yet reproduce this file faithfully, so it will "
                    + "not be saved" + (code.ReadOnlyReason is { Length: > 0 } why ? $" ({why})" : "") + ".";
         var caret = code.CaretOffset;
         if (!code.IsReadOnlyRegion(caret, 0))
             return null;
-        var what = "the file's header";
-        foreach (var held in code.ReadOnlyRegionsNow)
-        {
-            if (!held.Changes(caret, 0))
-                continue;
-            if (code.MemberNamedBy(held) is { } member)
-                what = "the Attribute lines describing " + member;
-            break;
-        }
+        var what = code.DescribeRegions(code.ReadOnlyRegionsNow.Where(r => r.Changes(caret, 0)).ToList());
         var past = code.PastReadOnlyRegion(caret);
         var to = code.Document.GetLocation(past);
         return $"That is in {what}, which only the IDE changes, so type_text there would be refused. The nearest place "

@@ -34,9 +34,29 @@ namespace HexIDE.Forms.ViewModels;
 /// </para>
 /// </summary>
 public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindowManager windowManager,
-    ILocalizationService localization)
-    : BaseEditorWindowViewModel, ISearchableDocument, IOutlineDocument
+    ILocalizationService localization, ISettingsService settings)
+    : BaseEditorWindowViewModel, ISearchableDocument, IOutlineDocument, HexIDE.Forms.Views.IEditorDocumentQueries
 {
+    internal ISettingsService Settings => settings;
+    public string? DocumentUri => session is { IsOpen: true } open ? open.Uri : null;
+    public Task FlushDocumentAsync(CancellationToken ct = default) =>
+        session is { IsOpen: true } open ? open.FlushAsync(ct) : Task.CompletedTask;
+    public IReadOnlyList<string> CompletionTriggerCharacters => DocumentUri is { } uri
+        ? lspClient.CompletionTriggerCharacters(uri) : [];
+    public IReadOnlyList<string> SignatureHelpTriggerCharacters => DocumentUri is { } uri
+        ? lspClient.SignatureHelpTriggerCharacters(uri) : [];
+    public Task<CompletionItem[]> RequestCompletionAsync(Position position, CancellationToken ct = default) =>
+        DocumentUri is { } uri && lspClient.SupportsCapability(uri, "completionProvider")
+            ? lspClient.RequestCompletionAsync(uri, position, ct) : Task.FromResult<CompletionItem[]>([]);
+    public Task<CompletionItem[]> RequestCompletionForTriggerAsync(Position position, string triggerCharacter,
+        CancellationToken ct = default) =>
+        DocumentUri is { } uri && lspClient.SupportsCapability(uri, "completionProvider")
+            ? lspClient.RequestCompletionForTriggerAsync(uri, position, triggerCharacter, ct) : Task.FromResult<CompletionItem[]>([]);
+    public Task<SignatureHelp?> RequestSignatureHelpAsync(Position position, CancellationToken ct = default,
+        string? triggerCharacter = null) =>
+        DocumentUri is { } uri && lspClient.SupportsCapability(uri, "signatureHelpProvider")
+            ? lspClient.RequestSignatureHelpAsync(uri, position, ct, triggerCharacter) : Task.FromResult<SignatureHelp?>(null);
+
     public IReadOnlyList<DocumentSymbol> OutlineSymbols { get; private set; } = [];
     public event Action? LanguageServerStateChanged;
     private int symbolRefreshVersion;
@@ -207,8 +227,10 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindo
             Markers = markers;
             MarkersChanged?.Invoke(markers);
         };
-        EventHandler stateChanged = (_, _) => Avalonia.Threading.Dispatcher.UIThread.Post(
-            () => LanguageServerStateChanged?.Invoke());
+        // Taken here, on the UI thread: StateChanged arrives on the connection's thread, and asking Dispatcher.UIThread
+        // there while a headless test's setup has it cleared makes that thread the UI thread (#2530).
+        var uiThread = Avalonia.Threading.Dispatcher.UIThread;
+        EventHandler stateChanged = (_, _) => uiThread.Post(() => LanguageServerStateChanged?.Invoke());
         lspClient.StateChanged += stateChanged;
         AutoDispose(new ActionDisposable(() => lspClient.StateChanged -= stateChanged));
         session.Start();
@@ -262,11 +284,11 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindo
                 string.Format(localization.GetString("Str.Dialog.SourceEncoding.NothingWritten"),
                     refusal.Document, refusal.CodePage, refusal.Character, refusal.CodePoint,
                     refusal.Line.Length > 0 ? refusal.Line : refusal.Character),
-                "HexIDE", MessageBoxButtons.Ok, MessageBoxIcon.Warning);
+                HexIDE.IDE.Distribution.DisplayName, MessageBoxButtons.Ok, MessageBoxIcon.Warning);
             throw;
         }
 
-        AtomicFileWriter.WriteAllBytes(path, bytes);
+        AtomicFileWriter.WriteRecoverableBytes(path, bytes);
 
         savedText = text;
         IsDirty = false;

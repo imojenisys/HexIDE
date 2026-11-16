@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using HexIDE.Lsp.Messages;
+using HexIDE.Conversations;
 using Microsoft.Extensions.Logging;
 
 namespace HexIDE.Lsp;
@@ -41,6 +42,7 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     private readonly TimeProvider _timeProvider;
     private readonly ILspWorkspace? _workspace;
     private readonly IWorkspaceArtifactService? _artifacts;
+    private readonly ConversationLog? _capture;
 
     // Each connection is a source of its own, and so is anything injecting through this router. Without
     // this, two servers claiming one document overwrote each other and a build erased both (#358).
@@ -91,14 +93,21 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         ILspWorkspace? workspace = null,
         IReadOnlyList<LanguageServerConfigProblem>? configurationProblems = null,
         IWorkspaceArtifactService? artifacts = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ConversationLog? capture = null)
     {
         _logger = logger;
+        _capture = capture;
         _diagnosticLifecycle = new(logger);
         _timeProvider = timeProvider ?? TimeProvider.System;
         _workspace = workspace;
         _artifacts = artifacts;
-        if (artifacts is not null) artifacts.RestartRequested += OnArtifactRestartRequested;
+        if (artifacts is not null)
+        {
+            artifacts.RestartRequested += OnArtifactRestartRequested;
+            artifacts.FileChanged += NotifyWatchedFile;
+            artifacts.ConfigurationProblemsChanged += OnArtifactProblemsChanged;
+        }
         _configurationProblems = configurationProblems ?? [];
         // Ordered once. OrderByDescending is stable, so equal priorities keep registration order — which is
         // the documented fallback rather than an accident of how the sort happened to behave.
@@ -157,6 +166,8 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     /// when one server declined it and another served it.</summary>
     public IReadOnlyList<string> DeclinedCapabilities => [];
 
+    private void OnArtifactProblemsChanged() => ConnectionsChanged?.Invoke(this, EventArgs.Empty);
+
     private readonly ConcurrentDictionary<string, LanguageServerConfigProblem> _importProblems = new();
     private readonly IReadOnlyList<LanguageServerConfigProblem> _configurationProblems;
     public IReadOnlyList<LanguageServerConfigProblem> ConfigurationProblems
@@ -165,7 +176,11 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         {
             LanguageServerConfigProblem[] contributed;
             lock (_contributionProblems) contributed = _contributionProblems.SelectMany(p => p.Problems).ToArray();
-            return _configurationProblems.Concat(contributed).Concat(_importProblems.Values).ToArray();
+            LanguageServerRegistration[] registrations;
+            lock (_entriesGate) registrations = _entries.Select(entry => entry.Registration).ToArray();
+            return _configurationProblems.Concat(contributed).Concat(_importProblems.Values)
+                .Concat(registrations.SelectMany(registration =>
+                    _artifacts?.GetConfigurationProblems(registration) ?? [])).ToArray();
         }
     }
 
@@ -431,6 +446,12 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         ConnectionsChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    public void NotifyWatchedFile(string path, int type)
+    {
+        foreach (var entry in _entries)
+            if (entry.Client is { IsRunning: true } client) client.NotifyWatchedFile(path, type);
+    }
+
     public Task SaveDocumentAsync(string uri, CancellationToken cancellationToken = default) =>
         // No start here either, for the same reason as a change: saving a document nothing has opened is
         // not a reason to launch a server. Each claimant decides for itself whether it was asked for
@@ -505,11 +526,18 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     public IReadOnlyList<string> CompletionTriggerCharacters(string uri) =>
         StartedClaimantsFor(uri).SelectMany(CompletionTriggers).Distinct(StringComparer.Ordinal).ToArray();
 
+    public IReadOnlyList<string> SignatureHelpTriggerCharacters(string uri) =>
+        StartedClaimantsFor(uri).SelectMany(client => ProviderTriggers(client, "signatureHelpProvider"))
+            .Distinct(StringComparer.Ordinal).ToArray();
+
     private static IEnumerable<string> CompletionTriggers(ILspClient client)
+        => ProviderTriggers(client, "completionProvider");
+
+    private static IEnumerable<string> ProviderTriggers(ILspClient client, string capability)
     {
         if (client.AdvertisedCapabilities is not { } caps
-            || !ServerCapabilities.Supports(caps, "completionProvider")) yield break;
-        var provider = caps.GetProperty("completionProvider");
+            || !ServerCapabilities.Supports(caps, capability)) yield break;
+        var provider = caps.GetProperty(capability);
         if (provider.ValueKind != JsonValueKind.Object
             || !provider.TryGetProperty("triggerCharacters", out var triggers)
             || triggers.ValueKind != JsonValueKind.Array) yield break;
@@ -717,6 +745,25 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     // different opinion about the same text.
     public async Task<RenameResult?> RequestRenameAsync(string uri, Position position, string newName, CancellationToken ct = default) =>
         await TopClaimantAdvertisingAsync(uri, "renameProvider", ct) is { } c ? await c.RequestRenameAsync(uri, position, newName, ct) : null;
+
+    public bool SupportsOnTypeFormatting(string uri, string trigger) => ClaimantsFor(uri, IsProjectMember(uri))
+        .Any(e => e.Client is { IsRunning: true } c
+            && ServerCapabilities.SupportsOnTypeFormatting(c.AdvertisedCapabilities, trigger));
+
+    public async Task<TextEdit[]> RequestOnTypeFormattingAsync(string uri, Position position, string trigger, FormattingOptions options, CancellationToken ct = default)
+    {
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        budget.CancelAfter(VBLspClient.OnTypeFormattingTimeout);
+        var advertisers = ClaimantsFor(uri, IsProjectMember(uri))
+            .Where(e => e.Client is { IsRunning: true } c
+                && ServerCapabilities.SupportsOnTypeFormatting(c.AdvertisedCapabilities, trigger)).ToList();
+        if (advertisers.Count == 0) return [];
+        var winner = advertisers[0];
+        foreach (var skipped in advertisers.Skip(1))
+            skipped.Client!.NotePrioritySkip("documentOnTypeFormattingProvider", OwnerOf(winner.Client!));
+        return await OpenedOnAsync(winner, uri, budget.Token) is { } client
+            ? await client.RequestOnTypeFormattingAsync(uri, position, trigger, options, budget.Token) : [];
+    }
 
     public bool SupportsRangeFormatting(string uri) => ClaimantsFor(uri, IsProjectMember(uri))
         .Any(e => e.Client is { IsRunning: true } c
@@ -927,7 +974,12 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
 
     public async ValueTask DisposeAsync()
     {
-        if (_artifacts is not null) _artifacts.RestartRequested -= OnArtifactRestartRequested;
+        if (_artifacts is not null)
+        {
+            _artifacts.RestartRequested -= OnArtifactRestartRequested;
+            _artifacts.FileChanged -= NotifyWatchedFile;
+            _artifacts.ConfigurationProblemsChanged -= OnArtifactProblemsChanged;
+        }
         if (_artifacts is IDisposable disposable) disposable.Dispose();
         foreach (var e in _entries) await e.Lifetime.CancelAsync();
         await StopAsync();
@@ -1182,11 +1234,49 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         e.StateSince = DateTimeOffset.UtcNow;
     }
 
+    /// <summary>Restarts only the entry the user selected, including one that stopped or failed.</summary>
+    public async Task RestartAsync(string id, CancellationToken cancellationToken = default)
+    {
+        await _restartGate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_entries.FirstOrDefault(e => e.Registration.Id == id) is not { } entry) return;
+            try
+            {
+                _capture?.Record(id, ConversationDirection.Local, ConversationEntryKind.Lifecycle,
+                    null, null, 0, detail: "restart requested by user");
+            }
+            catch (Exception) { /* a capture is never worth breaking a connection for */ }
+            await RestartEntryAsync(entry, cancellationToken, startWithoutDocuments: true);
+        }
+        finally { _restartGate.Release(); }
+    }
+
+    private async Task RestartEntryAsync(Entry entry, CancellationToken cancellationToken, bool startWithoutDocuments = false)
+    {
+        foreach (var (uri, known) in _open)
+            if (ClaimantsFor(uri, known.IsProjectMember).Contains(entry)) HoldOpen(entry, uri);
+        await StopForRestartAsync(entry);
+        entry.State = LanguageConnectionState.NotStarted;
+        entry.StateSince = DateTimeOffset.UtcNow;
+        try
+        {
+            if (startWithoutDocuments) await EnsureStartedAsync(entry, cancellationToken);
+            await ReopenKnownDocumentsAsync(null, cancellationToken, only: entry);
+        }
+        finally
+        {
+            if (startWithoutDocuments)
+                foreach (var uri in _open.Keys) ReleaseOpen(entry, uri);
+            ConnectionsChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
     private void OnArtifactRestartRequested(LanguageServerRegistration server) => _ = RestartForArtifactAsync(server);
 
     /// <summary>
-    /// Restarts the one server whose workspace artefact a regeneration changed, for a server that reads it only when it
-    /// starts and asked for this (#2072), then re-opens the documents it held.
+    /// Restarts the one server that opted into restarts for workspace artefacts or project membership changes,
+    /// then re-opens the documents it held.
     /// </summary>
     /// <remarks>
     /// Only that server: the others neither read its file nor should lose their state. One that isn't running is left
@@ -1204,12 +1294,8 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
                 // By registration: one added again under the id since is another server, whose file did not change.
                 if (_entries.FirstOrDefault(x => ReferenceEquals(x.Registration, server)) is not
                     { Client: not null, State: LanguageConnectionState.Running } e) return;
-                _logger.LogInformation("Restarting {Server}: its workspace artefact changed.", serverId);
-                foreach (var (uri, known) in _open)
-                    if (ClaimantsFor(uri, known.IsProjectMember).Contains(e)) HoldOpen(e, uri);
-                await StopForRestartAsync(e);
-                await ReopenKnownDocumentsAsync(null, CancellationToken.None, only: e);
-                ConnectionsChanged?.Invoke(this, EventArgs.Empty);
+                _logger.LogInformation("Restarting {Server}: a workspace update requested a restart.", serverId);
+                await RestartEntryAsync(e, CancellationToken.None, startWithoutDocuments: server.RestartOnProjectChange);
             }
             finally { _restartGate.Release(); }
         }
@@ -1480,7 +1566,12 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     private void OnInnerProgress(object? sender, ProgressParams p) => ProgressReceived?.Invoke(sender,
         p with { ServerDisplayName = _entries.FirstOrDefault(e => ReferenceEquals(e.Client, sender))?.Registration.DisplayName });
 
-    private void OnInnerMessage(object? sender, ShowMessageParams p) => MessageShown?.Invoke(this, p);
+    private void OnInnerMessage(object? sender, ShowMessageParams p) => MessageShown?.Invoke(this,
+        p.ServerDisplayName is null ? p : p with
+        {
+            ServerDisplayName = _entries.FirstOrDefault(e => ReferenceEquals(e.Client, sender))?.Registration.DisplayName
+                ?? p.ServerDisplayName,
+        });
 
     private void OnInnerCodeLensRefresh(object? sender, EventArgs e) =>
         CodeLensRefreshRequested?.Invoke(sender, e);

@@ -5,6 +5,7 @@ using HexIDE.Events;
 using HexIDE.Forms.ViewModels;
 using HexIDE.Forms.Views;
 using HexIDE.IDE;
+using HexIDE.Language;
 using HexIDE.Localization;
 using HexIDE.Lsp;
 using HexIDE.Lsp.Messages;
@@ -31,7 +32,7 @@ public class GuardedWritersTests : IDisposable
 
     public GuardedWritersTests()
     {
-        localization.GetString("Str.CodeEditor.Msg.RenameTouchesReadOnly").Returns("rename refused");
+        localization.GetString("Str.CodeEditor.Msg.RenameChangesReadOnlyText").Returns("rename refused");
     }
 
     public void Dispose()
@@ -86,7 +87,9 @@ public class GuardedWritersTests : IDisposable
             Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            Substitute.For<HexIDE.Debugging.IRunScope>(), localization);
+            Substitute.For<HexIDE.Debugging.IRunScope>(), localization,
+                new Vb6ProjectFileFormat(),
+                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader(), regionRules: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionRules(), regionWriter: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter());
         made.Add(vm);
         return vm;
     }
@@ -104,6 +107,110 @@ public class GuardedWritersTests : IDisposable
         form.MarkUnfaithfulToSave(UnfaithfulSaveCause.UnreproducibleBinaryContent,
             "it references companion binary content HexIDE cannot re-emit (0 of 1 blob(s) reached the model)");
         return NewEditor().Initialize(form);
+    }
+
+    [AvaloniaFact]
+    public async Task WholeFileReadOnlyRefusesAddProcedureBeforeItsDialog()
+    {
+        localization.GetString("Str.CodeEditor.FileNotSaved.Banner").Returns("file cannot be saved");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+
+        await vm.AddProcedure();
+
+        vm.Document.Text.Should().Be(before);
+        await windowManager.DidNotReceive().ShowDialog(Arg.Any<HexIDE.Forms.ViewModels.AddProcedureViewModel>());
+        await windowManager.Received().MessageBox("file cannot be saved", Arg.Any<string>(),
+            Arg.Any<MessageBoxButtons>(), MessageBoxIcon.Information);
+    }
+
+    [AvaloniaFact]
+    public async Task WholeFileReadOnlyRefusesAnEventStub()
+    {
+        localization.GetString("Str.CodeEditor.FileNotSaved.Banner").Returns("file cannot be saved");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+
+        typeof(CodeEditorViewModel).GetMethod("InsertEventHandlerStub",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.Invoke(vm, ["Form", "Load"]);
+
+        vm.Document.Text.Should().Be(before);
+        await windowManager.Received().MessageBox("file cannot be saved", Arg.Any<string>(),
+            Arg.Any<MessageBoxButtons>(), MessageBoxIcon.Information);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WholeFileReadOnlyRefusesReplace(bool all)
+    {
+        localization.GetString("Str.CodeEditor.FileNotSaved.Banner").Returns("file cannot be saved");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+        vm.Document.Insert(vm.Document.TextLength, "' undo marker");
+        vm.Document.UndoStack.Undo();
+        var dock = Substitute.For<IDocumentDockService>();
+        dock.ActiveDocument.Returns(vm);
+        dock.OpenDocuments.Returns([vm]);
+        var find = new FindReplaceViewModel(windowManager, dock, localization)
+        {
+            SearchText = "False", ReplaceText = "True", Scope = FindScope.CurrentModule
+        };
+        vm.SelectionStart = before.IndexOf("False", StringComparison.Ordinal);
+        vm.SelectionLength = 5;
+
+        if (all) await find.ReplaceAllAsync();
+        else await find.ReplaceOneAsync();
+
+        vm.Document.Text.Should().Be(before);
+        vm.Document.UndoStack.CanUndo.Should().BeFalse();
+        vm.Document.UndoStack.CanRedo.Should().BeTrue();
+        await windowManager.Received().MessageBox("file cannot be saved", Arg.Any<string>(),
+            Arg.Any<MessageBoxButtons>(), MessageBoxIcon.Information);
+    }
+
+    [AvaloniaFact]
+    public void WholeFileReadOnlyRefusesFormattingFromDocumentOrSave()
+    {
+        localization.GetString("Str.CodeEditor.FileNotSaved.Banner").Returns("file cannot be saved");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+        vm.Document.Insert(vm.Document.TextLength, "' undo marker");
+        vm.Document.UndoStack.Undo();
+
+        vm.ApplyFormatting([new TextEdit(new HexIDE.Lsp.Messages.Range(
+            new Position(0, 0), new Position(vm.Document.LineCount, 0)), before.Replace("False", "True"))]);
+
+        vm.Document.Text.Should().Be(before);
+        vm.Document.UndoStack.CanUndo.Should().BeFalse();
+        vm.Document.UndoStack.CanRedo.Should().BeTrue();
+        windowManager.Received().MessageBox("file cannot be saved", Arg.Any<string>(),
+            Arg.Any<MessageBoxButtons>(), MessageBoxIcon.Information);
+    }
+
+    [AvaloniaFact]
+    public async Task WholeFileReadOnlyRefusesInsertFile()
+    {
+        localization.GetString("Str.CodeEditor.FileNotSaved.Banner").Returns("file cannot be saved");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+        vm.Document.Insert(vm.Document.TextLength, "' undo marker");
+        vm.Document.UndoStack.Undo();
+        var file = System.IO.Path.GetTempFileName();
+        try
+        {
+            await System.IO.File.WriteAllTextAsync(file, "' inserted");
+            windowManager.OpenFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerOpenOptions>())
+                .Returns(new[] { file });
+            await vm.InsertFileAsync(vm.Document.TextLength, 0);
+
+            vm.Document.Text.Should().Be(before);
+            vm.Document.UndoStack.CanUndo.Should().BeFalse();
+            vm.Document.UndoStack.CanRedo.Should().BeTrue();
+            await windowManager.Received().MessageBox("file cannot be saved", Arg.Any<string>(),
+                Arg.Any<MessageBoxButtons>(), MessageBoxIcon.Information);
+        }
+        finally { System.IO.File.Delete(file); }
     }
 
     private CodeEditorViewModel OpenClass()
@@ -561,6 +668,33 @@ public class GuardedWritersTests : IDisposable
         vm.Document.Text.Should().Be(before);
     }
 
+    [AvaloniaTheory]
+    [InlineData(2, "A and B")]
+    [InlineData(3, "A, B and C")]
+    public void AnEditReachingSeveralMembersNamesThemTogether(int count, string names)
+    {
+        var vm = OpenClass();
+        vm.Document.Text = string.Concat(new[] { "A", "B", "C" }.Take(count).Select(name =>
+            $"Public Sub {name}()\r\nAttribute {name}.VB_Description = \"x\"\r\nEnd Sub\r\n"));
+        var before = vm.Document.Text;
+        var start = before.IndexOf("Attribute", StringComparison.Ordinal);
+        var end = before.LastIndexOf("End Sub", StringComparison.Ordinal);
+
+        vm.ApplyEdits([new TextChange(start, end - start, "")]).Should().Be(
+            $"The edit at line 2, column 1 would change the Attribute lines describing {names}, which only the IDE changes. Nothing was changed.");
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public void ALineBreakBeforeAMembersRunUsesTheFormatsWords()
+    {
+        var vm = OpenClass();
+        var line = vm.Document.GetLineByOffset(vm.Document.Text.IndexOf("Public Function Total", StringComparison.Ordinal));
+
+        vm.ApplyEdits([new TextChange(line.EndOffset, 0, "\r\nx")]).Should()
+            .Contain("in the line above the Attribute lines describing Total");
+    }
+
     [AvaloniaFact]
     public void AnEditInsideAMembersAttributeLineIsRefused()
     {
@@ -604,6 +738,79 @@ public class GuardedWritersTests : IDisposable
 
         result.Refusal.Should().Contain("the Attribute lines describing Total are changed");
         vm.Document.Text.Should().Be(before);
+    }
+
+    // #3687: these already-fixed paths must stay English even with a real German pack active.
+    [AvaloniaTheory]
+    [InlineData("whole file")]
+    [InlineData("range findings")]
+    [InlineData("line break")]
+    public void ProgramRefusalsStayEnglishInAGermanIde(string path)
+    {
+        var german = new LocalizationService();
+        german.Apply("de");
+        try
+        {
+            german.ActiveLanguage.Should().Be("de");
+            german.GetString("Str.CodeEditor.FileNotSaved.Banner").Should().StartWith("Diese Datei");
+            localization.GetString(Arg.Any<string>()).Returns(c => german.GetString(c.Arg<string>()));
+            var vm = path == "whole file" ? OpenFormHeldReadOnly() : OpenClass();
+            var before = vm.Document.Text;
+
+            if (path == "whole file")
+            {
+                vm.ReplaceContent(before + "' edit").Refusal.Should().Be(
+                    $"This file will not be saved: {Distribution.DisplayName} cannot yet reproduce it faithfully, so saving it would change it. "
+                    + "Its code is part of the file, so no change to it is accepted. Nothing was changed.");
+            }
+            else if (path == "range findings")
+            {
+                vm.ApplyEdits([new TextChange(vm.Document.TextLength, 0,
+                    "Public Sub Added()\r\nAttribute Added.VB_Description = \"x\"\r\nEnd Sub\r\n")]).Should().Be(
+                    "Edits refused: Attribute lines describing Added are added. Nothing was changed.");
+            }
+            else
+            {
+                var line = vm.Document.GetLineByOffset(before.IndexOf("Public Function Total", StringComparison.Ordinal));
+                vm.ApplyEdits([new TextChange(line.EndOffset, 0, "\r\nx")]).Should().Be(
+                    $"The edit at line {line.LineNumber}, column {line.Length + 1} would put a line break in the line above the Attribute lines describing Total or in that line's trailing comment, "
+                    + "parting the line from the read-only text below it. Insert new lines after that read-only text instead. Nothing was changed.");
+            }
+
+            vm.Document.Text.Should().Be(before);
+            vm.Document.UndoStack.CanUndo.Should().BeFalse();
+        }
+        finally
+        {
+            german.Apply("en");
+        }
+    }
+
+    [AvaloniaFact]
+    public void WholeFileReadOnlyRefusesContentReplacement()
+    {
+        localization.GetString(Arg.Any<string>()).Returns(c => "⟦" + c.Arg<string>() + "⟧");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+
+        vm.ReplaceContent(before.Replace("= False", "= True")).Refusal.Should().Be($"This file will not be saved: {Distribution.DisplayName} cannot yet reproduce it faithfully, so saving it would change it. Its code is part of the file, so no change to it is accepted. Nothing was changed.");
+
+        vm.Document.Text.Should().Be(before);
+        vm.Document.UndoStack.CanUndo.Should().BeFalse();
+    }
+
+    [AvaloniaFact]
+    public void WholeFileReadOnlyRefusesRangeEdits()
+    {
+        localization.GetString(Arg.Any<string>()).Returns(c => "⟦" + c.Arg<string>() + "⟧");
+        var vm = OpenFormHeldReadOnly();
+        var before = vm.Document.Text;
+
+        vm.ApplyEdits([new TextChange(before.IndexOf("False", StringComparison.Ordinal), 5, "True")])
+            .Should().Be($"This file will not be saved: {Distribution.DisplayName} cannot yet reproduce it faithfully, so saving it would change it. Its code is part of the file, so no change to it is accepted. Nothing was changed.");
+
+        vm.Document.Text.Should().Be(before);
+        vm.Document.UndoStack.CanUndo.Should().BeFalse();
     }
 
     // ── Add-in SetContent and automation set_file_content: whole file with its header, or code alone ────
@@ -688,10 +895,10 @@ public class GuardedWritersTests : IDisposable
     [AvaloniaFact]
     public void AFileInsertedAfterAHeaderWithNoFinalLineBreakStartsALineOfItsOwn()
     {
-        // The header's attribute run carries on into the code, whose last line has no terminator.
-        var module = TestHelpers.CreateModule(name: "Module1");
-        module.UpdateCode("Attribute VB_Description = \"Helpers\"");
-        var vm = NewEditor().Initialize(module);
+        // A form's leading attribute run stays read-only, even with no final terminator.
+        var form = new FormDefinition(Project, HexIDE.Runtime.Components.FormComponentClass.Instance, "Module1");
+        form.UpdateCode("Attribute VB_Description = \"Helpers\"");
+        var vm = NewEditor().Initialize(form);
         var before = vm.Document.Text;
 
         vm.InsertPastReadOnlyRegion(3, 0, "Sub Main()\r\nEnd Sub\r\n");

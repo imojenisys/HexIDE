@@ -55,6 +55,49 @@ public class ShippedPackParityTests
     /// <summary>The canonical pack every other one is measured against.</summary>
     private const string Canonical = "en";
 
+    [Theory]
+    [InlineData("Str.CodeEditor.Msg.RenameChangesReadOnlyText", "Str.CodeEditor.Msg.RenameTouchesReadOnly")]
+    [InlineData("Str.CodeEditor.Msg.NoMarkOnReadOnlyText", "Str.CodeEditor.Msg.NoMarkOnReadOnlyLine")]
+    [InlineData("Str.FindReplace.Msg.ReadOnlyTextOnly", "Str.FindReplace.Msg.ProtectedOnly")]
+    [InlineData("Str.FindReplace.Msg.ReplacementsSkippingReadOnlyText", "Str.FindReplace.Msg.ReplacementsWithSkipped")]
+    public void PeopleSeeTheIdesOwnWordsForReadOnlyText(string key, string retiredKey)
+    {
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(PacksDirectory(), "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+        canonical.Should().ContainKey(key);
+        foreach (var word in new[] { "Attribute", "header", "designer", "VB6" })
+            canonical[key].Should().NotContainEquivalentOf(word);
+        foreach (var file in Directory.EnumerateFiles(PacksDirectory(), "*.json"))
+        {
+            var pack = JsonSerializer.Deserialize(File.ReadAllText(file),
+                LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+            pack.Should().NotContainKey(retiredKey, file);
+            if (IsFullTranslation(Path.GetFileNameWithoutExtension(file)))
+            {
+                pack.Should().ContainKey(key, file);
+                Regex.Matches(pack[key], @"\{\d+\}").Select(m => m.Value).Should().BeEquivalentTo(
+                    Regex.Matches(canonical[key], @"\{\d+\}").Select(m => m.Value), file);
+            }
+        }
+    }
+
+    [Fact]
+    public void NoPackHasKeysAbsentFromCanonicalEnglish()
+    {
+        var packs = PacksDirectory();
+        var canonical = KeysOf(Path.Combine(packs, $"{Canonical}.json"));
+        canonical.Should().NotBeEmpty("the canonical pack defines the keys that may ship");
+
+        var unexpected = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(packs, "*.json"))
+        {
+            unexpected.AddRange(KeysOf(file).Except(canonical).Order(StringComparer.Ordinal)
+                .Select(key => $"{Path.GetFileName(file)}: {key}"));
+        }
+
+        unexpected.Should().BeEmpty("all packs, including regional overrides, use only canonical English keys");
+    }
+
     [Fact]
     public void PackAmpersandsAreLiteralRatherThanAccessKeyMarkers()
     {
@@ -76,6 +119,40 @@ public class ShippedPackParityTests
 
         unexpected.Should().BeEmpty("Avalonia access keys are underscores, never ampersands (#347)");
     }
+
+    [Fact]
+    public void TheBrandRewriteNeverReachesAUrlOrAPathInAPack()
+    {
+        // BrandText takes the literal product name in a pack as the place a distribution's own name goes (#2042). A link
+        // or a folder spelled with that name would come out broken in every branded build, and nothing else would say so.
+        const string brand = "BRANDNAME";
+        var broken = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(PacksDirectory(), "*.json"))
+        {
+            var strings = JsonSerializer.Deserialize(File.ReadAllText(file),
+                LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+            BrandText.Apply(strings, brand);
+            broken.AddRange(strings
+                .Where(pair => PutsNameInAUrlOrAPath(pair.Value, brand))
+                .Select(pair => $"{Path.GetFileName(file)}: {pair.Key}"));
+        }
+
+        broken.Should().BeEmpty("a URL or a path must not spell the product name where BrandText would rewrite it");
+    }
+
+    [Theory]
+    [InlineData("See https://github.com/hexide-io/BRANDNAME for more.", true)]
+    [InlineData(@"Look in logs\BRANDNAME\today.", true)]
+    [InlineData("Look in ~/.config/BRANDNAME.", true)]
+    [InlineData("About BRANDNAME...", false)]
+    [InlineData("BRANDNAME's safety", false)]
+    [InlineData("Either/or, in BRANDNAME", false)]
+    public void TheUrlOrPathGuardCatchesTheNameInsideOneOnly(string text, bool caught) =>
+        PutsNameInAUrlOrAPath(text, "BRANDNAME").Should().Be(caught);
+
+    private static bool PutsNameInAUrlOrAPath(string text, string brand) =>
+        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Any(word => word.Contains(brand, StringComparison.Ordinal) && (word.Contains('/') || word.Contains('\\')));
 
     [Fact]
     public void EveryShippedPackNameMatchesItsEnglishManifestName()
@@ -245,7 +322,8 @@ public class ShippedPackParityTests
         {
             var translated = bulgarian.Strings[key];
             translated.Should().NotBeNullOrWhiteSpace(key);
-            translated.Replace("VB6_EXE", "").Replace("VB_Name", "").Should().NotContain("_", key);
+            translated.Replace("VB6_EXE", "").Replace("VB_Name", "").Replace("HEXIDE_AI_API_KEY", "")
+                .Should().NotContain("_", key);
             System.Text.RegularExpressions.Regex.Matches(translated, @"\{\d+[^}]*\}")
                 .Select(m => m.Value).Should().BeEquivalentTo(
                     System.Text.RegularExpressions.Regex.Matches(value, @"\{\d+[^}]*\}")
@@ -423,6 +501,7 @@ public class ShippedPackParityTests
             .Select(pair => pair.Key).Should().BeEquivalentTo(new[]
             {
                 "Str.Tool.FindReferences.Error",
+                "Str.Options.Addin.Status.Incompatible",
                 "Str.CodeEditor.ViewAs.Vb6", "Str.Tool.Locals.Ellipsis",
                 "Str.Dialog.AddProcedure.Type.Sub", "Str.Dialog.MenuEditor.Visible",
                 "Str.Tool.ProtocolInspector.DetailHeader", "Str.StatusBar.Insert",
@@ -431,6 +510,7 @@ public class ShippedPackParityTests
                 "Str.Document.UserControlSuffix", "Str.Document.PropertyPageSuffix",
                 "Str.Dialog.Color.Rgb",
                 "Str.Tool.Outline.Kind.Interface", "Str.Tool.Outline.Kind.Variable",
+                "Str.Dock.DocumentTabStripItemLayoutModeMdi",
                 "Str.Tool.LanguageServers.Vm.Age.Seconds",
                 "Str.Tool.LanguageServers.Vm.Elapsed",
             });

@@ -40,12 +40,12 @@ public class DesignerOverlayTreeTests
     internal static Designer Shown()
     {
         var toolbox = new ToolBoxToolViewModel(
-            Substitute.For<IDocumentDockService>(), Substitute.For<IComponentRegistry>(),
+            Substitute.For<IDocumentDockService>(), new ComponentRegistry(),
             Substitute.For<ILocalizationService>());
         toolbox.SelectedComponent = toolbox.Components.First(c => c.BaseClass == CommandButtonComponentClass.Instance);
         var vm = new FormEditViewModel(toolbox, Substitute.For<IEventBus>(),
                 Substitute.For<IProjectService>(), null!, null!, Substitute.For<ISettingsService>(),
-                Substitute.For<ILocalizationService>())
+                Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat())
             .Initialize(new FormDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), FormComponentClass.Instance, "Form1"));
         var view = new FormEditView { DataContext = vm };
         var window = new Window { Width = 800, Height = 600, Content = view };

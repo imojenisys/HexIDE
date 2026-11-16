@@ -33,6 +33,72 @@ public sealed class WorkspaceArtifactGenerationTests : IDisposable
         "probe", "Probe server", [".c"], "c", () => Substitute.For<ILspClient>(),
         WorkspaceArtifact: new(path, "probe"));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedFolderKeepsFirstProjectAndReportsBothUntilSeparated(bool importing)
+    {
+        var first = new WorkspaceArtifactContext(_root, new("First", "First.vbp", [], []));
+        var second = new WorkspaceArtifactContext(Path.Combine(_root, "."), new("Second", "Second.vbp", [], []));
+        _workspace.Projects = [first, second];
+        _provider.UseProjectName = true;
+        var server = importing ? Server() with
+        {
+            ProjectImport = new("probe.import", JsonDocument.Parse("[]").RootElement.Clone()),
+        } : Server();
+        await using var registry = new LspClientRegistry(
+            [server, Server() with { Id = "plain", WorkspaceArtifact = null }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        registry.ConfigurationProblems.Should().ContainSingle().Which.Message.Should().Contain("First").And.Contain("Second");
+        var notifications = 0;
+        registry.ConnectionsChanged += (_, _) => notifications++;
+        var imported = new List<string>();
+        if (importing)
+            await _service.ImportAsync(server, (project, _) =>
+            {
+                imported.Add(project.Project.Name);
+                return Task.CompletedTask;
+            }, TestContext.Current.CancellationToken);
+        else
+            await _service.PrepareAsync(server, TestContext.Current.CancellationToken);
+
+        if (importing) imported.Should().Equal("First");
+        else
+        {
+            _provider.Calls.Should().Be(1);
+            File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("First");
+        }
+        var problem = registry.ConfigurationProblems.Should().ContainSingle().Subject;
+        problem.EntryId.Should().Be(server.Id);
+        problem.Message.Should().Contain("First").And.Contain("Second");
+        problem.EntryRejected.Should().BeFalse();
+        notifications.Should().Be(0);
+        _workspace.Projects = [first, second with { WorkspaceRoot = Path.Combine(_root, "separate") }];
+        _workspace.Change();
+        await Debounce();
+        registry.ConfigurationProblems.Should().BeEmpty();
+        notifications.Should().Be(1);
+        if (importing) imported.Should().Equal("First", "First", "Second");
+        else File.ReadAllText(Path.Combine(_root, "separate", "generated.json")).Should().Be("Second");
+    }
+
+    [Fact]
+    public async Task ArtefactWritesReportOnlyCompletedMaterialChangesDirectly()
+    {
+        var changed = new List<(string Path, int Type)>();
+        var signal = typeof(WorkspaceArtifactService).GetEvent("FileChanged");
+        signal.Should().NotBeNull();
+        signal!.AddEventHandler(_service, (Action<string, int>)((path, type) => changed.Add((path, type))));
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        _provider.Content = "replacement";
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        _provider.Content = null;
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        changed.Should().Equal((Path.Combine(_root, "generated.json"), 1), (Path.Combine(_root, "generated.json"), 2),
+            (Path.Combine(_root, "generated.json"), 3));
+    }
+
     [Fact]
     public async Task IdenticalRegenerationPreservesWriteTime()
     {
@@ -348,6 +414,88 @@ public sealed class WorkspaceArtifactGenerationTests : IDisposable
         other.Should().ContainSingle("only the server whose artefact changed is restarted");
         await other[0].Received(1).OpenDocumentAsync(uri, "int x;", Arg.Any<CancellationToken>());
         await other[0].DidNotReceive().StopAsync();
+    }
+
+    [Theory]
+    [InlineData(true, "add")]
+    [InlineData(true, "remove")]
+    [InlineData(true, "same folder")]
+    [InlineData(false, "add")]
+    [InlineData(false, "remove")]
+    [InlineData(true, "source")]
+    public async Task ProjectMembershipRestartsOnlyOptedInConnections(bool enabled, string change)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = new WorkspaceArtifactContext(_root, new("First", Path.Combine(_root, "First.vbp"), [], []));
+        var secondRoot = change == "same folder" ? _root : Path.Combine(_root, "second");
+        var second = new WorkspaceArtifactContext(secondRoot,
+            new("Second", Path.Combine(secondRoot, "Second.vbp"), [], []));
+        _workspace.Projects = [first, second];
+        var clients = new List<ILspClient>();
+        var other = new List<ILspClient>();
+        // Exercise the JSON entry through registration, not just a hand-built registration's flag.
+        var entry = JsonSerializer.Deserialize<LanguageServerEntry>(
+            $$"""
+            { "id": "probe", "extensions": [".c"], "languageId": "c", "transport": "stdio", "command": "probe",
+              "restartOnProjectChange": {{(enabled ? "true" : "null")}} }
+            """)!;
+        var registration = new LanguageServerRegistrationFactory(NullLoggerFactory.Instance).Create([entry]).Single()
+            with { CreateClient = () => Track(clients) };
+        await using var registry = new LspClientRegistry(
+            [registration, Server() with { Id = "other", WorkspaceArtifact = null, CreateClient = () => Track(other) }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        var uri = new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri;
+        await registry.OpenDocumentAsync(uri, "int x;", ct);
+        if (change == "remove") _workspace.Projects = [first];
+        else if (change == "source")
+            _workspace.Projects = [first with { Project = first.Project with
+                { Files = [new("outside.c", Path.Combine(_root, "outside.c"), WorkspaceProjectFileKind.Carried)] } }, second];
+        else _workspace.Projects = [first, second,
+            new(secondRoot, new("Third", Path.Combine(secondRoot, "Third.vbp"), [], []))];
+        _workspace.Change();
+        _workspace.Change();
+        await Debounce();
+        var shouldRestart = enabled && change != "source";
+        if (shouldRestart)
+        {
+            for (var waited = 0; clients.Count < 2 && waited < 5000; waited += 25)
+                await Task.Delay(25, ct);
+            clients.Should().HaveCount(2);
+            await clients[0].Received(1).StopAsync();
+            await clients[1].Received(1).OpenDocumentAsync(uri, "int x;", Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            clients.Should().ContainSingle();
+            await clients[0].DidNotReceive().StopAsync();
+            await clients[0].Received(1).UpdateWorkspaceFoldersAsync(Arg.Any<CancellationToken>());
+        }
+        other.Should().ContainSingle();
+        await other[0].DidNotReceive().StopAsync();
+        await other[0].Received(1).UpdateWorkspaceFoldersAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProjectMembershipRestartsAManuallyStartedConnectionWithoutDocuments()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var clients = new List<ILspClient>();
+        await using var registry = new LspClientRegistry(
+            [Server() with { WorkspaceArtifact = null, RestartOnProjectChange = true,
+                CreateClient = () => Track(clients) }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        await registry.RestartAsync("probe", ct);
+        clients.Should().ContainSingle();
+        _workspace.Projects = [.. _workspace.Projects,
+            new(Path.Combine(_root, "second"), new("Second", Path.Combine(_root, "Second.vbp"), [], []))];
+        _workspace.Change();
+        await Debounce();
+        for (var waited = 0; clients.Count < 2 && waited < 5000; waited += 25)
+            await Task.Delay(25, ct);
+        clients.Should().HaveCount(2);
+        await clients[0].Received(1).StopAsync();
+        await clients[1].Received(1).StartAsync(Arg.Any<CancellationToken>());
+        await clients[1].DidNotReceiveWithAnyArgs().OpenDocumentAsync(default!, default!, Arg.Any<CancellationToken>());
     }
 
     private LanguageServerRegistration Importing(ILspClient client) => Server() with
@@ -902,6 +1050,7 @@ public sealed class WorkspaceArtifactGenerationTests : IDisposable
     private sealed class Provider : IWorkspaceArtifactProvider
     {
         public string Name => "probe";
+        public bool UseProjectName { get; set; }
         public string? Content { get; set; } = "first";
         public int Calls { get; private set; }
         public Exception? Failure { get; set; }
@@ -911,6 +1060,7 @@ public sealed class WorkspaceArtifactGenerationTests : IDisposable
             Calls++;
             OnProduce?.Invoke();
             if (Failure is not null) throw Failure;
+            if (UseProjectName) return context.Project.Name;
             return Content is null || context.LibraryNames is not { } names ? Content
                 : Content + " " + names.NameOf(new WorkspaceProjectReference("library"));
         }

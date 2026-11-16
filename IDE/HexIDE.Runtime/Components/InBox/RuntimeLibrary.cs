@@ -59,6 +59,9 @@ public sealed class RuntimeLibrary
 
     public IReadOnlyList<LibraryClass> Classes { get; } = [];
 
+    // #2265 and oracle PR #3956: measured names; Tab is qualified only.
+    internal IReadOnlyList<string> ControlClasses { get; init; } = [];
+
     public bool IsNamedBy(VbReference reference) =>
         Guid.Equals(reference.Guid, StringComparison.OrdinalIgnoreCase) && Version == reference.Version;
 
@@ -163,7 +166,13 @@ public static class ControlLibraries
             ["TabStrip"] = 1089, ["Toolbar"] = 1088, ["StatusBar"] = 1087, ["ProgressBar"] = 1082, ["TreeView"] = 1086,
             ["ListView"] = 1085, ["ImageList"] = 1083, ["Slider"] = 1091, ["ImageCombo"] = 1092,
         },
-        "mscomctl-constants.json");
+        "mscomctl-constants.json")
+    {
+        ControlClasses = ["ImageList", "ListImages", "ListImage", "ListView", "ListItems", "ListItem",
+            "ColumnHeaders", "ColumnHeader", "TreeView", "Nodes", "Node", "ProgressBar",
+            "StatusBar", "Panels", "Panel", "Toolbar", "Buttons", "Button", "TabStrip", "Tabs", "Tab",
+            "ListSubItems", "ListSubItem", "ButtonMenus", "ButtonMenu"],
+    };
 
     /// <summary>COMCTL32.OCX, Microsoft Windows Common Controls 5.0: the same controls but ImageCombo, which 6.0 added.</summary>
     public static readonly RuntimeLibrary ComctlLib = new("ComctlLib", "Microsoft Windows Common Controls 5.0 (SP2)",
@@ -174,7 +183,12 @@ public static class ControlLibraries
             ["TabStrip"] = 1089, ["Toolbar"] = 1088, ["StatusBar"] = 1087, ["ProgressBar"] = 1082, ["TreeView"] = 1086,
             ["ListView"] = 1085, ["ImageList"] = 1083, ["Slider"] = 1091,
         },
-        "comctl32-constants.json");
+        "comctl32-constants.json")
+    {
+        ControlClasses = ["ImageList", "ListImages", "ListImage", "ListView", "ListItems", "ListItem",
+            "ColumnHeaders", "ColumnHeader", "TreeView", "Nodes", "Node", "ProgressBar",
+            "StatusBar", "Panels", "Panel", "Toolbar", "Buttons", "Button", "TabStrip", "Tabs", "Tab"],
+    };
 
     public static readonly RuntimeLibrary MSFlexGridLib = new("MSFlexGridLib", "MSFLXGRD.OCX",
         "{5E9E78A0-531B-11CF-91F6-C2863C385E30}", "1.0", "MSFLXGRD.OCX", 393216,
@@ -251,10 +265,21 @@ public static class RuntimeLibraries
         IReadOnlyList<RuntimeLibrary>? known = null)
     {
         var result = new List<RuntimeLibrary>();
-        foreach (var reference in project.References)
+        var entries = new List<(int Slot, int Kind, RuntimeLibrary Library)>();
+        var referenceSlots = project.KnownLineKeys.Select((key, slot) => (key, slot))
+            .Where(entry => entry.key.Equals("Reference", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => entry.slot).ToList();
+        for (var i = 0; i < project.References.Count; i++)
             foreach (var library in known ?? All)
-                if (library.IsNamedBy(reference) && !result.Contains(library))
-                    result.Add(library);
+                if (library.IsNamedBy(project.References[i]))
+                    entries.Add((i < referenceSlots.Count ? referenceSlots[i] : -1, 1, library));
+        var afterForms = project.KnownLineKeys.FindLastIndex(key => key.Equals("Form", StringComparison.OrdinalIgnoreCase)) + 1;
+        foreach (var (hint, line) in project.UnknownPreSectionLines)
+            if (ObjectReference.TryParse(line, out var reference) && ControlLibraries.For(reference) is { } library)
+                entries.Add((hint == ProjectDefinition.AfterFormsHint ? afterForms : hint, 0, library));
+        // Unknown lines precede the recognised key at their slot; ties retain their read order (#2265).
+        foreach (var entry in entries.OrderBy(entry => entry.Slot).ThenBy(entry => entry.Kind))
+            if (!result.Contains(entry.Library)) result.Add(entry.Library);
         foreach (var library in ControlLibraries.ReferencedBy(project))
             if (!result.Contains(library)) result.Add(library);
         return result;

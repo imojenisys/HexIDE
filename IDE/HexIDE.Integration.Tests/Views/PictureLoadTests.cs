@@ -32,7 +32,7 @@ public class PictureLoadTests
     public void Both_property_tabs_offer_load_buttons_only_on_picture_rows()
     {
         var grid = new PropertiesToolViewModel(Substitute.For<IDocumentDockService>(), new EventBus(),
-            Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>());
+            Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat());
         foreach (var property in new PropertyClass[] { VBProperties.PictureProperty, VBProperties.IconProperty,
                      VBProperties.DragIconProperty, VBProperties.MouseIconProperty, VBProperties.CaptionProperty })
         {
@@ -49,7 +49,7 @@ public class PictureLoadTests
             {
                 view.FindControl<TabItem>(tab)!.IsSelected = true;
                 window.UpdateLayout();
-                foreach (var row in grid.Properties)
+                foreach (var row in grid.Properties.OfType<PropertyViewModel>())
                 {
                     var buttons = view.GetVisualDescendants().OfType<Button>()
                         .Where(b => b.IsEffectivelyVisible && ReferenceEquals(b.DataContext, row)
@@ -123,15 +123,15 @@ public class PictureLoadTests
             var bus = new EventBus();
             var loc = Substitute.For<ILocalizationService>();
             loc.GetString("Str.Tool.Properties.LoadPictureFailed").Returns("Cannot load picture '{0}'.");
-            using var designer = new FormEditViewModel(null!, bus, null!, null!, null!, null!, loc).Initialize(form);
+            using var designer = new FormEditViewModel(null!, bus, null!, null!, null!, null!, loc, new Vb6ProjectFileFormat()).Initialize(form);
             var dock = Substitute.For<IDocumentDockService>();
             dock.ActiveDocument.Returns(designer);
             var windows = Substitute.For<IWindowManager>();
             windows.OpenFilePickerAsync(Arg.Any<FilePickerOpenOptions>())
                 .Returns(outcome == "cancel" ? null : new[] { path });
-            var grid = new PropertiesToolViewModel(dock, bus, windows, loc);
+            var grid = new PropertiesToolViewModel(dock, bus, windows, loc, new Vb6ProjectFileFormat());
             designer.SelectedComponent = designer.AllComponents.Single(c => c.Instance == instance);
-            var row = grid.Properties.Single(p => p.PropertyClass == property);
+            var row = grid.Properties.OfType<PropertyViewModel>().Single(p => p.PropertyClass == property);
             row.CanLoadPicture.Should().BeTrue();
             await row.LoadPictureCommand.ExecuteAsync(null);
             await windows.Received(1).OpenFilePickerAsync(Arg.Is<FilePickerOpenOptions>(o => !o.AllowMultiple));
@@ -156,9 +156,9 @@ public class PictureLoadTests
             designer.CanUndo.Should().BeFalse();
             designer.UndoStack.Redo();
             form.AbsolutePath = Path.ChangeExtension(path, ".frm");
-            var service = new ProjectService(null!, windows, bus, Substitute.For<IProjectManager>(),
+            var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(), null!, windows, bus, Substitute.For<IProjectManager>(),
                 Substitute.For<IRecentProjectsService>(), Substitute.For<IReferenceLibraryService>(),
-                Substitute.For<IUserSidecarService>(), new FileBaselineStore(), loc, Substitute.For<IHeaderRefresher>());
+                Substitute.For<IUserSidecarService>(), new FileBaselineStore(), loc, Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry());
             (await service.SaveForm(form, saveAs: false, interactive: false)).Should().BeTrue();
             var source = await File.ReadAllTextAsync(form.AbsolutePath);
             var companion = await File.ReadAllBytesAsync(Path.ChangeExtension(path, ".frx"));

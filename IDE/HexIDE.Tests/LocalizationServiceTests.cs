@@ -43,7 +43,7 @@ public class LocalizationServiceTests
     [InlineData("Str.Tool.ObjectBrowser.Toolbar.CopySignature", "Kopiuj sygnaturę do schowka")]
     [InlineData("Str.Tool.ObjectBrowser.Toolbar.ClearSearch", "Wyczyść wyszukiwanie")]
     [InlineData("Str.Tool.Properties.Title", "Właściwości")]
-    [InlineData("Str.Tool.Project.Title", "Grupa projektów - Group1")]
+    [InlineData("Str.Tool.Project.TitleGroup", "Grupa projektów - {0}")]
     [InlineData("Str.Tool.FormLayout.Title", "Układ formularza")]
     [InlineData("Str.Tool.ObjectBrowser.Title", "Przeglądarka obiektów")]
     [InlineData("Str.Tool.Project.PropertiesFormat", "Właściwości {0}")]
@@ -369,7 +369,7 @@ public class LocalizationServiceTests
     [InlineData("ja")]
     [InlineData("zh-Hans")]
     [InlineData("zh-Hant")]
-    public void Apply_CjkPack_PreservesEveryEnglishAccessKey(string language)
+    public void Apply_CjkPack_PreservesEnglishAccessKeysExceptDock(string language)
     {
         var sut = CreateSut();
         sut.Apply("en");
@@ -378,8 +378,15 @@ public class LocalizationServiceTests
         sut.Apply(language);
         foreach (var (key, value) in canonical)
         {
+            // Dock labels omit access keys in non-Latin scripts (#3776).
+            if (key.StartsWith("Str.Dock.", StringComparison.Ordinal))
+            {
+                sut.GetString(key).Should().NotContain("_", key);
+                continue;
+            }
             // These underscores belong to identifiers, not access keys (#41).
-            if (key is "Str.Vb6Toolchain.Vb6NotFound" or "Str.Dialog.ConflictingNames")
+            if (key is "Str.Vb6Toolchain.Vb6NotFound" or "Str.Dialog.ConflictingNames"
+                or "Str.AIChat.ApiKeyRequired" or "Str.AIChat.PrivacyKeyTip")
                 continue;
             var marker = value.IndexOf('_');
             if (marker < 0) continue;
@@ -612,8 +619,10 @@ public class LocalizationServiceTests
         sut.GetString("Str.Menu.File").Should().NotBe("Str.Menu.File");
     }
 
-    [Fact]
-    public void Initialize_CapturesUiCultureBeforeInvariantPin()
+    [Theory]
+    [InlineData("LocalizationService.OsUICulture = CultureInfo.CurrentUICulture;")]
+    [InlineData("UserRegion.Culture = CultureInfo.CurrentCulture;")]
+    public void Initialize_CapturesCulturesBeforeInvariantPin(string assignment)
     {
         var root = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
         while (root != null && !System.IO.File.Exists(System.IO.Path.Combine(root.FullName, "IDE", "HexIDE", "App.axaml.cs")))
@@ -621,7 +630,7 @@ public class LocalizationServiceTests
         root.Should().NotBeNull();
         var source = System.IO.File.ReadAllText(System.IO.Path.Combine(root!.FullName, "IDE", "HexIDE", "App.axaml.cs"))
             .ReplaceLineEndings("\n");
-        var capture = source.IndexOf("LocalizationService.OsUICulture = CultureInfo.CurrentUICulture;", StringComparison.Ordinal);
+        var capture = source.IndexOf(assignment, StringComparison.Ordinal);
         capture.Should().BeGreaterThanOrEqualTo(0);
         capture.Should().BeLessThan(source.IndexOf("CultureInfo.DefaultThreadCurrentCulture =", StringComparison.Ordinal));
         capture.Should().BeLessThan(source.IndexOf("CultureInfo.DefaultThreadCurrentUICulture =", StringComparison.Ordinal));
@@ -1089,6 +1098,7 @@ public class LocalizationServiceTests
                 placeholders.Matches(canonical[key]).Select(m => m.Value), key);
             value.Replace("VB_Name", "", StringComparison.Ordinal)
                 .Replace("VB6_EXE", "", StringComparison.Ordinal)
+                .Replace("HEXIDE_AI_API_KEY", "", StringComparison.Ordinal)
                 .Should().NotContain("_", key);
         }
     }

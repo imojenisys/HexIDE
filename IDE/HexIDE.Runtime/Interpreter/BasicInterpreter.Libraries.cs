@@ -9,15 +9,17 @@ public partial class BasicInterpreter
 
     internal string? ControlClassFor(string name)
     {
-        // Reference= class precedence against Object= is unmeasured; retain the existing library-class lookup.
-        if (LibraryClassFor(name) is not null)
+        // Project names and managed library classes retain their existing lookup.
+        if (Modules.TryGet(name, out var module) && module.Kind is InterpreterModuleKind.Class or InterpreterModuleKind.Form
+            || LibraryClassFor(name) is not null)
             return null;
-        // ProgressBar is the first implemented control in these libraries. The project's Object= order wins (#2265).
+        // Project Reference=/Object= read order wins (#2265). Tab is legal only with its library.
         foreach (var library in BuiltIns.ControlLibraries)
-            if (library.Controls.ContainsKey("ProgressBar")
-                && (name.Equals("ProgressBar", StringComparison.OrdinalIgnoreCase)
-                    || name.Equals(library.TypeName("ProgressBar"), StringComparison.OrdinalIgnoreCase)))
-                return library.TypeName("ProgressBar");
+            foreach (var className in library.ControlClasses)
+                if ((!className.Equals("Tab", StringComparison.OrdinalIgnoreCase)
+                        && name.Equals(className, StringComparison.OrdinalIgnoreCase))
+                    || name.Equals(library.TypeName(className), StringComparison.OrdinalIgnoreCase))
+                    return library.TypeName(className);
         return null;
     }
 

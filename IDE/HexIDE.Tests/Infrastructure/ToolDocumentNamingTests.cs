@@ -22,7 +22,8 @@ namespace HexIDE.Tests.Infrastructure;
 /// </remarks>
 public class ToolDocumentNamingTests
 {
-    private static readonly Regex Lookup = new(@"(?<![\w.])(?:Find|FindDesigner|ResolveDocument)\s*\(\s*(?<name>\w+)\s*,");
+    // Archive paths and project files resolve through their own container or owner identity (#1118).
+    private static readonly Regex Lookup = new(@"(?<![\w.])(?:Find|FindDesigner|ResolveDocument|OpenArchive|OpenProjectFile)\s*\(\s*(?<name>\w+)\s*,");
     private static readonly Regex NamingCall = new(@"(?<![\w.])Naming\s*\(");
 
     /// <summary>The tools that look a document up, each with the parameter it looks up and where it first does.</summary>
@@ -72,9 +73,12 @@ public class ToolDocumentNamingTests
         resolving.Should().HaveCountGreaterThanOrEqualTo(14, "fourteen tools look a document up");
 
         // An optional tab name is checked for null to choose title addressing; that is not a second lookup.
+        // The write-safety preflight rejects path syntax before lookup; it never matches another document.
         resolving
             .Select(r => (Tool: r.Tool.Name, Parameter: r.Name,
-                Uses: Regex.Matches(Regex.Replace(r.Tool.Body, $@"\b{Regex.Escape(r.Name)} is null", ""), $@"(?<![\w.]){Regex.Escape(r.Name)}\b").Count,
+                Uses: Regex.Matches(Regex.Replace(Regex.Replace(r.Tool.Body,
+                    $@"\bProjectWriteSafety\.NameRefusal\(\s*{Regex.Escape(r.Name)}\s*\)", ""),
+                    $@"\b{Regex.Escape(r.Name)} is null", ""), $@"(?<![\w.]){Regex.Escape(r.Name)}\b").Count,
                 Lookups: Lookup.Matches(r.Tool.Body).Count(m => m.Groups["name"].Value == r.Name)))
             .Where(r => r.Uses != r.Lookups)
             .Select(r => $"{r.Tool} uses `{r.Parameter}` {r.Uses - r.Lookups} time(s) besides looking it up")
@@ -170,7 +174,7 @@ public class ToolDocumentNamingTests
         tool.Parameters.Should().Contain(p => p.Name == "name" && p.Optional);
         tool.Parameters.Should().Contain(p => p.Name == "project" && p.Optional);
         tool.Parameters.Should().Contain(p => p.Name == "title" && p.Optional);
-        tool.Body.Should().Contain("ResolveDocument(");
+        tool.Body.Should().Contain(name == "activate_document_tab" ? "Find(name, project, carried: true)" : "ResolveDocument(");
     }
 
     [Theory]

@@ -43,7 +43,9 @@ public class CodeEditorViewModelTests : IDisposable
     private CodeEditorViewModel CreateSut()
     {
         _sut = new CodeEditorViewModel(
-            _windowManager, _editorService, _projectService, _eventBus, _lspClient, _settingsService, _statusBarService, _bookmarkService, _breakpointService, _debugController, _runScope, _localization, recentEditHistory: recentEdits);
+            _windowManager, _editorService, _projectService, _eventBus, _lspClient, _settingsService, _statusBarService, _bookmarkService, _breakpointService, _debugController, _runScope, _localization,
+                new Vb6ProjectFileFormat(),
+                new Vb6ReadOnlyRegionReader(), recentEditHistory: recentEdits);
         return _sut;
     }
 
@@ -360,10 +362,9 @@ public class CodeEditorViewModelTests : IDisposable
     [AvaloniaFact]
     public void AModuleWhoseHeaderWasNotRecognisedGetsNoPrefix()
     {
-        // A header the reader did not recognise, such as one under a comment, leaves the WHOLE file in Code with
-        // an empty recorded header (hexide-io/HexIDE#472). Prepending the canonical literal on top of that would show
-        // the developer two headers. Null means "never read from disk"; empty means "read, and nothing was split
-        // off", and the buffer must tell them apart.
+        // A headerless file records an empty header; a developer can then type a name into its code (#3757).
+        // Prepending the canonical literal would show two names. Null means "never read from disk"; empty means
+        // "read, and nothing was split off", and the buffer must tell them apart.
         var module = TestHelpers.CreateModule(name: "Module1");
         module.RecordOriginalHeader("");
         module.UpdateCode("' generated\r\nAttribute VB_Name = \"Module1\"\r\nOption Explicit\r\n");
@@ -561,7 +562,7 @@ public class CodeEditorViewModelTests : IDisposable
         module.UpdateCode("Option Explicit\r\n");
         var vm = CreateSut().Initialize(module);
 
-        var detector = new DirtyDetector(new FileBaselineStore(), Substitute.For<IProjectService>());
+        var detector = new DirtyDetector(new FileBaselineStore(), Substitute.For<IProjectService>(), new Vb6ProjectFileFormat());
 
         detector.Classify(new WatchedFileTarget("Module1.bas", null, module, vm, null))
             .Should().Be(ReloadDecision.CleanReload);
@@ -579,7 +580,7 @@ public class CodeEditorViewModelTests : IDisposable
 
         vm.Document.Text += "Dim x As Long\r\n";
 
-        var detector = new DirtyDetector(new FileBaselineStore(), Substitute.For<IProjectService>());
+        var detector = new DirtyDetector(new FileBaselineStore(), Substitute.For<IProjectService>(), new Vb6ProjectFileFormat());
 
         detector.Classify(new WatchedFileTarget("Module1.bas", null, module, vm, null))
             .Should().Be(ReloadDecision.Conflict);
@@ -1094,6 +1095,44 @@ public class CodeEditorViewModelTests : IDisposable
         await _lspClient.Received(1).OpenDocumentAsync(LspDocumentUri.ForFile(to), Arg.Any<string>(), Arg.Any<bool>(),
             Arg.Any<CancellationToken>());
         if (closed) ProjectLspDocument.Reopened(_lspClient, vm.Identity); // release the test's project holder
+    }
+
+    [AvaloniaFact]
+    public async Task AFormWhoseFileMovedIsRenamedOnTheWire()
+    {
+        var moved = new List<Action<FormMovedEvent>>();
+        _eventBus.Subscribe(Arg.Do<Action<FormMovedEvent>>(h => moved.Add(h))).Returns(Substitute.For<IDisposable>());
+        var folder = Path.Join(Path.GetTempPath(), "hexide-moved-" + Guid.NewGuid().ToString("N"));
+        var (from, to) = (Path.Join(folder, "Form1.frm"), Path.Join(folder, "src", "Form1.frm"));
+        var form = TestHelpers.CreateForm(name: "Form1");
+        form.AbsolutePath = from;
+        var vm = CreateSut().Initialize(form);
+        var before = vm.GetDocumentUriPublic();
+        _lspClient.ClearReceivedCalls();
+
+        form.AbsolutePath = to;
+        foreach (var handler in moved.ToList()) handler(new FormMovedEvent(form));
+
+        await _lspClient.Received(1).CloseDocumentForRenameAsync(before, Arg.Any<CancellationToken>());
+        await _lspClient.Received(1).OpenDocumentAsync(LspDocumentUri.ForFile(to), Arg.Any<string>(), Arg.Any<bool>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public void AFormMadeReadOnlyOutsideAReloadTellsItsCodeWindow()
+    {
+        var changed = new List<Action<FormReadOnlyChangedEvent>>();
+        _eventBus.Subscribe(Arg.Do<Action<FormReadOnlyChangedEvent>>(h => changed.Add(h))).Returns(Substitute.For<IDisposable>());
+        var form = TestHelpers.CreateForm(name: "Form1");
+        var vm = CreateSut().Initialize(form);
+        var raised = new List<string?>();
+        vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        form.MarkUnfaithfulToSave(UnfaithfulSaveCause.ReadByAddin, "it has gone");
+        foreach (var handler in changed.ToList()) handler(new FormReadOnlyChangedEvent(form));
+
+        vm.IsReadOnly.Should().BeTrue();
+        raised.Should().Contain(nameof(vm.IsReadOnly));
     }
 
     [AvaloniaFact]

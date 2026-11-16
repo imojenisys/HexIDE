@@ -63,11 +63,11 @@ public sealed class RecoveryOffersTests : IDisposable
             var sidecar = Substitute.For<IUserSidecarService>();
             sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
             sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
-            Service = new ProjectService(
+            Service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
                 () => throw new InvalidOperationException("new-project dialog must not be reached"),
                 Windows, Bus, Manager, Substitute.For<IRecentProjectsService>(),
                 Substitute.For<IReferenceLibraryService>(), sidecar, Store, Substitute.For<ILocalizationService>(),
-                Substitute.For<IHeaderRefresher>(), contributed: contributed);
+                Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry(), contributed: contributed);
         }
 
         public ProjectDefinition Project => Loaded.Single();
@@ -102,7 +102,7 @@ public sealed class RecoveryOffersTests : IDisposable
 
         return new RecoveryOffers(recovery, session.Service, session.Manager, windows, localization, dock,
             session.Store, clock, bus ?? Substitute.For<IEventBus>(), Substitute.For<IStatusBarService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), format: new Vb6ProjectFileFormat());
     }
 
     /// <summary>Writes a saved project of a form and two modules into <paramref name="folder"/>, and names its file.</summary>

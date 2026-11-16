@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using HexIDE.Desktop.Server;
-using HexIDE.Runtime.Interpreter;
+using HexIDE.IDE;
 
 namespace HexIDE.Tests.Server;
 
@@ -91,7 +91,9 @@ public class ProcessWindowsToolTests
         var reply = await ProcessWindowsTool.DescribeAsync(Environment.ProcessId, TestContext.Current.CancellationToken);
 
         reply.Note.Should().Contain("It has exited, and its ID now belongs to a process that started later, which isn't read.");
-        reply.Windows.Should().BeNullOrEmpty();
+        // Not that there are none: the fake earlier launch stands for whatever once had this ID, and on a shared machine a
+        // process that really was started under it can still be running, as a hosted runner's own terminal has been.
+        (reply.Windows ?? []).Should().NotContain(w => w.ProcessId == Environment.ProcessId);
     }
 
     [Fact]
@@ -158,7 +160,12 @@ public class ProcessWindowsToolTests
         {
             ShellLaunches.Record(process.Id, "notepad.exe", 0);
 
-            var reply = await ProcessWindowsTool.DescribeAsync(process.Id, TestContext.Current.CancellationToken);
+            // Nothing waits for the program to get going, so its window can take a moment to exist.
+            ProcessWindowsResult reply;
+            var deadline = Environment.TickCount64 + 10_000;
+            do
+                reply = await ProcessWindowsTool.DescribeAsync(process.Id, TestContext.Current.CancellationToken);
+            while (!(reply.Windows ?? []).Any(w => w.ClassName == "Notepad") && Environment.TickCount64 < deadline);
 
             reply.Windows.Should().Contain(w => w.ClassName == "Notepad" && w.State == "Hidden" && !w.Visible);
             reply.Note.Should().EndWith(" None is visible, as vbHide starts a program hidden.");
