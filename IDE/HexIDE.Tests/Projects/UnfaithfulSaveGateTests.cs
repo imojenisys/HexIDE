@@ -194,15 +194,19 @@ public class UnfaithfulSaveGateTests : IDisposable
         var events = Substitute.For<IEventBus>();
         events.Subscribe<HexIDE.Events.CreateOrNavigateToSubEvent>(Arg.Any<Action<HexIDE.Events.CreateOrNavigateToSubEvent>>())
             .Returns(Substitute.For<IDisposable>());
-        using var editor = new CodeEditorViewModel(
+        using (var editor = new CodeEditorViewModel(
             Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), svc,
             events, Substitute.For<HexIDE.Lsp.ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
             Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(), new Vb6ProjectFileFormat(),
-            new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader()).Initialize(form);
-        editor.IsReadOnly.Should().BeFalse("the corpus must open without the read-only banner");
-        editor.ReadOnlyReason.Should().BeNull();
+            new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader()).Initialize(form))
+        {
+            editor.IsReadOnly.Should().BeFalse("the corpus must open without the read-only banner");
+            editor.ReadOnlyReason.Should().BeNull();
+        }
+        // Close the untouched buffer before editing the model; otherwise disposal restores its old code
+        // and #3071 retains that unsaved buffer as a project-owned language-server session.
         const string edit = "' edited code\r\n";
         if (editCode) form.UpdateCode(form.Code + edit);
 
