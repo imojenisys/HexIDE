@@ -4,8 +4,8 @@ using System.Threading.Channels;
 namespace HexIDE.Dap;
 
 /// <summary>
-/// One DAP connection over owned streams. Reads start immediately. Consume Events promptly; an overflowing
-/// event queue closes the connection rather than dropping debugger state or growing memory without a bound.
+/// One DAP connection over owned streams. Reads start immediately. A full Events queue pauses stream reading.
+/// Its single consumer must keep draining while DAP requests are pending: a response can follow queued events.
 /// No UI dispatch, process ownership, handshake policy or automatic retry is hidden in this wire layer.
 /// </summary>
 public sealed class DapConnection : IAsyncDisposable
@@ -42,7 +42,7 @@ public sealed class DapConnection : IAsyncDisposable
         _events = Channel.CreateBounded<DapEvent>(new BoundedChannelOptions(_options.EventCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = false,
+            SingleWriter = false, // The delivery barrier writes alongside the wire reader.
             AllowSynchronousContinuations = false,
         });
         _capture?.Note("DAP connection opened.");
@@ -130,16 +130,12 @@ public sealed class DapConnection : IAsyncDisposable
     }
 
     /// <summary>Enqueues a local barrier behind events already read, for the final consumer to acknowledge.</summary>
-    public Task QueueDeliveryBarrierAsync()
+    public async Task QueueDeliveryBarrierAsync()
     {
         var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lock (_sync)
-        {
-            ThrowIfClosed();
-            if (!_events.Writer.TryWrite(new(0, "", JsonSerializer.SerializeToElement(new { })) { DeliveryBarrier = delivered }))
-                throw new IOException("DAP event queue is full; cannot queue a delivery barrier.");
-        }
-        return delivered.Task;
+        await _events.Writer.WriteAsync(new(0, "", JsonSerializer.SerializeToElement(new { }))
+            { DeliveryBarrier = delivered }, _lifetime.Token).ConfigureAwait(false);
+        await delivered.Task.WaitAsync(_lifetime.Token).ConfigureAwait(false);
     }
 
     private void ThrowIfClosed()
@@ -195,9 +191,7 @@ public sealed class DapConnection : IAsyncDisposable
                     case "event":
                         var name = Text(message, "event");
                         RecordFrame();
-                        lock (_sync)
-                            if (!_events.Writer.TryWrite(new(sequence, name, message)))
-                                throw new IOException("DAP event queue overflowed; the consumer is not keeping up.");
+                        await _events.Writer.WriteAsync(new(sequence, name, message), _lifetime.Token).ConfigureAwait(false);
                         break;
                     case "request":
                         var reverseCommand = Text(message, "command");
