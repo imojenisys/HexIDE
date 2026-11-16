@@ -42,7 +42,8 @@ reports the file and the problem, and doesn't fall back to being HexIDE, because
 and recovery files inside your product. `--help` still answers on a broken installation, and exits with code 2.
 All startup refusals a person reads use the operating system’s language before settings load (#4065), including
 the descriptor’s detailed reasons, command-line flag errors and native dialog caption. Field names, paths, sizes
-and limits stay unchanged. Descriptor exceptions keep their English messages for programs and logs.
+and limits stay unchanged. With `--help`, a broken installation prints the localized refusal before the help
+text. Descriptor exceptions keep their English messages for programs and logs.
 
 Logo capture checks every PNG chunk's length and CRC, the header's format, and the final IEND. Its IDAT
 stream must inflate to exactly the scanline bytes required by the dimensions, including Adam7 passes.

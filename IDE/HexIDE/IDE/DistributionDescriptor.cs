@@ -262,7 +262,8 @@ public static partial class DistributionDescriptor
                 "Str.Startup.Descriptor.LogoDimensions", "logo", width, height, 1, MaximumLogoDimension);
 
         if (!IsCompletePng(bytes, (int)width, (int)height))
-            throw Refuse(file, $"'logo' names '{reference}', which is not a PNG image");
+            throw Refuse(file, $"'logo' names '{reference}', which is not a PNG image",
+                "Str.Startup.Descriptor.LogoImage", "logo", reference);
 
         return bytes;
     }

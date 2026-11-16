@@ -97,6 +97,26 @@ public class DistributionStartupLocalizationTests
         });
     }
 
+    [Fact]
+    public void IncompletePngReasonIsLocalizedAndRemainsEnglishForPrograms()
+    {
+        var png = new byte[24];
+        new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a }.CopyTo(png, 0);
+        "IHDR"u8.CopyTo(png.AsSpan(12));
+        png[19] = png[23] = 1;
+        var json = With("\"logo\":\"logo.png\"");
+        Action parse = () => DistributionDescriptor.Parse(Encoding.UTF8.GetBytes(json), "brand.json", _ => png);
+        parse.Should().Throw<DistributionDescriptorException>()
+            .WithMessage("brand.json: 'logo' names 'logo.png', which is not a PNG image.");
+        WithInstallation(directory =>
+        {
+            File.WriteAllText(Path.Combine(directory, "brand.json"), json);
+            File.WriteAllBytes(Path.Combine(directory, "logo.png"), png);
+            Refusal(directory).Should().Contain("« logo »").And.Contain("« logo.png »")
+                .And.Contain("image PNG").And.NotContain("which is not a PNG image");
+        });
+    }
+
     [Theory]
     [InlineData("--user-data-dir", null, "répertoire")]
     [InlineData("--server-port", "bad-port", "port")]
@@ -148,15 +168,47 @@ public class DistributionStartupLocalizationTests
         {
             LocalizationService.OsUICulture = CultureInfo.GetCultureInfo("fr-FR");
             var output = "";
-            HexIDE.Desktop.Program.RunDistributionGate([], directory, directory, text => output += text, text => output += text)
-                .Should().BeTrue();
-            Environment.ExitCode.Should().Be(2);
+            HexIDE.Desktop.Program.RunDistributionGate([], directory, directory, _ => { },
+                render => output += render(new ConsoleTarget(false, int.MaxValue)), text => output += text,
+                () => throw new InvalidOperationException("A broken installation must not start"))
+                .Should().Be(2);
             return output;
         }
         finally
         {
             LocalizationService.OsUICulture = previous;
             Environment.ExitCode = previousExitCode;
+        }
+    }
+
+    [Fact]
+    public void BrokenInstallationHelpPrintsFrenchRefusalBeforeHelp()
+    {
+        var previous = LocalizationService.OsUICulture;
+        var previousHelp = ServerOptions.HelpRequested;
+        try
+        {
+            LocalizationService.OsUICulture = CultureInfo.GetCultureInfo("fr-FR");
+            WithInstallation(directory =>
+            {
+                File.WriteAllText(Path.Combine(directory, "brand.json"), "[]");
+                var output = new List<string>();
+                HexIDE.Desktop.Program.RunDistributionGate(["--help"], directory, directory, _ => { },
+                    render => output.Add(render(new ConsoleTarget(false, int.MaxValue))),
+                    _ => throw new InvalidOperationException("Help must write the refusal to the console"),
+                    () => throw new InvalidOperationException("Help must not start"))
+                    .Should().Be(2);
+                output.Should().HaveCount(2);
+                output[0].Should().StartWith("L’identité de cette installation ne peut pas être utilisée")
+                    .And.Contain(Path.Combine(directory, "brand.json"))
+                    .And.Contain("objet JSON");
+                output[1].Should().Be(ServerOptions.HelpText(new ConsoleTarget(false, int.MaxValue)));
+            });
+        }
+        finally
+        {
+            LocalizationService.OsUICulture = previous;
+            typeof(ServerOptions).GetProperty(nameof(ServerOptions.HelpRequested))!.SetValue(null, previousHelp);
         }
     }
 
