@@ -499,7 +499,8 @@ public partial class VB6BuiltIns
     {
         if (v.Value is decimal m) return m;
         if (v.Value is bool b) return b ? -1m : 0m;
-        if (Vb6Value.TryNumericToDouble(v, out var d)) return (decimal)d;
+        if (v.Value is float f) return VbNumeric.FloatingToDecimal(f, 7);
+        if (Vb6Value.TryNumericToDouble(v, out var d)) return VbNumeric.FloatingToDecimal(d);
         if (v.Value is string s && decimal.TryParse(s, NumberStyles.Any, VbLocale.Current, out var ds)) return ds;
         throw new VBRunTimeException(VBStandardError.TypeMismatch);
     }
