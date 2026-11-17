@@ -46,9 +46,12 @@ unwind and failed parameter binding. Static slots pass to the run or instance an
 aliases never belong to the callee. Freed slot numbers are not reused, and exhausted numbering raises error 7.
 Debugger inspection treats freed slots as out of scope.
 
-Instance fields and instance Statics still retain their storage after termination. Phase 2 is deferred until
-member accesses on terminated instances have been counted across the Runtime suite, Battleship and the #2067
-sweep, as the issue's design note requires. Replacing the module-environment clone is separate performance work.
+Instance fields and instance Statics still retain their storage after termination. The measurement-only
+[#4375](https://github.com/hexide-io/HexIDE/issues/4375) counter recorded zero non-forced member accesses on terminated
+instances across the in-tree Runtime, Runtime integration, Battleship forms and IDE/corpus runs
+([report and limits](../scripts/probes/terminated-member-access/results.md)). Phase 2 remains deferred: the
+#2067 third-party sweep is uncounted and requires a container or throwaway VM. Replacing the module-environment
+clone is separate performance work.
 
 ## App logging (#2552)
 
