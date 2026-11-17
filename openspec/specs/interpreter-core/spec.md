@@ -30,6 +30,22 @@ worse than one that is obviously incomplete.
 
 ## Requirements
 
+### Requirement: Control event declarations are checked when a form starts
+
+Before a form's declarations or Initialize run, the interpreter SHALL compare its collected control event Subs with the control class's event argument counts, plus one for an array element. An element's first parameter SHALL be ByRef Integer by effective type, including suffixes and DefType. Names and the event's own argument types/passing SHALL NOT be checked.
+
+
+#### Scenario: An element retains a scalar handler
+Measurements: [#4205](https://github.com/hexide-io/HexIDE/issues/4205), oracle PR #4358.
+- **WHEN** execution enters a form with `Command1` carrying `Index = 0` and `Sub Command1_Click()`
+- **THEN** it raises `Procedure declaration does not match description of event or procedure having the same name` as a compile error before the form's own code runs
+- **AND** the error carries the form module and the handler declaration's line, and the log names the procedure
+
+#### Scenario: A renamed or implicitly Integer index parameter
+- **WHEN** the element's Click handler takes `i As Integer`, `Index%`, or `Index` under `DefInt I`, by reference
+- **THEN** the handler accepts the event and receives Integer 0 when that element is clicked
+
+
 ### Requirement: Source-class default members SHALL resolve at async value boundaries
 
 The engine SHALL collect the name and kind of a source class's default member and read its Function,
@@ -1391,7 +1407,7 @@ to 2 when omitted. Values outside 0–9 SHALL raise 5. These styles and defaults
 Empty paths, directories and recognisable ASCII text documents (including associated documents) SHALL raise 5, missing programs
 53 and Null arguments 94. Unix SHALL retain direct process launching and map non-executable document
 failures to 5 where distinguishable. Non-string PathName conversions, access denied to executables,
-programs that exist but cannot start, and ambiguous/binary document classification SHALL refuse explicitly as not implemented pending measurement (#4146).
+programs that exist but cannot start, and ambiguous/binary document classification SHALL refuse explicitly as not implemented pending measurement (#4406).
 
 #### Scenario: A program launches a helper
 - **WHEN** code calls `Shell` with a quoted executable path, arguments and an accepted explicit style
