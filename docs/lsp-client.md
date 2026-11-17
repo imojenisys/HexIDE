@@ -1829,6 +1829,24 @@ Three clusters account for nearly all of the gap:
 
 ---
 
+## In-memory wire stress test (#3520)
+
+`WireStressTests.ConcurrentConnectionsKeepEveryFrameValid` drives eight independent
+`VBLspClient`/StreamJsonRpc pairs for three seconds by default. Checking streams validate
+Content-Length framing and JSON in both directions, retaining the last 4 KB read and the
+last 64 headers written per endpoint for corruption diagnostics. The load includes large
+full-document updates, requests, early cancellation, server requests and notifications,
+with bounded blocking work on the thread pool. Set `HEXIDE_WIRE_STRESS_SECONDS` and
+`HEXIDE_WIRE_STRESS_PAIRS` to extend the attempt. A passing run is a count of checked
+frames, not evidence that the intermittent corruption reported in
+[#3520](https://github.com/hexide-io/HexIDE/issues/3520) is fixed.
+
+The Linux attempts on 2026-11-16 ran four 900-second processes in two concurrent
+batches, eight pairs per process, each batch alongside a full IDE unit suite.
+They checked 26,426,338 received frames in 3,600 combined load seconds, with zero bad
+frames. The final-source batch alone checked 11,537,208 frames in 1,800 combined
+seconds. Neither batch reproduced the reported corruption.
+
 ## Known client limitations
 
 | Limitation | Consequence | Tracked |
