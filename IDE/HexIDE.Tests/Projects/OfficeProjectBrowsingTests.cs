@@ -7,6 +7,7 @@ using HexIDE.Localization;
 using HexIDE.Projects;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Sidecar;
+using HexIDE.Tests.Infrastructure;
 
 namespace HexIDE.Tests.Projects;
 
@@ -19,12 +20,8 @@ public sealed class OfficeProjectBrowsingTests : IDisposable
     private readonly ILocalizationService localization = Substitute.For<ILocalizationService>();
     private readonly ArchiveProjectService archives;
     private readonly List<BaseEditorWindowViewModel> tabs = [];
-    public static string CorpusFile(string name)
-    {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root.Parent != null && !Directory.Exists(Path.Combine(root.FullName, "corpus"))) root = root.Parent;
-        return Path.Combine(root.FullName, "corpus", "office", "m365-x64", name);
-    }
+    public static string CorpusFile(string name) =>
+        Path.Combine(RepoTree.Root(), "corpus", "office", "m365-x64", name);
 
     public OfficeProjectBrowsingTests()
     {
@@ -35,6 +32,22 @@ public sealed class OfficeProjectBrowsingTests : IDisposable
         dock.OpenDocuments.Returns(tabs);
         dock.When(d => d.OpenDocument(Arg.Any<BaseEditorWindowViewModel>())).Do(c => tabs.Add(c.Arg<BaseEditorWindowViewModel>()));
         archives = new(dock, recent, localization, windows, Substitute.For<HexIDE.Language.IConditionalCodeReader>());
+    }
+
+    [Fact]
+    public void Corpus_file_lookup_ignores_a_nearer_corpus_directory()
+    {
+        var decoy = Path.Combine(AppContext.BaseDirectory, "corpus");
+        var existed = Directory.Exists(decoy);
+        Directory.CreateDirectory(decoy);
+        try
+        {
+            File.Exists(CorpusFile("basic.xlsm")).Should().BeTrue();
+        }
+        finally
+        {
+            if (!existed) Directory.Delete(decoy);
+        }
     }
 
     [AvaloniaTheory]
