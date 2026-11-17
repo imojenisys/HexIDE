@@ -1367,11 +1367,15 @@ named calls and unsupported domains SHALL refuse as unimplemented.
 
 ### Requirement: Shell SHALL launch programs with the measured argument and result contract
 `Shell` SHALL work as a function and a statement, launch asynchronously and return the process ID as
-Double. Explicit styles 0–4, 6 and 7 SHALL select the Windows startup show state; Unix hosts SHALL
-accept these styles without changing window state. WindowStyle SHALL convert through CInt.
-Empty paths and directories SHALL raise 5, missing programs 53 and Null arguments 94.
-Unmeasured non-string PathName conversions, successful launches with omitted WindowStyle, and other
-OS launch failures and unmeasured style values SHALL refuse explicitly as not implemented pending measurement (#2522).
+Double. Styles 0–9 SHALL select the Windows startup show state; Unix hosts SHALL
+accept these styles without changing window state. WindowStyle SHALL convert through CInt and default
+to 2 when omitted. Values outside 0–9 SHALL raise 5. These styles and defaults are measured in
+[#4146](https://github.com/hexide-io/HexIDE/issues/4146); the original argument/result measurements are in
+[the Shell oracle](../../../docs/vb6-fidelity-oracle/shell.md).
+Empty paths, directories and recognisable ASCII text documents (including associated documents) SHALL raise 5, missing programs
+53 and Null arguments 94. Unix SHALL retain direct process launching and map non-executable document
+failures to 5 where distinguishable. Non-string PathName conversions, access denied to executables,
+programs that exist but cannot start, and ambiguous/binary document classification SHALL refuse explicitly as not implemented pending measurement (#4146).
 
 #### Scenario: A program launches a helper
 - **WHEN** code calls `Shell` with a quoted executable path, arguments and an accepted explicit style
@@ -1924,6 +1928,24 @@ Contract: [#1116](https://github.com/hexide-io/HexIDE/issues/1116); Value conver
 #### Scenario: Required argument is missing
 - **WHEN** code calls `ProgressBar1.Increment` without an argument
 - **THEN** the runtime raises Argument not optional and leaves Value unchanged
+
+### Requirement: Floating point converted to Decimal
+The runtime SHALL convert a Double to Decimal at 15 significant digits and a Single at 7 significant
+digits, rounding the exact binary value half to even, including implicit Decimal arithmetic and numeric
+formatting. This rule covers values whose significant digits fit within Decimal's 28 decimal places;
+the scale-28 anomalies retain the existing conversion pending a measured rule.
+Provenance: [SP6 native and p-code measurements, #4017](https://github.com/hexide-io/HexIDE/pull/4017).
+
+#### Scenario: Decimal and String rounding differ
+- **WHEN** code evaluates `CDec(1234567890123445#)`
+- **THEN** the Decimal value is 1234567890123440
+- **AND** `CStr` keeps its distinct rounding rule
+
+#### Scenario: A numeric string is a Date serial
+- **WHEN** code evaluates `CDate("24.0")` under en-GB
+- **THEN** its serial is 24, representing 23 January 1900 at midnight
+- **AND** numeric strings outside the Date range raise error 13
+- **AND** `IsDate("24.0")` is False, as the String-to-Date measurements in #967 record
 
 ### Requirement: Intrinsic list code-only search extensions
 Under [#1116](https://github.com/hexide-io/HexIDE/issues/1116), ListBox and every ComboBox style
