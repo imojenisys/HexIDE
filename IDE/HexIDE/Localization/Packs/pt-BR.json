@@ -2,6 +2,13 @@
   "name": "Portuguese (Brazil)",
   "direction": "ltr",
   "strings": {
+    "Str.FilePicker.ProjectFiles": "Arquivos de projeto",
+    "Str.FilePicker.FormFiles": "Arquivos de formulário",
+    "Str.FilePicker.ModuleFiles": "Arquivos de módulo",
+    "Str.FilePicker.MemberFiles": "Arquivos de membros",
+    "Str.FilePicker.AllFiles": "Todos os arquivos",
+    "Str.FilePicker.SaveProjectGroupAs": "Salvar grupo de projetos como",
+    "Str.FilePicker.NoGroupWriter": "Nenhum tipo de projeto registrado pode salvar este grupo de projetos. Nada foi escrito.",
     "Str.ProjectFile.ReplaceModel": "Aplicar o texto do arquivo de projeto substituirá as configurações não salvas de {0}. Continuar?",
     "Str.Menu.Help.LogFolder": "Abrir pasta de _registros do HexIDE",
     "Str.Help.LogFolder.OpenFailed": "Não foi possível abrir a pasta de registros. Você pode abri-la manualmente: {0}",
