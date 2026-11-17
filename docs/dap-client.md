@@ -156,7 +156,9 @@ or timed-out request is never retried. The IDE displays result text/errors and r
 MCP `evaluate` returns output delivered during that evaluation followed by the response result, and
 reports an adapter refusal as `success: false` with its message in `error` (#4323). Output already read
 is awaited through a local delivery barrier in the connection event and session update queues, acknowledged
-on the UI thread. The update reader only dispatches the acknowledgement; it never waits for a DAP response.
+after earlier updates in the same UI batch. The barrier waits for room in a full event queue and follows
+the session publication chain; session shutdown cancels the wait. The update reader only acknowledges
+delivery; it never waits for a DAP response.
 The Immediate window receives output events separately, so it still prints each event only once.
 `EvaluateWatchAsync(stop, frameId, expression)` uses `context: watch` and preserves result text, type and
 variable references. The Watches window owns a separate external list for the IDE session and discards

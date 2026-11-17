@@ -257,8 +257,9 @@ public sealed partial class ExternalDebugService(ConversationLog capture, ILocal
             // Start Run To Cursor's clean-up ahead of the stop's dispatch. Never await its DAP reply:
             // backpressure can hold that reply behind the events this reader must continue draining.
             foreach (var update in batch)
-                if (update.Event?.Event is "stopped" or "terminated" ||
-                    update.Snapshot.State is DapSessionState.Ended or DapSessionState.Faulted)
+                if (update.Event?.DeliveryBarrier is null &&
+                    (update.Event?.Event is "stopped" or "terminated" ||
+                     update.Snapshot.State is DapSessionState.Ended or DapSessionState.Faulted))
                 {
                     var restore = update.Event?.Event == "stopped";
                     await Dispatcher.UIThread.InvokeAsync(() => { _ = RemoveCursorBreakpointAsync(current, restore); });

@@ -167,14 +167,17 @@ public static class Program
                             body = JsonSerializer.Deserialize<JsonElement>(expression[11..]) });
                     }
                     // RDCore printed text and response order: https://github.com/hexide-io/HexIDE/issues/4323.
-                    if (context == "repl" && (expression is "? output" or "? both" || expression?.StartsWith("? output:", StringComparison.Ordinal) == true))
+                    if (context == "repl" && (expression is "? output" or "? both" or "? flood" || expression?.StartsWith("? output:", StringComparison.Ordinal) == true))
                     {
                         if (expression!.StartsWith("? output:", StringComparison.Ordinal))
                         {
                             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
                             while (!File.Exists(expression[9..])) await Task.Delay(10, deadline.Token);
                         }
-                        await Send(new { seq = 10, type = "event", @event = "output", body = new { output = " 84 \n" } });
+                        if (expression == "? flood")
+                            for (var i = 0; i < 10_000; i++)
+                                await Send(new { seq = 10, type = "event", @event = "output", body = new { output = $"line {i}\n" } });
+                        else await Send(new { seq = 10, type = "event", @event = "output", body = new { output = " 84 \n" } });
                         await Send(new { seq = 11, type = "response", request_seq = request.RootElement.GetProperty("seq").GetInt32(),
                             command, success = true, body = new { result = expression == "? both" ? "response" : "", variablesReference = 0 } });
                         continue;
