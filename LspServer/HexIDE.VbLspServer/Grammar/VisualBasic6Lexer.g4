@@ -137,6 +137,10 @@ DEFINT: 'DEFINT';
 
 DEFLNG: 'DEFLNG';
 
+DEFLNGLNG: 'DEFLNGLNG';
+
+DEFLNGPTR: 'DEFLNGPTR';
+
 DEFOBJ: 'DEFOBJ';
 
 DEFSNG: 'DEFSNG';
@@ -519,13 +523,14 @@ fragment DATENAME:
 fragment DATESEPARATOR: [ \t/.,:\-]+;
 fragment DATEMERIDIEM: ('A' | 'P') 'M'?;
 
-COLORLITERAL: '&H' [0-9A-F]+ ( AMPERSAND | PERCENT )?;
+// Keep adjacent-digit exponentiation (2^3) as on main; VBA7's reading is unmeasured.
+COLORLITERAL: '&H' [0-9A-F]+ ( AMPERSAND | PERCENT | POW {InputStream.LA(1) < '0' || InputStream.LA(1) > '9'}? )?;
 
 // Clean-room: '%' (Integer) added to the numeric type-declaration suffix set (VB6 Language
 // Reference, Type Declaration Characters). Not derived from any other grammar.
 // Clean-room: 'D' added as an exponent marker beside 'E', as DOUBLELITERAL already had it; vb6.exe compiles 1D3 as
 // 1000, a Double (measured, #1611). Not derived from any other grammar.
-INTEGERLITERAL: [0-9]+ (('E' | 'D') INTEGERLITERAL)* ( HASH | AMPERSAND | EXCLAMATIONMARK | AT | PERCENT)?;
+INTEGERLITERAL: [0-9]+ (('E' | 'D') INTEGERLITERAL)* ( HASH | AMPERSAND | EXCLAMATIONMARK | AT | PERCENT | POW {InputStream.LA(1) < '0' || InputStream.LA(1) > '9'}?)?;
 
 // Clean-room: a literal may end in its point, `5.` or `5.D1`; vb6.exe compiles each as a Double (measured, #1615). Not
 // derived from any other grammar.
@@ -535,7 +540,7 @@ DOUBLELITERAL:
 
 FILENUMBER: HASH LETTERORDIGIT+;
 
-OCTALLITERAL: '&O' [0-7]+ ( AMPERSAND | PERCENT )?;
+OCTALLITERAL: '&O' [0-7]+ ( AMPERSAND | PERCENT | POW {InputStream.LA(1) < '0' || InputStream.LA(1) > '9'}? )?;
 
 // A DESIGNER property-bag key - `_ExtentX`, `_ExtentY`, `_Version`. VB6 writes these into the Begin block
 // of every ActiveX control, and they are deliberately NOT VB6 identifiers: a name may not begin with an
