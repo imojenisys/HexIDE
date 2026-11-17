@@ -68,6 +68,7 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
     
     public VBFormRuntime()
     {
+        AvaloniaInterop.ProgramAppearance.Apply(this);
         AddHandler(GotFocusEvent, (_, e) =>
         {
             if (e is FocusChangedEventArgs moved && FindControl(this, moved.NewFocusedElement as ILogical) is { } control)

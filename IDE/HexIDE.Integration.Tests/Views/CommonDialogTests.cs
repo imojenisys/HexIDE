@@ -241,7 +241,7 @@ public class CommonDialogTests
     public void ShowFont_takes_the_font_chosen_and_Cancel_leaves_it()
     {
         var windows = Opening();
-        windows.ShowFontDialog(Arg.Any<FontDialogResult?>()).Returns(
+        windows.ShowFontDialog(Arg.Any<FontDialogResult?>(), isProgramDialog: true).Returns(
             Task.FromResult<FontDialogResult?>(new FontDialogResult(new FontFamily("Courier New"), FontStyle.Italic, FontWeight.Bold, 10)),
             Task.FromResult<FontDialogResult?>(null));
         var ran = Run(Form(Dialog,
@@ -264,7 +264,7 @@ public class CommonDialogTests
     public void ShowColor_runs_through_the_IDE_host(int flags, int expected)
     {
         var windows = Opening();
-        windows.ShowColorDialog(expected).Returns(Task.FromResult<int?>(expected));
+        windows.ShowColorDialog(expected, isProgramDialog: true).Returns(Task.FromResult<int?>(expected));
         var ran = Run(Form(Dialog,
             $"    dlg.Flags = {flags}\r\n"
           + "    dlg.Color = vbRed\r\n"
@@ -273,7 +273,7 @@ public class CommonDialogTests
 
         ran.Failures.Should().BeEmpty();
         ran.Printed.Should().Equal("19");
-        windows.Received(1).ShowColorDialog(expected);
+        windows.Received(1).ShowColorDialog(expected, isProgramDialog: true);
     }
 
     [AvaloniaTheory]
@@ -282,7 +282,7 @@ public class CommonDialogTests
     public void Printer_runs_through_the_IDE_host(string statement)
     {
         var windows = Opening();
-        windows.ShowPrintDialog().Returns(Task.FromResult(true), Task.FromResult(false));
+        windows.ShowPrintDialog(isProgramDialog: true).Returns(Task.FromResult(true), Task.FromResult(false));
         var ran = Run(Form(Dialog,
             "    dlg.Copies = 3\r\n"
           + "    dlg.PrinterDefault = False\r\n"
@@ -293,7 +293,7 @@ public class CommonDialogTests
           + "    Debug.Print Err.Number & \" \" & dlg.Copies & \" \" & dlg.Orientation & \" \" & dlg.hDC\r\n"), windows);
         ran.Failures.Should().BeEmpty();
         ran.Printed.Should().Equal("1 1 0", "32755 1 1 0");
-        windows.Received(2).ShowPrintDialog();
+        windows.Received(2).ShowPrintDialog(isProgramDialog: true);
     }
 
     [AvaloniaFact]

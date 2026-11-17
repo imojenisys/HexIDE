@@ -32,6 +32,7 @@ internal static class ProgramDialogChrome
         // An embedded dialog does not own its host window's caption.
         if (window.Content is not MessageBox { IsProgramDialog: true } and not InputBox { IsProgramDialog: true })
             return;
+        AvaloniaInterop.ProgramAppearance.Apply(window);
         if (OperatingSystem.IsWindows())
         {
             Win32Properties.AddWindowStylesCallback(window, WindowsStyles);

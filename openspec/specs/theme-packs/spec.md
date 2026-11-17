@@ -247,6 +247,17 @@ not be.
 - **WHEN** a dark theme is active and a form is open on the design surface
 - **THEN** the canvas and the controls on it render with the form's own colours
 
+### Requirement: Running program windows SHALL remain light independently of the IDE theme
+Running program forms and dialogs SHALL request the Light theme variant, as the design canvas does,
+regardless of the IDE pack or host dark mode. Control popups SHALL inherit the program's light appearance.
+This interim policy SHALL remain until platform skins (#1137) supply the program's system colours.
+The IDE's own dialogs SHALL continue to follow its theme pack.
+
+#### Scenario: A program opens a MsgBox under a dark pack
+- **WHEN** a running program opens a MsgBox while a dark IDE pack is active
+- **THEN** the program's MsgBox renders Light, including if its owner is hidden
+- **AND** the IDE's own message boxes remain dark
+
 ### Requirement: Chrome colours SHALL come from the theme, never from literals
 Interface colour SHALL be taken from a named theme key, and SHALL NOT be written as a literal value at the
 point of use.

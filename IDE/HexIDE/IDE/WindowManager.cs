@@ -284,7 +284,7 @@ public class WindowManager : IWindowManager
             throw new NotImplementedException();
     }
 
-    public async Task<int?> ShowColorDialog(int initial)
+    public async Task<int?> ShowColorDialog(int initial, bool isProgramDialog = false)
     {
         var dialog = new ColorDialog(initial);
         int? result = null;
@@ -298,6 +298,7 @@ public class WindowManager : IWindowManager
         else if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = MakeDialogWindow(title, dialog);
+            if (isProgramDialog) HexIDE.Runtime.AvaloniaInterop.ProgramAppearance.Apply(window);
             dialog.ColorRequest += r => { result = r; window.Close(); };
             await window.ShowDialog(GetTopWindow(desktop));
         }
@@ -306,7 +307,7 @@ public class WindowManager : IWindowManager
         return result;
     }
 
-    public async Task<bool> ShowPrintDialog()
+    public async Task<bool> ShowPrintDialog(bool isProgramDialog = false)
     {
         var dialog = new PrintDialog();
         var result = false;
@@ -320,6 +321,7 @@ public class WindowManager : IWindowManager
         else if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = MakeDialogWindow(title, dialog);
+            if (isProgramDialog) HexIDE.Runtime.AvaloniaInterop.ProgramAppearance.Apply(window);
             dialog.PrintRequest += r => { result = r; window.Close(); };
             await window.ShowDialog(GetTopWindow(desktop));
         }
@@ -328,7 +330,7 @@ public class WindowManager : IWindowManager
         return result;
     }
 
-    public async Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null)
+    public async Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null, bool isProgramDialog = false)
     {
         var vm = new FontDialogViewModel(initial);
         var dialog = new FontDialog { DataContext = vm };
@@ -344,6 +346,7 @@ public class WindowManager : IWindowManager
         else if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = MakeDialogWindow(_localization.GetString("Str.WindowManager.FontTitle"), dialog);
+            if (isProgramDialog) HexIDE.Runtime.AvaloniaInterop.ProgramAppearance.Apply(window);
             vm.AcceptRequested += r => { result = r; window.Close(); };
             vm.CancelRequested += window.Close;
             await window.ShowDialog(GetTopWindow(desktop));

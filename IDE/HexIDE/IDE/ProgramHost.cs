@@ -16,9 +16,9 @@ public sealed class ProgramHost(IWindowManager windowManager, ILocalizationServi
     public Task<string?> InputBox(string prompt, string? title, string defaultText) =>
         windowManager.InputBox(prompt, title, defaultText, isProgramDialog: true);
 
-    public Task<bool> PrintDialog() => windowManager.ShowPrintDialog();
+    public Task<bool> PrintDialog() => windowManager.ShowPrintDialog(isProgramDialog: true);
 
-    public Task<int?> ColorDialog(int initial) => windowManager.ShowColorDialog(initial);
+    public Task<int?> ColorDialog(int initial) => windowManager.ShowColorDialog(initial, isProgramDialog: true);
 
     public string StartupFormFailedToLoad(string formName, string description) =>
         string.Format(localization.GetString("Str.ProjectRunner.StartupFormFailedToLoad"), formName, description);
@@ -56,7 +56,7 @@ public sealed class ProgramHost(IWindowManager windowManager, ILocalizationServi
             : new FontDialogResult(new Avalonia.Media.FontFamily(initial.Name),
                 initial.Italic ? Avalonia.Media.FontStyle.Italic : Avalonia.Media.FontStyle.Normal,
                 initial.Bold ? Avalonia.Media.FontWeight.Bold : Avalonia.Media.FontWeight.Normal, initial.Size);
-        var chosen = await windowManager.ShowFontDialog(start);
+        var chosen = await windowManager.ShowFontDialog(start, isProgramDialog: true);
         return chosen is null
             ? null
             : new VbFontChoice(chosen.Family.Name, (float)chosen.Size, chosen.Weight >= Avalonia.Media.FontWeight.Bold,

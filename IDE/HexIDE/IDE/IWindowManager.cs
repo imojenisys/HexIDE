@@ -29,7 +29,7 @@ public interface IWindowManager
     Task<IReadOnlyList<string>?> OpenFilePickerAsync(FilePickerOpenOptions options);
     Task<string?> SaveFilePickerAsync(FilePickerSaveOptions options, string? directory = null);
     Task ShowAbout(AboutDialogOptions options);
-    Task<bool> ShowPrintDialog();
-    Task<int?> ShowColorDialog(int initial);
-    Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null);
+    Task<bool> ShowPrintDialog(bool isProgramDialog = false);
+    Task<int?> ShowColorDialog(int initial, bool isProgramDialog = false);
+    Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null, bool isProgramDialog = false);
 }
