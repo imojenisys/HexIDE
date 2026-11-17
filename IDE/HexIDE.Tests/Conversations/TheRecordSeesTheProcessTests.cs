@@ -310,6 +310,42 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
 
         (await gone).Fault.Should().BeFalse();
         await stopping;
+        await _log.DrainAsync();
+        connection.Entries().Count(e => e.Detail?.StartsWith("disconnected:", StringComparison.Ordinal) == true)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_failed_wait_lists_only_this_connections_entries_in_order()
+    {
+        await using var connection = await Connected("vb6");
+        await using var other = await Connected("other");
+        connection.Transport.Say(TransportNoticeKind.StandardOutput, "first line");
+        other.Transport.Say(TransportNoticeKind.StandardError, "another connection");
+        connection.Transport.Say(TransportNoticeKind.StandardError, "second line");
+
+        Func<Task> wait = () => connection.WaitForAsync(_ => false, "missing entry");
+        var failure = await wait.Should().ThrowAsync<InvalidOperationException>();
+        failure.Which.Message.Should().StartWith("no missing entry reached the record for 'vb6'")
+            .And.Contain("StandardOutput: first line; StandardError: second line")
+            .And.NotContain("another connection");
+    }
+
+    [Fact]
+    public async Task A_stop_that_finishes_before_the_hangup_callback_records_one_non_fault_disconnection()
+    {
+        var transport = new NoticingFakeTransport { HoldShutdown = true };
+        await using var connection = await Connected("vb6", transport);
+        var stopping = connection.Client.StopAsync();
+        await transport.ShutdownArrived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        transport.Release.TrySetResult();
+        await stopping;
+        transport.Hangup();
+        await _log.DrainAsync();
+
+        connection.Entries().Where(e => e.Detail?.StartsWith("disconnected:", StringComparison.Ordinal) == true)
+            .Should().ContainSingle().Which.Fault.Should().BeFalse();
     }
 
     [Fact]
@@ -369,7 +405,9 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
                 await Task.Delay(10, TestContext.Current.CancellationToken);
             }
 
-            throw new InvalidOperationException($"no {what} reached the record for '{Id}'");
+            throw new InvalidOperationException(
+                $"no {what} reached the record for '{Id}'. Entries in order: " +
+                string.Join("; ", Entries().Select(e => $"{e.Kind}: {e.Detail}")));
         }
 
         public async ValueTask DisposeAsync() => await Client.DisposeAsync();
