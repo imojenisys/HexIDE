@@ -74,6 +74,7 @@ A test that reaches the provider only at run time, through the application's com
 | `Projects/DocumentSavedAnnouncementTests.cs` | split |
 | `Projects/MemberWithoutAFileTests.cs` | split |
 | `Projects/PackageEncodingTests.cs` | split |
+| `Projects/ProjectFileClassifierFormatTests.cs` | split |
 | `Projects/ProjectFileFormatSeamTests.cs` | split |
 | `Projects/ProjectFilePickerTests.cs` | split |
 | `Projects/ProjectFormatPerProjectTests.cs` | split |
