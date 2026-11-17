@@ -1330,6 +1330,15 @@ fails with a `#3520:` diagnosis: elapsed time, test-token and thread-pool state,
 client logs and the last 4 KB read by each stand-in. The snapshot precedes deliberate teardown; it adds
 no retry and does not identify the cause of the intermittent CI drops by itself.
 
+Transport wait failures also report `RunnerLoad` history (#4465): in-memory wire diagnoses (#4446),
+first `publishDiagnostics` waits (#4430), child-process notices (#4201), and the WebSocket listen
+handshake/frame exchange (#4462). One background thread samples every 250 ms, retaining 150 seconds
+of dispatch delay, pool threads and queue size, process CPU share, GC pauses and lock contention.
+The summary covers the wait window (capped at 150 seconds), including work still queued, and current
+minimum/available threads and processor count. The WebSocket failure names the pending step. This is
+test-only evidence for distinguishing runner starvation from transport-specific failures; it changes
+no timeout, retry or product behaviour.
+
 The untitled-document tests drain and poll for clangd's URI refusal, with a five-second deadline, before
 asserting on standard error (#2269). Diagnostics arriving does not mean the independent stderr reader
 has finished recording those lines. The ruff test checks watched-file negotiation alongside pull diagnostics (#456).
