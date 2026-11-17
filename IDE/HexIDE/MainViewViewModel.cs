@@ -121,6 +121,7 @@ public partial class MainViewViewModel : ObservableObject
     public DelegateCommand SaveFormCommand { get; }
     public DelegateCommand RemoveDocumentCommand { get; }
     public DelegateCommand SaveFormAsCommand { get; }
+    public DelegateCommand SaveProjectCommand { get; }
     public DelegateCommand SaveProjectAsCommand { get; }
 
     public DelegateCommand StartDefaultProjectCommand { get; }
@@ -301,6 +302,7 @@ public partial class MainViewViewModel : ObservableObject
     public ISettingsService Settings => settingsService;
 
     public IProfileService Profile { get; }
+    public AddinProjectTemplateService ProjectTemplates { get; }
 
     internal AddinMenuService AddinMenuService { get; }
 
@@ -1693,8 +1695,10 @@ public partial class MainViewViewModel : ObservableObject
         HexIDE.Debugging.ExternalDebugService? externalDebugger,
         HexIDE.Recovery.IRecoveryOffers? recoveryOffers,
         RunWithMenuViewModel? runWith,
-        ILogFolderOpener? logFolderOpener)
+        ILogFolderOpener? logFolderOpener,
+        AddinProjectTemplateService projectTemplates)
     {
+        ProjectTemplates = projectTemplates;
         logFolderOpener ??= new PlatformLogFolderOpener();
         OpenLogFolderCommand = new DelegateCommand(() => OpenLogFolderAsync(windowManager, localization, logFolderOpener).ListenErrors());
         RunWith = runWith;
@@ -1914,6 +1918,9 @@ public partial class MainViewViewModel : ObservableObject
         RemoveDocumentCommand = new DelegateCommand(() => RemoveActiveDocument().ListenErrors(),
             () => RemovableDocument != null);
         ProjectExplorer.ObservePropertyChanged(x => x.SelectedItem).Subscribe(_ => UpdateRemoveDocumentMenu());
+        SaveProjectCommand = new DelegateCommand(SaveProject, () => projectManager.LoadedProjects.Count > 0);
+        projectManager.ProjectLoaded += _ => SaveProjectCommand.RaiseCanExecutedChanged();
+        projectManager.ProjectUnloaded += _ => SaveProjectCommand.RaiseCanExecutedChanged();
         SaveProjectAsCommand = new DelegateCommand(SaveProjectAs,
             () => projectManager.LoadedProjects.Any(project => project.Offers.MovesProjectFile));
         projectManager.ProjectLoaded += _ => SaveProjectAsCommand.RaiseCanExecutedChanged();
@@ -1948,9 +1955,17 @@ public partial class MainViewViewModel : ObservableObject
             () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.SetsReferences: true });
         ProjectComponentsCommand = new DelegateCommand(() => projectService.EditProjectComponents(FocusedProjectUtil.FocusedOrStartupProject!),
             () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.SetsComponents: true });
-        ProjectPropertiesCommand = new DelegateCommand(() => projectService.EditProjectProperties(FocusedProjectUtil.FocusedOrStartupProject!),
+        ProjectPropertiesCommand = new DelegateCommand(() =>
+            {
+                if (FocusedProjectUtil.FocusedOrStartupProject is { } project)
+                    projectService.EditProjectProperties(project).ListenErrors();
+            },
             () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.SetsProperties: true });
-        MakeProjectCommand = new DelegateCommand(() => projectService.MakeProject(FocusedProjectUtil.FocusedOrStartupProject!).ListenErrors(),
+        MakeProjectCommand = new DelegateCommand(() =>
+            {
+                if (FocusedProjectUtil.FocusedOrStartupProject is { } project)
+                    projectService.MakeProject(project).ListenErrors();
+            },
             () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.Makes: true });
         RemoveProjectCommand = new DelegateCommand(() => projectService.UnloadProject(FocusedProjectUtil.FocusedOrStartupProject!).ListenErrors(),
             () => FocusedProjectUtil.FocusedOrStartupProject != null);
@@ -1996,7 +2011,7 @@ public partial class MainViewViewModel : ObservableObject
 
         // Routed commands listen to CommandManager, not to the delegate behind their binding.
         foreach (var command in new[] { ToggleBreakpointCommand, RunToCursorCommand, SetNextStatementCommand,
-                     ShowNextStatementCommand, EditWatchCommand, SaveProjectAsCommand })
+                     ShowNextStatementCommand, EditWatchCommand, SaveProjectCommand, SaveProjectAsCommand })
             command.CanExecuteChanged += (_, _) => Avalonia.Labs.Input.CommandManager.InvalidateRequerySuggested();
 
         if (externalDebugger is not null)
