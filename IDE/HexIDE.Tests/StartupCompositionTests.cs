@@ -20,6 +20,20 @@ public class StartupCompositionTests : CompositionTestBase
     }
 
     [AvaloniaFact]
+    public void TheRunnerSharesTheArchiveSingleton()
+    {
+        // The runner refuses to start while an archive document is focused, so it must hold the archive service the
+        // rest of the IDE uses. Under Pure.DI 2.5.7 it got null when the root was resolved first, as App does: the
+        // generated code read the archive singleton's field without creating it (#4213; fixed upstream in
+        // DevTeam/Pure.DI 392efa0e0, after 2.5.7).
+        _ = Composition.Root;
+        var runner = Composition.ProjectRunnerService.Should().BeOfType<ProjectRunnerService>().Subject;
+        typeof(ProjectRunnerService).GetField("archives",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(runner).Should().BeSameAs(Composition.ArchiveProjects);
+    }
+
+    [AvaloniaFact]
     public void ResolvesEveryStartupRootInApplicationOrder()
     {
         // Keep the order in App.OnFrameworkInitializationCompleted: a different first root can hide a cycle.
