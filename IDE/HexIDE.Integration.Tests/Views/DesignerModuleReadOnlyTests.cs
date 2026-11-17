@@ -25,7 +25,7 @@ public class DesignerModuleReadOnlyTests
     [InlineData("VB.Form", true, true)]
     public async Task Typing_into_a_designer_file_declared_as_a_module_is_refused(string root, bool ocx, bool contributed)
     {
-        await using var owned = new RealComposition();
+        var owned = new RealComposition();
         var composition = owned.Composition;
         _ = composition.Root;
         var directory = Path.Join(Path.GetTempPath(), "hexide-designer-module-" + Guid.NewGuid().ToString("N"));
@@ -77,6 +77,8 @@ public class DesignerModuleReadOnlyTests
             foreach (var project in composition.ProjectManager.LoadedProjects.ToArray())
                 composition.ProjectManager.UnloadProject(project);
             type?.Dispose();
+            // The server uses the project directory as its working directory, locking it on Windows.
+            await owned.DisposeAsync();
             Directory.Delete(directory, recursive: true);
         }
     }
