@@ -19,6 +19,10 @@ public static class Vb6ProjectType
     /// <summary>The files no other type may take.</summary>
     public static ProjectFileReservation Reservation { get; } = new(Id, Title, ["*.vbp", "*.vbg"]);
 
+    /// <summary>Member files, using the bundled server's existing VB6 source-extension list.</summary>
+    public static ProjectFileReservation Members { get; } = new(Id, Title,
+        HexIDE.Lsp.DocumentLanguage.Vb6Extensions.Select(extension => "*" + extension).ToArray());
+
     /// <summary>The type, reading and rendering through <paramref name="format"/>.</summary>
     public static AddinProjectType For(IProjectFileFormat format) => new("Visual Basic 6.0 projects")
     {
