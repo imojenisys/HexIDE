@@ -30,11 +30,11 @@ public class RootDoubleClickTests
 {
     private sealed class NullSink : IDeserializeErrorSink { public void LogError(string _) { } }
 
-    private static FormEditViewModel Open(string kind, string name, string control = "", IEventBus? bus = null, IEditorService? editors = null)
+    private static FormEditViewModel Open(string kind, string name, string control = "", IEventBus? bus = null, IEditorService? editors = null, string code = "")
     {
         var file = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "P"),
             $"VERSION 5.00\r\nBegin VB.{kind} {name} \r\n   ClientHeight    =   3600\r\n   ClientLeft      =   0\r\n"
-          + $"   ClientTop       =   0\r\n   ClientWidth     =   4800\r\n{control}End\r\nAttribute VB_Name = \"{name}\"\r\n", new NullSink())!;
+          + $"   ClientTop       =   0\r\n   ClientWidth     =   4800\r\n{control}End\r\nAttribute VB_Name = \"{name}\"\r\n{code}", new NullSink())!;
         var localization = Substitute.For<ILocalizationService>();
         localization.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         return new FormEditViewModel(null!, bus ?? Substitute.For<IEventBus>(), Substitute.For<HexIDE.Projects.IProjectService>(),
@@ -96,6 +96,83 @@ public class RootDoubleClickTests
             editors.Received().EditCode(designer.FormDefinition);
             request.Should().NotBeNull();
             request!.Sub.Should().Be("Text1_Change");
+        }
+        finally { window.Close(); }
+    }
+
+    private static CodeEditorViewModel Editor(FormEditViewModel designer, EventBus bus) =>
+        new CodeEditorViewModel(Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(),
+            Substitute.For<IProjectService>(), bus, Substitute.For<ILspClient>(), Substitute.For<ISettingsService>(),
+            Substitute.For<IStatusBarService>(), Substitute.For<IBookmarkService>(), Substitute.For<IBreakpointService>(),
+            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>())
+            .Initialize(designer.FormDefinition!);
+
+    // The selections and absence of a stub were measured in VB6 SP6 (oracle PR #4460).
+    [AvaloniaTheory]
+    [InlineData("Shape", "Shape1")]
+    [InlineData("Line", "Line1")]
+    public async Task Eventless_control_double_tap_opens_declarations(string kind, string name)
+    {
+        var bus = new EventBus();
+        var editors = Substitute.For<IEditorService>();
+        using var designer = Open("Form", "Form1", $"Begin VB.{kind} {name}\r\nEnd\r\n", bus, editors,
+            "Option Explicit\r\nPrivate Sub Existing()\r\nEnd Sub\r\n");
+        using var editor = Editor(designer, bus);
+        var before = editor.Document.Text;
+        editor.CaretOffset = before.Length;
+        var view = new FormEditView { DataContext = designer };
+        var window = new Window { Content = view, Width = 800, Height = 600 };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            var item = view.GetVisualDescendants().OfType<ControlItem>().Single();
+            item.RaiseEvent(new TappedEventArgs(InputElement.DoubleTappedEvent,
+                new PointerEventArgs(InputElement.PointerPressedEvent, item, new Pointer(1, PointerType.Mouse, true),
+                    item, default, 0, default, KeyModifiers.None)));
+            await Task.Delay(150, TestContext.Current.CancellationToken);
+            editors.Received().EditCode(designer.FormDefinition);
+            editor.SelectedObject.Should().Be("(General)");
+            editor.SelectedProcedure.Should().Be("(Declarations)");
+            editor.CaretOffset.Should().Be(before.IndexOf("Option Explicit", StringComparison.Ordinal));
+            editor.Document.Text.Should().Be(before);
+            editor.IsModified.Should().BeFalse();
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Choosing_declarations_moves_to_the_start_of_code()
+    {
+        var bus = new EventBus();
+        using var designer = Open("Form", "Form1", code: "Option Explicit\r\nPrivate Sub Existing()\r\nEnd Sub\r\n");
+        using var editor = Editor(designer, bus);
+        editor.CaretOffset = editor.Document.TextLength;
+        editor.SelectedProcedure = "(Declarations)";
+        editor.CaretOffset.Should().Be(editor.Document.Text.IndexOf("Option Explicit", StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact]
+    public async Task CommandButton_double_tap_creates_and_navigates_to_Click()
+    {
+        var bus = new EventBus();
+        using var designer = Open("Form", "Form1", "Begin VB.CommandButton Command1\r\nEnd\r\n", bus,
+            Substitute.For<IEditorService>());
+        using var editor = Editor(designer, bus);
+        var view = new FormEditView { DataContext = designer };
+        var window = new Window { Content = view, Width = 800, Height = 600 };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            var item = view.GetVisualDescendants().OfType<ControlItem>().Single();
+            item.RaiseEvent(new TappedEventArgs(InputElement.DoubleTappedEvent,
+                new PointerEventArgs(InputElement.PointerPressedEvent, item, new Pointer(1, PointerType.Mouse, true),
+                    item, default, 0, default, KeyModifiers.None)));
+            await Task.Delay(150, TestContext.Current.CancellationToken);
+            editor.Document.Text.ReplaceLineEndings("\n").Should().Contain("Private Sub Command1_Click()\n\nEnd Sub");
+            var end = editor.Document.GetLineByOffset(editor.Document.Text.IndexOf("End Sub", StringComparison.Ordinal));
+            editor.CaretOffset.Should().Be(editor.Document.GetLineByNumber(end.LineNumber - 1).Offset);
         }
         finally { window.Close(); }
     }

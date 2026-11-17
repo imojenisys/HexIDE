@@ -324,6 +324,13 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
                 FocusWindowRequest?.Invoke();
             }
         }));
+        AutoDispose(this.eventBus.Subscribe<NavigateToDeclarationsEvent>(e =>
+        {
+            if (e.Form != formDefinition) return;
+            SelectedObject = GeneralObject;
+            SelectedProcedure = DeclarationsProc;
+            NavigateToDeclarations();
+        }));
         AutoDispose(this.eventBus.Subscribe<ApplyAllUnsavedChangesEvent>(e =>
         {
             // Marshalled, because failing here is INVISIBLE and corrupting. Document.Text throws
@@ -2619,7 +2626,12 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
     private void OnSelectedProcedureChanged(string? oldValue, string? newValue)
     {
-        if (newValue is null or DeclarationsProc) return;
+        if (newValue is null) return;
+        if (newValue == DeclarationsProc)
+        {
+            NavigateToDeclarations();
+            return;
+        }
 
         if (SelectedObject == GeneralObject || SelectedObject is null)
         {
@@ -2648,6 +2660,12 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             }
         }
 
+        FocusWindowRequest?.Invoke();
+    }
+
+    private void NavigateToDeclarations()
+    {
+        this.NavigateToOffset(PastReadOnlyRegion(0));
         FocusWindowRequest?.Invoke();
     }
 
