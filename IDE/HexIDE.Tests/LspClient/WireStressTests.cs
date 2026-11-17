@@ -189,6 +189,16 @@ public class WireStressTests(ITestOutputHelper output)
         [JsonRpcMethod("exit")] public void Exit() { }
     }
 
+    private static async Task<(Stream Client, Stream Server)> TcpPair(System.Net.Sockets.TcpListener listener, CancellationToken token)
+    {
+        var client = new System.Net.Sockets.TcpClient { NoDelay = true };
+        var accepting = listener.AcceptTcpClientAsync(token).AsTask();
+        await client.ConnectAsync(System.Net.IPAddress.Loopback, ((System.Net.IPEndPoint)listener.LocalEndpoint).Port, token);
+        var server = await accepting;
+        server.NoDelay = true;
+        return (client.GetStream(), server.GetStream());
+    }
+
     private static int Setting(string name, int fallback) =>
         int.TryParse(Environment.GetEnvironmentVariable(name), out var n) && n > 0 ? n : fallback;
 
@@ -230,6 +240,105 @@ public class WireStressTests(ITestOutputHelper output)
             await Task.WhenAll(clients.Select(c => c.StartAsync(token)));
             clients.Should().OnlyContain(c => c.IsRunning);
             var clock = Stopwatch.StartNew();
+            // Churn (#3520 experiment): unchecked pairs torn down while both sides are mid-write, beside the checked pairs.
+            var churnRounds = 0L;
+            var churners = Enumerable.Range(0, Setting("HEXIDE_WIRE_STRESS_CHURN", 0)).Select(n => Task.Run(async () =>
+            {
+                var tcp = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_TCP") == "1";
+                using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+                if (tcp) listener.Start();
+                for (var round = 0; clock.Elapsed.TotalSeconds < seconds && !token.IsCancellationRequested; round++)
+                {
+                    var pipes = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_PIPES") == "1";
+                    var (local, remote) = tcp ? await TcpPair(listener, token) : FullDuplexStream.CreatePair();
+                    var toServer = new System.IO.Pipelines.Pipe();
+                    var toClient = new System.IO.Pipelines.Pipe();
+                    var adapter = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_ADAPTER");
+                    IJsonRpcMessageHandler Over(Stream stream) => adapter switch
+                    {
+                        "nbwriter" => new HeaderDelimitedMessageHandler(stream.UsePipeWriter(),
+                            System.IO.Pipelines.PipeReader.Create(stream, new System.IO.Pipelines.StreamPipeReaderOptions(leaveOpen: true)), new SystemTextJsonFormatter()),
+                        "netwriter" => new HeaderDelimitedMessageHandler(
+                            System.IO.Pipelines.PipeWriter.Create(stream, new System.IO.Pipelines.StreamPipeWriterOptions(leaveOpen: true)),
+                            System.IO.Pipelines.PipeReader.Create(stream, new System.IO.Pipelines.StreamPipeReaderOptions(leaveOpen: true)), new SystemTextJsonFormatter()),
+                        "nbreader" => new HeaderDelimitedMessageHandler(
+                            System.IO.Pipelines.PipeWriter.Create(stream, new System.IO.Pipelines.StreamPipeWriterOptions(leaveOpen: true)),
+                            stream.UsePipeReader(), new SystemTextJsonFormatter()),
+                        _ => new HeaderDelimitedMessageHandler(stream, stream, new SystemTextJsonFormatter()),
+                    };
+                    var peer = pipes
+                        ? new JsonRpc(new HeaderDelimitedMessageHandler(toClient.Writer, toServer.Reader, new SystemTextJsonFormatter()), new Server())
+                        : new JsonRpc(Over(remote), new Server());
+                    peer.StartListening();
+                    var transport = Substitute.For<ILspTransport>();
+                    transport.IsAlive.Returns(true);
+                    transport.LeaveServerRunning.Returns(true);
+                    transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
+                        .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(local, local, c.Arg<IJsonRpcMessageFormatter>())));
+                    var raw = pipes || tcp || Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_RAW") == "1";
+                    var order = int.TryParse(Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_ORDER"), out var o) ? o : -1;
+                    var client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6");
+                    var rawClient = !raw ? null : pipes
+                        ? new JsonRpc(new HeaderDelimitedMessageHandler(toServer.Writer, toClient.Reader, new SystemTextJsonFormatter()))
+                        : new JsonRpc(Over(local));
+                    try
+                    {
+                        var uri = $"file:///churn-{n}.bas";
+                        var text = new string('z', 8192 + round % 8192);
+                        if (rawClient is not null)
+                        {
+                            rawClient.StartListening();
+                            await rawClient.InvokeWithParameterObjectAsync<JsonElement>("initialize", JsonSerializer.SerializeToElement(new { capabilities = new { } }), token);
+                        }
+                        else
+                        {
+                            await client.StartAsync(token);
+                            await client.OpenDocumentAsync(uri, text, token);
+                        }
+                        var pushes = Task.Run(async () =>
+                        {
+                            for (var k = 0; k < 64; k++)
+                                await peer.NotifyWithParameterObjectAsync("window/logMessage", JsonSerializer.SerializeToElement(new { type = 3, message = text }));
+                        });
+                        var sends = Task.Run(async () =>
+                        {
+                            for (var k = 1; k <= 64; k++)
+                                if (rawClient is not null)
+                                    await rawClient.NotifyWithParameterObjectAsync("textDocument/didChange", JsonSerializer.SerializeToElement(new { textDocument = new { uri, version = k }, contentChanges = new[] { new { text } } }));
+                                else
+                                    await client.ChangeDocumentAsync(uri, k, text, token);
+                        });
+                        await Task.Delay(round % 3, token);
+                        async Task CloseClient() { rawClient?.Dispose(); await client.DisposeAsync(); }
+                        switch (order >= 0 ? order : pipes ? round % 2 : round % 3)
+                        {
+                            case 0: peer.Dispose(); await CloseClient(); break;
+                            case 1: await CloseClient(); peer.Dispose(); break;
+                            case 2: local.Dispose(); remote.Dispose(); peer.Dispose(); await CloseClient(); break;
+                            default: // control: let both sides finish writing, then close
+                                try { await Task.WhenAll(pushes, sends); } catch { }
+                                await CloseClient(); peer.Dispose(); break;
+                        }
+                        if (adapter is not null)
+                        {
+                            // The (PipeWriter, PipeReader) handlers don't own the stream: close it once both ends are done, as
+                            // the Stream constructor's handler does after its writer has flushed.
+                            try { await Task.WhenAll(peer.Completion, rawClient?.Completion ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5), token); } catch { }
+                            local.Dispose();
+                            remote.Dispose();
+                        }
+                        try { await Task.WhenAll(pushes, sends); } catch { /* torn down mid-write on purpose */ }
+                    }
+                    catch (Exception) when (!token.IsCancellationRequested) { /* the churn pair itself may fail; only checked pairs count */ }
+                    finally
+                    {
+                        peer.Dispose();
+                        rawClient?.Dispose();
+                        try { await client.DisposeAsync(); } catch { /* already disposed */ }
+                    }
+                    Interlocked.Increment(ref churnRounds);
+                }
+            }, token)).ToArray();
             var load = Task.WhenAll(clients.Select(async (client, i) =>
             {
                 var version = 0;
@@ -256,6 +365,8 @@ public class WireStressTests(ITestOutputHelper output)
             releaser = new Thread(() => { release.Wait(TimeSpan.FromSeconds(seconds / 2.0)); release.Set(); });
             releaser.Start();
             await load;
+            await Task.WhenAll(churners);
+            output.WriteLine($"#3520: churn rounds={Interlocked.Read(ref churnRounds)}");
             await Task.WhenAll(blockers);
         }
         finally
