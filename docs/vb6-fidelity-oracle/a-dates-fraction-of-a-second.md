@@ -122,3 +122,8 @@ fitted to the serials vb6.exe actually made.
 - **Two rows are left out**, though each is right to the second: `Format$(d, "hh:nn:ss AMPM")`, where HexIDE does not
   know the `AMPM` token (#2040), and `Format$(e, "Long Date")`, where .NET's ICU pattern for en-GB adds the weekday
   Windows leaves out (#2041).
+
+- **Implementation status, #4378:** the AMPM row now runs on every host. #2040 added the token;
+  #4378 supplies Windows' designators from NLS on Windows and the generated table elsewhere,
+  so the recorded en-GB answer is `12:00:01 PM | err 0`. The earlier “left out” note above records
+  the original test omission; this changes no measurement.
