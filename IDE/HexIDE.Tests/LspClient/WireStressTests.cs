@@ -189,6 +189,93 @@ public class WireStressTests(ITestOutputHelper output)
         [JsonRpcMethod("exit")] public void Exit() { }
     }
 
+    // #3520 experiment: a pool that never reuses a block. On return it fills the block with 0xDD and quarantines it;
+    // a block found changed later was written after its return, and the report carries the stack that returned it.
+    private sealed class PoisonPool(string name) : System.Buffers.MemoryPool<byte>
+    {
+        public static readonly ConcurrentQueue<string> Violations = new();
+        public string Name => name;
+        public long Rented, Returned, Checked;
+        private readonly ConcurrentQueue<Owner> quarantine = new();
+        public override int MaxBufferSize => int.MaxValue;
+        public override System.Buffers.IMemoryOwner<byte> Rent(int minBufferSize = -1)
+        {
+            Interlocked.Increment(ref Rented);
+            return new Owner(this, new byte[Math.Max(minBufferSize, 4096)]);
+        }
+        protected override void Dispose(bool disposing) { }
+        public void VerifyAll() { while (quarantine.TryDequeue(out var o)) o.Verify(); }
+        public override string ToString() => $"{name}: rented={Rented}, returned={Returned}, checked={Checked}";
+        private void OnReturn(Owner owner)
+        {
+            Interlocked.Increment(ref Returned);
+            quarantine.Enqueue(owner);
+            while (quarantine.Count > 4096 && quarantine.TryDequeue(out var old)) old.Verify();
+        }
+        private sealed class Owner(PoisonPool pool, byte[] array) : System.Buffers.IMemoryOwner<byte>
+        {
+            private int returned;
+            private StackTrace? returnedAt;
+            private int firstThread;
+            public Memory<byte> Memory => array;
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref returned, 1) != 0)
+                {
+                    SpinWait.SpinUntil(() => Volatile.Read(ref returnedAt) is not null, 500);
+                    if (Violations.Count < 20) Violations.Enqueue($"{pool.Name}: returned twice. FIRST return (thread {firstThread}):{Environment.NewLine}{returnedAt}{Environment.NewLine}SECOND return (thread {Environment.CurrentManagedThreadId}):{Environment.NewLine}{new StackTrace(1, false)}");
+                    return;
+                }
+                returnedAt = new StackTrace(1, false);
+                firstThread = Environment.CurrentManagedThreadId;
+                array.AsSpan().Fill(0xDD);
+                pool.OnReturn(this);
+            }
+            public void Verify()
+            {
+                Interlocked.Increment(ref pool.Checked);
+                var at = array.AsSpan().IndexOfAnyExcept((byte)0xDD);
+                if (at >= 0 && Violations.Count < 20)
+                    Violations.Enqueue($"{pool.Name}: written after return at {at} of {array.Length}: '{Encoding.ASCII.GetString(array, at, Math.Min(40, array.Length - at))}'; returned at:{Environment.NewLine}{returnedAt}");
+            }
+        }
+    }
+
+    private static readonly PoisonPool ReaderPool = new("reader pool"), WriterPool = new("writer pool");
+
+    // #3520, the product-shaped fix under test: a pool whose owners hand their array back at most once. The poison
+    // check caught StreamPipeReader disposing one owner twice as a connection ends; on a plain pool that returns the
+    // array twice and two later renters share it. Here the second dispose is a counted no-op.
+    private sealed class GuardedPool(System.Buffers.ArrayPool<byte> arrays) : System.Buffers.MemoryPool<byte>
+    {
+        public static long Rents, Suppressed, RentsAfterSuppressed;
+        private int suppressedHere;
+        private System.Buffers.ArrayPool<byte> Arrays => arrays;
+        public override int MaxBufferSize => int.MaxValue;
+        public override System.Buffers.IMemoryOwner<byte> Rent(int minBufferSize = -1)
+        {
+            Interlocked.Increment(ref Rents);
+            if (Volatile.Read(ref suppressedHere) != 0) Interlocked.Increment(ref RentsAfterSuppressed);
+            return new Owner(this, arrays.Rent(Math.Max(minBufferSize, 4096)));
+        }
+        protected override void Dispose(bool disposing) { }
+        public static string Report() => $"guarded: rents={Rents}, second disposes suppressed={Suppressed}, rents from that pool after one={RentsAfterSuppressed}";
+        private sealed class Owner(GuardedPool pool, byte[] rented) : System.Buffers.IMemoryOwner<byte>
+        {
+            private readonly byte[] array = rented;
+            private byte[]? held = rented;
+            public Memory<byte> Memory => array;
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref held, null) is { } a) { pool.Arrays.Return(a); return; }
+                Interlocked.Increment(ref Suppressed);
+                Volatile.Write(ref pool.suppressedHere, 1);
+            }
+        }
+    }
+
+    private static readonly GuardedPool SharedGuarded = new(System.Buffers.ArrayPool<byte>.Shared);
+
     private static async Task<(Stream Client, Stream Server)> TcpPair(System.Net.Sockets.TcpListener listener, CancellationToken token)
     {
         var client = new System.Net.Sockets.TcpClient { NoDelay = true };
@@ -222,19 +309,27 @@ public class WireStressTests(ITestOutputHelper output)
         Thread? releaser = null;
         try
         {
+            var checkedTcp = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHECKED_TCP") == "1";
+            using var checkedListener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+            if (checkedTcp) checkedListener.Start();
+            IJsonRpcMessageHandler CheckedHandler(Stream s, IJsonRpcMessageFormatter f) => checkedTcp
+                ? new HeaderDelimitedMessageHandler(
+                    System.IO.Pipelines.PipeWriter.Create(s, new System.IO.Pipelines.StreamPipeWriterOptions(leaveOpen: true)),
+                    System.IO.Pipelines.PipeReader.Create(s, new System.IO.Pipelines.StreamPipeReaderOptions(leaveOpen: true)), f)
+                : new HeaderDelimitedMessageHandler(s, s, f);
             for (var i = 0; i < pairs; i++)
             {
-                var (local, remote) = FullDuplexStream.CreatePair();
+                var (local, remote) = checkedTcp ? await TcpPair(checkedListener, token) : FullDuplexStream.CreatePair();
                 var a = new CheckingStream(local, ledger, $"{i}/client");
                 var b = new CheckingStream(remote, ledger, $"{i}/server");
-                var rpc = new JsonRpc(new HeaderDelimitedMessageHandler(b, b, new SystemTextJsonFormatter()), new Server());
+                var rpc = new JsonRpc(CheckedHandler(b, new SystemTextJsonFormatter()), new Server());
                 peers.Add(rpc);
                 rpc.StartListening();
                 var transport = Substitute.For<ILspTransport>();
                 transport.IsAlive.Returns(true);
                 transport.LeaveServerRunning.Returns(true);
                 transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
-                    .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(a, a, c.Arg<IJsonRpcMessageFormatter>())));
+                    .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(CheckedHandler(a, c.Arg<IJsonRpcMessageFormatter>())));
                 clients.Add(new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6"));
             }
             await Task.WhenAll(clients.Select(c => c.StartAsync(token)));
@@ -245,15 +340,70 @@ public class WireStressTests(ITestOutputHelper output)
             var churners = Enumerable.Range(0, Setting("HEXIDE_WIRE_STRESS_CHURN", 0)).Select(n => Task.Run(async () =>
             {
                 var tcp = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_TCP") == "1";
+                // Stdio's shape: our side is main's handler over two one-way OS pipes (the server's stdin and stdout). The
+                // peer stands in for a separate process: its own buffers, no pooling. It pushes framed notifications while
+                // draining its input, and on end of input it stops pushing and closes its output, as a server does on exit.
+                // ORDER 1 disposes our connection while the peer still writes (main's stop); ORDER 4 finishes our writes,
+                // closes our write side, waits (bounded) for the read side to end, then disposes.
+                async Task StdioRound(int round)
+                {
+                    var order = int.TryParse(Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_ORDER"), out var o) ? o : 1;
+                    var text = new string('z', 8192 + round % 8192);
+                    using var toPeer = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.Out);
+                    using var peerIn = new System.IO.Pipes.AnonymousPipeClientStream(System.IO.Pipes.PipeDirection.In, toPeer.ClientSafePipeHandle);
+                    using var fromPeer = new System.IO.Pipes.AnonymousPipeServerStream(System.IO.Pipes.PipeDirection.In);
+                    using var peerOut = new System.IO.Pipes.AnonymousPipeClientStream(System.IO.Pipes.PipeDirection.Out, fromPeer.ClientSafePipeHandle);
+                    var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { jsonrpc = "2.0", method = "window/logMessage", @params = new { type = 4, message = text } }));
+                    var frame = Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n").Concat(body).ToArray();
+                    using var endOfInput = new ManualResetEventSlim();
+                    var drain = Task.Factory.StartNew(() =>
+                    {
+                        var buffer = new byte[65536];
+                        try { while (peerIn.Read(buffer, 0, buffer.Length) > 0) { } } catch (IOException) { } catch (ObjectDisposedException) { }
+                        endOfInput.Set();
+                    }, TaskCreationOptions.LongRunning);
+                    var pump = Task.Factory.StartNew(() =>
+                    {
+                        try { for (var k = 0; k < 64 && !endOfInput.IsSet; k++) peerOut.Write(frame); } catch (IOException) { } catch (ObjectDisposedException) { }
+                        endOfInput.Wait(TimeSpan.FromSeconds(10));
+                        peerOut.Dispose();
+                    }, TaskCreationOptions.LongRunning);
+                    var rpc = new JsonRpc(new HeaderDelimitedMessageHandler(toPeer, fromPeer, new SystemTextJsonFormatter()));
+                    rpc.StartListening();
+                    var sends = Task.Run(async () => { for (var k = 0; k < 64; k++) await rpc.NotifyAsync("textDocument/didChange", text); });
+                    await Task.Delay(round % 3);
+                    if (order == 4)
+                    {
+                        try { await sends; } catch { }
+                        toPeer.Dispose();
+                        await Task.WhenAny(rpc.Completion, Task.Delay(TimeSpan.FromSeconds(5)));
+                        rpc.Dispose();
+                    }
+                    else
+                    {
+                        rpc.Dispose();
+                        try { await sends; } catch { }
+                    }
+                    toPeer.Dispose();
+                    fromPeer.Dispose();
+                    await Task.WhenAny(Task.WhenAll(drain, pump), Task.Delay(TimeSpan.FromSeconds(15)));
+                }
                 using var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
                 if (tcp) listener.Start();
                 for (var round = 0; clock.Elapsed.TotalSeconds < seconds && !token.IsCancellationRequested; round++)
                 {
+                    if (Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_STDIO") == "1")
+                    {
+                        await StdioRound(round);
+                        Interlocked.Increment(ref churnRounds);
+                        continue;
+                    }
                     var pipes = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_PIPES") == "1";
                     var (local, remote) = tcp ? await TcpPair(listener, token) : FullDuplexStream.CreatePair();
                     var toServer = new System.IO.Pipelines.Pipe();
                     var toClient = new System.IO.Pipelines.Pipe();
                     var adapter = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_ADAPTER");
+                    var privatePool = Environment.GetEnvironmentVariable("HEXIDE_WIRE_STRESS_CHURN_PRIVATE");
                     IJsonRpcMessageHandler Over(Stream stream) => adapter switch
                     {
                         "nbwriter" => new HeaderDelimitedMessageHandler(stream.UsePipeWriter(),
@@ -261,6 +411,17 @@ public class WireStressTests(ITestOutputHelper output)
                         "netwriter" => new HeaderDelimitedMessageHandler(
                             System.IO.Pipelines.PipeWriter.Create(stream, new System.IO.Pipelines.StreamPipeWriterOptions(leaveOpen: true)),
                             System.IO.Pipelines.PipeReader.Create(stream, new System.IO.Pipelines.StreamPipeReaderOptions(leaveOpen: true)), new SystemTextJsonFormatter()),
+                        // As lane I's class does: the writer owns the stream, so completing it closes the stream at once,
+                        // possibly while this handler's own read is still pending on it.
+                        "netowned" => new HeaderDelimitedMessageHandler(
+                            System.IO.Pipelines.PipeWriter.Create(stream, new System.IO.Pipelines.StreamPipeWriterOptions(pool: privatePool == "writer" ? WriterPool : null, leaveOpen: false)),
+                            System.IO.Pipelines.PipeReader.Create(stream, new System.IO.Pipelines.StreamPipeReaderOptions(pool: privatePool switch
+                            {
+                                "reader" => ReaderPool,
+                                "guarded" => SharedGuarded,
+                                "guarded-conn" => new GuardedPool(System.Buffers.ArrayPool<byte>.Create()),
+                                _ => null,
+                            }, leaveOpen: true)), new SystemTextJsonFormatter()),
                         "nbreader" => new HeaderDelimitedMessageHandler(
                             System.IO.Pipelines.PipeWriter.Create(stream, new System.IO.Pipelines.StreamPipeWriterOptions(leaveOpen: true)),
                             stream.UsePipeReader(), new SystemTextJsonFormatter()),
@@ -319,7 +480,7 @@ public class WireStressTests(ITestOutputHelper output)
                                 try { await Task.WhenAll(pushes, sends); } catch { }
                                 await CloseClient(); peer.Dispose(); break;
                         }
-                        if (adapter is not null)
+                        if (adapter is not null and not "netowned")
                         {
                             // The (PipeWriter, PipeReader) handlers don't own the stream: close it once both ends are done, as
                             // the Stream constructor's handler does after its writer has flushed.
@@ -376,6 +537,18 @@ public class WireStressTests(ITestOutputHelper output)
             foreach (var client in clients) await client.DisposeAsync();
             foreach (var peer in peers) peer.Dispose();
             output.WriteLine($"#3520: pairs={pairs}; seconds={seconds}; checked frames={ledger.Frames}; bad={ledger.Failures.Count}");
+            using (var self = Process.GetCurrentProcess())
+                output.WriteLine($"#3520: memory after full GC={GC.GetTotalMemory(true) / 1048576} MB; peak working set={self.PeakWorkingSet64 / 1048576} MB; pool threads={ThreadPool.ThreadCount}; allocated={GC.GetTotalAllocatedBytes() / 1048576} MB");
+            if (Setting("HEXIDE_WIRE_STRESS_HOLD_SECONDS", 0) is var hold and > 0)
+            {
+                // For a heap dump of what the run left behind: the marker file names this process.
+                File.WriteAllText(Path.Combine(Path.GetTempPath(), $"hexide-3520-hold-{Environment.ProcessId}.txt"), "holding");
+                Thread.Sleep(TimeSpan.FromSeconds(hold));
+            }
+            ReaderPool.VerifyAll();
+            WriterPool.VerifyAll();
+            output.WriteLine($"#3520: {ReaderPool}; {WriterPool}; violations={PoisonPool.Violations.Count}; {GuardedPool.Report()}");
+            foreach (var violation in PoisonPool.Violations.Take(6)) output.WriteLine($"#3520 poison: {violation}");
             ledger.Failures.Should().BeEmpty(string.Join(Environment.NewLine, ledger.Failures));
         }
         ledger.Frames.Should().BeGreaterThan(pairs * 10);
