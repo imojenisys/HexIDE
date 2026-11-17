@@ -337,14 +337,14 @@ public class FormDeserializer
                 var propertyName = CanonicalPropertyName(serializedProperty.Key, componentClass);
 
                 // VB6 reads measurements as Single and refuses >= 2^31; only Height's negative
-                // refusal is measured (#4096, issuecomment-6915523429). Leave refused lines unset.
+                // refusal is measured (#4096, issuecomment-6915523429). Form control sizes recover below.
                 if (propertyName is "Left" or "Top" or "Width" or "Height"
                         or "ClientLeft" or "ClientTop" or "ClientWidth" or "ClientHeight"
                     && (parent is null || componentClass.PropertiesByName.ContainsKey(propertyName))
                     && TryReadNumber(serializedProperty.Value, out var measurement)
-                    && ((float)measurement >= 2147483648f || propertyName == "Height" && (float)measurement < 0
-                        // A negative size on a form's control recovers as zero with Save As instead (#4179, oracle PR #4350).
-                        && !(rootComponent.Type == "VB.Form" && parent is not null)))
+                    && ((float)measurement >= 2147483648f || propertyName == "Height" && (float)measurement < 0)
+                    // Refused Height on a form's control recovers as zero with Save As (#4179, #4422).
+                    && !(propertyName == "Height" && rootComponent.Type == "VB.Form" && parent is not null))
                 {
                     form.MarkUnfaithfulToSave(UnfaithfulSaveCause.RefusedMeasurement,
                         FormattableString.Invariant($"Property {serializedProperty.Key} in {serializedComponent.Name} could not be set to {serializedProperty.Value}."));
@@ -421,9 +421,10 @@ public class FormDeserializer
                     continue; // unknown property — preserved verbatim by OrderedRawProperties loop below
 
                 var val = serializedProperty.Value;
-                // VB6 IDE load errors recover the size as zero, and require Save As (#4179, oracle PR #4350).
+                // VB6 IDE load errors recover the size as zero, requiring Save As (#4179, PR #4350; #4422).
                 if (rootComponent.Type == "VB.Form" && parent is not null && TryReadNumber(val, out var size)
-                    && DesignerSizeValidation.Refuses(propertyClass, size))
+                    && (DesignerSizeValidation.Refuses(propertyClass, size)
+                        || propertyClass == VBProperties.HeightProperty && (float)size >= 2147483648f))
                 {
                     val = 0;
                     form.LoadedWithErrors = true;
