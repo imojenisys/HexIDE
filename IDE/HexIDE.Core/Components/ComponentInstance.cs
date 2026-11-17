@@ -24,6 +24,10 @@ public partial class ComponentInstance
     /// </summary>
     public List<UnknownRawProperty> UnknownRawProperties { get; } = [];
 
+    // Design-time Index is carried raw until #4284 makes it a property.
+    public bool IsControlArrayElement => UnknownRawProperties.Any(p => p.Name.Equals("Index", StringComparison.OrdinalIgnoreCase));
+
+
     /// <summary>
     /// The preserved lines in document order — the flat view, which is what every reader outside the
     /// writer has ever wanted. Derived, so there is no second copy to keep in step.
