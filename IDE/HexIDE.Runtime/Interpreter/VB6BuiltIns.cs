@@ -61,7 +61,7 @@ public partial class VB6BuiltIns
 
     // #4302 measures these LongLong inputs only. Other intrinsic uses need #1548's oracle rows.
     private static readonly HashSet<string> LongLongInputs = new(StringComparer.OrdinalIgnoreCase)
-    { "CLngLng", "CLngPtr", "CInt", "CLng", "CDbl", "CStr", "TypeName", "VarType", "Hex", "Oct", "Str", "Format", "LenB" };
+    { "CLngLng", "CLngPtr", "CInt", "CLng", "CDbl", "CStr", "TypeName", "VarType", "Hex", "Oct", "Str", "Format", "LenB", "Abs", "Int", "Fix", "Sgn" };
 
     internal bool IsVba64 { get; init; }
 

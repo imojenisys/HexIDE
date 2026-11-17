@@ -23,7 +23,7 @@ grammar VB6;
 
 @lexer::members {
     // Whether the character just before the current token ends a word: a letter, a digit or an underscore. Called
-    // only from the predicate at the right edge of IDENTIFIER_CONTINUATION, after the whole token has matched.
+    // from right-edge predicates after the whole token has matched (IDENTIFIER_CONTINUATION and LONGLONGCHAR).
     private bool WordEndsBeforeToken()
     {
         var before = TokenStartCharIndex - 1;
@@ -32,14 +32,7 @@ grammar VB6;
         return char.IsLetterOrDigit((char)c) || c == '_';
     }
 
-    // A literal suffix ends the operand; a following exponent operand keeps ^ as the operator.
-    private bool LongLongSuffixEndsHere()
-    {
-        var i = 1;
-        while (InputStream.LA(i) is ' ' or '\t') i++;
-        var next = InputStream.LA(i);
-        return next == -1 || next is '\r' or '\n' or ')' or ',' or ':' or '\'';
-    }
+    public bool IsVba64 { get; set; }
 
 }
 
@@ -1181,7 +1174,7 @@ type
    ;
 
 typeHint
-   : POW {IsVba64}?
+   : LONGLONGCHAR
    | AMPERSAND
    | AT
    | DOLLAR
@@ -2421,6 +2414,11 @@ PLUS_EQ
    ;
 
 
+LONGLONGCHAR
+   : '^' {IsVba64 && WordEndsBeforeToken()}?
+   ;
+
+
 POW
    : '^'
    ;
@@ -2785,5 +2783,5 @@ fragment Z
    ;
 
 fragment LONGLONGSUFFIX
-   : '^' {LongLongSuffixEndsHere()}?
+   : '^' {IsVba64}?
    ;

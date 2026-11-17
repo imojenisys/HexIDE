@@ -52,12 +52,14 @@ Integer, Long, Byte, LongLong, Single, Double and measured decimal/hexadecimal s
 and unmeasured argument counts for the conversions also refuse under #1548. These are missing
 measurements, not a language-analysis boundary. Intrinsic arguments containing LongLong are limited to the
 measured first-argument calls listed in MISSING_LANGUAGE; other intrinsics/positions, LenB of a Variant,
-and Or/Xor/Eqv/Imp/Not also refuse under #1548 rather than inherit a 32-bit helper's answer. Minimum-value
-negation and integer division/Mod by -1, and out-of-range or unmeasured `^` literal forms, likewise refuse
-until their VBA7 diagnostics are measured. Non-Double comparison partners and LongLong Select Case
-selectors likewise refuse under #1548 until their domains are measured. Non-integral partners in
-LongLong integer/bitwise operations, and LongLong multiplication with Date, also remain refused. The bundled LSP grammar still lacks the `^` suffix;
-its VBA7 syntax/diagnostics follow-up remains outside #4302, under #1548.
+and other conversions still refuse under #1548. The review measurements in [#4302](https://github.com/hexide-io/HexIDE/issues/4302)
+(oracle PR #4383) add Decimal division, Date multiplication, rounded integer/bitwise partners,
+Or/Xor/Eqv/Imp/Not, minimum-value overflow errors, and Abs/Int/Fix/Sgn. Comparisons use exact integer
+or Decimal domains, or Double for Single/Double/String/Date; Currency comparisons and LongLong
+Select Case selectors remain refused. Out-of-range integer/bitwise operand coercions, bitwise Date/Empty partners, and out-of-range or unmeasured `^`
+literal forms and a `^` read on a name declared as another type remain refused under #1548.
+Adjacent `^` is a type character in 64-bit projects and an operator in VB6; after `)` it stays an
+operator (reasoned, unmeasured). The bundled LSP grammar's VBA7 syntax/diagnostics follow-up is #4365.
 
 ## Slot lifetime (#79)
 

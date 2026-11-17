@@ -924,7 +924,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
 
     private Antlr4.Runtime.Tree.IParseTree Parse(string source, string moduleName)
     {
-        var lexer = new VB6Lexer(new AntlrInputStream(new StringReader(source)));
+        var lexer = new VB6Lexer(new AntlrInputStream(new StringReader(source))) { IsVba64 = IsVba64 };
         lexer.RemoveErrorListeners();
         lexer.AddErrorListener(this);
         parsingModule = moduleName;
@@ -2256,13 +2256,13 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     public void SyntaxError(TextWriter output, IRecognizer recognizer, IToken offendingSymbol, int line, int charPositionInLine,
         string msg, RecognitionException e)
     {
-        throw new VBCompileErrorException($"{SyntaxErrorText.Of(msg)} {SyntaxErrorAt(line, charPositionInLine)}\nOffending symbol: {offendingSymbol.Text}")
+        throw new VBCompileErrorException($"Syntax error: {SyntaxErrorText.Of(msg)} {SyntaxErrorAt(line, charPositionInLine)}\nOffending symbol: {offendingSymbol.Text}")
             { Line = line };
     }
 
     public void SyntaxError(TextWriter output, IRecognizer recognizer, int offendingSymbol, int line, int charPositionInLine,
         string msg, RecognitionException e)
     {
-        throw new VBCompileErrorException($"{SyntaxErrorText.Of(msg)} {SyntaxErrorAt(line, charPositionInLine)}") { Line = line };
+        throw new VBCompileErrorException($"Syntax error: {SyntaxErrorText.Of(msg)} {SyntaxErrorAt(line, charPositionInLine)}") { Line = line };
     }
 }

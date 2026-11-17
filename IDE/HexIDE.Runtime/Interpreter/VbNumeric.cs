@@ -46,8 +46,8 @@ public static class VbNumeric
         "SSFSFFDF", // Single
         "FFFFFFDF", // Double
         "FFFFFFDF", // Currency
-        "DDDDDDDF", // Decimal
-        "FFFFFFFF", // LongLong (#4302)
+        "DDDDDDDD", // Decimal
+        "FFFFFFDF", // LongLong (#4302, review measurements PR #4383)
     ];
     private static readonly string[] IntegerTypes =
     [
@@ -140,8 +140,6 @@ public static class VbNumeric
 
     private static Vb6Value Arith(Vb6Value l, Vb6Value r, ParserRuleContext? ctx, char op)
     {
-        if (op == '*' && (l.Type == VT.LongLong || r.Type == VT.LongLong) && (l.Type == VT.Date || r.Type == VT.Date))
-            throw new NotImplementedException("LongLong multiplication with Date is unmeasured (#1548)");
         int lr = CoreRank(l.Type), rr = CoreRank(r.Type);
         if (lr < 0 || rr < 0)
         {
@@ -224,42 +222,36 @@ public static class VbNumeric
 
     public static Vb6Value IntDivide(Vb6Value l, Vb6Value r, ParserRuleContext? ctx)
     {
-        RefuseUnmeasuredLongLongIntegerOperands(l, r);
         RefuseBooleanOverString(l, r, "\\", ctx);
         l = ReadString(l, ctx);
         r = ReadString(r, ctx);
-        long a = RoundToLong(l, ctx), b = RoundToLong(r, ctx);
+        bool wide = l.Type == VT.LongLong || r.Type == VT.LongLong;
+        long a = wide ? RoundLongLongOperand(l, ctx) : RoundToLong(l, ctx);
+        long b = wide ? RoundLongLongOperand(r, ctx) : RoundToLong(r, ctx);
         if (b == 0)
             throw new VBRunTimeException(ctx, VBStandardError.DivisionByZero);
-        RefuseUnmeasuredLongLongDivision(l, r, a, b);
+        CheckLongLongDivision(l, r, a, b, ctx);
         return NarrowLong(a / b, IntResultType(l.Type, r.Type), ctx);   // C# / truncates toward zero, as VB6 \
     }
 
     public static Vb6Value Modulo(Vb6Value l, Vb6Value r, ParserRuleContext? ctx)
     {
-        RefuseUnmeasuredLongLongIntegerOperands(l, r);
         RefuseBooleanOverString(l, r, "Mod", ctx);
         l = ReadString(l, ctx);
         r = ReadString(r, ctx);
-        long a = RoundToLong(l, ctx), b = RoundToLong(r, ctx);
+        bool wide = l.Type == VT.LongLong || r.Type == VT.LongLong;
+        long a = wide ? RoundLongLongOperand(l, ctx) : RoundToLong(l, ctx);
+        long b = wide ? RoundLongLongOperand(r, ctx) : RoundToLong(r, ctx);
         if (b == 0)
             throw new VBRunTimeException(ctx, VBStandardError.DivisionByZero);
-        RefuseUnmeasuredLongLongDivision(l, r, a, b);
+        CheckLongLongDivision(l, r, a, b, ctx);
         return NarrowLong(a % b, IntResultType(l.Type, r.Type), ctx);   // C# % sign follows dividend, as VB6 Mod
     }
 
-    internal static void RefuseUnmeasuredLongLongIntegerOperands(Vb6Value l, Vb6Value r)
-    {
-        static bool Integral(VT type) => type == VT.Byte || type == VT.Boolean || type == VT.Integer
-            || type == VT.Long || type == VT.LongLong;
-        if ((l.Type == VT.LongLong || r.Type == VT.LongLong) && (!Integral(l.Type) || !Integral(r.Type)))
-            throw new NotImplementedException("This LongLong integer/bitwise operand coercion is unmeasured (#1548)");
-    }
-
-    private static void RefuseUnmeasuredLongLongDivision(Vb6Value l, Vb6Value r, long a, long b)
+    private static void CheckLongLongDivision(Vb6Value l, Vb6Value r, long a, long b, ParserRuleContext? ctx)
     {
         if ((l.Type == VT.LongLong || r.Type == VT.LongLong) && a == long.MinValue && b == -1)
-            throw new NotImplementedException("LongLong integer division or Mod at the minimum value and -1 is unmeasured (#1548)");
+            throw new VBRunTimeException(ctx, VBStandardError.Overflow);
     }
 
     // A Boolean divided by a String, with \ or Mod, is the one shape where VB6 does not read the String as a Double:
@@ -307,7 +299,7 @@ public static class VbNumeric
         {
             var integral = ToLong(v);
             if (integral == long.MinValue)
-                throw new NotImplementedException("Negating the minimum LongLong is unmeasured (#1548)");
+                throw new VBRunTimeException(ctx, VBStandardError.Overflow);
             return Vb6Value.NewLongLong(-integral);
         }
         if (rt == VT.Integer || rt == VT.Long)
@@ -549,6 +541,7 @@ public static class VbNumeric
 
     private static VT IntResultType(VT l, VT r)
     {
+        if (l == VT.LongLong || r == VT.LongLong) return VT.LongLong;
         int li = CoreRank(l), ri = CoreRank(r);
         return li >= 0 && ri >= 0 ? ResultType(IntegerTypes, li, ri) : VT.Long;
     }
@@ -649,6 +642,26 @@ public static class VbNumeric
         if (v.Type == VT.EmptyVariant) { d = 0; return true; }
         if (v.Value is bool b) { d = b ? -1 : 0; return true; }
         return Vb6Value.TryNumericToDouble(v, out d);
+    }
+
+    // #4302 / PR #4383 measures in-range rounding, not diagnostics for an out-of-range partner.
+    internal static long RoundLongLongOperand(Vb6Value value, ParserRuleContext? ctx)
+    {
+        if (value.Value is decimal exact)
+        {
+            var rounded = decimal.Round(exact, 0, MidpointRounding.ToEven);
+            if (rounded < long.MinValue || rounded > long.MaxValue)
+                throw new NotImplementedException("Coercion of an out-of-range LongLong integer/bitwise operand is unmeasured (#1548)");
+            return (long)rounded;
+        }
+        if (value.Value is float or double)
+        {
+            var rounded = Math.Round(ToDouble(value), MidpointRounding.ToEven);
+            if (!double.IsFinite(rounded) || rounded < -9223372036854775808d || rounded >= 9223372036854775808d)
+                throw new NotImplementedException("Coercion of an out-of-range LongLong integer/bitwise operand is unmeasured (#1548)");
+            return (long)rounded;
+        }
+        return RoundToLong(value, ctx);
     }
 
     private static long RoundToLong(Vb6Value v, ParserRuleContext? ctx)
