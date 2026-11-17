@@ -8,6 +8,8 @@ using HexIDE.IDE;
 using HexIDE.Bookmarks;
 using HexIDE.Events;
 using HexIDE.Forms.ViewModels;
+using HexIDE.Forms.Views;
+using HexIDE.Lsp.Messages;
 using HexIDE.Projects;
 using HexIDE.Debugging;
 using HexIDE.Runtime.Debugging;
@@ -100,12 +102,16 @@ public class RootDoubleClickTests
         finally { window.Close(); }
     }
 
-    private static CodeEditorViewModel Editor(FormEditViewModel designer, EventBus bus) =>
-        new CodeEditorViewModel(Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(),
-            Substitute.For<IProjectService>(), bus, Substitute.For<ILspClient>(), Substitute.For<ISettingsService>(),
+    private static CodeEditorViewModel Editor(FormEditViewModel designer, EventBus bus, ILspClient? lsp = null)
+    {
+        var settings = Substitute.For<ISettingsService>();
+        settings.TabWidth.Returns(4);
+        return new CodeEditorViewModel(Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(),
+            Substitute.For<IProjectService>(), bus, lsp ?? Substitute.For<ILspClient>(), settings,
             Substitute.For<IStatusBarService>(), Substitute.For<IBookmarkService>(), Substitute.For<IBreakpointService>(),
             Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>())
             .Initialize(designer.FormDefinition!);
+    }
 
     // The selections and absence of a stub were measured in VB6 SP6 (oracle PR #4460).
     [AvaloniaTheory]
@@ -130,7 +136,8 @@ public class RootDoubleClickTests
             item.RaiseEvent(new TappedEventArgs(InputElement.DoubleTappedEvent,
                 new PointerEventArgs(InputElement.PointerPressedEvent, item, new Pointer(1, PointerType.Mouse, true),
                     item, default, 0, default, KeyModifiers.None)));
-            await Task.Delay(150, TestContext.Current.CancellationToken);
+            for (var i = 0; i < 100 && editor.SelectedProcedure != "(Declarations)"; i++)
+                await Task.Delay(10, TestContext.Current.CancellationToken);
             editors.Received().EditCode(designer.FormDefinition);
             editor.SelectedObject.Should().Be("(General)");
             editor.SelectedProcedure.Should().Be("(Declarations)");
@@ -169,10 +176,67 @@ public class RootDoubleClickTests
             item.RaiseEvent(new TappedEventArgs(InputElement.DoubleTappedEvent,
                 new PointerEventArgs(InputElement.PointerPressedEvent, item, new Pointer(1, PointerType.Mouse, true),
                     item, default, 0, default, KeyModifiers.None)));
-            await Task.Delay(150, TestContext.Current.CancellationToken);
+            for (var i = 0; i < 100 && !editor.Document.Text.Contains("Private Sub Command1_Click()", StringComparison.Ordinal); i++)
+                await Task.Delay(10, TestContext.Current.CancellationToken);
             editor.Document.Text.ReplaceLineEndings("\n").Should().Contain("Private Sub Command1_Click()\n\nEnd Sub");
             var end = editor.Document.GetLineByOffset(editor.Document.Text.IndexOf("End Sub", StringComparison.Ordinal));
             editor.CaretOffset.Should().Be(editor.Document.GetLineByNumber(end.LineNumber - 1).Offset);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("(Declarations)")]
+    [InlineData("Existing")]
+    public async Task Symbol_refresh_preserves_the_procedure_selection_without_moving_the_caret(string procedure)
+    {
+        var bus = new EventBus();
+        var lsp = Substitute.For<ILspClient>();
+        lsp.IsRunning.Returns(true);
+        using var designer = Open("Form", "Form1", code:
+            "Option Explicit\r\nPrivate Sub Existing()\r\n    ' body\r\nEnd Sub\r\n");
+        using var editor = Editor(designer, bus, lsp);
+        var line = editor.Document.GetLineByOffset(editor.Document.Text.IndexOf("Private Sub", StringComparison.Ordinal)).LineNumber - 1;
+        var range = new HexIDE.Lsp.Messages.Range(new Position(line, 0), new Position(line + 2, 7));
+        var symbol = new DocumentSymbol("Existing", SymbolKind.Method, range, range);
+        lsp.RequestDocumentSymbolsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns([symbol]);
+        var view = new CodeEditorView { DataContext = editor };
+        var window = new Window { Content = view, Width = 800, Height = 600 };
+        try
+        {
+            window.Show();
+            window.UpdateLayout();
+            await editor.RefreshSymbolsAsync();
+            Dispatcher.UIThread.RunJobs();
+            var combo = view.FindControl<ComboBox>("ProcedureCombo")!;
+            combo.SelectedItem = procedure;
+            editor.SelectedProcedure.Should().Be(procedure);
+            var caret = editor.Document.Text.IndexOf("' body", StringComparison.Ordinal) + 6;
+            editor.CaretOffset = caret;
+            var before = editor.Document.Text;
+            var rebuilds = 0;
+            var selectionDroppedDuringClear = false;
+            editor.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(editor.SelectedProcedure) && editor.SelectedProcedure is null)
+                    selectionDroppedDuringClear = editor.ProcedureNames.Count == 0;
+            };
+            editor.ProcedureNames.CollectionChanged += (_, _) => rebuilds++;
+
+            lsp.DiagnosticsPublished += Raise.Event<EventHandler<PublishDiagnosticsParams>>(
+                lsp, new PublishDiagnosticsParams(editor.GetDocumentUriPublic(), []));
+            for (var i = 0; i < 100 && rebuilds == 0; i++)
+                await Task.Delay(10, TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            rebuilds.Should().BeGreaterThan(0);
+            selectionDroppedDuringClear.Should().BeTrue();
+            editor.CaretOffset.Should().Be(caret);
+            editor.Document.Text.Should().Be(before);
+            editor.IsModified.Should().BeFalse();
+            editor.SelectedProcedure.Should().Be(procedure);
+            combo.SelectedItem.Should().Be(procedure);
         }
         finally { window.Close(); }
     }

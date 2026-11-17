@@ -1330,28 +1330,35 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         FocusWindowRequest?.Invoke();
     }
 
+    private bool refreshingProcedureNames;
+
     private void RefreshProcedureNames()
     {
-        var current = SelectedProcedure;
-        ProcedureNames.Clear();
-
-        if (SelectedObject == GeneralObject || SelectedObject is null)
+        refreshingProcedureNames = true;
+        try
         {
-            ProcedureNames.Add(DeclarationsProc);
-            foreach (var s in FlattenedSymbols())
-                if (s.Kind is SymbolKind.Method or SymbolKind.Function or SymbolKind.Property)
-                    ProcedureNames.Add(s.Name);
-        }
-        else
-        {
-            // Show events for the selected form/control
-            var component = FindComponent(SelectedObject);
-            if (component is not null)
-                foreach (var ev in component.BaseClass.Events)
-                    ProcedureNames.Add(ev.Name);
-        }
+            var current = SelectedProcedure;
+            ProcedureNames.Clear();
 
-        SelectedProcedure = (current is not null && ProcedureNames.IndexOf(current) >= 0) ? current : null;
+            if (SelectedObject == GeneralObject || SelectedObject is null)
+            {
+                ProcedureNames.Add(DeclarationsProc);
+                foreach (var s in FlattenedSymbols())
+                    if (s.Kind is SymbolKind.Method or SymbolKind.Function or SymbolKind.Property)
+                        ProcedureNames.Add(s.Name);
+            }
+            else
+            {
+                // Show events for the selected form/control
+                var component = FindComponent(SelectedObject);
+                if (component is not null)
+                    foreach (var ev in component.BaseClass.Events)
+                        ProcedureNames.Add(ev.Name);
+            }
+
+            SelectedProcedure = (current is not null && ProcedureNames.IndexOf(current) >= 0) ? current : null;
+        }
+        finally { refreshingProcedureNames = false; }
     }
 
     private string? RootEventPrefix => formDefinition?.RootVBTypeName switch
@@ -2626,7 +2633,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
     private void OnSelectedProcedureChanged(string? oldValue, string? newValue)
     {
-        if (newValue is null) return;
+        // Clear and reselection update the bound ComboBox synchronously; restoring its item is not a choice (#4480).
+        if (refreshingProcedureNames || newValue is null) return;
         if (newValue == DeclarationsProc)
         {
             NavigateToDeclarations();
