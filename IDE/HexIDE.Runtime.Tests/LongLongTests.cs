@@ -212,8 +212,21 @@ public class LongLongTests : BaseVBTestFixture
         {
             var file = System.IO.Path.Combine(folder, "record.bin");
             await System.IO.File.WriteAllBytesAsync(file, new byte[16], TestContext.Current.CancellationToken);
-            var act = () => Run($"Type T\nn As LongLong\nEnd Type\nDim x As T\nOpen \"{file}\" For Binary As #1\n{operation} #1, 1, x\n");
-            await act.Should().ThrowAsync<NotImplementedException>().WithMessage("*#1548*");
+            var vb = new BasicInterpreter(new MockStdLib(debug), context, rootEnv,
+                $"Type T\nn As LongLong\nEnd Type\nDim x As T\nOpen \"{file}\" For Binary As #1\n{operation} #1, 1, x\n",
+                compilationConstants: Compilation);
+            try
+            {
+                var act = () => vb.Execute();
+                await act.Should().ThrowAsync<NotImplementedException>().WithMessage("*#1548*");
+            }
+            finally
+            {
+                // The refusal interrupts the program before it can Close its file (Windows forbids deleting it).
+                vb.BuiltIns.Files.CloseAll();
+            }
+            using var released = System.IO.File.Open(file, System.IO.FileMode.Open,
+                System.IO.FileAccess.ReadWrite, System.IO.FileShare.None);
         }
         finally
         {
