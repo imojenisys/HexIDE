@@ -1,3 +1,4 @@
+using HexIDE.Office;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -385,7 +386,7 @@ public partial class ProjectService : IProjectService
             Title = "Open Project",
             FileTypeFilter =
             [
-                new("Project Files") { Patterns = ["*.vbp", "*.vbg", "*.twinproj", .. types.SelectMany(Picked)] },
+                new("Project Files") { Patterns = ["*.vbp", "*.vbg", .. ArchiveProjectService.FilePatterns, .. types.SelectMany(Picked)] },
                 new("Project Group") { Patterns = ["*.vbg"] },
                 new("Project")       { Patterns = ["*.vbp"] },
                 .. types.Select(type => new FilePickerFileType(type.Type.Title) { Patterns = Picked(type) }),
@@ -398,7 +399,7 @@ public partial class ProjectService : IProjectService
             throw new OperationCanceledException();
 
         // Archive projects coexist with the current workspace, as on the direct/recent open path.
-        if (!string.Equals(Path.GetExtension(files[0]), ".twinproj", StringComparison.OrdinalIgnoreCase))
+        if (!ArchiveProjectService.Covers(files[0]))
             await UnloadAllProjects();
 
         await OpenProject(files[0]);
@@ -406,14 +407,18 @@ public partial class ProjectService : IProjectService
 
     public async Task OpenProject(string projectPath)
     {
-        if (ArchiveProjectService.Reservation.Covers(projectPath))
+        if (ArchiveProjectService.Covers(projectPath))
         {
             if (archives == null) throw new NotSupportedException("Archive project service is unavailable.");
             try
             {
                 await archives.Open(projectPath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            catch (OfficeProjectMissingException)
+            {
+                await windowManager.MessageBox(string.Format(localization.GetString("Str.Office.NoProject"), Path.GetFileName(projectPath)), icon: MessageBoxIcon.Information);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or OfficeFileException)
             {
                 Log.Error(ex, "Error opening archive project {ProjectPath}", projectPath);
                 await windowManager.MessageBox(

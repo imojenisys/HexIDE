@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HexIDE.Utils;
+using HexIDE.Localization;
 using PropertyChanged.SourceGenerator;
 
 namespace HexIDE.Forms.ViewModels;
@@ -20,20 +21,22 @@ public partial class FileBrowserViewModel : ObservableObject
 
     public ObservableCollection<FileSystemEntryViewModel> Entries { get; } = new();
 
-    public string[] FileTypeFilters { get; } =
+    private readonly ILocalizationService localization;
+    public string[] FileTypeFilters =>
     [
-        "Project Files (*.vbp, *.vbg, *.twinproj)",
-        "All Files (*.*)"
+        localization.GetString("Str.Office.ProjectFiles"),
+        localization.GetString("Str.Office.AllFiles")
     ];
 
-    private static readonly string[] s_vbpPatterns = ["*.vbp", "*.vbg", "*.twinproj"];
+    private static readonly string[] s_vbpPatterns = ["*.vbp", "*.vbg", .. HexIDE.Projects.ArchiveProjectService.FilePatterns];
     private static readonly string[] s_allPatterns = ["*.*"];
 
     public DelegateCommand NavigateUpCommand { get; }
     public DelegateCommand NavigateBackCommand { get; }
 
-    public FileBrowserViewModel()
+    public FileBrowserViewModel(ILocalizationService localization)
     {
+        this.localization = localization;
         // Start in Documents or user profile
         var startDir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         if (string.IsNullOrEmpty(startDir))
