@@ -112,3 +112,22 @@ HexIDE.Runtime.Tests.DateFractionOfASecondTests.Long_date_uses_the_measured_Wind
 HexIDE.Runtime.Integration.Tests
 HexIDE.Runtime.Integration.Tests.Views.ToolbarCaptionTests.Segoe_UI_nine_point_matches_console_measurements — Requires the oracle's Windows Segoe UI font build
 HexIDE.Runtime.Integration.Tests.Views.ToolbarCaptionTests.Windows_caption_width_follows_installed_fonts_Gdi_extent — Requires Windows GDI
+
+Windows automatic-check repair, 2026-11-17 (verified under WSL):
+The file CommandButtonDefaultCancelTests.cs declared a partial UserControlKeyTests.
+Before this repair, --filter-class '*CommandButtonDefaultCancelTests' reproduced
+exactly the reported failure: exit 1, zero passed/failed/skipped, zero total.
+After giving that file its matching class and sharing the existing test harness:
+- The same filter: 20 passed, no skips; xUnit report guard passed.
+- Both changed classes: 53 passed, no skips; xUnit report guard passed.
+- Full Runtime.Integration.Tests: 2985 passed, 2 skipped, 2987 total;
+  xUnit report guard passed. The skips remain the Windows font/GDI cases above.
+- Full Runtime.Tests: 8998 passed, 19 skipped, 9017 total (same skips above).
+- MissingLanguageDocTests + ShippedPackParityTests + LocalizationCoverageTests:
+  65 passed, no skips. MISSING_LANGUAGE counts unchanged.
+No new behavior assertions were added. Teeth: one failing filter invocation before,
+the same invocation passing afterward; this is discovery coverage, not new VB6 proof.
+Windows execution remains for the supervisor's automatic check.
+- Full HexIDE.Tests rerun: 9135 passed, 68 skipped, 9203 total, 29m 09s.
+  No failures. Skip inventory is recorded above; skipped cases are not coverage.
+- Final tree hygiene: passed, nine existing warnings; git diff --check passed.

@@ -6,12 +6,13 @@ using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Runtime.Serialization;
 using HexIDE.Runtime.Components;
+using static HexIDE.Runtime.Integration.Tests.Views.UserControlKeyTests;
 
 namespace HexIDE.Runtime.Integration.Tests.Views;
 
 // VB6 SP6 native/p-code: #4371's measured rows (oracle PR #4376), and
 // docs/vb6-fidelity-oracle/key-events-keydown-keypress-and-keyup.md.
-public partial class UserControlKeyTests
+public class CommandButtonDefaultCancelTests
 {
     private static string DialogBlocks(string source = "VB.TextBox", string settings = "", string roles = "Default = -1") =>
         Block(source, "Text1", 0, extra: settings)
