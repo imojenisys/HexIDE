@@ -1005,6 +1005,34 @@ the Avalonia frame properties. Other controls SHALL have no frame section.
 - **WHEN** a caller inspects the `Window` of a running form on Windows
 - **THEN** `nativeStyle` and `nativeExStyle` equal the window's `GWL_STYLE` and `GWL_EXSTYLE`
 
+### Requirement: Window ownership is observable
+
+Window inspection SHALL report `frame.owner` from Avalonia's `Window.Owner` as `{ name, title }`, or
+null when there is none. The name SHALL be the running form's name, `ide` for the main window, or
+another window's title, as the window selector accepts.
+
+#### Scenario: A window is shown with an owner
+
+- **WHEN** a window shown with an owner is inspected
+- **THEN** `frame.owner` names that owner and gives its current title
+
+#### Scenario: An unowned window is inspected
+
+- **WHEN** a window with no Avalonia owner is inspected
+- **THEN** `frame.owner` is null
+
+### Requirement: Native window ownership is observable
+
+On a Windows HWND inspection SHALL report `frame.nativeOwner` from `GetWindow(hwnd, GW_OWNER)`, using
+the same identity as `owner` for a known window or the native class name and title otherwise, and null
+when there is no native owner. Without a Windows HWND it SHALL omit `nativeOwner`. The two owners can
+differ; Windows stacking and minimization follow the native owner.
+
+#### Scenario: A native owner is outside the managed windows
+
+- **WHEN** an inspected HWND's owner is not a known Avalonia window
+- **THEN** `frame.nativeOwner` gives its native class name as `name` and its title as `title`
+
 ### Requirement: A frame snapshot SHALL show the window whatever covers it
 
 The snapshot tool SHALL accept optional `includeFrame`, default false. When true on Windows, it SHALL
