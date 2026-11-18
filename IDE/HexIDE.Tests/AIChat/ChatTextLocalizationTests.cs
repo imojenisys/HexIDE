@@ -163,7 +163,7 @@ public class ChatTextLocalizationTests
         resources["Str.AIChat.ToolFailedNoReason"] = "Failed {0} without reason";
         var outcome = (ChatMessageViewModel)typeof(ChatViewModel)
             .GetMethod("DescribeWriteOutcome", BindingFlags.NonPublic | BindingFlags.Static)!
-            .Invoke(null, [new ToolCall("id", tool, "{}"), result])!;
+            .Invoke(null, [new ToolCall("id", tool, "{}"), new IdeToolReply(result)])!;
         outcome.RawContent.Should().Be(expected);
     }
 
@@ -183,7 +183,7 @@ public class ChatTextLocalizationTests
             Application.Current!.Resources["Str.AIChat." + key] = "WHOLE SENTENCE";
             var outcome = (ChatMessageViewModel)typeof(ChatViewModel)
                 .GetMethod("DescribeWriteOutcome", BindingFlags.NonPublic | BindingFlags.Static)!
-                .Invoke(null, [new ToolCall("id", "apply_edit", arguments), result])!;
+                .Invoke(null, [new ToolCall("id", "apply_edit", arguments), new IdeToolReply(result)])!;
             outcome.RawContent.Should().Be("WHOLE SENTENCE");
         }
         finally { localization.Apply("en"); }
@@ -398,6 +398,58 @@ public class ChatTextLocalizationTests
         finally
         {
             if (hadKey) resources[key] = previous!; else resources.Remove(key);
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("apply_edit", "{}", "EditContentMissing", "No content was sent, so nothing was changed. Send the whole file with its header unchanged, or the code alone.")]
+    [InlineData("run_project", "{}", "ProjectCannotStart", "Cannot start project (none loaded or already running)")]
+    [InlineData("stop_project", "{}", "ProjectNotRunning", "No project is currently running")]
+    [InlineData("apply_edit", "{\"file_name\":\"Module1\",\"content\":\"new\"}", "host", "host reason")]
+    public async Task ExecutorRefusalUsesResourcesAndResultStaysEnglish(string tool, string arguments, string key, string english)
+    {
+        var resources = Application.Current!.Resources;
+        var localization = new LocalizationService();
+        localization.Apply("en");
+        resources["Str.AIChat." + key] = "LOCAL REASON";
+        resources["Str.AIChat.NotAppliedTo"] = "REFUSED {0}: {1}";
+        resources["Str.AIChat.NotAppliedToUnnamed"] = "REFUSED UNNAMED: {0}";
+        resources["Str.AIChat.ToolFailed"] = "FAILED {0}: {1}";
+        var directory = Path.Join(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var host = Substitute.For<IHexIdeHost>();
+            host.Editor.TrySetContent("Module1", "new", null).Returns(new AddinEditResult(false, english));
+            File.WriteAllText(Path.Join(directory, "chat-settings.json"), """{"baseUrl":"http://localhost/v1"}""");
+            var handler = new ServerChatToolsLoopTests.ToolCallHandler(tool, arguments);
+            using var client = new ChatClient(new HttpClient(handler));
+            var chat = new ChatViewModel(host, directory, client) { InputText = "go" };
+            var send = chat.SendAsync();
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(30));
+            ChatMessageViewModel? question;
+            while ((question = chat.Messages.FirstOrDefault(m => m.IsApproval)) is null)
+                await Task.Delay(10, timeout.Token);
+            question.Approve();
+            await send.WaitAsync(timeout.Token);
+            Dispatcher.UIThread.RunJobs();
+
+            var shown = key == "host" ? english : "LOCAL REASON";
+            chat.Messages.Single(m => m.IsError).RawContent.Should().Be(tool == "apply_edit"
+                ? key == "host" ? "REFUSED Module1: " + shown : "REFUSED UNNAMED: " + shown
+                : "FAILED " + tool + ": " + shown);
+            var expected = "{\"success\":false,\"error\":\"" + english + "\"}";
+            chat.SessionLog.Single(m => m.Role == "tool").Content.Should().Be(expected);
+            handler.Bodies[1]["messages"]!.AsArray().Single(m => m!["role"]!.GetValue<string>() == "tool")!
+                ["content"]!.GetValue<string>().Should().Be(expected);
+            (await new IdeToolExecutor(host).ExecuteAsync(new ToolCall("id", tool, arguments))).Should().Be(expected);
+        }
+        finally
+        {
+            localization.Apply("en");
+            resources.Remove("Str.AIChat.host");
             Directory.Delete(directory, true);
         }
     }
