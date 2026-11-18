@@ -1041,6 +1041,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             VbaBitness = compilationConstants.VbaBitness
         };
         pp.Visit(Parse(ConditionalCompiler.Preprocess(moduleCode, compilationConstants, name).Text, name));
+        pp.CheckByValUdtParameters();
         return new ModuleInfo(name, kind, pp, env);
     });
 
@@ -2224,6 +2225,11 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         for (int i = 0; i < proc.Parameters.Count; i++)
         {
             var p = proc.Parameters[i];
+            // #4673: foreign Public Types are resolved only here, once all modules are known.
+            // This is the same refusal later than VB6; Optional and Event errors are outside this issue.
+            if (!p.ByRef && !p.Optional && p.TypeName is { } udtName
+                && TryResolveType(udtName, owner, null, out _))
+                throw new VBCompileErrorException("User-defined type may not be passed ByVal");
             // A ParamArray is the last parameter, and takes every argument left (#2462).
             if (p.ParamArray)
             {

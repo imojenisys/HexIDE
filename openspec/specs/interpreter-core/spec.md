@@ -2332,3 +2332,12 @@ unmeasured unsigned numeric uses. CallByName remains outside this support (#4520
 - **WHEN** TypeName, addition, multiplication or equality uses a late-bound Color
 - **THEN** error 458 is raised
 - **AND** IsNumeric on that Color is False
+
+### Requirement: UDT parameters declared ByVal are refused
+
+The interpreter SHALL refuse non-Optional Sub, Function and Property parameters declared ByVal with a UDT type using `VBCompileErrorException("User-defined type may not be passed ByVal")`. Local declarations SHALL be checked at load; foreign Public Types SHALL be checked at parameter binding. Declare, Event and Optional signatures SHALL retain their existing behaviour.
+
+#### Scenario: Unused procedure with a local UDT parameter
+Measured in [#4673](https://github.com/hexide-io/HexIDE/issues/4673).
+- **WHEN** a module declares a Type and an unused procedure taking it ByVal
+- **THEN** loading the module SHALL raise "User-defined type may not be passed ByVal"

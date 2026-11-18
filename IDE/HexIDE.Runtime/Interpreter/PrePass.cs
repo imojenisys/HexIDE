@@ -109,13 +109,16 @@ public class PrePass : VB6BaseVisitor<object?>
     // is one of them, since it holds the return; a Sub's is not (measured: `Dim S` in `Sub S` compiles). Refused as the
     // module loads, as vb6.exe refuses the build; the second declaration was skipped, so the first one's type won, and a Dim
     // beside a Static made an ordinary local.
-    private static ProcedureInfo CheckedLocals(ProcedureInfo procedure)
+    private ProcedureInfo CheckedLocals(ProcedureInfo procedure)
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (procedure.IsFunction)
             names.Add(procedure.Name);
         foreach (var parameter in procedure.Parameters)
+        {
             Declare(parameter.Name);
+            CheckByValUdtParameter(parameter);
+        }
         foreach (var constant in procedure.DeclaredConsts)
             Declare(constant.ambiguousIdentifier().GetText());
         foreach (var local in procedure.DeclaredLocals)
@@ -127,6 +130,23 @@ public class PrePass : VB6BaseVisitor<object?>
             if (!names.Add(name))
                 throw new VBCompileErrorException("Duplicate declaration in current scope");
         }
+    }
+
+    // #4673: refuse local UDT parameters at load, including unused procedures. Declare and Event
+    // signatures do not pass here; Optional parameters have a separate compile error, outside this issue.
+    private void CheckByValUdtParameter(ParamInfo parameter)
+    {
+        if (!parameter.ByRef && !parameter.Optional && parameter.TypeName is { } name && Types.ContainsKey(name))
+            throw new VBCompileErrorException("User-defined type may not be passed ByVal");
+    }
+
+    internal void CheckByValUdtParameters()
+    {
+        // A Type can follow the procedure that names it.
+        foreach (var procedure in Procedures.Values.Concat(Properties.Values.SelectMany(p =>
+                     new[] { p.Get, p.Let, p.Set }.OfType<ProcedureInfo>())))
+            foreach (var parameter in procedure.Parameters)
+                CheckByValUdtParameter(parameter);
     }
 
     /// <summary>Is this declaration <c>Private</c>? Absent visibility means Public for a Type and an Enum.</summary>

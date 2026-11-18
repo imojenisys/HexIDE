@@ -4,7 +4,7 @@ namespace HexIDE.Runtime.Tests;
 
 /// <summary>
 /// Interpreter-advanced Phase 2 — user-defined types (Type…End Type). The defining property is VALUE semantics:
-/// copy-on-assign at Let/ByVal/return, ByRef aliases, nested-field navigation. Array coverage lives in UdtArrayTests;
+/// copy-on-assign at Let/return, ByRef aliases, nested-field navigation. Array coverage lives in UdtArrayTests;
 /// fixed-length strings remain deferred.
 /// </summary>
 public class UdtTests : BaseVBTestFixture
@@ -91,18 +91,57 @@ public class UdtTests : BaseVBTestFixture
         AssertDebugLog([42]);
     }
 
-    [Fact]
-    public async Task ByVal_DoesNotMutate()
+    // Native/p-code measurements and the requested accessor coverage: #4673, including unused declarations.
+    [Theory]
+    [InlineData("Sub NoFill(ByVal p As Point)\np.X = 42\nEnd Sub\nDim q As Point\nq.X = 1\nNoFill q\nDebug.Print q.X\n")]
+    [InlineData("Function F(ByVal p As Point) As Integer\nEnd Function\n")]
+    [InlineData("Property Let P(ByVal v As Point)\nEnd Property\n")]
+    [InlineData("Property Get P(ByVal v As Point) As Integer\nEnd Property\n")]
+    [InlineData("Property Set P(ByVal v As Point)\nEnd Property\n")]
+    [InlineData("Sub NeverCalled(ByVal p As Point)\nEnd Sub\n")]
+    public async Task ByVal_UdtParameter_RefusedAtLoad(string declaration)
     {
-        await Run(Point +
-            "Sub NoFill(ByVal p As Point)\n" +
-            "p.X = 42\n" +
-            "End Sub\n" +
-            "Dim q As Point\n" +
-            "q.X = 1\n" +
-            "NoFill q\n" +
-            "Debug.Print q.X\n");        // 1 — the copy was mutated, not q
-        AssertDebugLog([1]);
+        Func<Task> run = () => Run(Point + declaration);
+        (await run.Should().ThrowAsync<VBCompileErrorException>()).WithMessage("*User-defined type may not be passed ByVal*");
+    }
+
+    [Fact]
+    public async Task ByVal_PrivateClassUdtParameter_RefusedAtLoad()
+    {
+        // #4673: the class need not be instantiated.
+        Func<Task> run = () => RunClasses("",
+            ("C", "Private " + Point + "Private Sub Take(ByVal p As Point)\nEnd Sub\n"));
+        (await run.Should().ThrowAsync<VBCompileErrorException>()).WithMessage("*User-defined type may not be passed ByVal*");
+    }
+
+    [Fact]
+    public async Task ByVal_UdtDeclareParameter_StillLoads()
+    {
+        // #4673: this declaration builds in VB6; no native call is made here.
+        await Run(Point + "Private Declare Sub ZeroIt Lib \"kernel32\" Alias \"RtlZeroMemory\" (ByVal p As Point, ByVal n As Long)\n");
+    }
+
+    [Fact]
+    public async Task ByVal_ClassAndEnumParameters_StillLoad()
+    {
+        await RunClasses("Enum E\nValue = 1\nEnd Enum\nSub F(ByVal p As C, ByVal v As E)\nEnd Sub\n", ("C", ""));
+    }
+
+    [Fact]
+    public async Task ByVal_ForeignPublicUdtParameter_RefusedWhenBound()
+    {
+        // #4673 permits the same error later for a Public Type from another module.
+        Func<Task> run = () => RunModules(
+            "Sub Take(ByVal p As Point)\nEnd Sub\nDim q As Point\nTake q\n", ("Shared", Point));
+        (await run.Should().ThrowAsync<VBCompileErrorException>()).WithMessage("*User-defined type may not be passed ByVal*");
+    }
+
+    [Fact]
+    public async Task ByVal_UdtDeclaredAfterProcedure_RefusedAtLoad()
+    {
+        Func<Task> run = () =>
+            Run("Sub NeverCalled(ByVal p As Point)\nEnd Sub\n" + Point);
+        (await run.Should().ThrowAsync<VBCompileErrorException>()).WithMessage("*User-defined type may not be passed ByVal*");
     }
 
     [Fact]
