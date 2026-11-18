@@ -4953,6 +4953,12 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
                         // slot holds Nothing until it is Set, whatever the type, so knowing it is a type is enough.
                         // A stdole alias for a scalar (`As OLE_COLOR`) is that scalar.
                         value = aliasScalar is { } scalar ? new Vb6Value(scalar) : Vb6Value.Nothing;
+                        // Measured scalar Set constraints (#1563), bare or VB-qualified. Other recognised object
+                        // types, including a project's form name and As Control, retain their existing view.
+                        if (!isArray && aliasScalar is null
+                            && (qualifier is null || qualifier.Equals("VB", StringComparison.OrdinalIgnoreCase))
+                            && (ControlObjectType.IsIntrinsic(typeName) || typeName.Equals("Form", StringComparison.OrdinalIgnoreCase)))
+                            declaredClass = typeName;
                     }
                     else
                         throw new VBCompileErrorException("User-defined type not defined: " + typeName);
