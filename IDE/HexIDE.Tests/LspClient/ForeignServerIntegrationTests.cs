@@ -340,13 +340,20 @@ public class ForeignServerIntegrationTests : IAsyncDisposable
                 if (entry.Direction == ConversationDirection.Received
                     && frame.TryGetProperty("method", out var method)
                     && method.GetString() == "workspace/diagnostic/refresh")
+                {
                     refresh = frame.Clone();
-                if (entry.Direction == ConversationDirection.Sent
-                    && refresh.ValueKind != JsonValueKind.Undefined
-                    && !frame.TryGetProperty("method", out _)
-                    && frame.TryGetProperty("id", out var id)
-                    && JsonElement.DeepEquals(id, refresh.GetProperty("id")))
-                    reply = frame.Clone();
+                    if (entry.Outcome == ConversationOutcome.Answered)
+                    {
+                        entry.AnswerSequence.Should().NotBeNull();
+                        var answer = _capture.Body("foreign.markdown", entry.AnswerSequence!.Value);
+                        answer.Should().NotBeNull();
+                        answer!.IsTruncated.Should().BeFalse();
+                        using var answerJson = JsonDocument.Parse(answer.Head);
+                        reply = answerJson.RootElement.Clone();
+                        JsonElement.DeepEquals(reply.GetProperty("id"), refresh.GetProperty("id")).Should().BeTrue();
+                        entry.Outcome.Should().Be(ConversationOutcome.Answered);
+                    }
+                }
             }
             if (timeout.IsCancellationRequested)
                 throw new InvalidOperationException("No refresh reply. Frames: " + string.Join(" | ",
