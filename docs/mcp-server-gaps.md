@@ -11,9 +11,12 @@ for non-modal surfaces.
 Each gap is a file of its own, and the folder it is in is its status:
 
 **Write-tool source audit (#2504, not a live probe).** The [file-safety audit](file-safety-audit.md)
-records missing disk recovery and project-root containment on source/property/control saves, with their
-entry points and remaining work. MCP conversation exports now preserve earlier exports; that fix does
-not close the other write-tool gaps. Tracked by [#2504](https://github.com/hexide-io/HexIDE/issues/2504).
+records disk recovery and project-root containment on source/property/control saves, with their
+entry points and the remaining work on UI-triggered writes. MCP conversation exports preserve earlier exports. The three direct member writers
+(`set_file_content`, `set_control_property`, `add_control`) now refuse external/traversing/linked
+destinations before editing and preserve existing source and companion bytes in recovery siblings,
+reported with restore instructions. `add_file` writes no disk file. Generic UI-triggered writes remain
+outside that guard; this does not close the audit. Tracked by [#2504](https://github.com/hexide-io/HexIDE/issues/2504).
 
 ---
 
@@ -128,6 +131,12 @@ reply — a field that is always populated stops being read.
   unexplained gap reads as data loss.
 - A reply that mutates reports the new state, and reports it even when the answer is empty.
 
+Tool and parameter descriptions have a 2,048-character cap (`ToolDescriptionLengthTests`). After editing
+one, run `cd IDE && dotnet test --project HexIDE.Tests/HexIDE.Tests.csproj -- --filter-trait "Category=ToolDescription"` (#2903).
+`[ToolDescription]` marks every class that pins this text, including classes whose names do not mention
+descriptions. `ToolDescriptionMarkerTests` guards against an unmarked class reading `Description` or
+`AllText` from `ToolSource`; run the same filter when adding a pin.
+
 **The mechanical half of this is now tested; whether the prose helps is not.** A description that misleads
 a caller produces a wrong call and a green build. `ToolDescriptionParameterTests` and
 `FirstContactTranscriptTests` (#535, closing #396) catch a parameter or reply field named in a spelling the
@@ -136,4 +145,5 @@ wire does not use, and a worked transcript that has drifted from the tools it sh
 they meet source they cannot parse. None of them can say whether a description *helps*, and the author is
 the one person who cannot judge that — the empty-reply defect above was caught by *being* the caller, not
 by re-reading prose that had just been written. That half is the first-contact exercise with a fresh model,
-[#534](https://github.com/hexide-io/HexIDE/issues/534), and it is still open.
+[#534](https://github.com/hexide-io/HexIDE/issues/534), which ran in October; its runs are recorded in
+[mcp-first-contact-runs.md](mcp-first-contact-runs.md).

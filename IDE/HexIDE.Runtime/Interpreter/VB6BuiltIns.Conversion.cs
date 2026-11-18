@@ -9,10 +9,16 @@ namespace HexIDE.Runtime.Interpreter;
 // range-check -> Overflow, Err 6). Every rule here was verified against vb6.exe (Hex/Oct width, CStr/CBool/CDate).
 public partial class VB6BuiltIns
 {
+    internal static bool IsLongLongConversion(string name) =>
+        name.Equals("CLngLng", StringComparison.OrdinalIgnoreCase) || name.Equals("CLngPtr", StringComparison.OrdinalIgnoreCase);
+
     private static void RegisterConversion(Dictionary<string, BuiltinFn> d)
     {
         d["CByte"] = (_, a, _) => NarrowNum(a[0], VT.Byte);
         d["CInt"]  = (_, a, _) => NarrowNum(a[0], VT.Integer);
+        d["CLngLng"] = (_, a, _) => VbNumeric.ToLongLong(a[0], null);
+        d["CLngPtr"] = (self, a, _) => self.VbaBitness == VbaBitness.Bit32
+            ? NarrowNum(a[0], VT.Long) : VbNumeric.ToLongLong(a[0], null);
         d["CLng"]  = (_, a, _) => NarrowNum(a[0], VT.Long);
         d["CSng"]  = (_, a, _) => NarrowNum(a[0], VT.Single);
         d["CDbl"]  = (_, a, _) => NarrowNum(a[0], VT.Double);
@@ -102,6 +108,7 @@ public partial class VB6BuiltIns
     /// A caller converts this, never the argument it passed, or Err would reach the conversion as an object.</returns>
     internal static Vb6Value RefuseNonScalar(Vb6Value v)
     {
+        v.RefuseOddBytes("Conversion");
         // An element of an array of a user-defined type that nothing has assigned holds no VbUdt yet, so the type
         // decides, not the value.
         if (v.Type.IsArray || v.Type == VT.UserDefinedType || v.Value is VbUdt)
@@ -249,6 +256,8 @@ public partial class VB6BuiltIns
     {
         if (v.Type == VT.Byte || v.Type == VT.Integer)
             return Width16((short)AsInt(v), radix);
+        if (v.Type == VT.LongLong)
+            return radix == 16 ? unchecked((ulong)(long)v.Value!).ToString("X") : Convert.ToString((long)v.Value!, 8);
         long l = (long)Math.Round(AsDouble(v), MidpointRounding.ToEven);
         if (v.Type != VT.Long && l >= short.MinValue && l <= short.MaxValue)
             return Width16((short)l, radix);

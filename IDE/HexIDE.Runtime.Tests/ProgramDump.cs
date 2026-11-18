@@ -52,11 +52,12 @@ internal sealed partial class ProgramDump
 
     /// <summary>Appends one program and what it did. <paramref name="thrown"/> is whatever the run threw, if anything.</summary>
     public void Record(string test, int sequence, IReadOnlyList<(string Name, bool IsClass, string Source)> modules,
-        IEnumerable<Vb6Value> log, string output, Exception? thrown)
+        IEnumerable<Vb6Value> log, string output, Exception? thrown, IReadOnlyList<string> injectedGlobals)
     {
         var record = new Program(
             test,
             sequence,
+            injectedGlobals,
             modules.Select((m, i) =>
             {
                 if (m.IsClass)
@@ -100,7 +101,12 @@ internal sealed partial class ProgramDump
     /// from the statements it governs.
     /// </para>
     /// </summary>
-    internal static (string? Wrapped, bool Bare, string? Refused) Wrap(string source)
+    internal static (string? Wrapped, bool Bare, string? Refused) Wrap(string source) =>
+        // The interpreter parses on ParseStack's 64 MB thread (#3210), so the depth-guard tests' 10,000 nested
+        // parentheses reach its guard; on a test thread's default stack this parse overflowed and ended the run.
+        ParseStack.Run(() => WrapOnStack(source));
+
+    private static (string? Wrapped, bool Bare, string? Refused) WrapOnStack(string source)
     {
         var errors = new FirstError();
         var input = new AntlrInputStream(new StringReader(Directive().Replace(source, m => m.Groups[1].Value + "'")));
@@ -124,18 +130,21 @@ internal sealed partial class ProgramDump
         if (body.Start.StartIndex > 0)
             head.Append(source[..body.Start.StartIndex].TrimEnd()).Append('\n');
 
-        foreach (var element in body.moduleBodyElement())
+        foreach (var element in body.children.OfType<ParserRuleContext>())
         {
-            if (element.moduleBlock()?.block() is not { } block)
+            if (element is VB6Parser.BlockSepContext)
+                continue;
+            if (element is not VB6Parser.ModuleBlockContext moduleBlock)
             {
-                var isProcedure = element.subStmt() is not null || element.functionStmt() is not null
-                    || element.propertyGetStmt() is not null || element.propertyLetStmt() is not null
-                    || element.propertySetStmt() is not null;
+                var member = (VB6Parser.ModuleBodyElementContext)element;
+                var isProcedure = member.subStmt() is not null || member.functionStmt() is not null
+                    || member.propertyGetStmt() is not null || member.propertyLetStmt() is not null
+                    || member.propertySetStmt() is not null;
                 (isProcedure ? procedures : declarations).Append(Text(element)).Append('\n');
                 continue;
             }
             string? label = null;
-            foreach (var child in block.children)
+            foreach (var child in moduleBlock.block().children)
             {
                 if (child is VB6Parser.LineHeadContext lineHead)
                     label = Text(lineHead).TrimEnd();
@@ -236,6 +245,7 @@ internal sealed partial class ProgramDump
     private sealed record Program(
         [property: JsonPropertyName("test")] string Test,
         [property: JsonPropertyName("sequence")] int Sequence,
+        [property: JsonPropertyName("injectedGlobals")] IReadOnlyList<string> InjectedGlobals,
         [property: JsonPropertyName("modules")] IReadOnlyList<Module> Modules,
         [property: JsonPropertyName("printed")] IReadOnlyList<Printed> Printed,
         [property: JsonPropertyName("lines")] IReadOnlyList<string> Lines,

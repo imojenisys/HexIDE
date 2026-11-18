@@ -28,8 +28,14 @@ function Check($project, $arguments, $expected, $status = 0) {
         ConvertTo-Json | Set-Content (Join-Path $fixture 'invocation.json')
     $output = & $powerShell -NoProfile -File $child 2>&1 | Out-String
     if ($LASTEXITCODE -ne $status) { throw "Wrong exit code for ${project}: $LASTEXITCODE; $output" }
+    $expected = @($expected)
+    if ($expected.Count -gt 0) {
+        $path = [string]$expected[1]
+        if (-not $path.EndsWith('.csproj')) { $path = Join-Path $path ((Split-Path $path -Leaf) + '.csproj') }
+        $expected = @('test', '--project', $path) + @($expected | Select-Object -Skip 2)
+    }
     $captured = @()
-    if (Test-Path $capturePath) { $captured = @(Get-Content $capturePath -Raw | ConvertFrom-Json) }
+    if (Test-Path $capturePath) { $captured = @(Get-Content $capturePath -Raw | ConvertFrom-Json | Write-Output) }
     if (($captured -join '|') -cne ($expected -join '|')) {
         throw "Wrong arguments: $($captured -join '|'); expected $($expected -join '|')"
     }
@@ -38,13 +44,22 @@ function Check($project, $arguments, $expected, $status = 0) {
     $script:checks++
 }
 try {
-    foreach ($pair in @(
+    $pairs = @(
         @('IDE/HexIDE.Runtime.Tests', 'RUNTIME'), @('IDE/HexIDE.Tests', 'IDE'),
-        @('IDE/HexIDE.Integration.Tests', 'INTEGRATION'), @('LspServer/HexIDE.VbLspServer.Tests', 'LSP_SERVER'),
-        @('IDE/HexIDE.TwinBasic.Tests', 'TWINBASIC'))) {
+        @('IDE/HexIDE.Integration.Tests', 'INTEGRATION'), @('IDE/HexIDE.Runtime.Integration.Tests', 'RUNTIME_INTEGRATION'),
+        @('LspServer/HexIDE.VbLspServer.Tests', 'LSP_SERVER'), @('IDE/HexIDE.TwinBasic.Tests', 'TWINBASIC'))
+    foreach ($pair in $pairs) {
         $floor = [regex]::Match($workflow, "(?m)^  MIN_TESTS_$($pair[1]): *([0-9]+)").Groups[1].Value
         Check $pair[0] @() @('test', (Join-Path $root $pair[0]), '--', '--minimum-expected-tests', $floor)
     }
+    # A suite given a floor in build.yml but not listed above would go unchecked here, and the runner could refuse
+    # it while CI runs it (#3663).
+    $floors = @([regex]::Matches($workflow, '(?m)^  MIN_TESTS_([A-Z_]+):') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+    $listed = @($pairs | ForEach-Object { $_[1] } | Sort-Object)
+    if (($floors -join ' ') -cne ($listed -join ' ')) {
+        throw "build.yml has floors for $($floors -join ' ') but this test checks $($listed -join ' ')"
+    }
+    $script:checks++
     foreach ($filter in @('--filter-class', '--filter-method', '--filter-query', '--filter-not-method')) {
         Check 'IDE/HexIDE.Tests/' @('--no-build', '--', $filter, '*Example*') @(
             'test', (Join-Path $root 'IDE/HexIDE.Tests'), '--no-build', '--', '--minimum-expected-tests', '1', $filter, '*Example*')
@@ -53,6 +68,18 @@ try {
         'test', (Join-Path $root 'IDE/HexIDE.Tests/HexIDE.Tests.csproj'), '--', '--minimum-expected-tests', '7')
     Check 'IDE/HexIDE.Tests' @('--', '--minimum-expected-tests=7') @(
         'test', (Join-Path $root 'IDE/HexIDE.Tests'), '--', '--minimum-expected-tests=7')
+    Check 'IDE/HexIDE.Tests' @('--', '--results-directory', 'TestResults') @(
+        'test', (Join-Path $root 'IDE/HexIDE.Tests'), '--', '--minimum-expected-tests',
+        ([regex]::Match($workflow, '(?m)^  MIN_TESTS_IDE: *([0-9]+)').Groups[1].Value),
+        '--results-directory', (Join-Path $root 'IDE/HexIDE.Tests/TestResults'))
+    Check 'IDE/HexIDE.Tests' @('--', '--filter-class', '*Example*', '--results-directory=reports') @(
+        'test', (Join-Path $root 'IDE/HexIDE.Tests'), '--', '--minimum-expected-tests', '1',
+        '--filter-class', '*Example*', ('--results-directory=' + (Join-Path $root 'IDE/HexIDE.Tests/reports')))
+    $absoluteResults = Join-Path $fixture 'reports'
+    Check 'IDE/HexIDE.Tests' @('--', '--results-directory', $absoluteResults) @(
+        'test', (Join-Path $root 'IDE/HexIDE.Tests'), '--', '--minimum-expected-tests',
+        ([regex]::Match($workflow, '(?m)^  MIN_TESTS_IDE: *([0-9]+)').Groups[1].Value),
+        '--results-directory', $absoluteResults)
     $fakeResult = 1
     Check 'IDE/HexIDE.Tests' @('--', '--filter-class', '*Example*') @(
         'test', (Join-Path $root 'IDE/HexIDE.Tests'), '--', '--minimum-expected-tests', '1', '--filter-class', '*Example*') 1

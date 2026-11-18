@@ -26,7 +26,7 @@ public class MarkOnReadOnlyLineTests : IDisposable
 
     public MarkOnReadOnlyLineTests()
     {
-        localization.GetString("Str.CodeEditor.Msg.NoMarkOnReadOnlyLine").Returns("no mark on line {0}");
+        localization.GetString("Str.CodeEditor.Msg.NoMarkOnReadOnlyText").Returns("no mark on line {0}");
     }
 
     public void Dispose()
@@ -220,7 +220,7 @@ public class MarkOnReadOnlyLineTests : IDisposable
         // One numbering whichever side answers: the automation tools ask the open window, the sidecar the model.
         var vm = OpenForm();
 
-        vm.CodeWindowText.Text.Should().Be(CodeWindowText.Of(vm.Identity).Text);
-        vm.CodeWindowText.HeaderLineCount.Should().Be(CodeWindowText.Of(vm.Identity).HeaderLineCount).And.Be(9);
+        vm.CodeWindowText.Text.Should().Be(DocumentContent.TextOf(vm.Identity, null).Text);
+        vm.CodeWindowText.HeaderLineCount.Should().Be(DocumentContent.TextOf(vm.Identity, null).HeaderLineCount).And.Be(9);
     }
 }

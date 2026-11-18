@@ -70,8 +70,7 @@ public sealed class CodeWindowHoldsTheFileTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             Substitute.For<IWindowManager>(),
             bus,
             projectManager,
@@ -80,7 +79,7 @@ public sealed class CodeWindowHoldsTheFileTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<ILocalizationService>(),
-            refresher);
+            refresher, new ComponentRegistry());
     }
 
     /// <summary>A code window on the document, on the same bus as the save, and open as far as the dock knows.</summary>
@@ -104,13 +103,8 @@ public sealed class CodeWindowHoldsTheFileTests : IDisposable
 
     private static string? FindUpwards(string relative)
     {
-        for (var at = new DirectoryInfo(AppContext.BaseDirectory); at is not null; at = at.Parent)
-        {
-            var candidate = Path.Join(at.FullName, relative);
-            if (Directory.Exists(candidate))
-                return candidate;
-        }
-        return null;
+        var candidate = Path.Join(HexIDE.Tests.Infrastructure.RepoTree.Root(), relative);
+        return Directory.Exists(candidate) ? candidate : null;
     }
 
     private static readonly string[] SourceExtensions =

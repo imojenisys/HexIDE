@@ -50,8 +50,7 @@ public class UserControlSaveRoundTripTests : IDisposable
 
         loadedProject = () => captured ?? throw new InvalidOperationException("project was never loaded");
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             Substitute.For<IWindowManager>(),
             Substitute.For<IEventBus>(),
             projectManager,
@@ -60,7 +59,7 @@ public class UserControlSaveRoundTripTests : IDisposable
             sidecar,
             baselineStore,
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     /// <summary>Writes a canonical .ctl (via the serializer, so the on-disk format is real VB6) plus a .vbp.</summary>

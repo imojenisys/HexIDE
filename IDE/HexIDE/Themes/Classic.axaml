@@ -2,6 +2,8 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:commonControls="clr-namespace:Classic.CommonControls;assembly=Classic.CommonControls.Avalonia">
 
+    <Thickness x:Key="TabSelectionBorderThickness">0</Thickness>
+
     <!--
         Classic VB6 theme colour palette.
         All IDE chrome colours are defined here. To create a new theme, add a
@@ -112,6 +114,7 @@
     <SolidColorBrush x:Key="BracketDepth2Brush" Color="#0000B0" />
     <SolidColorBrush x:Key="BracketDepth3Brush" Color="#800080" />
     <SolidColorBrush x:Key="BracketUnmatchedBrush" Color="#B00020" />
+    <SolidColorBrush x:Key="LinkTextBrush" Color="#0000FF" />
     <SolidColorBrush x:Key="ReadOnlyTextBrush" Color="#707070" />
     <SolidColorBrush x:Key="InactiveCodeTextBrush" Color="#707070" />
 
@@ -169,4 +172,5 @@
         </Setter>
     </ControlTheme>
 
+    <SolidColorBrush x:Key="LineNumbersForegroundBrush" Color="Gray" />
 </ResourceDictionary>

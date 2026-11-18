@@ -3,10 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using AvaloniaEdit.Document;
 using HexIDE.Language;
+using HexIDE.Lsp;
+using HexIDE.Controls;
 using HexIDE.Localization;
-using HexIDE.Runtime.Interpreter;
-using HexIDE.Runtime.Interpreter.ConditionalCompilation;
 using HexIDE.TwinBasic;
+using HexIDE.Projects;
 using PropertyChanged.SourceGenerator;
 
 namespace HexIDE.Forms.ViewModels;
@@ -14,7 +15,14 @@ namespace HexIDE.Forms.ViewModels;
 public partial class ArchiveDocumentViewModel : BaseEditorWindowViewModel, ISearchableDocument
 {
     private readonly ILocalizationService localization;
-    public ArchiveProjectEntry Entry { get; private set; }
+    private readonly IConditionalCodeReader conditionalCode;
+    private string? buildType;
+    private readonly ILspClient? lspClient;
+    private LspDocumentSession? session;
+    public IReadOnlyList<LspMarker> Markers { get; private set; } = [];
+    public event Action<IReadOnlyList<LspMarker>>? MarkersChanged;
+    public string DocumentUri => Entry.DocumentUri;
+    public ContainerEntry Entry { get; private set; }
     [Notify] private TextDocument document = new();
     [Notify] private string notice = "";
     [Notify] private string metadata = "";
@@ -30,20 +38,32 @@ public partial class ArchiveDocumentViewModel : BaseEditorWindowViewModel, ISear
     public bool IsReadOnlyRegion(int offset, int length) => false;
     public Func<int, int, bool> SnapshotReadOnlyRegions() => static (_, _) => true;
 
-    public ArchiveDocumentViewModel(ArchiveProjectEntry entry, ILocalizationService localization, string? buildType = null)
+    public ArchiveDocumentViewModel(ContainerEntry entry, ILocalizationService localization,
+        IConditionalCodeReader conditionalCode, string? buildType = null, ILspClient? lspClient = null)
     {
+        this.lspClient = lspClient;
         this.localization = localization;
+        this.conditionalCode = conditionalCode;
         Entry = entry;
         Update(entry, buildType);
     }
 
+    public ArchiveDocumentViewModel(ArchiveProjectEntry entry, ILocalizationService localization,
+        IConditionalCodeReader conditionalCode, string? buildType = null, ILspClient? lspClient = null)
+        : this(ContainerEntry.FromArchive(entry), localization, conditionalCode, buildType, lspClient) { }
+
     /// <param name="entry">The entry, from the project's latest snapshot.</param>
     /// <param name="buildType">The project's build type from its Settings, which <c>TWINBASIC_BUILD_TYPE</c> holds; null when
     /// the project names none, and conditions on it are then left ungreyed.</param>
-    public void Update(ArchiveProjectEntry entry, string? buildType = null)
+    public void Update(ContainerEntry entry, string? buildType = null)
     {
+        session?.Dispose();
+        session = null;
+        Markers = [];
+        MarkersChanged?.Invoke(Markers);
+        this.buildType = buildType;
         Entry = entry;
-        var preview = (entry as ArchiveProjectDocument)?.ReadText();
+        var preview = entry.ReadText();
         var buffer = new TextDocument(preview?.Text ?? "");
         buffer.UndoStack.ClearAll();
         // Protect programmatic edits as well as keyboard, paste and Replace operations.
@@ -53,45 +73,48 @@ public partial class ArchiveDocumentViewModel : BaseEditorWindowViewModel, ISear
         Notice = localization.GetString("Str.Archive.ReadOnly") + " " +
             (preview is null ? "" : preview.Status == ArchiveTextStatus.Available ? "" :
                 localization.GetString("Str.Archive." + preview.Status));
-        Metadata = string.Format(localization.GetString("Str.Archive.Metadata"),
+        if (entry.NoticeKey is { } noticeKey) Notice = localization.GetString(noticeKey);
+        Metadata = entry.Archive is { } archive ? string.Format(localization.GetString("Str.Archive.Metadata"),
             entry.Identity.ContainerPath, string.Join(" / ", entry.Identity.Segments),
-            entry.Source.Category, entry.Source.Flags, entry.Source.Revision,
-            (entry as ArchiveProjectDocument)?.File.Content.Length ?? 0);
-        InactiveLines = preview?.Status == ArchiveTextStatus.Available && entry.Name.EndsWith(".twin", StringComparison.OrdinalIgnoreCase)
-            ? InactiveLinesOf(preview.Text!, entry.Name, buildType)
+            archive.Source.Category, archive.Source.Flags, archive.Source.Revision,
+            (archive as ArchiveProjectDocument)?.File.Content.Length ?? 0) : "";
+        InactiveLines = entry.Archive != null && preview?.Status == ArchiveTextStatus.Available && entry.Name.EndsWith(".twin", StringComparison.OrdinalIgnoreCase)
+            ? InactiveLinesOf(preview.Text!, buildType)
             : [];
         Title = ComputeTitle();
+        if (lspClient != null && preview?.Status == ArchiveTextStatus.Available)
+        {
+            session = new LspDocumentSession(lspClient, Document, DocumentUri, isProjectMember: entry.Source != null);
+            session.MarkersChanged += markers =>
+            {
+                Markers = markers;
+                MarkersChanged?.Invoke(markers);
+            };
+            session.Start();
+        }
     }
 
     internal ArchiveDocumentViewModel Reopen()
     {
-        var reopened = new ArchiveDocumentViewModel(Entry, localization);
+        var reopened = new ArchiveDocumentViewModel(Entry, localization, conditionalCode, buildType, lspClient);
         reopened.CaretOffset = Math.Clamp(CaretOffset, 0, reopened.Document.TextLength);
         return reopened;
     }
 
-    private static IReadOnlyList<LineRange> InactiveLinesOf(string text, string name, string? buildType)
+    public override void Dispose()
     {
-        var builtIns = new Dictionary<string, Vb6Value>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (constant, value) in TwinBasicCompilationConstants.BuiltIns(win64: false, build: null, buildType))
-            builtIns[constant] = value switch
-            {
-                int number => new Vb6Value(number).AsVariant(),
-                string s => new Vb6Value(s).AsVariant(),
-                _ => Vb6Value.Null,
-            };
-        var constants = new CompilationConstants(CompilationArguments.None, builtIns) { CallsReadZero = true, NullIsUndetermined = true };
-        try
-        {
-            var result = ConditionalCompiler.Preprocess(text, constants, name);
-            return result.InactiveLines.Where(range =>
-                !result.UndeterminedLines.Any(unknown => unknown.First <= range.Last && unknown.Last >= range.First)).ToArray();
-        }
-        catch (VBCompileErrorException)
-        {
-            return [];
-        }
+        session?.Dispose();
+        session = null;
+        base.Dispose();
     }
+
+    private IReadOnlyList<LineRange> InactiveLinesOf(string text, string? buildType) =>
+        conditionalCode.InactiveLines(text, new ConditionalConstants(ConditionalConstants.NoArguments)
+        {
+            BuiltIns = TwinBasicCompilationConstants.BuiltIns(win64: false, build: null, buildType),
+            CallsReadZero = true,
+            NullIsUndetermined = true,
+        });
 
     private static void RejectEdit(object? sender, DocumentChangeEventArgs e) =>
         throw new InvalidOperationException("Archive documents are read-only.");

@@ -34,11 +34,14 @@ internal sealed record CommandLineOption(
 
 internal static class ServerOptions
 {
+    public static string? Platform { get; private set; }
+
     public static int? Port { get; private set; }
     public static bool NewProject { get; private set; }
     public static bool NewProjectUnsaved { get; private set; }
     public static string? ProjectPath { get; private set; }
-    public static string? Personality { get; private set; }
+    public static string? Profile { get; private set; }
+    public static string? ProfileArgumentError { get; private set; }
 
     /// <summary><c>--user-data-dir</c>: the directory this session keeps per-user files in, already made
     /// absolute against the directory HexIDE was started from. Null when the flag was not given.</summary>
@@ -86,6 +89,9 @@ internal static class ServerOptions
     /// node + the dev-gated capabilities, and shows the title-bar suffix).</summary>
     public static bool DeveloperMode { get; private set; }
 
+    /// <summary><c>--no-vb6</c>: start with VB6's project type unregistered. Debug builds only.</summary>
+    public static bool NoVb6 { get; private set; }
+
     /// <summary><c>--capture-lsp</c>: arm the protocol capture for every connection before any of them is
     /// made, so a conversation is recorded in full from the first handshake.</summary>
     /// <remarks>
@@ -113,6 +119,16 @@ internal static class ServerOptions
     /// while looking as though it had worked.
     /// </remarks>
     public static string? AnsiCodePageInvalid { get; private set; }
+
+    /// <summary><c>--dpi-unaware</c>: run the IDE DPI-unaware on Windows, so it renders at scale 1 whatever the
+    /// display's scaling, and a layout can be checked as a 100% display shows it (hexide-io/HexIDE#3083).</summary>
+    /// <remarks>
+    /// <b>Scale 1 only, and Windows only.</b> Avalonia's Win32 platform offers no other scale override: its options
+    /// give unaware, system-aware or per-monitor-aware, and <c>AVALONIA_GLOBAL_SCALE_FACTOR</c> is read by the X11
+    /// platform alone. Elsewhere the flag is refused rather than skipped, as <see cref="AnsiCodePageInvalid"/> is: it
+    /// is given to see the IDE at scale 1, and ignoring it would show another scale while looking as though it had worked.
+    /// </remarks>
+    public static bool DpiUnaware { get; private set; }
 
     /// <summary>
     /// Every option the IDE accepts, in the order <c>--help</c> lists them.
@@ -146,6 +162,15 @@ internal static class ServerOptions
             _ => { HelpRequested = true; return false; },
             Aliases: ["-h", "/?", "-?"]),
 
+        new("platform", "<name>",
+            new HexIDE.Localization.LocalizationService().GetStringFrom("en", "Str.Startup.PlatformSummary"),
+            value =>
+            {
+                if (value is null || value.StartsWith('-') || value.StartsWith('/')) return false;
+                Platform = value;
+                return true;
+            }),
+
         new("newproject", null,
             "Create a Standard EXE and save it in a temporary directory.",
             _ => { NewProject = true; return false; }),
@@ -177,12 +202,18 @@ internal static class ServerOptions
                 return true;
             }),
 
-        // <name>, not <vb6|vbaode|vba>: the value column is the longest spelling in the list, so naming
-        // the values here made every other row ten cells wider and put the beside layout out of reach of
-        // a default console. They live in the summary instead, where they cost one row rather than six.
-        new("personality", "<name>",
-            "IDE personality for the session: vb6, vbaode or vba.",
-            value => { Personality = value; return true; }),
+        new("profile", "<value>",
+            new HexIDE.Localization.LocalizationService().GetStringFrom("en", "Str.Profiles.HelpSummary"),
+            value =>
+            {
+                if (Profile != null || !IsProfileValue(value))
+                {
+                    ProfileArgumentError ??= "Str.Profiles.SelectorRequired";
+                    return false;
+                }
+                Profile = value;
+                return true;
+            }),
 
         new("server-port", "<port>",
             "Start the automation server on this port. Debug builds only.",
@@ -215,6 +246,10 @@ internal static class ServerOptions
                 return true;
             }),
 
+        new("no-vb6", null,
+            new HexIDE.Localization.LocalizationService().GetStringFrom("en", "Str.Startup.NoVb6Summary"),
+            _ => { NoVb6 = true; return false; }),
+
         new("developer-mode", null,
             "Turn on session developer mode. Debug builds only.",
             _ => { DeveloperMode = true; return false; }),
@@ -236,6 +271,10 @@ internal static class ServerOptions
                     AnsiCodePageInvalid = value ?? "";
                 return value is not null;
             }),
+
+        new("dpi-unaware", null,
+            "Render at scale 1 on a scaled Windows display. Debug builds only.",
+            _ => { DpiUnaware = true; return false; }),
     ];
 
     /// <param name="args">The command line.</param>
@@ -246,6 +285,9 @@ internal static class ServerOptions
     public static void ParseArgs(string[] args, string invocationDirectory)
     {
         _invocationDirectory = invocationDirectory;
+        if (args.Any(arg => arg.Equals("--personality", StringComparison.OrdinalIgnoreCase) ||
+                            arg.Equals("/personality", StringComparison.OrdinalIgnoreCase)))
+            ProfileArgumentError = "Str.Profiles.PersonalityRemoved";
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -256,10 +298,7 @@ internal static class ServerOptions
                 var value = option.TakesValue && i + 1 < args.Length ? args[i + 1] : null;
                 if (option.Apply(value) && value is not null) i++;
             }
-            else if (!arg.StartsWith('-') &&
-                     (arg.EndsWith(".vbp", StringComparison.OrdinalIgnoreCase) ||
-                      arg.EndsWith(".vbg", StringComparison.OrdinalIgnoreCase) ||
-                      arg.EndsWith(".twinproj", StringComparison.OrdinalIgnoreCase)))
+            else if (!arg.StartsWith('-') && File.Exists(Path.Combine(_invocationDirectory, arg)))
             {
                 ProjectPath = Path.GetFullPath(arg, _invocationDirectory);
             }
@@ -280,37 +319,81 @@ internal static class ServerOptions
     /// </remarks>
     public static string HelpText(ConsoleTarget target)
     {
-        var width = Options.Max(o => Spelling(o).Length);
+        var identity = Distribution.Current;
+        return HelpText(target, identity,
+            InvocationName(Environment.ProcessPath, OperatingSystem.IsWindows(), identity.IsStock ? "HexIDE" : identity.Name));
+    }
 
+    // With no process path, a brand falls back to its own name: a branded --help must never name HexIDE (#4175 review).
+    internal static string InvocationName(string? processPath, bool isWindows, string fallback)
+    {
+        var name = Path.GetFileName(processPath);
+        if (string.IsNullOrEmpty(name))
+            return fallback;
+        return isWindows && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? name[..^4] : name;
+    }
+
+    internal static string HelpText(ConsoleTarget target, DistributionIdentity identity, string invocation)
+    {
+        var width = Options.Max(o => Spelling(o).Length);
+        var heading = identity.IsStock
+            ? "HexIDE - an open, cross-platform IDE for Visual Basic 6 & VBA."
+            : identity.Tagline is { } tagline ? $"{identity.Name} - {tagline}" : identity.Name;
+
+        var projectFile = new HexIDE.Localization.LocalizationService().GetStringFrom("en", "Str.Startup.ProjectFileArgument");
         string[] text =
         [
             "",
-            "HexIDE - an open, cross-platform IDE for Visual Basic 6 & VBA.",
+            heading,
             "",
             "Usage:",
-            "  HexIDE.Desktop [options] [<project>.vbp|.vbg|.twinproj]",
+            $"  {invocation} [options] [<{projectFile}>]",
             "",
             "Options:",
             .. Options.Select(o => $"  {Spelling(o).PadRight(width)}  {o.Summary}"),
         ];
 
-        var mark = target.Colour ? HelpMark.Colour() : HelpMark.Mono();
-        var body = ConsoleLayout.FitsBeside(target.Width, HelpMark.Width, text)
-            ? ConsoleLayout.Beside(mark, text, HelpMark.Width)
-            : ConsoleLayout.Stacked(mark, text);
+        // HexIDE's mark is HexIDE's. A distribution's help is the text alone.
+        IReadOnlyList<string> body = text;
+        if (identity.IsStock)
+        {
+            var mark = target.Colour ? HelpMark.Colour() : HelpMark.Mono();
+            body = ConsoleLayout.FitsBeside(target.Width, HelpMark.Width, text)
+                ? ConsoleLayout.Beside(mark, text, HelpMark.Width)
+                : ConsoleLayout.Stacked(mark, text);
+        }
 
         string[] tail =
         [
             "",
             "Both prefixes work: --newproject and /newproject are the same flag, matched",
-            "case-insensitively. An argument HexIDE does not recognise is ignored without",
+            $"case-insensitively. An argument {identity.Name} does not recognise is ignored without",
             "complaint, so a flag that appears to do nothing may simply be misspelled.",
-            "",
-            "Full reference: docs/command-line.md",
+            .. identity.IsStock ? (string[])["", "Full reference: docs/command-line.md"] : [],
         ];
 
         return string.Join(Environment.NewLine, [.. body, .. tail]);
     }
+
+    private static bool IsProfileValue(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && !value.StartsWith('-') &&
+        Match(value) == null && !value.Equals("/personality", StringComparison.OrdinalIgnoreCase);
+
+    internal static HexIDE.Profiles.ProfileSnapshot? ResolveProfile(string invocationDirectory, string userDataDirectory)
+    {
+        var (selector, directory) = SelectProfile(Profile, invocationDirectory, Distribution.Current, AppContext.BaseDirectory);
+        return new HexIDE.Profiles.ProfileResolver(UserDataDirectory ?? userDataDirectory, directory).Resolve(selector);
+    }
+
+    /// <summary>
+    /// What to resolve, and what a relative path in it is relative to. A <c>--profile</c> on the command line beats the
+    /// installation's default and is relative to where it was typed; the default is relative to the installation.
+    /// </summary>
+    internal static (string? Selector, string Directory) SelectProfile(string? explicitSelector, string invocationDirectory,
+        DistributionIdentity distribution, string installationDirectory) =>
+        explicitSelector == null && distribution.DefaultProfile is { } installationDefault
+            ? (installationDefault, installationDirectory)
+            : (explicitSelector, invocationDirectory);
 
     private static string Spelling(CommandLineOption option) =>
         option.TakesValue ? $"--{option.Name} {option.ValueName}" : $"--{option.Name}";

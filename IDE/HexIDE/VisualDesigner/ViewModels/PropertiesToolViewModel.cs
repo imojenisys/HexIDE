@@ -49,10 +49,40 @@ public partial class PropertiesToolViewModel : Tool
         var value = localization.GetString(key);
         return string.IsNullOrEmpty(value) || value == key ? category.ToString() : value;
     }
-    public ObservableCollection<ComponentInstanceViewModel>? ComponentsProxy => currentDocument?.AllComponents;
-    public ObservableCollection<PropertyViewModel> Properties { get; } = new();
+    public ObservableCollection<ComponentInstanceViewModel>? ComponentsProxy => currentDocument?.SelectableComponents;
+    public ObservableCollection<BasePropertyViewModel> Properties { get; } = new();
     public ObservableCollection<BasePropertyViewModel> CategorizedProperties { get; } = new();
-    [Notify] private PropertyViewModel? selectedProperty;
+    [Notify] private BasePropertyViewModel? selectedProperty;
+    [Notify] private string filterText = "";
+    private BasePropertyViewModel[] allProperties = [];
+    private BasePropertyViewModel[] allCategorizedProperties = [];
+
+    private void CaptureProperties()
+    {
+        allProperties = Properties.ToArray();
+        allCategorizedProperties = CategorizedProperties.ToArray();
+        OnFilterTextChanged();
+    }
+
+    private void OnFilterTextChanged()
+    {
+        var matches = allProperties.Where(p => p.Name.Contains(FilterText ?? "", StringComparison.OrdinalIgnoreCase)).ToHashSet();
+        foreach (var category in allCategorizedProperties.OfType<PropertyCategoryViewModel>())
+            foreach (var property in allProperties.OfType<PropertyViewModel>().Where(p => p.PropertyClass.Category == category.Category))
+                property.IsVisible = category.IsExpanded;
+        Properties.Clear();
+        foreach (var property in allProperties.Where(matches.Contains))
+            Properties.Add(property);
+        CategorizedProperties.Clear();
+        foreach (var row in allCategorizedProperties)
+        {
+            if (row is not PropertyCategoryViewModel && matches.Contains(row) ||
+                row is PropertyCategoryViewModel category && matches.OfType<PropertyViewModel>().Any(p => p.PropertyClass.Category == category.Category))
+                CategorizedProperties.Add(row);
+        }
+        if (SelectedProperty != null && !matches.Contains(SelectedProperty))
+            SelectedProperty = null;
+    }
 
     private PropertyClass? lastSelectedPropertyClass;
 
@@ -81,9 +111,11 @@ public partial class PropertiesToolViewModel : Tool
         localization.BindTitle(this, "Str.Tool.Properties.Title");
         localization.LanguageChanged += () =>
         {
-            foreach (var property in Properties)
+            foreach (var property in allProperties.Concat(Properties).OfType<PropertyViewModel>().Distinct())
                 property.RefreshDescription();
-            foreach (var category in CategorizedProperties.OfType<PropertyCategoryViewModel>())
+            foreach (var raw in allProperties.Concat(Properties).OfType<RawPropertyViewModel>().Distinct())
+                raw.RefreshValue();
+            foreach (var category in allCategorizedProperties.Concat(CategorizedProperties).OfType<PropertyCategoryViewModel>().Distinct())
                 category.RefreshHeader();
         };
         CanPin = false;
@@ -109,6 +141,8 @@ public partial class PropertiesToolViewModel : Tool
             return;
         }
         currentModule = null;
+        allProperties = [];
+        allCategorizedProperties = [];
         SelectedProperty = null;
         Properties.Clear();
         CategorizedProperties.Clear();
@@ -145,7 +179,7 @@ public partial class PropertiesToolViewModel : Tool
                             var prop = properties[propertyClass] = new PropertyViewModel(this, propertyClass, Displayed(component.Instance, propertyClass));
                             Properties.Add(prop);
                         }
-                        foreach (var categoryGroup in component.Instance.BaseClass.Properties.GroupBy(p => p.Category))
+                        foreach (var categoryGroup in PropertyText.InWindowOrder(component.Instance.BaseClass).GroupBy(p => p.Category))
                         {
                             CategorizedProperties.Add(new PropertyCategoryViewModel(this, categoryGroup.Key));
                             foreach (var propertyClass in categoryGroup.OrderBy(prop => prop.Name))
@@ -155,16 +189,28 @@ public partial class PropertiesToolViewModel : Tool
                             }
                         }
 
-                        SelectedProperty = Properties.FirstOrDefault(x => x.PropertyClass == lastSelectedPropertyClass) ??
+                        // A raw line is read by the format of the project the form is in; a designer showing no form has none.
+                        var rawFormat = formEditViewModel.FormDefinition is { } shown ? ProjectFormats.Of(shown.Owner) : null;
+                        foreach (var raw in rawFormat is null ? [] : component.Instance.UnknownRawProperties.Where(raw =>
+                                     !properties.ContainsKey(VBProperties.DesignIndexProperty)
+                                     || !raw.Name.Equals("Index", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            var row = new RawPropertyViewModel(raw, localization, rawFormat!);
+                            Properties.Add(row);
+                            CategorizedProperties.Add(row);
+                        }
+
+                        SelectedProperty = Properties.OfType<PropertyViewModel>().FirstOrDefault(x => x.PropertyClass == lastSelectedPropertyClass) ??
                                            /* hardcoded default properties */
-                                           Properties.FirstOrDefault(x => x.PropertyClass == VBProperties.CaptionProperty) ??
-                                           Properties.FirstOrDefault(x => x.PropertyClass == VBProperties.IntervalProperty) ??
-                                           Properties.FirstOrDefault(x => x.PropertyClass == VBProperties.ShapeProperty) ??
-                                           Properties.FirstOrDefault(x => x.PropertyClass == VBProperties.NameProperty);
+                                           Properties.OfType<PropertyViewModel>().FirstOrDefault(x => x.PropertyClass == VBProperties.CaptionProperty) ??
+                                           Properties.OfType<PropertyViewModel>().FirstOrDefault(x => x.PropertyClass == VBProperties.IntervalProperty) ??
+                                           Properties.OfType<PropertyViewModel>().FirstOrDefault(x => x.PropertyClass == VBProperties.ShapeProperty) ??
+                                           Properties.OfType<PropertyViewModel>().FirstOrDefault(x => x.PropertyClass == VBProperties.NameProperty);
 
                         currentComponent.Instance.OnComponentPropertyChanged += OnComponentValueChanged;
                     }
 
+                    CaptureProperties();
                     OnPropertyChanged(nameof(SelectedComponentProxy));
                 });
         }
@@ -184,12 +230,15 @@ public partial class PropertiesToolViewModel : Tool
         SelectedProperty = null;
         OnPropertyChanged(nameof(ComponentsProxy));
         OnPropertyChanged(nameof(SelectedComponentProxy));
+        allProperties = [];
+        allCategorizedProperties = [];
         if (module == null)
             return;
         var row = new PropertyViewModel(this, VBProperties.NameProperty, module.Name);
         Properties.Add(row);
         CategorizedProperties.Add(row);
         SelectedProperty = row;
+        CaptureProperties();
     }
 
     private void RenameModule(object? value)
@@ -220,7 +269,7 @@ public partial class PropertiesToolViewModel : Tool
         catch (DataValidationException e)
         {
             windowManager.MessageBox(e.Message, icon: MessageBoxIcon.Error).ListenErrors();
-            var row = Properties[0];
+            var row = (PropertyViewModel)Properties[0];
             Avalonia.Threading.Dispatcher.UIThread.Post(() => row.UpdateValueNoRaise(module.Name));
         }
     }
@@ -228,7 +277,7 @@ public partial class PropertiesToolViewModel : Tool
     private void OnComponentValueChanged(ComponentInstance instance, PropertyClass property)
     {
         // A position is shown with what decides its units and the frame round a form, which another property can change.
-        foreach (var prop in Properties)
+        foreach (var prop in allProperties.OfType<PropertyViewModel>())
         {
             if (prop.PropertyClass == property || DesignPositions.IsPosition(prop.PropertyClass))
                 prop.UpdateValueNoRaise(Displayed(instance, prop.PropertyClass));
@@ -247,9 +296,57 @@ public partial class PropertiesToolViewModel : Tool
 
     private void OnSelectedPropertyChanged()
     {
-        if (selectedProperty != null)
+        if (selectedProperty is PropertyViewModel property)
         {
-            lastSelectedPropertyClass = selectedProperty.PropertyClass;
+            lastSelectedPropertyClass = property.PropertyClass;
+        }
+    }
+
+    internal static bool IsPicture(PropertyClass property) =>
+        property == VBProperties.PictureProperty || property == VBProperties.IconProperty
+        || property == VBProperties.MouseIconProperty || property == VBProperties.DragIconProperty;
+
+    internal async Task LoadPictureAsync(PropertyClass property)
+    {
+        if (!IsPicture(property) || currentDocument is not { } document
+            || document.SelectedComponent is not { } component) return;
+        string? path = null;
+        try
+        {
+            var paths = await windowManager.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = localization.GetString("Str.Tool.Properties.LoadPicture"),
+                AllowMultiple = false,
+            });
+            if (paths == null || paths.Count == 0) return;
+            path = paths[0];
+            var bytes = await File.ReadAllBytesAsync(path);
+            var payload = FrxImageHelper.PicturePayload(bytes) ?? bytes;
+            using var bitmap = FrxImageHelper.TryDecodeToAvaloniaBitmap(payload);
+            if (bitmap == null) throw new InvalidDataException();
+
+            // The framing is measured in docs/vb6-fidelity-oracle/serialization--file-format-fidelity.md.
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream);
+            writer.Write(payload.Length + 8);
+            writer.Write(0x746c);
+            writer.Write(payload.Length);
+            writer.Write(payload);
+            var record = stream.ToArray();
+            var instance = component.Instance;
+            var before = instance.GetBoxedPropertyOrDefault(property);
+            instance.SetUntypedProperty(property, record);
+            document.PushSetPropertyCommand(instance, property, before, record);
+        }
+        catch (NotImplementedException e)
+        {
+            await windowManager.MessageBox(string.Format(localization.GetString("Str.ProjectRunner.NotImplementedYet"),
+                e.Message), icon: MessageBoxIcon.Error);
+        }
+        catch (Exception)
+        {
+            await windowManager.MessageBox(string.Format(localization.GetString("Str.Tool.Properties.LoadPictureFailed"),
+                path), icon: MessageBoxIcon.Error);
         }
     }
 
@@ -268,15 +365,33 @@ public partial class PropertiesToolViewModel : Tool
                 FrxImageHelper.FrxBlobKind.Bitmap => "bmp",
                 FrxImageHelper.FrxBlobKind.Icon => "ico",
                 FrxImageHelper.FrxBlobKind.Cursor => "cur",
+                FrxImageHelper.FrxBlobKind.Jpeg => "jpg",
+                FrxImageHelper.FrxBlobKind.Gif => "gif",
                 _ => "bin",
             };
             var path = await windowManager.SaveFilePickerAsync(new FilePickerSaveOptions
             {
                 Title = localization.GetString("Str.Tool.Properties.ExportPicture"),
                 SuggestedFileName = property.Name + "." + extension,
+                ShowOverwritePrompt = false,
                 DefaultExtension = extension,
             });
-            if (path != null) AtomicFileWriter.WriteAllBytes(path, payload);
+            if (path == null) return;
+            var existing = File.Exists(path);
+            if (existing && await windowManager.MessageBox(
+                    string.Format(localization.GetString("Str.Tool.Properties.ReplacePicture"), path),
+                    localization.GetString("Str.Tool.Properties.ExportPictureTitle"),
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != MessageBoxResult.Yes)
+                return;
+
+            if (existing) AtomicFileWriter.WriteAllBytes(path, payload);
+            else
+            {
+                // A file arriving after the check was not included in the user's consent.
+                using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                stream.Write(payload);
+                stream.Flush(flushToDisk: true);
+            }
         }
         catch (Exception e)
         {
@@ -302,6 +417,9 @@ public partial class PropertiesToolViewModel : Tool
 
         try
         {
+            if (DesignerSizeValidation.Refuses(propertyClass, value))
+                throw new DataValidationException(localization.GetString("Str.Tool.Properties.InvalidValue"));
+
             // A position is typed in the units its row shows, and kept in pixels (#1636).
             if (DesignPositions.IsPosition(propertyClass) && currentDocument.FormDefinition is { } form)
                 value = ModelPosition(form, instance, propertyClass, value);
@@ -336,15 +454,15 @@ public partial class PropertiesToolViewModel : Tool
         catch (Exception e)
         {
             Log.Error(e, "Invalid property value");
-            windowManager.MessageBox("Invalid property value", icon: MessageBoxIcon.Error).ListenErrors();
+            windowManager.MessageBox(localization.GetString("Str.Tool.Properties.InvalidValue"), icon: MessageBoxIcon.Error).ListenErrors();
         }
 
         // A refused value goes back to what the object holds. The row kept showing it, so after the refusal the
         // grid displayed a value the control did not have, and a caller reading the row back saw the change it
         // had just been refused (#625). POSTED, and measured to need it: this runs inside the row's binding
         // writing to its source, and a change raised during that write is not carried back to the text box.
-        if (!committed && Properties.FirstOrDefault(p => p.PropertyClass == propertyClass) is { } row)
-            Avalonia.Threading.Dispatcher.UIThread.Post(() => row.UpdateValueNoRaise(before));
+        if (!committed && Properties.OfType<PropertyViewModel>().FirstOrDefault(p => p.PropertyClass == propertyClass) is { } row)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() => row.UpdateValueNoRaise(Displayed(instance, propertyClass)));
 
         if (committed && !Equals(before, after))
             currentDocument.PushSetPropertyCommand(instance, propertyClass, before, after);
@@ -372,6 +490,9 @@ public abstract partial class BasePropertyViewModel : ObservableObject
     /// </summary>
     public abstract string AccessibleName { get; }
 
+    public virtual string Name => AccessibleName;
+    public virtual string Description => "";
+
     [Notify] private bool isVisible = true;
 }
 
@@ -389,7 +510,7 @@ public partial class PropertyCategoryViewModel : BasePropertyViewModel
 
     private void OnIsExpandedChanged()
     {
-        foreach (var property in parent.Properties)
+        foreach (var property in parent.Properties.OfType<PropertyViewModel>())
         {
             if (property.PropertyClass.Category == category)
                 property.IsVisible = IsExpanded;
@@ -421,6 +542,7 @@ public partial class PropertyViewModel : BasePropertyViewModel
         PropertyClass = propertyClass;
         Name = propertyClass.Name;
         this.value = value;
+        LoadPictureCommand = new AsyncRelayCommand(() => parent.LoadPictureAsync(PropertyClass));
         ExportPictureCommand = new AsyncRelayCommand(() => parent.ExportPictureAsync(PropertyClass, Value), () => CanExportPicture);
     }
 
@@ -432,15 +554,19 @@ public partial class PropertyViewModel : BasePropertyViewModel
         OnPropertyChanged(nameof(Value));
     }
 
+    public bool CanLoadPicture => PropertiesToolViewModel.IsPicture(PropertyClass);
+
+    public IAsyncRelayCommand LoadPictureCommand { get; }
+
     public bool CanExportPicture => PropertiesToolViewModel.ExportablePicture(PropertyClass, Value) != null;
 
     public IAsyncRelayCommand ExportPictureCommand { get; }
 
-    public string Name { get; }
+    public override string Name { get; }
 
     public override string AccessibleName => Name;
     [Notify] private object? value;
-    public string Description => parent.ResolvePropertyDescription(PropertyClass);
+    public override string Description => parent.ResolvePropertyDescription(PropertyClass);
 
     internal void RefreshDescription() => OnPropertyChanged(nameof(Description));
     public PropertyClass PropertyClass { get; }
@@ -452,4 +578,27 @@ public partial class PropertyViewModel : BasePropertyViewModel
         OnPropertyChanged(nameof(CanExportPicture));
         ExportPictureCommand.NotifyCanExecuteChanged();
     }
+}
+
+public sealed class RawPropertyViewModel : BasePropertyViewModel
+{
+    private readonly ComponentInstance.UnknownRawProperty raw;
+    private readonly IProjectFileFormat format;
+    private readonly ILocalizationService localization;
+
+    public RawPropertyViewModel(ComponentInstance.UnknownRawProperty raw, ILocalizationService localization, IProjectFileFormat format)
+    {
+        this.format = format;
+        this.raw = raw;
+        this.localization = localization;
+    }
+
+    public override string Name => raw.Name;
+    public override string AccessibleName => Name;
+    public string Value => raw.Records is { Count: > 0 } || raw.Lines.Any(format.IsCompanionCitation)
+        ? localization.GetString("Str.Tool.Properties.Binary")
+        : string.Join(Environment.NewLine, raw.Lines.Select((line, index) =>
+            index == 0 && line.IndexOf('=') is var split && split >= 0 ? line[(split + 1)..].Trim() : line));
+
+    internal void RefreshValue() => OnPropertyChanged(nameof(Value));
 }

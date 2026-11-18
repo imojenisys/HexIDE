@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using HexIDE.IDE;
 
 namespace HexIDE.Runtime.Interpreter;
 
@@ -46,8 +47,12 @@ public static class VbLocale
     /// <summary>The cultures <see cref="ForProgram"/> had to change, by the culture they came from.</summary>
     private static readonly ConditionalWeakTable<CultureInfo, CultureInfo> Adapted = new();
 
-    /// <summary>The user's locale, set by the host at startup. Null until a host sets it.</summary>
-    public static CultureInfo? Default { get; set; }
+    /// <summary>The user's locale, set by the host at startup, and held as <see cref="UserRegion.Culture"/>. Null until a host sets it.</summary>
+    public static CultureInfo? Default
+    {
+        get => UserRegion.Culture;
+        set => UserRegion.Culture = value;
+    }
 
     /// <summary>The locale the running program uses now, as <see cref="ForProgram"/> gives it.</summary>
     public static CultureInfo Current => ForProgram(Scoped.Value ?? Default ?? CultureInfo.CurrentCulture);
@@ -69,17 +74,26 @@ public static class VbLocale
     /// Windows' own locale data, which VB6 reads, does not.
     /// </para>
     /// <para>
-    /// A culture already in that shape is returned unchanged, so a user's own overrides, such as a moved two-digit-year
+    /// Gregorian-default locales take date patterns and names from live NLS on Windows (#2041), and from
+    /// the checked-in Windows defaults elsewhere (#3928). Locales absent from the table retain ICU. Other cultures
+    /// already in that shape are returned unchanged. A user's other overrides, such as a moved two-digit-year
     /// window, reach the program. <c>CultureInfo.Calendar</c> is still the culture's own calendar on the result; read
     /// <c>DateTimeFormat.Calendar</c>.
     /// </para>
     /// </remarks>
-    public static CultureInfo ForProgram(CultureInfo culture) =>
+    public static CultureInfo ForProgram(CultureInfo culture) => ForProgram(culture, DateLocaleAppliesTo);
+
+    internal static CultureInfo ForProgram(CultureInfo culture, Func<CultureInfo, bool> appliesTo) =>
         culture.DateTimeFormat.Calendar is GregorianCalendar
         && culture.NumberFormat.NegativeSign == "-" && culture.NumberFormat.PositiveSign == "+"
         && !HasNonbreakingSpaces(culture.DateTimeFormat)
+        && !appliesTo(culture)
             ? culture
             : Adapted.GetValue(culture, Adapt);
+
+    private static bool DateLocaleAppliesTo(CultureInfo culture) => OperatingSystem.IsWindows()
+        ? WindowsDateLocale.AppliesTo(culture)
+        : WindowsDateTable.AppliesTo(culture);
 
     private static CultureInfo Adapt(CultureInfo culture)
     {
@@ -99,6 +113,13 @@ public static class VbLocale
                 format.LongDatePattern = WithoutEra(format.LongDatePattern);
                 format.YearMonthPattern = WithoutEra(format.YearMonthPattern);
             }
+        }
+        if (DateLocaleAppliesTo(culture))
+        {
+            if (OperatingSystem.IsWindows())
+                WindowsDateLocale.Apply(adapted);
+            else
+                WindowsDateTable.Apply(adapted);
         }
         var dates = adapted.DateTimeFormat;
         var fullDateTimePattern = dates.FullDateTimePattern;

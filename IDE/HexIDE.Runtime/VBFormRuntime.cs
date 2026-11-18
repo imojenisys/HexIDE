@@ -7,6 +7,7 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using HexIDE.Runtime.BuiltinTypes;
+using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Components;
 using HexIDE.Runtime.Interpreter;
 
@@ -23,6 +24,35 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
 
     // Kept beyond window focus: inactive and hidden forms answer their last control (#2437, measured).
     internal Control? ActiveControl { get; private set; }
+
+    // The control whose VB GotFocus was raised, independent of native focus arriving around activation (#3932).
+    private Control? focusedControl;
+    private Control? nativeFocusControl;
+
+    internal void ControlFocused(Control control)
+    {
+        ActiveControl = control;
+        nativeFocusControl = control;
+        if (!ReferenceEquals(windowContext.Program?.ActiveForm, windowContext.FormInstance)
+            || ReferenceEquals(focusedControl, control))
+            return;
+        BlurControl();
+        focusedControl = control;
+        control.ExecuteSub(ComponentBaseClass.GotFocusEvent);
+    }
+
+    internal void BlurControl()
+    {
+        var previous = focusedControl;
+        focusedControl = null;
+        previous?.ExecuteSub(ComponentBaseClass.LostFocusEvent);
+    }
+
+    internal void RestoreControlFocus()
+    {
+        if (ActiveControl is { } control && ReferenceEquals(control, nativeFocusControl))
+            ControlFocused(control);
+    }
 
     internal static Control? FindControl(Control window, ILogical? focused)
     {
@@ -44,11 +74,12 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
             if (e is FocusChangedEventArgs moved && FindControl(this, moved.NewFocusedElement as ILogical) is { } control)
                 ActiveControl = control;
         }, RoutingStrategies.Bubble, handledEventsToo: true);
-        windowContext = new VBWindowContext(new StandaloneStandardLib(this)) { Window = this };
+        windowContext = new VBWindowContext(new StandaloneStandardLib(this, HexIDE.IDE.Distribution.DisplayName)) { Window = this };
         // Held by a modal form, the window takes no input of its own (#822): what reaches it is stopped on the way down, and
         // activating it brings the modal form forward instead.
         foreach (var input in new RoutedEvent[] { KeyDownEvent, KeyUpEvent, TextInputEvent, PointerPressedEvent, PointerReleasedEvent, PointerWheelChangedEvent })
             AddHandler(input, new EventHandler<RoutedEventArgs>((_, e) => e.Handled |= heldBy is not null), RoutingStrategies.Tunnel);
+        ControlKeyEvents.AttachEmptyForm(this);
         // Activating a form tells the program, which raises Activate and Deactivate (#994). A held form is never active: Windows
         // doesn't activate a disabled window, and activating it brings the modal form forward.
         Activated += (_, _) =>
@@ -175,6 +206,9 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         }
     }
 
+    public System.Threading.Tasks.Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp) =>
+        windowContext.CompareRowsAsync(name, row1, row2, cmp);
+
     public void ExecuteKeyboardEvent(string name, IReadOnlyList<Vb6Value> args, int writable, Action<int> completed) =>
         windowContext.ExecuteKeyboardEvent(name, args, writable, completed);
 
@@ -183,11 +217,17 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         windowContext.ExecuteSub(name, args);
     }
 
+    public void ExecuteEventByRef(string name, IReadOnlyList<Vb6Value> args, int byRefIndex, Action<Vb6Value> completed) =>
+        windowContext.ExecuteEventByRef(name, args, byRefIndex, completed);
+
     public System.Threading.Tasks.Task ExecuteEditEventAsync(string name, IList<Vb6Value> args) =>
         windowContext.ExecuteEditEventAsync(name, args);
 
     public void ExecuteSubIf(string name, IReadOnlyList<Vb6Value>? args, Func<bool> when) =>
         windowContext.ExecuteSubIf(name, args, when);
+
+    public System.Threading.Tasks.Task ExecuteControlEventAsync(string name, IReadOnlyList<CallArg> args) =>
+        windowContext.ExecuteControlEventAsync(name, args);
 
     public bool Handles(string name) => windowContext.Handles(name);
 
@@ -205,7 +245,25 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
 
     // A disabled form is shown without being activated, so the control that had the focus keeps it (measured, #1101).
 
-    public void ShowForm()
+    public void ShowForm() => ShowForm(null);
+
+    internal void ShowModalForm(VBFormRuntime? owner)
+    {
+        ShowInTaskbar = false;
+        // Ownership for promotion over an owned descendant is unmeasured; keep that form unowned, not a native cycle.
+        for (WindowBase? ancestor = owner; ancestor is not null; ancestor = ancestor.Owner)
+            if (ReferenceEquals(ancestor, this))
+            {
+                ClearLeavingOwnership();
+                owner = null;
+                break;
+            }
+        ShowForm(owner);
+    }
+
+    internal void ClearModalOwner() => Owner = null;
+
+    private void ShowForm(VBFormRuntime? owner)
     {
         if (!positioned && CenterOnShow)
         {
@@ -214,17 +272,45 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         }
         positioned = true;
         ShowActivated = IsEnabled;
-        Show();
+        if (owner is null)
+            Show();
+        else
+        {
+            // Show(owner) leaves an already visible window alone; VB6 also allows modeless-to-modal Show (#822).
+            Owner = owner;
+            Show(owner);
+        }
+        // The last visible form hidden and re-shown keeps its VB focus, without another GotFocus (#3936).
+        if (ReferenceEquals(windowContext.Program?.ActiveForm, windowContext.FormInstance))
+            ActiveControl?.Focus();
         // Me.Show in Load raises Activate and initial GotFocus before the next statement (#2436).
         if (windowContext.Loading && IsEnabled)
             windowContext.Program?.Activated(windowContext);
     }
 
-    public void HideForm() => Hide();
+    private void ClearLeavingOwnership()
+    {
+        // VB6 hides only the requested form, even beneath a modal one (#3936, #4032); Avalonia hides owned children too.
+        foreach (var child in OwnedWindows)
+            if (child is VBFormRuntime form)
+                form.ClearModalOwner();
+        ClearModalOwner();
+    }
+
+    public void HideForm()
+    {
+        ClearLeavingOwnership();
+        Hide();
+    }
 
     public bool IsShown => IsVisible;
 
-    public void CloseForm() => Close();
+    public void CloseForm()
+    {
+        // The program chooses the previously active form (#994), not necessarily this modal form's owner (#4618).
+        ClearLeavingOwnership();
+        Close();
+    }
 
     protected override void OnClosing(WindowClosingEventArgs e)
     {

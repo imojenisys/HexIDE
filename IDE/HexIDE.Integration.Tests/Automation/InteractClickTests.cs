@@ -5,12 +5,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using HexIDE.Automation;
 using HexIDE.IDE;
 using HexIDE.Localization;
@@ -55,6 +57,49 @@ public class InteractClickTests
     }
 
     [AvaloniaTheory]
+    [InlineData(false, 1)]
+    [InlineData(false, 1.5)]
+    [InlineData(true, 1)]
+    [InlineData(true, 1.5)]
+    public async Task Right_click_places_a_context_popup_at_the_click(bool flyout, double scaling)
+    {
+        var scene = Build();
+        var menu = new ContextMenu { ItemsSource = new[] { new MenuItem { Header = "Action" } } };
+        var flyoutItem = new MenuItem { Header = "Action" };
+        var contextFlyout = new MenuFlyout { ItemsSource = new[] { flyoutItem } };
+        try
+        {
+            scene.Window.SetRenderScaling(scaling);
+            scene.Window.Position = new PixelPoint(100, 100);
+            if (flyout) scene.Pad.ContextFlyout = contextFlyout;
+            else scene.Pad.ContextMenu = menu;
+            scene.Window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+
+            var outcome = await UiAutomationDriver.FinishAsync(UiAutomationDriver.Interact(scene.Pad, "click", "30,20 right"));
+            outcome.Success.Should().BeTrue(outcome.Error);
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+
+            Control content = flyout ? flyoutItem : menu;
+            var popup = content.FindAncestorOfType<OverlayPopupHost>();
+            popup.Should().NotBeNull();
+            var expected = scene.Pad.PointToScreen(new Point(30, 20));
+            var actual = popup!.PointToScreen(default);
+            Math.Abs(actual.X - expected.X).Should().BeLessThanOrEqualTo(3);
+            Math.Abs(actual.Y - expected.Y).Should().BeLessThanOrEqualTo(3);
+        }
+        finally
+        {
+            menu.Close();
+            contextFlyout.Hide();
+            scene.Window.Close();
+        }
+    }
+
+    [AvaloniaTheory]
     [InlineData(null, "Button[Standard.OpenProject]")]
     [InlineData("Open", "Button[Open]")]
     public async Task Click_names_an_automation_id_and_preserves_an_Avalonia_name(string? name, string described)
@@ -68,6 +113,32 @@ public class InteractClickTests
             outcome.Detail.Should().Contain($"on '{described}'");
         }
         finally { scene.Window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task A_click_cancels_the_tooltip_started_by_its_arrival()
+    {
+        var scene = Build();
+        try
+        {
+            ToolTip.SetTip(scene.Button, "Project Explorer");
+            ToolTip.SetShowDelay(scene.Button, 100);
+            var outcome = await UiAutomationDriver.FinishAsync(UiAutomationDriver.Interact(scene.Button, "click", null));
+            outcome.Success.Should().BeTrue(outcome.Error);
+
+            var until = Environment.TickCount64 + 400;
+            while (Environment.TickCount64 < until)
+            {
+                await Task.Delay(20);
+                Dispatcher.UIThread.RunJobs();
+                ToolTip.GetIsOpen(scene.Button).Should().BeFalse("a press cancels the arrival's tooltip timer");
+            }
+        }
+        finally
+        {
+            UiAutomationDriver.EndHover(scene.Button);
+            scene.Window.Close();
+        }
     }
 
     [AvaloniaFact]
@@ -209,6 +280,97 @@ public class InteractClickTests
         {
             scene.Window.Close();
         }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(true, 1, null, false)]
+    [InlineData(false, 1, null, false)]
+    [InlineData(true, 1.5, null, false)]
+    [InlineData(false, 1.5, null, false)]
+    [InlineData(true, 1, "double", false)]
+    [InlineData(true, 1.5, "double", false)]
+    [InlineData(true, 1, "10,10 to 20,10", false)]
+    [InlineData(true, 1.5, "10,10 to 20,10", false)]
+    [InlineData(true, 1, "10,10 to 20,10 hold", false)]
+    [InlineData(true, 1.5, "10,10 to 20,10 hold", false)]
+    [InlineData(true, 1, "no-frame", false)]
+    [InlineData(true, 1.5, "no-frame", false)]
+    [InlineData(false, 1, "10,25", true)]
+    [InlineData(false, 1.5, "10,25", true)]
+    public async Task A_clipped_click_scrolls_before_pressing(bool covered, double scaling, string? value, bool partial)
+    {
+        var target = new Border { Background = Brushes.White, Width = 80, Height = 30 };
+        var content = new Canvas { Width = 200, Height = 500 };
+        Canvas.SetTop(target, partial ? 80 : 300);
+        content.Children.Add(target);
+        var scroll = new ScrollViewer { Name = "Viewport", Content = content, Width = 200, Height = 100 };
+        var canvas = new Canvas();
+        canvas.Children.Add(scroll);
+        var cover = new Border { Background = Brushes.Gray, Width = 200, Height = 100, IsHitTestVisible = covered };
+        Canvas.SetTop(cover, 280);
+        canvas.Children.Add(cover);
+        var window = new Window { Content = canvas, Width = 400, Height = covered ? 450 : 200 };
+        window.Show();
+        try
+        {
+            window.SetRenderScaling(scaling);
+            window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            var presses = 0;
+            var covers = 0;
+            target.PointerPressed += (_, _) => presses++;
+            cover.PointerPressed += (_, _) => covers++;
+
+            var outcome = await UiAutomationDriver.FinishAsync(await UiAutomationDriver.InteractAsync(target, "click",
+                value == "no-frame" ? null : value, value == "no-frame" ? TimeSpan.Zero : null));
+            if (value == "no-frame")
+            {
+                outcome.Success.Should().BeFalse();
+                outcome.Error.Should().Contain("drew no frame after scrolling").And.Contain("nothing was pressed");
+                presses.Should().Be(0);
+                covers.Should().Be(0);
+                return;
+            }
+
+            outcome.Success.Should().BeTrue(outcome.Error);
+            presses.Should().Be(value == "double" ? 2 : 1);
+            covers.Should().Be(0);
+            scroll.Offset.Y.Should().BeGreaterThan(0);
+            outcome.Detail.Should().Contain("scrolled into view first").And.Contain("ScrollViewer[Viewport]");
+        }
+        finally
+        {
+            await UiAutomationDriver.FinishAsync(UiAutomationDriver.Interact(target, "release", null));
+            window.Close();
+        }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1)]
+    [InlineData(1.5)]
+    public async Task A_non_scrolling_clip_refuses_without_pressing(double scaling)
+    {
+        var target = new Border { Background = Brushes.White, Width = 80, Height = 30 };
+        Canvas.SetTop(target, 150);
+        var panel = new Canvas { Name = "Clip", Width = 200, Height = 100, ClipToBounds = true };
+        panel.Children.Add(target);
+        var window = new Window { Content = panel, Width = 400, Height = 400 };
+        window.Show();
+        try
+        {
+            window.SetRenderScaling(scaling);
+            window.UpdateLayout();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+            var presses = 0;
+            window.AddHandler(InputElement.PointerPressedEvent, (_, _) => presses++, RoutingStrategies.Tunnel, true);
+            var outcome = await UiAutomationDriver.FinishAsync(await UiAutomationDriver.InteractAsync(target, "click", null));
+            outcome.Success.Should().BeFalse();
+            outcome.Error.Should().Contain("couldn't be brought into view").And.Contain("Canvas[Clip]");
+            presses.Should().Be(0);
+        }
+        finally { window.Close(); }
     }
 
     [AvaloniaFact]
@@ -382,7 +544,7 @@ public class InteractClickTests
     public async Task A_drag_draws_a_toolbox_control_from_the_press_to_the_release()
     {
         var toolbox = new ToolBoxToolViewModel(
-            Substitute.For<IDocumentDockService>(), Substitute.For<IComponentRegistry>(),
+            Substitute.For<IDocumentDockService>(), new ComponentRegistry(),
             Substitute.For<ILocalizationService>());
         toolbox.SelectedComponent = System.Linq.Enumerable.First(toolbox.Components,
             c => c.BaseClass == CommandButtonComponentClass.Instance);

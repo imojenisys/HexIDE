@@ -35,13 +35,20 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
         });
     }
 
-    private readonly Dictionary<Control, (ToolbarItem Item, bool Arrow)> targets = [];
+    private readonly Dictionary<Control, ToolbarItem> targets = [];
     private bool suppressRelease;
 
-    private (ToolbarItem? Item, bool Arrow) Target(object? source)
+    private (ToolbarItem? Item, bool Arrow) Target(PointerEventArgs e)
     {
-        for (var visual = source as Visual; visual is not null && visual != this; visual = visual.GetVisualParent())
-            if (visual is Control control && targets.TryGetValue(control, out var target)) return target;
+        for (var visual = e.Source as Visual; visual is not null && visual != this; visual = visual.GetVisualParent())
+            if (visual is Control control && targets.TryGetValue(control, out var target))
+            {
+                target.TryGetProperty("Style", out var kind);
+                // VB6's dropdown arrow strip is 13 px wide and spans the button's height (#2328).
+                var arrow = Convert.ToInt64(kind.Value) == 5 &&
+                    e.GetPosition(control).X >= control.Bounds.Width - 13;
+                return (target, arrow);
+            }
         return (null, false);
     }
 
@@ -74,7 +81,7 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
 
     private void Press(object? sender, PointerPressedEventArgs e)
     {
-        var (item, arrow) = Target(e.Source);
+        var (item, arrow) = Target(e);
         var left = e.GetCurrentPoint(this).Properties.IsLeftButtonPressed;
         suppressRelease = left && (arrow || e.ClickCount % 2 == 0);
         e.Handled = suppressRelease;
@@ -93,7 +100,7 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
             entry.Click += (_, _) => ItemEvent(ToolbarComponentClass.ButtonMenuClickEvent, menu);
             flyout.Items.Add(entry);
         }
-        var anchor = targets.First(t => t.Value.Item == item && !t.Value.Arrow).Key;
+        var anchor = targets.First(t => t.Value == item).Key;
         FlyoutBase.SetAttachedFlyout(anchor, flyout);
         flyout.ShowAt(anchor);
     }
@@ -104,7 +111,7 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
         if (suppressRelease) { suppressRelease = false; return; }
         AttachedEvents.RaiseMouse(this, e, ComponentBaseClass.MouseUpEvent);
         this.ExecuteSub(ComponentBaseClass.ClickEvent);
-        if (e.InitialPressMouseButton == MouseButton.Left) Activate(Target(e.Source).Item);
+        if (e.InitialPressMouseButton == MouseButton.Left) Activate(Target(e).Item);
         RefreshButtons();
     }
 
@@ -126,7 +133,7 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
             item.TryGetProperty("Value", out var value);
             item.TryGetProperty("Enabled", out var enabled);
             item.TryGetProperty("ToolTipText", out var tip);
-            var displayCaption = DisplayCaption((string)caption.Value!);
+            var displayCaption = DisplayCaption((string)caption.WithoutOddBytes("VBToolbar text use").Value!);
             object captionContent = displayCaption.Contains('&')
                 ? new AccessText { Text = displayCaption.Replace("_", "__").Replace("&", "_"), ShowAccessKey = true }
                 : displayCaption;
@@ -148,7 +155,6 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
                     face.Children.Add(captionContent as Control ?? new TextBlock { Text = displayCaption });
                     var arrow = new TextBlock { Text = "▾" };
                     face.Children.Add(arrow);
-                    targets[arrow] = (item, true);
                     visual = Convert.ToInt64(value.Value) == 1
                         ? new ToggleButton { Content = face, IsChecked = true }
                         : new Button { Content = face };
@@ -201,8 +207,8 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
             }
             visual.IsEnabled = (bool)enabled.Value!;
             if (style == 1) visual.Classes.Add("flat");
-            if (showTips && (string)tip.Value! != "") ToolTip.SetTip(visual, tip.Value);
-            targets[visual] = (item, false);
+            if (showTips && (string)tip.WithoutOddBytes("VBToolbar text use").Value! != "") ToolTip.SetTip(visual, tip.WithoutOddBytes("VBToolbar text use").Value);
+            targets[visual] = item;
             strip.Children.Add(visual);
             if (disabledImage is not null)
             {
@@ -235,20 +241,31 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
 
     internal Vb6Value ValidateImage(Vb6Value image)
     {
-        if (image.Type == Vb6Value.ValueType.Integer || image.Type == Vb6Value.ValueType.Long)
+        // #4147: Strings are exact keys; numeric selectors use CInt rounding and storage.
+        if (image.Type == Vb6Value.ValueType.Boolean && !(bool)image.Value!) throw ToolbarItems.Unmeasured();
+        if (image.IsNull || image.WithoutOddBytes("VBToolbar text use").Type == Vb6Value.ValueType.String && ((string)image.Value!).Length == 0)
+            throw ToolbarItems.Error(35603);
+        if (image.Type == Vb6Value.ValueType.String)
         {
-            var index = ToolbarItems.Number(image);
-            if (index == 0) return new Vb6Value(0);
-            if (index < 0) throw ToolbarItems.Unmeasured();
             if (ImageList is null) throw ToolbarItems.Error(35613);
-            if (index > ImageList.Images.Count) throw ToolbarItems.Error(35600);
-            return new Vb6Value((int)index);
+            foreach (var entry in ImageList.Images.Values)
+                if (((ImageListImage)entry.Value!).Key == (string)image.WithoutOddBytes("VBToolbar text use").Value!) return image;
+            throw ToolbarItems.Error(35601);
         }
-        if (image.Type != Vb6Value.ValueType.String || ((string)image.Value!).Length == 0)
+        if (image.Type != Vb6Value.ValueType.Integer && image.Type != Vb6Value.ValueType.Long &&
+            image.Type != Vb6Value.ValueType.Byte && image.Type != Vb6Value.ValueType.Single &&
+            image.Type != Vb6Value.ValueType.Double && image.Type != Vb6Value.ValueType.Currency &&
+            image.Type != Vb6Value.ValueType.Decimal && image.Type != Vb6Value.ValueType.Boolean &&
+            image.Type != Vb6Value.ValueType.EmptyVariant)
             throw ToolbarItems.Unmeasured();
+        var index = image.Type == Vb6Value.ValueType.Integer || image.Type == Vb6Value.ValueType.Long
+            ? ToolbarItems.Number(image)
+            : Convert.ToInt64(VbNumeric.CoerceOnStore(image, Vb6Value.ValueType.Integer, null).Value);
+        if (index == 0) return new Vb6Value(0);
+        if (index < 0) throw ToolbarItems.Error(35600);
         if (ImageList is null) throw ToolbarItems.Error(35613);
-        _ = ImageList.Images.Item(image);
-        return image;
+        if (index > ImageList.Images.Count) throw ToolbarItems.Error(35600);
+        return new Vb6Value((int)index);
     }
 
     private void BindImages(Vb6Value value)
@@ -388,13 +405,23 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
             case "buttons": throw ToolbarItems.Error(383);
             case "imagelist": BindImages(value); return true;
             case "hotimagelist": case "disabledimagelist":
-                if (value.Value is not VBImageList alternate || alternate.Images.Count == 0 ||
-                    alternate.ImageWidth != 16 || alternate.ImageHeight != 16 ||
-                    ImageList is not { ImageWidth: 16, ImageHeight: 16 })
+                if (value.Type == Vb6Value.ValueType.String) throw new VBRunTimeException(VBStandardError.TypeMismatch);
+                // #4147 Fidelity Principle: a refused PictureBox assignment preserves the previous list.
+                if (value.Value is VBPictureBox) throw ToolbarItems.Error(35610);
+                if (value.Value is not VBImageList && !(value.Value is null && value.Type == Vb6Value.ValueType.Object))
                     throw ToolbarItems.Unmeasured();
+                var alternate = value.Value as VBImageList;
+                if (alternate is not null)
+                {
+                    var cleared = alternate.Images.Count == 0 && alternate.ImageWidth == 0 && alternate.ImageHeight == 0;
+                    if ((!cleared && (alternate.ImageWidth != 16 || alternate.ImageHeight != 16)) ||
+                        ImageList is not { ImageWidth: 16, ImageHeight: 16 })
+                        throw ToolbarItems.Unmeasured();
+                    if (alternate.Images.Count == 0) throw ToolbarItems.Error(380);
+                }
                 if (name.Equals("hotimagelist", StringComparison.OrdinalIgnoreCase)) HotImageList = alternate;
                 else DisabledImageList = alternate;
-                alternate.BoundToolbars.Add(new WeakReference<VBToolbar>(this));
+                alternate?.BoundToolbars.Add(new WeakReference<VBToolbar>(this));
                 return true;
             case "style": style = Choice(value, 1); return true;
             case "textalignment":
@@ -409,7 +436,7 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
             case "helpfile":
                 if (value.Type != Vb6Value.ValueType.String)
                     throw UnmeasuredConversion();
-                helpFile = (string)value.Value!;
+                helpFile = (string)value.WithoutOddBytes("VBToolbar text use").Value!;
                 return true;
             case "mousepointer": mousePointer = MeasuredChoice(value, 0); return true;
             case "oledropmode": oleDropMode = MeasuredChoice(value, 0); return true;

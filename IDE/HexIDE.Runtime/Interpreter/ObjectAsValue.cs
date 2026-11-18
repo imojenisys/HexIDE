@@ -21,11 +21,13 @@ namespace HexIDE.Runtime.Interpreter;
 /// statement's start and length.</item>
 /// </list>
 /// <para>One exception, measured: where the default member is a <b>Function</b>, <c>Format</c>, <c>Abs</c> and
-/// <c>Not</c> of a Variant holding it raise 450, and so does a Case value compared with an Empty selector in the IDE. A
+/// <c>Not</c> of a Variant holding it raise 450, and so does a Case value compared with an Empty or Null selector in the IDE. A
 /// Property Get default member gives 42 on those uses. The rows say which uses give 450, not why.</para>
-/// <para>A ByVal Variant argument takes the object itself. HexIDE does not call a class's default member yet (#174), so
-/// it refuses, untrappably: a trappable error would let <c>On Error Resume Next</c> carry on without the value VB6
-/// gives. An object with no default member raises VB6's 438, which a program may trap.</para>
+/// <para>A ByVal Variant argument takes the object itself. The pre-pass retains a class's default member name and kind,
+/// and BasicInterpreter resolves it at async value boundaries (#174). Any object still reaching this synchronous
+/// helper refuses, untrappably: a trappable error would let
+/// <c>On Error Resume Next</c> carry on without VB6's value. An object with no default member raises VB6's 438,
+/// which a program may trap.</para>
 /// <para>The in-box objects, measured the same way: Err stands for its Number; App, Screen and Clipboard have no default
 /// member, so 438; <c>Debug</c> used as a value and a control array without an index are compile errors (read from
 /// <c>/make</c>, since a project that does not compile leaves no log in an IDE run).</para>
@@ -37,21 +39,29 @@ internal static class ObjectAsValue
     /// as it is.</summary>
     public static Vb6Value Scalar(Vb6Value value, ParserRuleContext? context) => value.Value switch
     {
+        VbCollectionEnumerator => throw new VBRunTimeException(context, VBStandardError.TypeMismatch),
         VbObject obj when obj.ClassDef.PrePass.DeclaresDefaultMember => throw DefaultMemberRefused(obj),
         VbObject => throw new VBRunTimeException(context, VBStandardError.ObjectDoesntSupportThisPropertyOrMethod),
+        VBAnimation => throw new VBRunTimeException(context, VBStandardError.ObjectDoesntSupportThisPropertyOrMethod),
+        VBFlatScrollBar bar => new Vb6Value(bar.Value),
         VBDTPicker picker => PickerValue(picker),
         VBUpDown upDown => new Vb6Value((long)upDown.Value),
         Components.InBox.TabStripTab tab => new Vb6Value(tab.Tab.Caption),
         VBTabStrip => throw new VBRunTimeException(context, VBStandardError.ObjectDoesntSupportThisPropertyOrMethod),
         VBCommonDialog => throw new VBRunTimeException(new VBStandardError(394, "Property is write-only")),
         ToolbarItem item => item.DefaultValue,
+        VBMonthView monthView => monthView.DefaultValue,
         Components.InBox.TreeNode node => new Vb6Value(node.Text),
         VBMaskEdBox box => new Vb6Value(box.Model.Text),
         VBSSTab => new Vb6Value((short)0),
         AvaloniaInterop.ControlFont font => font.DefaultValue,
         VbErr err => new Vb6Value(err.Number),
+        ListViewItem item => item.DefaultText,
+        ListViewTextObject item => item.DefaultText,
         VBRichTextBox box => new Vb6Value(box.WriteRtf()),
         StatusBarPanel panel => new Vb6Value(panel.Text),
+        ImageComboItem item => new Vb6Value(item.Text),
+        ImageComboItems => throw ImageComboItems.Unmeasured(),
         // VB6 refuses both before the program runs: Debug is only ever Debug.Print or Debug.Assert ("Syntax error"),
         // and a control array needs an index ("Argument not optional"). Raised here as the statement runs.
         DebugProxy => throw new VBCompileErrorException("Syntax error"),
@@ -63,6 +73,7 @@ internal static class ObjectAsValue
         FormControls => throw new VBRunTimeException(context, VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment),
         // And Forms: `v = Forms` is 450, and v stays Empty (measured, #2496).
         VbForms => throw new VBRunTimeException(context, VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment),
+        PanelPicture => throw new NotImplementedException("Picture default Handle is not implemented (#2626)"),
         ICSharpProxy => throw new VBRunTimeException(context, VBStandardError.ObjectDoesntSupportThisPropertyOrMethod),
         _ => value,
     };
@@ -75,16 +86,22 @@ internal static class ObjectAsValue
     public static Vb6Value DefaultMemberIfAny(Vb6Value value) => value.Value switch
     {
         VbObject obj when obj.ClassDef.PrePass.DeclaresDefaultMember => throw DefaultMemberRefused(obj),
+        VBFlatScrollBar bar => new Vb6Value(bar.Value),
         VBDTPicker picker => PickerValue(picker),
         VBUpDown upDown => new Vb6Value((long)upDown.Value),
         ToolbarItem item => item.DefaultValue,
+        VBMonthView monthView => monthView.DefaultValue,
         Components.InBox.TreeNode node => new Vb6Value(node.Text),
         VBMaskEdBox box => new Vb6Value(box.Model.Text),
         VBSSTab => new Vb6Value((short)0),
         AvaloniaInterop.ControlFont font => font.DefaultValue,
         VbErr err => new Vb6Value(err.Number),
+        ListViewItem item => item.DefaultText,
+        ListViewTextObject item => item.DefaultText,
         VBRichTextBox box => new Vb6Value(box.WriteRtf()),
         StatusBarPanel panel => new Vb6Value(panel.Text),
+        ImageComboItem item => new Vb6Value(item.Text),
+        ImageComboItems => throw ImageComboItems.Unmeasured(),
         _ => value,
     };
 

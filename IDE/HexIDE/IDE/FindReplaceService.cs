@@ -1,4 +1,5 @@
 using HexIDE.Forms.ViewModels;
+using HexIDE.Language;
 using HexIDE.Localization;
 using Serilog;
 using System;
@@ -81,8 +82,8 @@ public class FindReplaceService : IFindReplaceService
             };
             _subscribed = true;
         }
-        Log.Debug("FindReplaceService: Creating new dialog");
-        _viewModel = new FindReplaceViewModel(_windowManager, _documentDockService, _localization, _projects);
+        Log.Debug("FindReplaceService: Opening dialog");
+        _viewModel ??= new FindReplaceViewModel(_windowManager, _documentDockService, _localization, _projects);
         _isOpen = true;
 
         // ShowWindow is modeless — fire and forget, track close

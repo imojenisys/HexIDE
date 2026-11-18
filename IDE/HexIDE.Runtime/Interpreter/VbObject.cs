@@ -25,6 +25,7 @@ public readonly record struct EventSink(Vb6Value Listener, string VarName);
 /// </summary>
 public sealed class VbObject
 {
+    internal BasicInterpreter? Interpreter { get; init; }
     public ModuleInfo ClassDef { get; }
     public ExecutionEnvironment InstanceEnv { get; }
 
@@ -34,6 +35,9 @@ public sealed class VbObject
     /// Null for a class instance, and for a form run with no window behind it, as a test's is (#822).
     /// </summary>
     public Avalonia.Controls.Control? FormWindow { get; set; }
+
+    // Null until assigned by the program; reading the file/default picture remains unimplemented (#4603).
+    internal PanelPicture? FormIconPicture { get; set; }
 
     /// <summary>
     /// For a form instance, its <c>Controls</c> collection (#1060), made as its controls are put into it. Null for a class
@@ -115,5 +119,6 @@ public sealed class VbObject
     {
         ClassDef = classDef;
         InstanceEnv = instanceEnv;
+        instanceEnv.SetInstance(this);
     }
 }

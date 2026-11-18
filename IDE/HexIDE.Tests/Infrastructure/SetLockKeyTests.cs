@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using HexIDE.Desktop.Server;
 using HexIDE.IDE;
 using HexIDE.Lsp;

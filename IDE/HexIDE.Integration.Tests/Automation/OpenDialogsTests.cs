@@ -65,7 +65,7 @@ public class OpenDialogsTests
     {
         var ide = Shown(new Window(), "IDE");
         var watch = OpenDialogs.Watch([ide], ide);
-        var message = new Window { Title = "HexIDE", Content = new HexIDE.Runtime.Dialogs.MessageBox
+        var message = new Window { Title = "HexIDE", Content = new HexIDE.Dialogs.MessageBox
         {
             Text = "This action will reset your project…",
             Buttons = HexIDE.IDE.MessageBoxButtons.YesNo
@@ -93,6 +93,37 @@ public class OpenDialogsTests
         finally { error.Close(); message.Close(); ide.Close(); }
     }
 
+    // A trust prompt's answer is the person's: the note describes it and never says how to answer it (#1121 review).
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_security_prompt_is_described_as_the_person_s_decision_and_its_answer_is_not_coached(bool beside)
+    {
+        var ide = Shown(new Window(), "IDE");
+        var watch = OpenDialogs.Watch([ide], ide);
+        var prompt = new Window { Title = "Code from outside this computer", Content = new HexIDE.Dialogs.MessageBox
+        {
+            Text = "Code that came from the internet or another computer is about to run.",
+            Buttons = HexIDE.IDE.MessageBoxButtons.YesNo,
+            IsSecurityPrompt = true,
+        } };
+        _ = prompt.ShowDialog(ide);
+        var other = beside ? Dialog("Settings", ide) : null;
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var note = OpenDialogs.Note(watch, other is null ? [ide, prompt] : [ide, prompt, other]);
+            note.Should().Contain(OpenDialogs.SecurityPromptNote);
+            if (other is null)
+                note.Should().NotContain("interact").And.EndWith(".");
+            else
+                note.Should().EndWith("shows any other, and interact answers it.");
+            OpenDialogs.HowToAnswer(prompt, "Answer it first").Should().NotContain("interact").And.Contain("their decision");
+            OpenDialogs.HowToAnswer(ide, "Answer it first").Should().StartWith("Answer it first: dump_visual_tree");
+        }
+        finally { other?.Close(); prompt.Close(); ide.Close(); }
+    }
+
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
@@ -101,7 +132,7 @@ public class OpenDialogsTests
         var ide = Shown(new Window(), "IDE");
         var watch = OpenDialogs.Watch([ide], ide);
         var text = multiline ? "First line" + Environment.NewLine + "Second line" : new string('x', 140);
-        var dialog = new Window { Title = "HexIDE", Content = new HexIDE.Runtime.Dialogs.MessageBox
+        var dialog = new Window { Title = "HexIDE", Content = new HexIDE.Dialogs.MessageBox
         {
             Text = text,
             Icon = HexIDE.IDE.MessageBoxIcon.Question
@@ -320,7 +351,7 @@ public class OpenDialogsTests
     [AvaloniaFact]
     public void A_programs_box_shown_in_a_window_of_its_own_counts()
     {
-        var box = Shown(new Window { Content = new HexIDE.Runtime.Dialogs.MessageBox() }, "Ask");
+        var box = Shown(new Window { Content = new HexIDE.Dialogs.MessageBox() }, "Ask");
         try
         {
             OpenDialogs.Among([box]).Should().Equal(box);

@@ -8,7 +8,50 @@ namespace HexIDE.Tests.AIChat;
 
 public class ChatSessionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void OldThinkingIsRemovedAfterANewDeveloperMessageOrCompaction(bool compact)
+    {
+        var session = new ChatSession();
+        session.Add(new ConversationMessage("user", "first"));
+        session.Add(new ConversationMessage("assistant", "reply", [new ToolCall("one", "read", "{}")])
+        {
+            NativeContent = JsonNode.Parse("""[{"type":"thinking","thinking":"reason","signature":"signed"},{"type":"redacted_thinking","data":"opaque"},{"type":"text","text":"reply"},{"type":"tool_use","id":"one","name":"read","input":{}}]""")!.AsArray()
+        });
+        session.Add(new ConversationMessage("tool", "result", toolCallId: "one"));
+        session.BuildApiMessages("system")[2]["anthropic_content"]!.ToJsonString().Should().Contain("signed");
+        if (compact) session.DrainForCompaction(2);
+        else session.Add(new ConversationMessage("user", "next"));
+        var messages = session.BuildApiMessages("changed system");
+        var assistant = messages.Single(m => m["role"]!.GetValue<string>() == "assistant");
+        var native = assistant["anthropic_content"]!.AsArray();
+        native.Select(b => b!["type"]!.GetValue<string>()).Should().Equal("text", "tool_use");
+        native[1]!["id"]!.GetValue<string>().Should().Be("one");
+    }
+
     // ── #1: history round-trip ────────────────────────────────────────────────
+
+    [Fact]
+    public void SavingRetainsPreviousChatBytesForRecovery()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "hexide-chat-recovery-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "chat.json");
+            var session = new ChatSession();
+            session.Add(new ConversationMessage("user", "first"));
+            session.SaveTo(path);
+            var original = File.ReadAllBytes(path);
+            session.Add(new ConversationMessage("assistant", "second"));
+            session.SaveTo(path);
+            var recovery = Directory.GetFiles(dir, "*.recovery").Should().ContainSingle().Subject;
+            File.ReadAllBytes(recovery).Should().Equal(original);
+            ChatSession.LoadFrom(path).Log.Should().HaveCount(2);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
 
     [Fact]
     public void SaveThenLoad_RoundTripsFullLog()

@@ -31,9 +31,11 @@ public class VbErr(Func<string>? projectName = null) : ICSharpProxy, ICSharpProp
     /// </summary>
     public string Description
     {
-        get => description;
+        get => unmeasuredDescription
+            ? throw new NotImplementedException("This ListView error description is unmeasured (#1085)") : description;
         set
         {
+            unmeasuredDescription = false;
             description = value;
             descriptionSet = true;
         }
@@ -45,10 +47,12 @@ public class VbErr(Func<string>? projectName = null) : ICSharpProxy, ICSharpProp
 
     private string description = "";
     private bool descriptionSet;
+    private bool unmeasuredDescription;
 
     public void Clear()
     {
         Number = 0;
+        unmeasuredDescription = false;
         description = "";
         descriptionSet = false;
         Source = "";
@@ -64,6 +68,7 @@ public class VbErr(Func<string>? projectName = null) : ICSharpProxy, ICSharpProp
         HelpFile = ex.VbHelpFile ?? "";
         HelpContext = ex.VbHelpContext ?? DefaultHelpContext(Number);
         Description = ex.Error.Description ?? "";
+        unmeasuredDescription = ex is ListViewItems.ListViewError { HasDescription: false };
     }
 
     // Err.Raise Number, [Source], [Description], [HelpFile], [HelpContext] — sets the fields then throws. With no
@@ -138,13 +143,13 @@ public class VbErr(Func<string>? projectName = null) : ICSharpProxy, ICSharpProp
     }
 
     private static string HelpFileValue(Vb6Value value) => value.Type == Vb6Value.ValueType.String
-        ? (string)value.Value!
+        ? (string)value.WithoutOddBytes("VbErr text use").Value!
         : throw new NotImplementedException("Err.HelpFile assignment conversion is not measured (#2527)");
 
     private static long HelpContextValue(Vb6Value value)
     {
         if (value.Type == Vb6Value.ValueType.String
-            && int.TryParse((string)value.Value!, NumberStyles.Integer, VbLocale.Current, out var parsed))
+            && int.TryParse((string)value.WithoutOddBytes("VbErr text use").Value!, NumberStyles.Integer, VbLocale.Current, out var parsed))
             return parsed;
         if ((value.Type == Vb6Value.ValueType.Integer || value.Type == Vb6Value.ValueType.Long
              || value.Type == Vb6Value.ValueType.Byte || value.Type == Vb6Value.ValueType.Single

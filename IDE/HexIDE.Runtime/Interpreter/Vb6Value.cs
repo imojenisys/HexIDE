@@ -15,13 +15,15 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     // With text, two strings compare as Option Compare Text compares them (VbTextCompare), and anything else as without.
     public int? TryCompareTo(Vb6Value other, bool text = false)
     {
+        RefuseOddBytes("Comparison");
+        other.RefuseOddBytes("Comparison");
         if (Type == other.Type)
         {
             if (Type == ValueType.Error)
                 return ((ushort)Value!).CompareTo((ushort)other.Value!);
             if (Type == ValueType.Integer)
                 return ((int)Value!).CompareTo((int)other.Value!);
-            if (Type == ValueType.Long)
+            if (Type == ValueType.Long || Type == ValueType.LongLong)
                 return ((long)Value!).CompareTo((long)other.Value!);
             if (Type == ValueType.Byte)
                 return ((byte)Value!).CompareTo((byte)other.Value!);
@@ -57,10 +59,11 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     /// that widens the value model's numeric subtypes to double for the operator/comparison cascades.</summary>
     public static bool TryNumericToDouble(Vb6Value v, out double d)
     {
+        v.RefuseOddBytes("Numeric conversion");
         switch (v.Value)
         {
             case uint:
-                throw new NotImplementedException("Numeric use of an unsigned Automation Long is not implemented (#1084)");
+                throw new NotImplementedException("Numeric use of an unsigned Automation Long is not implemented (#4513)");
             case byte b: d = b; return true;
             case int i: d = i; return true;
             case long l: d = l; return true;
@@ -82,7 +85,21 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     public static bool operator !=(Vb6Value left, Vb6Value right) => !left.Equals(right);
 
     public readonly ValueType Type;
-    public readonly object? Value;
+    private readonly object? payload;
+    public object? Value => payload is StringStorage text ? text.Text : payload;
+
+    // A BSTR identity, independent of its text. Null denotes vbNullString or an unassigned String (#2622).
+    // Keep the identity in the payload: a separate reference here fattens every value copied on the recursive walk.
+    private sealed class StringStorage(string text)
+    {
+        public string Text { get; } = text;
+    }
+
+    internal object? StringBuffer => payload as StringStorage;
+    internal Vb6Value CopyString() => Type == ValueType.String
+        ? new Vb6Value(Type, Value, HasFixedType, DeclaredAs, HeldAsVariant, StringBuffer is null ? null : new StringStorage((string)Value!))
+        : this;
+    internal static Vb6Value NullString => new(ValueType.String, "");
 
     /// <summary>
     /// True when this value carries a FIXED type rather than being a Variant that currently happens to
@@ -117,14 +134,14 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     public readonly bool HeldAsVariant;
 
     /// <summary>This value with a fixed type — a declared variable's value, or a literal.</summary>
-    public Vb6Value AsFixedType() => new Vb6Value(Type, Value, true, DeclaredAs);
+    public Vb6Value AsFixedType() => new Vb6Value(Type, Value, true, DeclaredAs, stringBuffer: StringBuffer);
 
     /// <summary>This value as neither typed nor a Variant's: no ceiling, so arithmetic widens rather than overflowing,
     /// and Select Case compares it as before (see <see cref="HeldAsVariant"/>).</summary>
-    public Vb6Value AsVariantSubtype() => new Vb6Value(Type, Value, false, DeclaredAs);
+    public Vb6Value AsVariantSubtype() => new Vb6Value(Type, Value, false, DeclaredAs, stringBuffer: StringBuffer);
 
     /// <summary>This value as a Variant's (see <see cref="HeldAsVariant"/>).</summary>
-    public Vb6Value AsVariant() => new Vb6Value(Type, Value, false, DeclaredAs, heldAsVariant: true);
+    public Vb6Value AsVariant() => new Vb6Value(Type, Value, false, DeclaredAs, heldAsVariant: true, stringBuffer: StringBuffer);
 
     /// <summary>
     /// The class or interface name this reference was READ THROUGH, for an object read out of a slot
@@ -145,15 +162,15 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     public readonly string? DeclaredAs;
 
     /// <summary>This reference as read through <paramref name="declaredClass"/> (null = through a Variant).</summary>
-    public Vb6Value ViewedAs(string? declaredClass) => new Vb6Value(Type, Value, HasFixedType, declaredClass, HeldAsVariant);
+    public Vb6Value ViewedAs(string? declaredClass) => new Vb6Value(Type, Value, HasFixedType, declaredClass, HeldAsVariant, StringBuffer);
 
     /// <summary>This value with <paramref name="array"/> in place of the array it holds, keeping its type and flags.</summary>
     internal Vb6Value WithArray(VBArray array) => new Vb6Value(Type, array, HasFixedType, DeclaredAs, HeldAsVariant);
 
-    private Vb6Value(ValueType type, object? value, bool hasFixedType = false, string? declaredAs = null, bool heldAsVariant = false)
+    private Vb6Value(ValueType type, object? value, bool hasFixedType = false, string? declaredAs = null, bool heldAsVariant = false, object? stringBuffer = null)
     {
         Type = type;
-        Value = value;
+        payload = stringBuffer ?? value;
         HasFixedType = hasFixedType;
         DeclaredAs = declaredAs;
         HeldAsVariant = heldAsVariant && !hasFixedType;
@@ -168,14 +185,54 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
         if (value is >= short.MinValue and <= short.MaxValue)
         {
             Type = ValueType.Integer;
-            Value = value;
+            payload = value;
         }
         else
         {
             Type = ValueType.Long;
-            Value = (long)value;
+            payload = (long)value;
         }
     }
+    internal bool IsOddByteString => Type == ValueType.OddByteString;
+
+    internal void RefuseOddBytes(string operation)
+    {
+        if (IsOddByteString) throw OddBytesNotImplemented(operation);
+    }
+
+    internal Vb6Value WithoutOddBytes(string operation)
+    {
+        RefuseOddBytes(operation);
+        return this;
+    }
+
+    internal static NotImplementedException OddBytesNotImplemented(string operation) =>
+        new($"{operation} with an odd-byte String is not implemented (#1510).");
+
+    // #4576 / the-byte-string-functions.md: pair bytes without an encoding fallback for lone surrogates.
+    internal static Vb6Value FromStringBytes(byte[] bytes)
+    {
+        if (bytes.Length % 2 != 0) return new(ValueType.OddByteString, bytes);
+        var chars = new char[bytes.Length / 2];
+        for (var i = 0; i < chars.Length; i++)
+            chars[i] = (char)(bytes[2 * i] | bytes[2 * i + 1] << 8);
+        return new Vb6Value(new string(chars));
+    }
+
+    internal byte[] StringBytes() => IsOddByteString ? (byte[])Value! : OrdinaryStringBytes((string)Value!);
+
+    private static byte[] OrdinaryStringBytes(string text)
+    {
+        var bytes = new byte[2 * text.Length];
+        for (var i = 0; i < text.Length; i++)
+        {
+            bytes[2 * i] = (byte)text[i];
+            bytes[2 * i + 1] = (byte)(text[i] >> 8);
+        }
+        return bytes;
+    }
+
+    public static Vb6Value NewLongLong(long value) => new(ValueType.LongLong, value);
     public Vb6Value(long value) : this(ValueType.Long, value) {}
     internal static Vb6Value NewAutomationUnsignedLong(uint value) => new(ValueType.AutomationUnsignedLong, value);
     public Vb6Value(byte value) : this(ValueType.Byte, value) {}
@@ -199,7 +256,7 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     public Vb6Value(float value) : this(ValueType.Single, value) {}
     public Vb6Value(double value) : this(ValueType.Double, value) {}
     public Vb6Value(bool value) : this(ValueType.Boolean, value) {}
-    public Vb6Value(string? value) : this(value == null ? ValueType.Null : ValueType.String, value) {}
+    public Vb6Value(string? value) : this(value == null ? ValueType.Null : ValueType.String, value, stringBuffer: value is null ? null : new StringStorage(value)) {}
 
     public Vb6Value(bool? b) : this(b.HasValue ? ValueType.Boolean : ValueType.Null, b) { }
 
@@ -212,7 +269,7 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     public Vb6Value(ValueType type)
     {
         Type = type;
-        Value = GetDefaultValueFor(type);
+        payload = GetDefaultValueFor(type);
     }
 
     public Vb6Value(ValueType type, IReadOnlyList<(int lowerBound, int upperBound)> dimensions)
@@ -222,7 +279,7 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
 
         Type = type;
         var array = new VBArray(type.Type.Match(prim => new ValueType(prim, false), inner => new ValueType(inner, false)), dimensions);
-        Value = array;
+        payload = array;
     }
 
     private static object? GetDefaultValueFor(ValueType type)
@@ -242,6 +299,7 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
                 ValueTypePrimitive.File => throw new NotImplementedException(),
                 ValueTypePrimitive.Integer => 0,
                 ValueTypePrimitive.Long => 0L,
+                ValueTypePrimitive.LongLong => 0L,
                 ValueTypePrimitive.Byte => (byte)0,
                 ValueTypePrimitive.Currency => 0m,
                 ValueTypePrimitive.Decimal => 0m,
@@ -300,6 +358,7 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
         public static readonly ValueType EmptyVariant = new ValueType(ValueTypePrimitive.EmptyVariant, false);
         public static readonly ValueType CSharpProxyObject = new ValueType(ValueTypePrimitive.CSharpProxyObject, false);
         public static readonly ValueType Null = new ValueType(ValueTypePrimitive.Null, false);
+        public static readonly ValueType LongLong = new(ValueTypePrimitive.LongLong, false);
         public static readonly ValueType Long = new ValueType(ValueTypePrimitive.Long, false);
         public static readonly ValueType AutomationUnsignedLong = new(ValueTypePrimitive.AutomationUnsignedLong, false);
         public static readonly ValueType Byte = new ValueType(ValueTypePrimitive.Byte, false);
@@ -311,6 +370,8 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
         // A class-module instance (REFERENCE type). One shared ValueType; the concrete class + per-instance state
         // live on the VbObject. A null Value = Nothing.
         public static readonly ValueType Object = new ValueType(ValueTypePrimitive.Object, false);
+
+        public static readonly ValueType OddByteString = new(ValueTypePrimitive.OddByteString, false);
 
         public static readonly ValueType Error = new ValueType(ValueTypePrimitive.Error, false);
         /// <summary>A blank argument slot. See <see cref="ValueTypePrimitive.Missing"/>.</summary>
@@ -374,7 +435,9 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
         Missing,
 
         AutomationUnsignedLong,
-        Error
+        Error,
+        LongLong,
+        OddByteString
     }
 
     public static implicit operator Vb6Value(int value) =>
@@ -424,6 +487,9 @@ public class VBArray
     public Vb6Value.ValueType? ElementType => elementType;
 
     internal string? DeclaredClass { get; set; }
+    internal int? FixedStringWidth { get; set; }
+
+    internal AutoNew? AutoNew { get; set; }
 
     // Dynamic (`Dim a()`, ReDim, Array()/Split()/Filter()) vs fixed (`Dim a(N)`). Only Erase distinguishes them:
     // a dynamic array is freed (undimensioned), a fixed one keeps its bounds and resets elements. Default dynamic;
@@ -466,6 +532,7 @@ public class VBArray
         bounds = new List<(int lbound, int ubound)>(bounds),
         elementType = elementType,
         elementDefault = elementDefault,
+        FixedStringWidth = FixedStringWidth,
         DeclaredClass = DeclaredClass,
         array = aliases is null ? CopyLevel(array, copyElement) : CopyAliases(copyElement),
     };
@@ -488,9 +555,13 @@ public class VBArray
         return copy;
     }
 
-    internal VBArray NewWithBounds(IReadOnlyList<(int, int)>? newBounds) => newBounds is null
-        ? Unallocated(elementType ?? Vb6Value.ValueType.EmptyVariant, elementDefault)
-        : new VBArray(elementType ?? Vb6Value.ValueType.EmptyVariant, newBounds, elementDefault);
+    internal VBArray NewWithBounds(IReadOnlyList<(int, int)>? newBounds)
+    {
+        var result = newBounds is null ? Unallocated(elementType ?? Vb6Value.ValueType.EmptyVariant, elementDefault)
+            : new VBArray(elementType ?? Vb6Value.ValueType.EmptyVariant, newBounds, elementDefault);
+        result.FixedStringWidth = FixedStringWidth;
+        return result;
+    }
 
     public VBArray()
     {
@@ -643,6 +714,15 @@ public class VBArray
         return ((Vb6Value)arr).ViewedAs(DeclaredClass);
     }
 
+    // Expression reads make an untouched element (#4150). Stores, enumeration and inspection use GetValue.
+    internal Vb6Value ReadValue(IReadOnlyList<int> index)
+    {
+        var value = GetValue(index);
+        if (value.Value is null && AutoNew is { } autoNew)
+            throw new AutoInstanceNeeded(this, index.ToArray(), autoNew);
+        return value;
+    }
+
     public void SetValue(IReadOnlyList<int> index, Vb6Value val)
     {
         if (index.Count != bounds.Count)
@@ -667,6 +747,8 @@ public class VBArray
         if (elementType is { } et && VbNumeric.IsDeclarableScalar(et))
             val = VbNumeric.CoerceOnStore(val, et, null);
 
+        if (FixedStringWidth is { } width)
+            val = FixedLengthString.Store(val, width);
         ModuleExecutionContext.CheckObjectStore(val, DeclaredClass);
 
         ((object[])arr)[index[^1] - bounds[^1].lbound] = val;

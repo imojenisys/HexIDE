@@ -41,6 +41,7 @@ add_test_floor() {
         IDE/HexIDE.Runtime.Tests) key=RUNTIME ;;
         IDE/HexIDE.Tests) key=IDE ;;
         IDE/HexIDE.Integration.Tests) key=INTEGRATION ;;
+        IDE/HexIDE.Runtime.Integration.Tests) key=RUNTIME_INTEGRATION ;;
         IDE/HexIDE.TwinBasic.Tests) key=TWINBASIC ;;
         LspServer/HexIDE.VbLspServer.Tests) key=LSP_SERVER ;;
         *) echo "test-linux.sh: no CI test floor for $project" >&2; return 2 ;;
@@ -88,4 +89,8 @@ rsync -a --delete \
 
 echo "test-linux.sh: $source_root -> $copy" >&2
 cd "$copy/$project"
-exec dotnet test "${test_args[@]}"
+# A compiler server or MSBuild node started in a read-only sandbox can serve later builds by the
+# same user, but cannot write their output (#4133). Exports also reach probes built by the tests.
+export UseSharedCompilation=false
+export MSBUILDDISABLENODEREUSE=1
+exec dotnet test --project "$(basename "$project").csproj" "${test_args[@]}"

@@ -4,6 +4,9 @@ HexIDE's test suite drives real, third-party language servers. This note explain
 they are obtained, and — because one of them is GPL-licensed — exactly why that is consistent with a
 100%-MIT tree.
 
+The DAP client has the same independent check: see [foreign debug adapters](foreign-debug-adapters.md)
+for the adapter pins, licences, acquisition and complete-session assertions.
+
 ## Why third-party servers at all
 
 A client and a server written by the same hand converge on their shared assumptions rather than on the
@@ -42,8 +45,13 @@ capability to satisfy it caused rumdl to send
 `{"jsonrpc":"2.0","method":"workspace/diagnostic/refresh","params":null,"id":1}` — invalid JSON-RPC, since
 `params` may be an object or an array and nothing else — which HexIDE could not decode and which therefore
 killed **the entire connection** rather than that one message. A malformed frame costing every language
-feature is HexIDE's defect, not the server's; the server's mistake only revealed it (rumdl's half is
-tracked as #428). Nothing written by one hand would have found it.
+feature is HexIDE's defect, not the server's; the server's mistake only revealed it. Rechecked on
+2026-11-16 with pinned rumdl **0.2.79** over stdio: the raw refresh frame above still carries
+`"params":null`, and HexIDE replies with a matching id and `"result":null`
+([#4144](https://github.com/hexide-io/HexIDE/issues/4144)).
+`RumdlDiagnosticRefreshPinsRawParamsAndReceivesReply` pins both wire shapes. The repair stays even if
+a future server version omits the member: HexIDE tolerates this malformed frame from servers it did
+not write. Nothing written by one hand would have found it.
 
 And it kept giving. Reading the repaired frame turned up two more, each of which had been sitting behind
 something that looked like success: the repair was installed **only on connections being recorded**, so a
@@ -63,6 +71,57 @@ vscode-json-language-server 4.10.0 returned `result:null` for all four spellings
 `ShutdownWireShapeTests` asserts member absence on the raw frames, covering all four spellings without
 relying on a permissive server. StreamJsonRpc's null argument object in its parameter-object overload
 omits the member; it does not serialize `"params":null`.
+
+## Snippet completion negotiation (2026-11-13, #3483)
+
+A paired stdio probe toggled only `completionItem.snippetSupport`, keeping insert/replace support,
+both insertion modes, `asIs` as default, and the indentation list default enabled. These are sampled
+sites, not a survey of every completion a server can produce:
+
+| Server | Site | Without snippets | With snippets |
+|---|---|---|---|
+| clangd 22.1.6 | `tw` in `int main() { tw }`, after declaring `int twice(int n);` and waiting for parsing | 12 plain items | 12 snippet items; `twice(${1:int n})` replaces `tw` |
+| vscode-json-language-server 4.10.0 | Property in a document using the package.json schema | No completion provider advertised | 65 snippet-formatted items; the sampled `name` edit contains literal quoted text |
+| texlab 5.26.0 | `\sec` inside an article document | 50 plain items | 50 plain items |
+| rumdl 0.2.79 | Link target in Markdown | Empty list | Empty list |
+| ruff 0.16.7 | `os.pa` after `import os` | No completion provider | No completion provider |
+
+No sampled reply supplied insert/replace edits, insertion modes or list defaults. clangd can answer
+with lexical fallback items while parsing is pending; those were plain even with snippets enabled.
+`CompletionForeignTests` therefore waits for the opened document's diagnostics, then requests clangd's
+function completion through the shipping client, inserts it in the editor, edits its argument stop,
+and checks Tab's final caret. This test uses headless Avalonia and runs on Linux too.
+
+## Normal teardown and document close (2026-11-04, #491)
+
+`RealServerShutdownTests` drives the normal HexIDE client over stdio on Linux, with the pinned
+versions unchanged and Node installed. Each test opens a real temporary file containing a defect,
+reads non-empty diagnostics from a recorded publication or pull response, sends `didClose`, and
+observes incoming wire frames for three seconds. It then calls `StopAsync`, checks the recorded
+`shutdown` reply (`result:null`) and subsequent `exit`, and reads the process lifecycle record.
+
+| Server | Exit code after normal teardown | `publishDiagnostics` after `didClose` |
+|---|---|---|
+| rumdl 0.2.79 | 0 | Empty diagnostics for the closed URI |
+| texlab 5.26.0 | 0 | Non-empty: code 3, “Mismatched environment”, source `texlab` |
+| vscode-json-language-server 4.10.0 | 0 | No publication in the three-second window |
+| clangd 22.1.6 | 0 | Empty diagnostics for the closed URI |
+| ruff 0.16.7 | 0 | Empty diagnostics for the closed URI, version 1 |
+| Bundled VB6 server | 0 | Empty diagnostics for the closed URI |
+
+None needed the transport's kill fallback. The older #491 measurement found rumdl **0.2.64**
+failed to exit within ten seconds; that is not the result of the current **0.2.79** pin. The same
+issue records ruff returning **2** after a refused shutdown or an exit without shutdown, so neither
+an assumed two-value rule nor a boolean is used for exit-code coverage.
+
+The inputs are a malformed Markdown heading with extra blank lines, mismatched LaTeX environments,
+a JSON trailing comma, an undeclared C++ name, an unused Python import, and an incomplete VB6 `Dim`
+declaration. Texlab's one diagnostic remains after close; one or more identical publications were
+observed, so the tests pin their contents rather than their scheduling-dependent count. The JSON
+server's silence is bounded evidence, not a claim that it can never publish after close. Ruff's
+silence described above concerns diagnostics while a document is open under pull negotiation;
+it does publish an empty set on close. No locally synthesised diagnostics event is counted as a
+server publication.
 
 ## What they do with a document that has no file (2026-09-20)
 
@@ -103,8 +162,8 @@ Three findings the table does not carry:
 
 Currently unexercised by anything real: the `pipe` and `websocket` transports (both supported, both tested
 only against fakes), a server that genuinely defers its analysis to save, and **workspace-wide pull
-diagnostics** (`workspace/diagnostic`), which HexIDE does not implement (#284) and which neither ruff nor
-rumdl advertises.
+diagnostics** (`workspace/diagnostic`), which HexIDE does not implement (it pulls per document, #284) and
+which neither ruff nor rumdl advertises.
 
 ## The reference implementation, and why it costs a runtime dependency
 
@@ -121,7 +180,7 @@ the repository; the installed tree does not, and is put under `artifacts/` rathe
 lockfile so `node_modules` can never appear in the tree even briefly.
 
 **Node is a harness dependency, not a shipped one.** Nothing in HexIDE requires it. A machine without Node
-skips these three tests, visibly — except where `HEXIDE_REQUIRE_FOREIGN_LSP=1` is set, which is CI, and
+skips the JSON-server tests, visibly — except where `HEXIDE_REQUIRE_FOREIGN_LSP=1` is set, which is CI, and
 where the whole point is that coverage cannot quietly disappear. CI installs Node explicitly rather than
 relying on the runner image happening to have it.
 
@@ -152,7 +211,19 @@ Downloaded on demand, once, at a pinned version, with a SHA-256 verified before 
 `artifacts/foreign-lsp/`. Not committed: several megabytes per platform against a repository whose whole
 history is a fraction of that, and every version bump would add the same again permanently.
 
+Release and specification-model downloads make up to three attempts for HTTP 5xx responses, timeouts
+or dropped connections, with 250 ms and 500 ms backoffs (#3489). Other HTTP errors and checksum
+mismatches do not retry. Exhausting the attempts leaves the server unavailable; required-server guards
+still fail. npm acquisition continues to use `npm ci`.
+
 Linux uses musl builds where offered, so one binary runs on any distribution.
+
+The advisory `build-ide (windows-arm, advisory)` job runs on `windows-11-arm` (#3139).
+For rumdl, texlab, clangd and ruff, `win-arm64` deliberately selects the existing Windows x64
+archive under Windows' emulation, retaining its digest and provenance. The JSON server uses the
+Node runtime installed by `actions/setup-node` and the same npm lockfile. The leg keeps
+`HEXIDE_REQUIRE_FOREIGN_LSP=1`; an unavailable server fails visibly. The leg has run on main
+(it passed on 2026-11-07); the Linux asset tests check the pin choices, not emulation.
 
 A checksum mismatch deletes the download and records the expected and actual digests. The affected
 foreign-server tests skip with a checksum-specific reason; an ordinary test in `RequiredServersTests`
@@ -166,21 +237,31 @@ fails even when `HEXIDE_REQUIRE_FOREIGN_LSP` is unset. Discovery never throws fo
   against*: it still catches a corrupted transfer, a replaced asset, or an unannounced rebuild under the
   same tag. It does **not** attest provenance. If the release had already been tampered with when it was
   first fetched, the digest records that faithfully.
+- **clangd** publishes no checksum file either, so its digests were computed here, with texlab's limits.
+- **ruff** releases a `.sha256` beside every asset, so its digests are publisher-attested, as rumdl's are.
+- **vscode-json-language-server** has no digest of its own here: `npm ci` installs it from the committed
+  lockfile, whose registry-attested integrity hashes npm checks.
 
 That distinction is trust-on-first-use versus attestation, and the code names it per server rather than
 letting a row of hex imply they are the same thing.
 
 ### Environment variables
 
+By default, resolution checks the per-server variable, then PATH, then the pinned download. An explicit
+variable remains authoritative even when its file is missing; it does not silently fall back. The JSON
+server instead resolves its pinned script and Node after checking its variable.
+
 | Variable | Effect |
 |---|---|
 | `HEXIDE_MARKDOWN_LSP`, `HEXIDE_LATEX_LSP`, `HEXIDE_JSON_LSP`, `HEXIDE_CPP_LSP`, `HEXIDE_PYTHON_LSP` | Point at your own build. Checked before the download, so an explicit choice is never silently replaced. |
+| `HEXIDE_FOREIGN_LSP_NO_PATH=1` | Skip PATH copies of servers, while keeping the per-server variables above first. **CI sets this** so a runner image’s preinstalled server cannot replace the pinned, digest-verified download (#3211). Node remains a harness runtime found on PATH for the pinned JSON script. |
+| `HEXIDE_FOREIGN_LSP_REPORT` | Write the resolved servers to this file. CI prints it after the tests, even on failure: server name, source (variable, PATH or pinned download), executable path and version. The JSON entry also names the script and reads its installed package version. A failed version probe is reported as unavailable. |
 | `HEXIDE_FOREIGN_LSP_DOWNLOAD=0` | Stay off the network. The affected tests then skip, visibly. |
 | `HEXIDE_REQUIRE_FOREIGN_LSP=1` | Turn "unavailable" into a failure. **CI sets this**, because a silently skipped proof is the failure mode this whole fixture exists to prevent. |
 
 ## Bumping a version
 
-Edit the version and the five digests in `ForeignServerAcquisition.cs`. Take each digest from the
-publisher's own checksum file where one exists — never from a file you downloaded yourself, which verifies
+Edit the version and digests in `ForeignServerAcquisition.cs`, including the Windows on Arm aliases.
+Take each digest from the publisher's own checksum file where one exists — never from a file you downloaded yourself, which verifies
 nothing beyond that the download completed. Where the publisher offers none, compute it and leave the
 provenance marked as computed here.

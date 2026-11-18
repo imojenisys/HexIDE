@@ -48,6 +48,13 @@ public sealed class AutoInstanceNeeded(int location, AutoNew autoNew)
         Field = new UdtFieldRef(bag, field);
     }
 
+    public AutoInstanceNeeded(VBArray array, IReadOnlyList<int> index, AutoNew autoNew) : this(-1, autoNew)
+    {
+        Element = new ArrayElementRef(array, index, false);
+    }
+
+    public ArrayElementRef? Element { get; }
+
     public UdtFieldRef? Field { get; }
 
     /// <summary>The slot to fill.</summary>
@@ -65,6 +72,12 @@ public interface IFormProgram
 {
     /// <summary>Make the default instance of <paramref name="form"/>, stored in the form's name: Initialize runs here.</summary>
     Task MakeDefaultInstance(ModuleInfo form);
+
+    /// <summary>Make a separate form instance for <c>New</c>, without binding its default name (#4598).</summary>
+    Task<VbObject> MakeInstance(ModuleInfo form);
+
+    /// <summary>Release an instance's window once its last reference has gone.</summary>
+    void Terminated(VbObject form);
 
     /// <summary>Load <paramref name="form"/> if it isn't loaded: Form_Load runs here. A form that unloaded gets a new window.</summary>
     Task Load(VbObject form);

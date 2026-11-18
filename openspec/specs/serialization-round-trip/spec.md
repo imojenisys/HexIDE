@@ -18,7 +18,7 @@ The text is content in the same sense. VB6 source declares no encoding: it is in
 machine that wrote it. So the IDE keeps each source file of a project in the encoding it was read in, and
 refuses an edit that encoding cannot hold rather than converting the file. A file in a code page this machine
 cannot read is still loaded, byte for byte, rather than dropped from the project. A file the project only
-carries is not held to this yet ([#745](https://github.com/hexide-io/HexIDE/issues/745)).
+carries is read as UTF-8 or, where that fails, as Latin-1, and is saved in the encoding it was read in.
 
 > **Known divergence — narrower than this note once said.** The requirements below state the intended
 > contract. It once read that no file of VB6's own shipped samples survived a save byte-identically, and that
@@ -48,7 +48,157 @@ carries is not held to this yet ([#745](https://github.com/hexide-io/HexIDE/issu
 > fallen to none, each form leaving only by round-tripping, the last of them when content cited by a control
 > the IDE does not model began to be carried ([#60](https://github.com/hexide-io/HexIDE/issues/60)).
 
+The module-name collection and save order follows [measurement #3777](../../../docs/vb6-fidelity-oracle/a-modules-name-line-below-the-top-of-its-file.md).
+
 ## Requirements
+
+### Requirement: Known designer type names ignore case
+
+The form reader SHALL match known control and visual-root type names without regard to case and
+write their canonical root or library spelling on save, retaining the control's library identity.
+VB6 SP6 measured `vb.label`, `VB.LABEL`, `vb.form` and `mscomctllib.progressbar` this way
+([#824](https://github.com/hexide-io/HexIDE/issues/824), oracle PR #4517).
+
+#### Scenario: A Label's type uses another case
+- **WHEN** a form declares `Begin vb.label Label1` or `Begin VB.LABEL Label1`
+- **THEN** the reader creates a Label whose Caption is readable by the running program
+- **AND** the writer emits `Begin VB.Label Label1`
+
+#### Scenario: The form root uses another case
+- **WHEN** the root declares `Begin vb.form Form1`
+- **THEN** the form loads and saves as `Begin VB.Form Form1`
+
+#### Scenario: An in-box control's type uses another case
+- **WHEN** a form declares `Begin mscomctllib.progressbar ProgressBar1`
+- **THEN** the reader creates a ProgressBar
+- **AND** the writer emits `Begin MSComctlLib.ProgressBar ProgressBar1`
+
+### Requirement: Startup form names ignore case
+The project loader SHALL match a `.vbp`'s `Startup=` form name with `OrdinalIgnoreCase`.
+When that form is found, the project writer SHALL write the form's own spelling.
+Measured source: [#823, VB6 SP6, oracle PR #4517](https://github.com/hexide-io/HexIDE/issues/823).
+
+#### Scenario: Startup names the form in another case
+- **GIVEN** a project with form `Form1` and `Startup="form1"` or `Startup="FORM1"`
+- **WHEN** the project is loaded and saved
+- **THEN** its startup form is `Form1` and its saved setting is `Startup="Form1"`
+
+#### Scenario: Startup already uses the form's spelling
+- **GIVEN** a project with form `Form1` and `Startup="Form1"`
+- **WHEN** the project is loaded and saved
+- **THEN** its startup form and saved startup spelling remain `Form1`
+
+### Requirement: Project groups retain membership and order
+The reader SHALL treat `StartupProject=` as a member in file order and select it as startup.
+It SHALL consume both `VBGROUP 5.0` and `VBGROUP 5.00` as headers and retain other unknown lines as before.
+See the [VB6 measurements](../../../docs/vb6-fidelity-oracle/a-project-groups-file-as-vb6-writes-it.md).
+
+#### Scenario: Startup is the second member
+- **GIVEN** `Project=A\A.vbp` followed by `StartupProject=B\B.vbp`
+- **WHEN** the group is opened
+- **THEN** it contains A followed by B, with B as startup
+
+#### Scenario: An older HexIDE group lists startup twice
+- **GIVEN** `StartupProject=B\B.vbp`, `Project=A\A.vbp`, and `Project=B\B.vbp`
+- **WHEN** the group is opened
+- **THEN** it loads A followed by B once each, with B as startup, retaining the `Project=` positions
+
+### Requirement: Project groups write the measured VB6 format
+With a startup project, the writer SHALL emit `VBGROUP 5.0` and each project in group order, using
+`StartupProject=` for startup and `Project=` for every other member, with CR LF line endings.
+Groups without startup SHALL retain their prior output pending measurement.
+Only `.vbp` paths SHALL be listed, case-insensitively; pathless members are skipped.
+A mixed-group save SHALL refuse before any write, including a member's Save As in a saved `.vbg`.
+
+#### Scenario: A group holds another project kind
+- **GIVEN** a group holding A.vbp and Other.rdproj
+- **WHEN** the group is saved, including its first save
+- **THEN** the save refuses, naming Other with its file name and explaining VB6's code-module interpretation
+- **AND** no file is written and the group retains its members, order and startup project
+- **AND** a member's Save Project As to a non-`.vbp` path with a saved `.vbg` holder refuses the same way
+
+Measured in [oracle PR #4308](https://github.com/hexide-io/HexIDE/pull/4308): VB6 opens other extensions
+as code modules and refuses a trailing section in a `.vbg`. A separate mixed-workspace descriptor awaits #1206.
+
+
+#### Scenario: Saving a group whose startup is second
+- **GIVEN** projects A and B in order, with B as startup
+- **WHEN** the group is saved
+- **THEN** it writes only `Project=A\A.vbp` followed by `StartupProject=B\B.vbp` after the header
+- **AND** any unknown lines follow as before
+
+### Requirement: A loaded module takes its name from its file
+A loaded `.bas` or `.cls` SHALL take its name from its header's `Attribute VB_Name`, falling back to
+its `.vbp` line when no name is present. Loading SHALL show no warning or dialog for a mismatch.
+Save Project SHALL write the loaded name into the `.vbp` and preserve it in the module file.
+Collisions with another project member remain unmeasured; HexIDE SHALL retain the `.vbp` name for that module.
+
+#### Scenario: The file and project line disagree
+- **GIVEN** `Module=WName; Odd.bas` and a file with `Attribute VB_Name = "QName"`
+- **WHEN** the project loads
+- **THEN** the module is named `QName` and code can call `QName.Who()`
+- **AND** Save Project writes `Module=QName; Odd.bas` and keeps the file's name `QName`
+- **AND** a class file's name similarly determines the type available to `New`
+
+#### Scenario: A module has no name attribute
+- **GIVEN** `Module=WName; Odd.bas` and no name attribute in the file
+- **WHEN** the project loads and is saved
+- **THEN** the module keeps `WName` and the saved file begins with `Attribute VB_Name = "WName"`
+
+### Requirement: Module name attributes are collected into the file header
+The reader SHALL collect the first module-level `VB_Name` outside procedures into a `.bas` header.
+For a `.cls`, it SHALL collect the `VERSION`…`END` block and the contiguous module-attribute run
+containing the name. Other lines SHALL keep their body order. A rename SHALL rewrite the name in the
+header when present, or in the code otherwise.
+
+#### Scenario: Unmeasured name and attribute shapes
+- **GIVEN** a dotted member attribute, a name inside a procedure, or a second name line
+- **WHEN** a module is read
+- **THEN** those lines stay in place
+- **AND** separated class attribute runs and relocation of an unterminated final name retain their prior split pending measurement
+
+#### Scenario: A name below a comment or blank line
+- **WHEN** a module is loaded with a comment or blank line above its module name attribute
+- **THEN** its next save writes the name in the header and the comment or blank line below it
+- **AND** renaming it with its code window open or closed reaches the saved name attribute
+
+#### Scenario: Text above a class VERSION line
+- **WHEN** a class has text before its `VERSION` line
+- **THEN** HexIDE preserves that text in order below the collected header
+- **AND** it deliberately diverges from VB6's C1 result, which drops the text, to avoid losing user content
+
+#### Scenario: Load normalises the composition without a user edit
+- **WHEN** collecting the name changes the order of a file's lines at load
+- **THEN** the load's render baseline keeps `hasUnsavedChanges` false until the model is edited
+- **AND** Save Project still writes the normalised file
+- **AND** a breakpoint or bookmark saved before the load stays on the statement it marked
+
+### Requirement: Directory saves require replacement consent
+HexIDE's SaveProjectToDirectory operation SHALL name existing source, binary companion and project
+file destinations in one replacement question before writing any output. Only an explicit Yes SHALL
+allow the operation to proceed. This requirement describes a HexIDE addition, not VB6 Save As behavior.
+
+#### Scenario: A directory save would replace an existing file
+- **WHEN** a directory save targets an existing source, companion or project file
+- **THEN** the replacement question names that file
+- **AND** No or cancellation leaves every destination and the project's document paths unchanged
+
+### Requirement: New member save pickers suggest the measured directory
+A save picker for a pathless form or module SHALL suggest its owning saved project's directory.
+For an unsaved project (including internal scratch persistence), subsequent pickers in the same save
+SHALL suggest the directory chosen by the previous picker. The first picker SHALL retain its platform
+default; the normally launched VB6 default is unmeasured (#498).
+
+Measured source: [document save oracle](../../../docs/vb6-fidelity-oracle/when-a-document-gets-a-file-and-what-a-dangling-startup-does.md).
+
+#### Scenario: A new form in a saved project
+- **WHEN** Save Project asks where to save a newly added Form2
+- **THEN** it suggests the project's directory and Form2.frm
+
+#### Scenario: A never-saved project
+- **WHEN** the developer chooses a directory for its first member
+- **THEN** its next member and project pickers suggest that directory
+- **AND** a separate save operation does not inherit that choice
 
 ### Requirement: Content the IDE does not understand SHALL survive a round-trip
 Where a file contains content the IDE has no model for — a property, a property block, an entire component
@@ -77,6 +227,15 @@ subset — and the developer discovers which parts by finding out what stopped w
 - **AND** carried Toolbars SHALL remain view-only, excluded from the Properties component list, including their own
   scalar properties and Buttons, until those edits can be saved faithfully; editing a surrounding form property
   SHALL survive save and reload without changing the carried Toolbar blocks or companion bytes
+
+#### Scenario: Runtime-only MonthView loading (#1095 A)
+- **WHEN** a form contains a top-level, non-array `MSComCtl2.MonthView` block
+- **THEN** its runtime SHALL create a MonthView with CurrentDate, date bounds and measured scalar settings loaded,
+  interpreting StartOfWeek by its low word and exposing Value as its default member
+- **AND** the designer SHALL retain the block verbatim and view-only, including the StartOfWeek high word,
+  until its file-writing slice can save edits faithfully
+- **AND** unsupported own members and saved properties SHALL refuse explicitly rather than supply invented values
+- **AND** input, events, drawing, nested and arrayed instances remain pending subsequent slices
 
 #### Scenario: A section left by another tool
 - **WHEN** a project file ends in a section belonging to some other tool
@@ -269,8 +428,12 @@ meaningful.
 - **THEN** it is editable and saveable
 
 #### Scenario: A form with a populated container
-- **WHEN** such a form is loaded, while container nesting does not round-trip
-- **THEN** it is still presented read-only
+- **WHEN** such a form is loaded
+- **THEN** it is editable and saveable
+
+#### Scenario: A structure still not reproduced
+- **WHEN** a form holds a control nested under a class that cannot contain one
+- **THEN** it is presented read-only
 
 ### Requirement: A container's children SHALL be written back inside their container
 Where a file expresses a control as a child of a container, the IDE SHALL write it back inside that
@@ -642,6 +805,19 @@ SHALL follow the record of the project being opened. Source bytes SHALL NOT gain
 Whether VB6's File → Save Project retains the section is unmeasured; `/make` accepting trailing sections
 does not establish save behaviour.
 
+The same trailing `[HexIDE]` section SHALL store a project's VBA7 target as `VbaBitness=32` or
+`VbaBitness=64` (#4245). The loader SHALL expose it on the Core project definition. No key SHALL be
+written for the default VB6 target, so an otherwise unchanged VB6 project retains its bytes. Changing
+or clearing the target SHALL replace or remove its previous key while retaining encoding records and
+unknown keys. A `VbaBitness` value other than 32 or 64 SHALL read as no target and SHALL be written back
+verbatim. This is HexIDE metadata, not a claim about VBA's native project format.
+
+#### Scenario: A VBA7 target survives a fresh open
+- **GIVEN** a project whose VBA7 target is 64-bit
+- **WHEN** it is saved and freshly opened
+- **THEN** its trailing `[HexIDE]` section has `VbaBitness=64` and the project retains that target
+- **AND** a project with no target writes no bitness key
+
 #### Scenario: An edit removes the UTF-8 signature
 - **GIVEN** a BOM-less UTF-8 module holding `' café 日本`
 - **WHEN** its code becomes `' café` and the project is saved and freshly opened
@@ -799,6 +975,76 @@ project saves SHALL continue to include carried files; Make SHALL leave source m
 - **THEN** the archive contains neither the carried file nor its project item line
 - **AND** the other project lines retain their relative order and the source project retains the carried file
 
+### Requirement: MSFlexGrid saves retain their own property run
+
+The writer SHALL emit carried MSFlexGrid properties after the extents and version in the order recorded
+by the VB6 saved-file oracle, preserving their raw values, comments and Font block. These carried own
+properties SHALL remain unavailable for designer editing. A new toolbox grid SHALL write the measured
+bare block, including its extender TabIndex, without adding own default-property lines or a companion.
+
+#### Scenario: Editing a form with saved grids
+
+- **GIVEN** the VB6-authored MSFlexGrid fixture in `corpus/inbox-controls/saved/msflexgrid/`
+- **WHEN** the form is saved unchanged, or only its caption is edited
+- **THEN** each grid's block remains byte for byte identical and no companion is produced
+
+### Requirement: MSFlexGrid applies or refuses saved settings at runtime
+
+At F5 the loader SHALL apply saved modelled MSFlexGrid settings, using the measured defaults when
+omitted, and SHALL refuse unsupported saved properties by name with the not-implemented error.
+Loading SHALL leave the carried lines unchanged for serialization. The designer SHALL retain its
+preview without enabling edits to carried settings.
+
+#### Scenario: Saved dimensions reach the running grid
+
+- **GIVEN** a saved grid with Rows 4, Cols 3, FixedRows 2 and FixedCols 0
+- **WHEN** the form runs
+- **THEN** those values are read back, with Row/RowSel/TopRow 2 and Col/ColSel/LeftCol 0
+- **AND** TextMatrix(0, 2) is accessible
+
+#### Scenario: An unsupported saved setting prevents a misleading run
+
+- **GIVEN** a grid carrying a saved Font or FormatString
+- **WHEN** the form starts at F5
+- **THEN** it refuses with the not-implemented error naming that property
+- **AND** its saved property block still round-trips unchanged
+
+### Requirement: ListView saves preserve read-only own properties
+
+The serializer SHALL carry a loaded MSComctlLib ListView's own property runs and flat column blocks,
+including repeated OLEDragMode/OLEDropMode lines and binary citations, while writing editable extender
+properties from the designer model. A resize SHALL recompute extents from whole pixels. Own properties
+and columns without an edit writer SHALL remain unavailable for designer editing. ImageList bindings
+SHALL be preserved; saved Icons, SmallIcons and ColHdrIcons names SHALL resolve after runtime controls
+are created, with column ImageIndex selectors validated against ColumnHeaderIcons. Unmeasured bindings
+SHALL refuse rather than silently omit images.
+
+#### Scenario: Saving a designed ListView without edits
+- **WHEN** either saved ListView corpus form is loaded and saved without edits
+- **THEN** its form text and companion bytes are unchanged
+
+#### Scenario: Resizing a ListView with bound column images
+- **WHEN** the designer resizes a loaded ListView and changes its Tag
+- **THEN** its geometry, Tag and extents reflect the edits
+- **AND** its column blocks, image binding strings and companion records survive unchanged
+
+#### Scenario: Previewing bindings that the runtime cannot resolve
+- **WHEN** a loaded ListView is displayed in the designer
+- **THEN** the preview shows its name and optional checkbox without resolving ImageList bindings
+- **AND** report headers are not displayed
+
+### Requirement: Loaded ListViews use measured client edges
+
+A loaded MSComctlLib ListView SHALL use a client inset of 2 pixels for Appearance 1 plus 1 pixel
+for BorderStyle 1, including when the BorderStyle line is omitted and loads as 0. Drawing, hit testing
+and MouseDown/MouseMove/MouseUp coordinates SHALL use that same inset. These four combinations are
+measured in [#2730](https://github.com/hexide-io/HexIDE/issues/2730) (oracle PR #2732).
+
+#### Scenario: Running the saved ListView forms
+- **WHEN** either saved ListView corpus form runs without changing its saved properties
+- **THEN** its ListViews load, including Appearance 1 with omitted BorderStyle
+- **AND** its saved ImageList bindings resolve and the form can unload normally
+
 ### Requirement: PropertyPage saves distinguish HelpContextID from StandardSize
 A PropertyPage designer SHALL expose HelpContextID as an editable integer property and save its value
 in the `.pag`. A save SHALL omit StandardSize, including a carried line from a loaded file, because
@@ -851,6 +1097,19 @@ StdPicture CLSID, `lt\0\0`, the size and the inserted BMP/ICO file bytes.
 - **WHEN** a form and its companion from `corpus/inbox-controls/saved/imagelist` are loaded and saved
 - **THEN** the form text and companion bytes match VB6's saved files
 - **AND** each saved image is available to the running program in index order with its Key, Tag and Picture
+
+### Requirement: Missing project members share a localized load warning
+
+The loader SHALL report a missing form, standard module, class module, UserControl or property page
+with the same localized message, naming its path as recorded in the `.vbp`, and SHALL retain its project
+entry for saving.
+
+#### Scenario: A module is absent from a project subdirectory
+
+- **GIVEN** a project containing `Module=Utilities; Code\Utilities.bas` whose file is absent
+- **WHEN** the project is opened
+- **THEN** the load warning names `Code\Utilities.bas` without prefixing the host project directory
+- **AND** the module's item line remains available for saving
 
 ### Requirement: In-box corpus state consistency
 
@@ -913,6 +1172,153 @@ unchanged because their insertion behaviour has not been measured.
 - **WHEN** an ActiveX EXE with no Retained line and adjacent Unattended=0 and ThreadPerObject=0 lines is saved
 - **THEN** Retained=0 is inserted between those lines
 - **AND** the remaining lines retain their order
+
+### Requirement: New-project scratch files require user-chosen destinations
+
+Save Project As and Save Project on a project still in its recorded scratch directory SHALL ask for
+scratch members' destinations in member order, then the project's destination. The project file SHALL
+be written last and name each member at its chosen path. Scratch files SHALL NOT count as user-saved.
+All destinations SHALL be collected before any write or path change; cancelling any picker SHALL
+cancel the whole save without writing files or marking edits saved. This follows the save workflow
+recorded in [#2678](https://github.com/hexide-io/HexIDE/issues/2678).
+
+Internal automation persistence SHALL write an existing scratch member to its scratch path without a
+file picker. This SHALL NOT give it a user-saved status. Explicit Save and Save As commands and save
+prompts SHALL still treat scratch members as needing a user-chosen destination. Automation's picker
+guard SHALL agree with its persistence path: only a pathless member needs an armed picker answer.
+
+#### Scenario: Save a new scratch project beside its first form
+
+- **WHEN** a new scratch project's form and project destinations are chosen in one folder
+- **THEN** the form picker precedes the project picker, both files are written there, and the project
+  names the form as `Form1.frm` without a path back into the scratch directory
+
+#### Scenario: Cancel a scratch member's destination
+
+- **WHEN** any scratch member's save picker is cancelled
+- **THEN** no file is written, all original paths remain, and unsaved edits remain unsaved
+
+#### Scenario: Persist an automation edit to a scratch member
+
+- **WHEN** automation persists a form or module with an existing scratch path
+- **THEN** the edit is written to that path without a picker, and the member remains user-unsaved
+
+### Requirement: Outside project edits require a save decision
+
+HexIDE SHALL check a VB6 project file against the last read or write before replacing it (#3699).
+If both disk bytes and the local project changed, it SHALL offer Reload, Keep My Changes and Cancel
+through the existing cancellable file conflict dialog. If only disk changed, it SHALL preserve the
+file without a question. An unchanged disk file SHALL save without a conflict question.
+
+#### Scenario: Another editor changes the project
+- **GIVEN** an opened `.vbp` with a local project edit and different bytes now on disk
+- **WHEN** the user saves the project
+- **THEN** the conflict dialog offers Reload, Keep My Changes and Cancel before any file is written
+- **AND** Reload reopens the disk project with the existing member-unsaved-changes prompt
+- **AND** Keep My Changes writes the local project
+- **AND** Cancel leaves every file untouched
+
+#### Scenario: Only the other editor changed the project
+- **GIVEN** an opened `.vbp` with no local project edit and different bytes now on disk
+- **WHEN** the user saves the project
+- **THEN** the external project bytes survive without a conflict question
+
+### Requirement: Damaged modelled property lines SHALL protect the original
+
+The reader SHALL apply repeated modelled designer properties in file order, comparing names without
+regard to case. Readable duplicates SHALL save as a single line holding the winning value. If a
+repeated property has an unreadable value, the reader SHALL keep the readable value and mark the form
+unfaithful to save with a cause naming the property.
+
+A twip measurement whose value converted to Single is at least 2^31 (except `Height` on a form's control),
+or a negative `Height` on anything but a control of a form, SHALL be
+left as if that line were absent and SHALL mark the form unfaithful to save with a cause naming the
+property and value. Save SHALL refuse these forms before writing the original. These rules follow
+[the #4096 measurements](https://github.com/hexide-io/HexIDE/issues/4096#issuecomment-6915523429);
+the upper bound shares the reader's geometry path, while the negative rule applies only to `Height`.
+VB6 keeps the form editable and opens Save As after load errors. HexIDE protects the original through
+its existing read-only gate; a load-error recovery Save As flow remains outside this requirement.
+A negative `Width` or `Height`, or a `Height` whose Single value is at least 2^31, on a form's control
+follows the next requirement instead (#4179, #4422).
+
+#### Scenario: A readable duplicate
+
+- **GIVEN** `ClientHeigHt = 3000` followed by `ClientHeight = 4000`
+- **WHEN** the form is loaded and saved twice
+- **THEN** its height holds 4000 twips and each save writes one `ClientHeight` line
+- **AND** the two saves are byte-identical
+
+#### Scenario: A failed line does not replace a readable value
+
+- **GIVEN** `ClientHeight = 2000` followed by `ClientHeight = abc`
+- **WHEN** the form is loaded
+- **THEN** its height holds 2000 twips and the form is unfaithful to save
+- **AND** Save refuses without changing the original bytes
+
+#### Scenario: A measurement cannot be set
+
+- **GIVEN** a CommandButton with `Left = 2147483648`
+- **WHEN** the form is loaded
+- **THEN** the button's Left is left as if the line were absent
+- **AND** the form is unfaithful to save and Save leaves the original bytes unchanged
+
+### Requirement: Recover negative control sizes without overwriting the source
+
+On a `VB.Form`, negative control sizes and control `Height` values whose Single value is at least 2^31
+SHALL load as zero with a Begin-line diagnostic, keeping forms editable and runnable. Saves MUST protect the source and use Save As until a new file has been written.
+
+Source: [VB6 SP6 IDE measurements, oracle PR #4350](https://github.com/hexide-io/HexIDE/pull/4350),
+[#4179 revised decision](https://github.com/hexide-io/HexIDE/issues/4179), and
+[#4422 scope and measurements](https://github.com/hexide-io/HexIDE/issues/4422).
+
+#### Scenario: Opening a negative size
+- **WHEN** a Label or CommandButton has Width or Height -150 in a form file
+- **THEN** that size reads zero and the localized diagnostic is `Line {0}: Property {1} in {2} could not be set.`, naming the property, control and one-based Begin line
+- **AND** the form opens for editing
+
+#### Scenario: Opening a too-large Height
+- **WHEN** a control on a form has a Height whose Single value is at least 2^31
+- **THEN** Height reads zero with the same Begin-line diagnostic and the form remains editable
+- **AND** the form is marked loaded with errors, requiring Save As rather than held unfaithful to save
+- **AND** other refused measurements, including those on UserControls and PropertyPages, retain the read-only hold
+
+#### Scenario: Running without opening the designer
+- **WHEN** F5 runs that project, whether or not its designer was opened
+- **THEN** Form_Load reads the recovered sizes as zero without a host exception
+
+#### Scenario: Saving the recovered form
+- **WHEN** Save, Save Project or Save Project Group would overwrite that form's source
+- **THEN** the form's Save As picker asks for a new path
+- **AND** accepting a new path writes zero there and leaves the original untouched
+- **AND** later saves use the new path without another picker
+
+#### Scenario: Cancelling or saving without a picker
+- **WHEN** the picker is cancelled
+- **THEN** nothing is written for that form
+- **WHEN** a noninteractive save would overwrite its source
+- **THEN** it refuses with an English sentence naming the form
+
+#### Scenario: Zero sizes and negative positions
+- **WHEN** a form contains zero or positive control sizes, or negative Left/Top positions
+- **THEN** loading retains the existing behaviour without a size-load diagnostic
+
+### Requirement: Designer text declared as a code module
+A code module recognized as designer text SHALL retain its whole source without splitting a header and
+carry `DesignerFileAsModule`. All save and edit paths SHALL refuse it without changing its declared kind.
+Its localized refusal SHALL name the file and the project or add-in that declared it
+([#4459](https://github.com/hexide-io/HexIDE/issues/4459)).
+
+#### Scenario: A contributed project lists a form as a module
+- **WHEN** a contributed module starts with a non-blank `VERSION n.nn` line without `CLASS`, then zero or more `Object = ` lines, then `Begin ` (ignoring blank lines)
+- **THEN** its code window shows the original source, read-only, and Save, Save As, typing, server workspace edits, project-wide replacement and automation writes refuse it, leaving its bytes unchanged
+
+#### Scenario: A VB6 project lists a designer file as Module
+- **WHEN** a `.vbp` lists a designer file under `Module=`
+- **THEN** its save and edit paths refuse it without reclassifying it as a form
+
+#### Scenario: An ordinary class module
+- **WHEN** the first non-blank line is `VERSION 1.0 CLASS`
+- **THEN** the existing module header split and writable save path remain available
 
 ## Out of Scope
 - **Interpreting preserved binary content.** Binary resources the IDE has no model for stay opaque; they are

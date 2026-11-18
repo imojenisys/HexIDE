@@ -14,7 +14,7 @@ namespace HexIDE.Debugging;
 /// <para>
 /// <b>A line is counted from the top of the file, header included</b>, as the code window numbers it
 /// (hexide-io/HexIDE#273): in a form that has a header, line 1 is its <c>VERSION</c> line, not the first line
-/// of code. The interpreter is given the same whole file (<c>FormCodeText.WholeFile</c>), so its statement
+/// of code. The interpreter is given the same whole file, so its statement
 /// lines are these lines and nothing converts between them. VB6's code window hid the header, so HexIDE's
 /// numbers differ from VB6's there; that divergence is deliberate.
 /// </para>
@@ -54,6 +54,15 @@ public interface IBreakpointService
 
     /// <summary>The breakpoint lines (1-based, ascending) for a document.</summary>
     IReadOnlyList<int> GetBreakpoints(DocumentIdentity document);
+
+    /// <summary>The expression attached to a breakpoint, or null for an unconditional breakpoint.</summary>
+    string? GetCondition(DocumentIdentity document, int line);
+
+    /// <summary>Set an existing breakpoint's expression; an empty expression removes the condition.</summary>
+    void SetCondition(DocumentIdentity document, int line, string? condition);
+
+    /// <summary>Move lines and their conditions together after a header change.</summary>
+    void MoveLines(DocumentIdentity document, int firstLine, int delta);
 
     /// <summary>Remove all breakpoints in a document.</summary>
     void ClearDocument(DocumentIdentity document);

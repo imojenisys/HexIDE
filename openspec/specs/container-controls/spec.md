@@ -175,6 +175,26 @@ control produces a file that opens cleanly and is quietly a different form. Refu
 - **THEN** it is treated the same way, because the IDE cannot host controls inside a class it did not build
 
 
+
+### Requirement: A running control SHALL expose its container and parent as objects
+For a visual control on a running form, reading Container SHALL return the Frame or PictureBox holding
+it, or the form when it is on the form. Reading Parent SHALL return the form, including when the control
+is nested inside containers. Both results SHALL support subsequent member reads and Set into an object
+variable ([#2064](https://github.com/hexide-io/HexIDE/issues/2064), measured native and p-code;
+[oracle](../../../docs/vb6-fidelity-oracle/controls-add-and-controls-remove.md)).
+
+This requirement does not specify Container assignment or the unexplained Timer and Data Container
+errors recorded in the oracle. Controls.Add is implemented separately (#1556); this requirement covers
+design-time controls.
+
+#### Scenario: A control inside a PictureBox inside a Frame
+- **WHEN** a program reads Text1.Container.Name and Text1.Parent.Name with Text1 inside Picture1 inside Frame1
+- **THEN** the results are Picture1 and the form's name respectively
+
+#### Scenario: A control on the form
+- **WHEN** a program assigns Command1.Container or Command1.Parent to an Object variable
+- **THEN** reading that object's Name gives the form's name
+
 ### Requirement: TabStrip top-row drawing
 
 An MSComctlLib.TabStrip SHALL paint its single top row with raised selected tabs (Style 0),
@@ -192,6 +212,12 @@ The strip SHALL remain excluded from the designer's container classes.
 - **WHEN** drawing encounters TabStyle 1, nondefault Placement, MultiRow, TabWidthStyle, fixed sizes or row overflow
 - **THEN** a running form reports the not-implemented error through its event queue
 - **AND** it does not substitute a guessed layout
+
+#### Scenario: Designer drawing outside the supported slice
+
+- **WHEN** the designer previews a strip with an unsupported drawing layout
+- **THEN** it SHALL show the view-only placeholder with the control name and refusal reason
+- **AND** the saved block remains unchanged
 
 ### Requirement: TabStrip saved property bags
 
@@ -375,10 +401,28 @@ caption mnemonic from a child SHALL switch to its enabled visible tab and then f
 - **THEN** tab two is selected and the SSTab receives focus
 
 
+### Requirement: SSTab runtime pictures belong to each tab
+As measured in [#3426](https://github.com/hexide-io/HexIDE/issues/3426) (including the corrected control rows,
+#4297), `TabPicture(i)` SHALL return the stored Picture object, initially empty (Type 0), never Nothing.
+Set and Let SHALL accept a Picture by reference; Nothing SHALL clear to an empty Picture.
+A PictureBox or Image SHALL supply a separate Picture object containing its Picture's image.
+String, number, Form, TextBox and Label assignments SHALL raise 13 and preserve the stored picture.
+Indexes SHALL convert as CInt and raise 381 outside the tab range. `Picture` SHALL read and write the
+current tab's picture. Shrinking Tabs SHALL discard pictures beyond the new count.
+A picture SHALL draw at its own pixel size left of its caption, with both centred together;
+a tab without a picture SHALL retain its existing rendering. Native handles (#2626), live
+PictureBox.Image references and saved `.frx` pictures (#2696) remain outside this requirement.
+
+#### Scenario: Stored identity and current tab alias
+- **GIVEN** a Picture assigned to TabPicture(2)
+- **WHEN** Tab is set to 2
+- **THEN** Picture and TabPicture(2) return that same object
+- **AND** reducing Tabs to 2 and increasing it to 3 leaves TabPicture(2) empty
+
 ### Requirement: SSTab previews its saved strip in the designer
 The designer SHALL apply the implemented saved strip properties and select the saved Tab, without
 running the runtime-only ControlEnabled tab-zero load quirk. The initial preview SHALL leave saved child
-positions and page metadata unchanged. Per-tab picture binding remains a later slice of #2301.
+positions and page metadata unchanged. Design-time `.frx` TabPicture binding remains a later slice (#2696).
 
 #### Scenario: Preview a saved nonzero page
 - **GIVEN** an SSTab saved with tab one showing and custom captions
@@ -404,3 +448,23 @@ in the measured page order. A page switch SHALL add no undo entry until VB6 desi
 - **WHEN** a child is cut from tab one and pasted with tab zero showing
 - **THEN** it belongs to tab zero and follows tab zero on subsequent switches
 - **AND** saving removes its old reference and writes its new reference
+
+### Requirement: Runtime PictureBox bitmap assignment honors AutoSize
+A running AutoSize PictureBox SHALL fit an assigned bitmap plus its measured border. It SHALL retain dimensions on load, when cleared with LoadPicture(), and when AutoSize is enabled without a picture. Explicit Width SHALL hold until the next picture assignment. [Measurements](../../../docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md).
+
+#### Scenario: Assigning and clearing a bitmap
+- **GIVEN** an AutoSize PictureBox with the default border
+- **WHEN** code assigns a 40 by 30 pixel bitmap with LoadPicture
+- **THEN** Width reads 660 twips and Height reads 510 twips
+- **AND** with no border they read 600 and 450 twips
+- **WHEN** code assigns Width 3000 and clears the picture with LoadPicture()
+- **THEN** Width remains 3000 and Height stays unchanged
+
+#### Scenario: An unmeasured sizing case
+- **WHEN** AutoSize would fit a non-bitmap picture or a flat Fixed Single border
+- **THEN** the runtime refuses as not implemented before replacing the picture
+- **AND** other unmeasured Picture assignment conversions refuse as not implemented
+
+#### Scenario: Turning AutoSize on with a picture already present
+- **WHEN** code enables AutoSize with a picture already present
+- **THEN** the runtime refuses the unmeasured transition as not implemented before changing AutoSize

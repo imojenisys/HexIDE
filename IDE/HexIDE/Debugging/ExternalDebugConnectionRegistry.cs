@@ -15,8 +15,11 @@ public sealed class ExternalDebugConnectionRegistry : ILanguageConnectionRegistr
         languages.ConnectionsChanged += (_, _) => ConnectionsChanged?.Invoke(this, EventArgs.Empty);
         debugger.Changed += () => ConnectionsChanged?.Invoke(this, EventArgs.Empty);
     }
+    public IReadOnlyList<OwnedDiagnostic> Diagnostics => languages.Diagnostics;
     public IReadOnlyList<LanguageServerConnection> Connections => debugger.Connection is { } connection
         ? [.. languages.Connections, connection] : languages.Connections;
     public IReadOnlyList<LanguageServerConfigProblem> ConfigurationProblems => languages.ConfigurationProblems;
+    public System.Threading.Tasks.Task RestartAsync(string id, System.Threading.CancellationToken cancellationToken = default) =>
+        languages.RestartAsync(id, cancellationToken);
     public event EventHandler? ConnectionsChanged;
 }

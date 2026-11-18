@@ -1,6 +1,6 @@
 # Security Policy
 
-HexIDE is pre-alpha software. We take security seriously and appreciate responsible disclosure.
+HexIDE is alpha software, an early developer preview. We take security seriously and appreciate responsible disclosure.
 
 ## Reporting a vulnerability
 
@@ -16,7 +16,8 @@ best-effort, but security issues are prioritised over feature work.
 
 ## Supported versions
 
-Only the latest default branch is supported. There are no released binaries yet.
+Only the latest default branch is supported. Released binaries are built from it, so a fix reaches them in the
+next [release](https://github.com/hexide-io/HexIDE/releases).
 
 ## Security-relevant surfaces
 
@@ -36,6 +37,8 @@ A few parts of HexIDE are worth calling out for reviewers:
 
 ## Data handling
 
-The core IDE does not phone home, collect telemetry, or transmit your projects anywhere — it
-reads and writes local files only. Optional add-ins (for example, an AI chat assistant) may
+The core IDE collects no telemetry and does not transmit your projects anywhere you have not configured.
+At startup it fetches the signed add-in revocation list from `https://hexide.io/revocations.json` only when
+an enabled package is not key-pinned first-party. `RevocationListUrl` overrides that address; an empty value
+disables fetching. A language server you configure may also connect over the network. Optional add-ins (for example, an AI chat assistant) may
 contact external services **that you configure**; consult each add-in's documentation.

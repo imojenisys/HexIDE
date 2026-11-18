@@ -12,7 +12,7 @@ public class ModuleExecutionContext
     /// Write a named variable, coercing to the slot's declared type on the way in.
     ///
     /// This is the single sink every named write goes through — Let, Set, For counters, For Each elements,
-    /// field writes — so the coercion belongs here rather than at each call site. A slot with no declared
+    /// object field writes — so the coercion belongs here rather than at each call site. A slot with no declared
     /// type is a Variant and takes the value unchanged, which is exactly the old behaviour.
     /// </summary>
     /// <param name="fillingConstant">
@@ -24,6 +24,7 @@ public class ModuleExecutionContext
     {
         if (env.TryGetVariableLocation(name, out var loc))
         {
+            NoteImplicitMemberAccess(env, name);
             // An Enum member and a user Const are constants. VB6 refuses `pTwo = 5`, `MK = 2` and `Set MK = Nothing` at
             // compile time with "Assignment to constant not permitted" (measured, #1003: a module Const, a local one, a
             // class's, `Module1.MK = 2` and `MK = MK + 1` alike); the walk can only refuse it here, as the statement runs,
@@ -39,11 +40,14 @@ public class ModuleExecutionContext
                 throw new VBRunTimeException(ctx, VBStandardError.ThisArrayIsFixedOrTemporarilyLocked);
             if (state.DeclaredTypeOf(loc) is { } declared)
                 value = VbNumeric.CoerceOnStore(value, declared, ctx);
+            if (state.FixedStringWidthOf(loc) is { } width)
+                value = FixedLengthString.Store(value, width, ctx);
             // A class-typed slot enforces its name: the object must BE that class or implement it as an
             // interface. Anything else is Err 13 "Type mismatch" at the Set — measured, both for two unrelated
             // classes and for an interface-typed slot given a non-implementer. Nothing always stores (its Value
             // is null); a control or proxy is outside this model.
-            CheckObjectStore(value, state.DeclaredClassOf(loc), ctx);
+            CheckObjectStore(value, value.Value is VbCollectionEnumerator
+                ? state.DeclaredViewOf(loc) : state.DeclaredClassOf(loc), ctx);
             state[loc] = value;
             return true;
         }
@@ -54,11 +58,12 @@ public class ModuleExecutionContext
     // Scalar slots and array elements enforce the same object type (measured, #1482).
     internal static void CheckObjectStore(Vb6Value value, string? declaredClass, ParserRuleContext? ctx = null)
     {
-        if (declaredClass is not null
-            && Components.InBox.ControlLibraries.ForTypeName(declaredClass) is { } library
-            && declaredClass.Equals(library.TypeName("ProgressBar"), StringComparison.OrdinalIgnoreCase)
+        if (value.Value is VbCollectionEnumerator && declaredClass is not null
+            && !declaredClass.Equals("IUnknown", StringComparison.OrdinalIgnoreCase))
+            throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch);
+        if (declaredClass is not null && ControlObjectType.IsDeclared(declaredClass)
             && value.Value is not null
-            && (value.Value is not BuiltinControls.VBProgressBar bar || !ReferenceEquals(bar.Library, library)))
+            && !declaredClass.Equals(ControlObjectType.Of(value.Value), StringComparison.OrdinalIgnoreCase))
             throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch);
         if (declaredClass is not null
             && value.Value is VbObject incoming
@@ -73,6 +78,9 @@ public class ModuleExecutionContext
     public bool TryGetVariable(ExecutionEnvironment env, string name, out Vb6Value value) =>
         TryRead(env, name, out value, inspecting: false);
 
+    internal bool TryGetVariable(ExecutionEnvironment env, string name, out Vb6Value value, bool trackMemberAccess) =>
+        TryRead(env, name, out value, inspecting: false, trackMemberAccess);
+
     /// <summary>
     /// Read a variable for the debugger: as <see cref="TryGetVariable"/> does, except that a form's control is read even
     /// before the form has loaded, and a form's name holding no instance reads as the Nothing it holds. Locals and the
@@ -82,10 +90,11 @@ public class ModuleExecutionContext
     public bool TryInspectVariable(ExecutionEnvironment env, string name, out Vb6Value value) =>
         TryRead(env, name, out value, inspecting: true);
 
-    private bool TryRead(ExecutionEnvironment env, string name, out Vb6Value value, bool inspecting)
+    private bool TryRead(ExecutionEnvironment env, string name, out Vb6Value value, bool inspecting, bool trackMemberAccess = true)
     {
         if (env.TryGetVariableLocation(name, out var loc))
         {
+            if (!inspecting && trackMemberAccess) NoteImplicitMemberAccess(env, name);
             if (!inspecting && state.PendingControlOf(loc) is { } form)
                 throw new FormLoadNeeded(form, name);
             if (inspecting)
@@ -136,6 +145,25 @@ public class ModuleExecutionContext
         value = default;
         return false;
     }
+
+    private static void NoteImplicitMemberAccess(ExecutionEnvironment env, string name)
+    {
+        if (env.Instance is { } instance
+            && !ReferenceEquals(env, instance.InstanceEnv)
+            && instance.Terminated
+            && !env.TryGetOwnVariableLocation(name, out _)
+            && instance.InstanceEnv.TryGetOwnVariableLocation(name, out var fieldSlot)
+            && (!instance.ClassDef.ModuleEnv.TryGetOwnVariableLocation(name, out var sharedSlot) || sharedSlot != fieldSlot))
+            instance.Interpreter?.NoteMemberAccess(instance, name);
+    }
+
+    /// <summary>What <paramref name="name"/>'s slot was declared as, for the Locals window's Type column (#2700): its
+    /// scalar type, its class or <c>Object</c>, and whether it is known to be a Variant. A slot with none of the three, a
+    /// UDT's or an array's, is one whose declaration the slot doesn't record. Null when there is no such variable.</summary>
+    internal (Vb6Value.ValueType? Scalar, string? Class, bool IsVariant)? DeclarationOf(ExecutionEnvironment env, string name) =>
+        env.TryGetVariableLocation(name, out var location)
+            ? (state.DeclaredTypeOf(location), state.DeclaredViewOf(location), state.IsVariant(location))
+            : null;
 
     /// <summary>Allocate a slot for <paramref name="name"/>. Pass <paramref name="declaredType"/> for a
     /// variable declared <c>As T</c> with a coercible scalar T; leave it null for a Variant, an array, an

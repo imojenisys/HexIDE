@@ -1,17 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using HexIDE.Language;
 
 namespace HexIDE.Runtime.Serialization;
-
-/// <summary>What replacing a document's content came to.</summary>
-/// <param name="NewText">The whole buffer to put in place, or null when the replacement was refused.</param>
-/// <param name="Refusal">Why it was refused, in words a caller can act on; null when it was not.</param>
-/// <param name="HeaderKept">
-/// True when the incoming text carried no header of its own, or only part of it, so the document's header was
-/// put in front of it. A caller that reports on its write can say so.
-/// </param>
-public readonly record struct ContentReplacement(string? NewText, string? Refusal, bool HeaderKept);
 
 /// <summary>
 /// Replacing a whole document's content without letting the replacement change a read-only region: the rule the
@@ -106,6 +98,21 @@ public static class GuardedContent
                 return Joined(NamesOf(run, AccessorOf(run, declarations)));
         }
         return null;
+    }
+
+    /// <summary>The header alone when reached, otherwise the members whose attribute lines are reached.</summary>
+    public static string DescribeRegions(string text, int prefixLength, IReadOnlyList<TextRegion> regions)
+    {
+        var members = new List<string>();
+        foreach (var region in regions)
+        {
+            if (MemberNamedBy(text, prefixLength, region) is not { } member)
+                return "the document's header (its designer block, class header or leading Attribute lines)";
+            members.Add(member);
+        }
+        return "the Attribute lines describing " + (members.Count == 1
+            ? members[0]
+            : string.Join(", ", members.GetRange(0, members.Count - 1)) + " and " + members[^1]);
     }
 
     /// <summary>

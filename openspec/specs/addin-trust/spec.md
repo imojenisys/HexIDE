@@ -80,16 +80,26 @@ allowed cannot silently become a different add-in.
 - **THEN** it is asked for again on the next start
 
 ### Requirement: The consent decision SHALL be re-verified before the add-in is loaded
-Where verification and the consent prompt are separated in time, the IDE SHALL re-verify the package before
-loading it and SHALL load only if the result still matches what the user was shown.
-
-The prompt can stay open indefinitely, and the files it describes are on disk the whole time. Without
-re-verification, the window between "the user reads the publisher name" and "the code runs" is a window in
-which the package can be swapped for a different one that the user never saw.
+The IDE SHALL re-verify each package immediately before loading its entry assembly, on both the startup
+and post-consent paths. It SHALL load only if the verdict and manifest hash match the original verification
+and a manifest is still present. A changed package SHALL be listed as Error with a localized LoadError
+saying it changed on disk after verification, and SHALL retain its id reservation against duplicates.
 
 #### Scenario: A package altered while the prompt is open
-- **WHEN** the package changes between the prompt appearing and the user allowing it
-- **THEN** re-verification fails and the add-in does not load
+- **WHEN** the package on disk differs from the one shown at the consent prompt
+- **THEN** it does not load, even if the user pressed Allow
+- **AND** Options → Add-Ins shows the localized changed-package error
+
+#### Scenario: A package altered between discovery and startup loading
+- **WHEN** another package's initialization or an external writer changes a package after discovery
+- **AND** its re-verification returns a different verdict, a different manifest hash, or no manifest
+- **THEN** no assembly from the changed package loads and it is not initialized
+- **AND** it is listed as Error with the localized changed-package message
+- **AND** a duplicate of its id remains refused
+
+#### Scenario: An unchanged package
+- **WHEN** re-verification matches the original verdict and manifest hash and still has a manifest
+- **THEN** the package loads if it was already allowed, is first-party, or the user allows it at the prompt
 
 ### Requirement: First-party status SHALL be established by key, not by claimed identity
 An add-in SHALL be treated as first-party only when its verified signing key matches a key the IDE ships
@@ -103,6 +113,25 @@ first-party private key.
 #### Scenario: An add-in claiming a first-party identifier
 - **WHEN** a third-party package claims the first-party identifier but is signed by a different key
 - **THEN** it is not treated as first-party and consent is still required
+
+### Requirement: An add-in's protocol prefixes SHALL be bound to its publisher's signed namespaces
+When the verified publisher record issues namespaces, a contributed language server's message prefix SHALL be
+`<namespace>/` and its command prefix `<namespace>.` (or under them) for one of them, or registration SHALL be
+refused naming both. The namespaces SHALL be read only from the signed publisher record. A record without the
+field SHALL keep the earlier rule, with one notice per add-in and no refusal. `hexide/` and `hexide.` SHALL stay
+reserved whatever a record says.
+
+#### Scenario: A prefix outside the issued namespaces
+- **WHEN** an add-in whose publisher was issued `rdcore.` registers a server with the message prefix `other/`
+- **THEN** registration is refused, naming `other/` and `rdcore.`
+
+#### Scenario: A record from before the field
+- **WHEN** an add-in whose publisher record has no namespaces registers a server with the prefix `rdcore/`
+- **THEN** the server is added, and one notice says the prefix isn't checked against the publisher
+
+#### Scenario: A record claiming HexIDE's namespace
+- **WHEN** a signed publisher record lists `hexide.`
+- **THEN** that entry grants nothing, and `hexide/` and `hexide.` prefixes are still refused
 
 ### Requirement: The IDE SHALL be able to revoke a build, a publisher, or an intermediate signer
 The IDE SHALL consult a signed revocation list before the consent decision, and SHALL refuse to load
@@ -147,9 +176,37 @@ its absence as a revocation would do far more damage than the case it guards aga
 - **WHEN** a retrieved list does not verify, or is older than the one already held
 - **THEN** it is ignored
 
+#### Scenario: The list the IDE ships does not verify
+- **WHEN** the build's own bundled list fails root verification
+- **THEN** the IDE SHALL still start, with the cached and retrieved lists, and SHALL log the refusal at error level,
+  because the build's own file failing is a defect in the build rather than a retrieval problem (#4537)
+
 #### Scenario: No retrieval configured
 - **WHEN** no revocation source is configured
 - **THEN** no retrieval is attempted and startup is not delayed
+
+### Requirement: Startup revocation retrieval SHALL depend on installed packages
+The default source SHALL be `https://hexide.io/revocations.json`, with its signature at the URL plus
+`.sig`. A user URL SHALL override it; null SHALL select the default and an empty URL SHALL disable retrieval. Startup SHALL fetch only
+when an enabled discovered package is not verified against the pinned first-party key, before packages
+load or await consent. Retrieval SHALL retain the three-second timeout, root verification and strictly
+newer `issuedUtc` check.
+
+#### Scenario: Only first-party components installed
+- **WHEN** every enabled discovered package is verified against the pinned first-party key
+- **THEN** startup makes no revocation fetch
+
+#### Scenario: Third-party package awaiting consent
+- **WHEN** an enabled third-party package is discovered and a nonempty source is configured
+- **THEN** startup attempts retrieval before deciding whether that package may load
+
+### Requirement: The revocation cache SHALL replace signed pairs atomically
+The cache SHALL atomically replace the signed bytes and signature together, preserving the previous
+cached list if a write is interrupted. Existing two-file caches SHALL remain readable.
+
+#### Scenario: Interrupted cache update
+- **WHEN** a newer valid list is fetched but its cache write is interrupted
+- **THEN** the current session uses the fetched list and the next session retains the previous valid cache
 
 ### Requirement: Unsigned add-ins SHALL load only under an explicit developer opt-in
 An unsigned or invalid package SHALL load only when developer mode is active and the developer has
@@ -182,6 +239,17 @@ no harm in a logo on a details page, which is a different moment with different 
 - **WHEN** the user inspects an add-in's identity
 - **THEN** they see each link with its identifier and key fingerprint, and whether it is key-pinned first-party
 
+The inspector's dialog title, row headings, root explanation and fingerprint comparison instructions
+SHALL use the active language pack in both the consent dialog and Options expander. The open Options
+page SHALL refresh these strings on a language switch. Branding SHALL preserve references to HexIDE's
+root and TRUST.md; chain identifiers, versions and fingerprints SHALL remain data.
+
+#### Scenario: Inspecting trust in another language
+- **WHEN** the user opens Trust details at consent or the Trust expander in Options
+- **THEN** the inspector's text uses the active pack
+- **AND** changing language with Options open updates the inspector's headings
+- **AND** a distribution with another product name still names HexIDE's root and TRUST.md
+
 #### Scenario: A publisher-supplied logo
 - **WHEN** a package supplies a logo
 - **THEN** it appears only on the informational details surface, never at the consent decision
@@ -197,7 +265,7 @@ no harm in a logo on a details page, which is a different moment with different 
 ### Requirement: Manifest compatibility precedes trust
 
 After guarding the entry path, verification SHALL refuse a manifest whose `schema` exceeds the current
-schema (1), whose `minHexideVersion` exceeds the running assembly version, or whose non-null minimum
+schema (2), whose `minHexideVersion` exceeds the running assembly version, or whose non-null minimum
 version cannot be parsed as a numeric `major.minor[.build[.revision]]` version. Missing components compare
 as zero. Older schemas and an absent minimum SHALL retain their existing behavior. The verdict SHALL be
 `Incompatible`, independent of signature trust, developer mode, unsigned loading and recorded consent.
@@ -220,4 +288,101 @@ minimum SHALL be rejected before changing the output directory.
 #### Scenario: Package declares a minimum host version
 
 - **WHEN** a publisher packs with `--min-hexide-version 1.4`
-- **THEN** the signed manifest records schema 1 and minimum HexIDE version `1.4`
+- **THEN** the signed manifest records schema 2 and minimum HexIDE version `1.4`
+
+### Requirement: Signing generators preserve existing output
+
+The add-in packer's `genkeys`, `genkeys-release`, `sign-publisher` and `sign-revocations` commands SHALL create their output files
+exclusively. If any destination already exists, the command SHALL fail without replacing that file
+or writing generated content to any of its other destinations. If a reservation or write fails,
+the command SHALL remove exactly the output files created by that call.
+
+#### Scenario: An existing private key or revocation output
+
+- **WHEN** a signing generator encounters an existing output file
+- **THEN** it reports failure and preserves that file's bytes
+- **AND** no generated key, trust record or signature is written to the other destinations
+- **AND** any output files reserved by this call are removed, including when the last destination collides
+
+### Requirement: Release signing chains have explicit identities and separate key outputs
+
+The packer SHALL provide `genkeys-release` with explicit intermediate and publisher identities and
+separate root, intermediate, first-party and public output directories. It SHALL validate ids with
+`PublisherId.IsValid` and names as trimmed, non-empty strings of at most 128 characters without controls,
+Unicode format, line-separator or paragraph-separator characters.
+This issuance validation SHALL NOT change package verification. Development generation SHALL retain
+its defaults.
+
+#### Scenario: Invalid signing identity
+
+- **WHEN** an id is not 3–64 lowercase ASCII letters or digits joined by single dots or hyphens,
+  or a display name is invalid
+- **THEN** generation is refused before writing any files
+
+#### Scenario: A release chain is generated
+
+- **WHEN** all identities and four non-overlapping output directories are supplied
+- **THEN** each private key is written to its own directory, public keys and signed records go to the
+  public directory, and all three public-key fingerprints are printed without private key material
+
+#### Scenario: An output file already exists
+
+- **WHEN** any release-chain destination file already exists
+- **THEN** it is preserved and no partial new chain is left behind
+
+### Requirement: Offline publisher issuance
+
+The packer's `sign-publisher` command SHALL issue a publisher record offline using an explicit root
+public key, the intermediate private key and public record, and the publisher's public key, id and
+display name. It SHALL validate inputs before writing, preserve existing files, write only
+`publisher.json` and `publisher.sig`, verify the written chain and report success without exposing
+private key material.
+
+#### Scenario: Issuing a third-party publisher
+
+- **WHEN** a maintainer supplies valid inputs to `sign-publisher` offline
+- **THEN** the issued record signs the publisher's own public key and references the verified intermediate
+- **AND** a package signed by that publisher verifies against the supplied root
+
+#### Scenario: Invalid issuance inputs
+
+- **GIVEN** publisher and intermediate ids must be 3–64 lowercase letters/digits joined by single dots or hyphens
+- **AND** display names must be trimmed, non-empty, at most 128 characters and free of control, Unicode format,
+  line-separator or paragraph-separator characters
+- **AND** keys must be ECDSA P-256, the intermediate signature must verify against the supplied root,
+  and the private key must match the intermediate public record
+- **WHEN** any of these checks fails
+- **THEN** issuance fails before writing publisher files
+
+### Requirement: Package output replacement preserves user files
+
+`pack` SHALL accept new or empty output folders and unchanged signed packages matching the supplied
+key, payload hashes, trust files and exact inventory. It SHALL refuse output/internal links and
+escaping payload paths, but allow linked ancestors. Ownership/link refusals SHALL name the path,
+explain why, confirm no change, and suggest another folder or moving this one aside. Replacements
+SHALL be staged; build or installation failure SHALL preserve the earlier package.
+
+#### Scenario: Empty output or linked ancestor
+- **WHEN** the output directory is empty or an ancestor of the output is a link
+- **THEN** packing proceeds subject to the same output inventory checks
+
+#### Scenario: Unrelated or edited output
+- **WHEN** the selected output contains unrelated or modified files, an extra directory, or a link
+- **THEN** packing refuses and preserves the existing output
+
+#### Scenario: Replacing a previous signed package
+- **WHEN** the existing output is an unchanged package signed with the supplied signing key and chain
+- **THEN** packing replaces it without prompting after the complete replacement is staged
+
+#### Scenario: Failure before installation
+- **WHEN** copying or signing the staged package fails
+- **THEN** the earlier package remains in place unchanged
+
+### Requirement: Add-in identity in trust surfaces remains the signed manifest name
+The consent prompt and Options → Add-Ins SHALL identify a signed add-in by the verified manifest's title.
+Localized chrome titles SHALL NOT replace that identity. `AddinTitle` and the packer's `--title` SHALL
+retain their separate roles as chrome text and signed package metadata respectively.
+
+#### Scenario: A package supplies a translated chrome title
+- **WHEN** an add-in registers a translated menu, tool window or command label and the language changes
+- **THEN** the consent prompt and Options → Add-Ins retain its signed manifest title

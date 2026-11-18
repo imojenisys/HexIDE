@@ -9,7 +9,7 @@ using static HexIDE.Runtime.Components.VBProperties;
 
 namespace HexIDE.Runtime.Components;
 
-public abstract class ComponentBaseClass : IComponentClass
+public abstract class ComponentBaseClass : IDesignerComponentClass
 {
     public ComponentBaseClass(IReadOnlyList<PropertyClass> extendedProperties,
         IReadOnlyList<EventClass>? events = null)
@@ -39,11 +39,17 @@ public abstract class ComponentBaseClass : IComponentClass
         Events = events ?? [];
     }
 
+    /// <summary>Declared members with origin marks; empty for controls not yet migrated to a member table.</summary>
+    public virtual IReadOnlyList<InBox.InBoxMember> Members => [];
+
     public IReadOnlyList<PropertyClass> Properties { get; }
 
     public IReadOnlyDictionary<string, PropertyClass> PropertiesByName { get; }
 
     public IReadOnlyList<EventClass> Events { get; }
+
+    // Unmeasured controls keep their first event until measured (#4411).
+    public virtual string? DesignerDoubleClickEvent => Events.FirstOrDefault()?.Name;
 
     public abstract string Name { get; }
     public abstract string VBTypeName { get; }

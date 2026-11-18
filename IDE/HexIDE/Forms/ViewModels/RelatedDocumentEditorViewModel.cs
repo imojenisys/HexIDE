@@ -34,9 +34,93 @@ namespace HexIDE.Forms.ViewModels;
 /// </para>
 /// </summary>
 public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindowManager windowManager,
-    ILocalizationService localization)
-    : BaseEditorWindowViewModel, ISearchableDocument
+    ILocalizationService localization, ISettingsService settings)
+    : BaseEditorWindowViewModel, ISearchableDocument, IOutlineDocument, HexIDE.Forms.Views.IEditorDocumentQueries
 {
+    internal ISettingsService Settings => settings;
+    internal ILspClient LanguageClient => lspClient;
+    public string? DocumentUri => session is { IsOpen: true } open ? open.Uri : null;
+    public Task FlushDocumentAsync(CancellationToken ct = default) =>
+        session is { IsOpen: true } open ? open.FlushAsync(ct) : Task.CompletedTask;
+    public IReadOnlyList<string> CompletionTriggerCharacters => DocumentUri is { } uri
+        ? lspClient.CompletionTriggerCharacters(uri) : [];
+    public IReadOnlyList<string> SignatureHelpTriggerCharacters => DocumentUri is { } uri
+        ? lspClient.SignatureHelpTriggerCharacters(uri) : [];
+    public Task<CompletionItem[]> RequestCompletionAsync(Position position, CancellationToken ct = default) =>
+        DocumentUri is { } uri && lspClient.SupportsCapability(uri, "completionProvider")
+            ? lspClient.RequestCompletionAsync(uri, position, ct) : Task.FromResult<CompletionItem[]>([]);
+    public Task<CompletionItem[]> RequestCompletionForTriggerAsync(Position position, string triggerCharacter,
+        CancellationToken ct = default) =>
+        DocumentUri is { } uri && lspClient.SupportsCapability(uri, "completionProvider")
+            ? lspClient.RequestCompletionForTriggerAsync(uri, position, triggerCharacter, ct) : Task.FromResult<CompletionItem[]>([]);
+    public Task<SignatureHelp?> RequestSignatureHelpAsync(Position position, CancellationToken ct = default,
+        string? triggerCharacter = null) =>
+        DocumentUri is { } uri && lspClient.SupportsCapability(uri, "signatureHelpProvider")
+            ? lspClient.RequestSignatureHelpAsync(uri, position, ct, triggerCharacter) : Task.FromResult<SignatureHelp?>(null);
+
+    public async Task<HoverResult?> RequestHoverAsync(Position position, CancellationToken ct = default)
+    {
+        if (session is not { IsOpen: true } open || !lspClient.SupportsCapability(open.Uri, "hoverProvider")) return null;
+        await open.FlushAsync(ct);
+        return await lspClient.RequestHoverAsync(open.Uri, position, ct);
+    }
+    public bool CanFormatDocument => DocumentUri is { } uri && lspClient.SupportsCapability(uri, "documentFormattingProvider");
+    public bool CanFormatSelection => SelectionLength > 0 && DocumentUri is { } uri && lspClient.SupportsRangeFormatting(uri);
+    public Task<TextEdit[]> RequestFormattingAsync(CancellationToken ct = default) =>
+        CanFormatDocument && DocumentUri is { } uri
+            ? lspClient.RequestFormattingAsync(uri, new FormattingOptions(settings.TabWidth, true), ct) : Task.FromResult<TextEdit[]>([]);
+    public Task<TextEdit[]> RequestRangeFormattingAsync(HexIDE.Lsp.Messages.Range range, CancellationToken ct = default) =>
+        DocumentUri is { } uri && lspClient.SupportsRangeFormatting(uri)
+            ? lspClient.RequestRangeFormattingAsync(uri, range, new FormattingOptions(settings.TabWidth, true), ct) : Task.FromResult<TextEdit[]>([]);
+
+    internal bool RefuseFormatting(bool readOnly)
+    {
+        if (!readOnly && LoadError is null) return false;
+        _ = windowManager.MessageBox(LoadError ?? localization.GetString("Str.CodeEditor.Msg.TypingChangesReadOnlyText"),
+            icon: MessageBoxIcon.Warning);
+        return true;
+    }
+
+    internal void ApplyFormatting(IReadOnlyList<TextEdit> edits)
+    {
+        if (RefuseFormatting(false)) return;
+        var resolved = edits.Select((edit, index) =>
+        {
+            var start = Document.GetOffset(edit.Range.Start.Line + 1, edit.Range.Start.Character + 1);
+            var end = Document.GetOffset(edit.Range.End.Line + 1, edit.Range.End.Character + 1);
+            return (Start: start, Length: end - start, edit.NewText, Index: index);
+        }).OrderByDescending(edit => edit.Start).ThenByDescending(edit => edit.Index).ToArray();
+        using (Document.RunUpdate())
+            foreach (var edit in resolved) Document.Replace(edit.Start, edit.Length, edit.NewText);
+    }
+
+    public IReadOnlyList<DocumentSymbol> OutlineSymbols { get; private set; } = [];
+    public event Action? LanguageServerStateChanged;
+    private int symbolRefreshVersion;
+
+    async Task IOutlineDocument.RefreshSymbolsAsync()
+    {
+        if (session is not { } open) return;
+        var version = ++symbolRefreshVersion;
+        var text = Document.Text;
+        await open.FlushAsync();
+        var symbols = await lspClient.RequestDocumentSymbolsAsync(open.Uri);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (version != symbolRefreshVersion || session != open || text != Document.Text) return;
+            OutlineSymbols = symbols;
+            OnPropertyChanged(nameof(OutlineSymbols));
+        });
+    }
+
+    void IOutlineDocument.NavigateToSymbol(DocumentSymbol symbol)
+    {
+        var position = symbol.SelectionRange.Start;
+        if (position.Line < 0 || position.Line >= Document.LineCount) return;
+        var line = Document.GetLineByNumber(position.Line + 1);
+        CaretOffset = Math.Clamp(line.Offset + Math.Max(0, position.Character), line.Offset, line.EndOffset);
+    }
+
     private RelatedDocumentDefinition? document;
     private Vb6TextEncoding encoding = Vb6TextEncoding.Utf8;
     private string savedText = string.Empty;
@@ -83,6 +167,8 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindo
     [Notify] private int selectionStart;
 
     [Notify] private int selectionLength;
+
+    private void OnSelectionLengthChanged() => Avalonia.Labs.Input.CommandManager.InvalidateRequerySuggested();
 
     public RelatedDocumentDefinition? RelatedDocument => document;
 
@@ -180,6 +266,16 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindo
             Markers = markers;
             MarkersChanged?.Invoke(markers);
         };
+        // Taken here, on the UI thread: StateChanged arrives on the connection's thread, and asking Dispatcher.UIThread
+        // there while a headless test's setup has it cleared makes that thread the UI thread (#2530).
+        var uiThread = Avalonia.Threading.Dispatcher.UIThread;
+        EventHandler stateChanged = (_, _) => uiThread.Post(() =>
+        {
+            LanguageServerStateChanged?.Invoke();
+            Avalonia.Labs.Input.CommandManager.InvalidateRequerySuggested();
+        });
+        lspClient.StateChanged += stateChanged;
+        AutoDispose(new ActionDisposable(() => lspClient.StateChanged -= stateChanged));
         session.Start();
     }
 
@@ -231,11 +327,11 @@ public partial class RelatedDocumentEditorViewModel(ILspClient lspClient, IWindo
                 string.Format(localization.GetString("Str.Dialog.SourceEncoding.NothingWritten"),
                     refusal.Document, refusal.CodePage, refusal.Character, refusal.CodePoint,
                     refusal.Line.Length > 0 ? refusal.Line : refusal.Character),
-                "HexIDE", MessageBoxButtons.Ok, MessageBoxIcon.Warning);
+                HexIDE.IDE.Distribution.DisplayName, MessageBoxButtons.Ok, MessageBoxIcon.Warning);
             throw;
         }
 
-        AtomicFileWriter.WriteAllBytes(path, bytes);
+        AtomicFileWriter.WriteRecoverableBytes(path, bytes);
 
         savedText = text;
         IsDirty = false;

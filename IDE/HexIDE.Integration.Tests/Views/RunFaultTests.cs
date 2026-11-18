@@ -93,7 +93,7 @@ public class RunFaultTests
         public List<string> StartFailed { get; } = new();
         public List<string> RunFailed { get; } = new();
         // Where each RunFailed error was raised, as the runner says while it reports it (#955).
-        public List<HexIDE.Runtime.Interpreter.ErrorLocation?> RunFailedAt { get; } = new();
+        public List<ErrorLocation?> RunFailedAt { get; } = new();
     }
 
     private static Run Build(ProjectDefinition project)
@@ -108,7 +108,7 @@ public class RunFaultTests
         // nested-event test below fail on a busy box and pass on an idle one. Since #766 the raiser waits, so these run
         // with the slice at its most disruptive rather than off.
         var controller = new DebugController { TimeSliceMs = -1 };
-        var runner = new ProjectRunnerService(
+        var runner = TestRunners.WithInterpreter(
             Substitute.For<IEventBus>(), windowManager, Substitute.For<IProjectManager>(),
             localization, controller, Substitute.For<IBreakpointService>(), new WatchService(), new RunScope());
         var run = new Run { Runner = runner, Controller = controller, WindowManager = windowManager, Project = project };
@@ -180,6 +180,46 @@ public class RunFaultTests
         var printed = new List<string>();
         sink = printed.Add;
         return printed;
+    }
+
+    // #4179 / oracle PR #4350: F5 runs even when the designer has never been opened.
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Negative_saved_sizes_run_as_zero(bool openDesigner)
+    {
+        var frm = FormWithButton.Replace("Command1", "Command2")
+            .Replace("Width           =   1215", "Width           =   -150")
+            .Replace("End\r\nAttribute", "Begin VB.Label Label1\r\nWidth = -150\r\nEnd\r\nEnd\r\nAttribute");
+        var run = FormProject("Private Sub Form_Load()\r\nDebug.Print CStr(Command2.Width) & \" \" & CStr(Label1.Width)\r\nEnd Sub\r\n", frm);
+        using var designer = openDesigner ? new HexIDE.VisualDesigner.FormEditViewModel(
+            new HexIDE.VisualDesigner.ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(), new ComponentRegistry(),
+                Substitute.For<ILocalizationService>()), new EventBus(), Substitute.For<HexIDE.Projects.IProjectService>(),
+            Substitute.For<IEditorService>(), run.WindowManager, Substitute.For<ISettingsService>(),
+            Substitute.For<ILocalizationService>()).Initialize(run.Project.Forms.Single()) : null;
+        if (designer is not null)
+        {
+            designer.IsReadOnly.Should().BeFalse();
+            var view = new HexIDE.VisualDesigner.FormEditView { DataContext = designer };
+            view.Measure(new Avalonia.Size(900, 700));
+            view.Arrange(new Avalonia.Rect(0, 0, 900, 700));
+        }
+        var printed = Printed(out var sink);
+        VBDebugConsole.Output += sink;
+        try
+        {
+            var window = Start(run, printed);
+            run.StartFailed.Should().BeEmpty();
+            run.RunFailed.Should().BeEmpty();
+            printed.Should().Equal("0 0");
+            window.Close();
+            Pump();
+        }
+        finally
+        {
+            VBDebugConsole.Output -= sink;
+            run.Runner.EndProject();
+        }
     }
 
     // A never-called handler must not stop Form_Load; reaching Print uses Me.Print's refusal (#993).
@@ -577,14 +617,18 @@ public class RunFaultTests
     {
         // The pre-pass runs while the interpreter is built. That used to happen outside the run's try, after
         // the debugger was reset to Running and the project claimed, so this left both that way (#590's shape).
-        var run = SubMainProject("Dim s As String * 10\r\n\r\nSub Main()\r\n    Debug.Print \"never\"\r\nEnd Sub\r\n");
+        // The sample is a declaration the pre-pass still refuses: an indexed Property Set in a standard module
+        // (PrePass.ParsePropertyMutator). It was a fixed-length String until #179, then an array As New until
+        // #4150, each implemented in turn. When this one is, pick another the pre-pass refuses.
+        var run = SubMainProject("Public Property Set Many(i As Integer, o As Object)\r\nEnd Property\r\n\r\n"
+            + "Sub Main()\r\n    Debug.Print \"never\"\r\nEnd Sub\r\n");
 
         run.Runner.RunProject(run.Project);
 
         // Before pumping: run_project reads StartFailed as raised before the start call returns, so a report that
         // arrived on a later dispatcher pass would leave it answering that the program ran.
         run.StartFailed.Should().ContainSingle("reported before the start call returns, as the form path does")
-            .Which.Should().StartWith("Not implemented yet: ").And.Contain("fieldLength");
+            .Which.Should().StartWith("Not implemented yet: ").And.Contain("Property Set 'Many'");
         AssertNothingIsRunning(run);
 
         Pump();
@@ -605,7 +649,7 @@ public class RunFaultTests
 
         run.RunFailed.Should().ContainSingle().Which.Should().StartWith(expected);
         // Line 3 of the file: a module's file begins with its Attribute VB_Name line, which the code window numbers too.
-        run.RunFailedAt.Should().Equal([new HexIDE.Runtime.Interpreter.ErrorLocation("Module1", 3)], "where it was raised (#955)");
+        run.RunFailedAt.Should().Equal([new ErrorLocation("Module1", 3)], "where it was raised (#955)");
         run.Runner.FailureLocation.Should().BeNull("read only while the failure is reported");
         _ = run.WindowManager.DidNotReceiveWithAnyArgs().MessageBox(default!);
         AssertNothingIsRunning(run);

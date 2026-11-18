@@ -67,6 +67,8 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
 
     private ProjectService MakeService()
     {
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning)
+            .Returns(MessageBoxResult.Yes);
         var projectManager = Substitute.For<IProjectManager>();
         projectManager.LoadedProjects.Returns(_ => loaded);
         projectManager.When(m => m.AddProject(Arg.Any<ProjectDefinition>()))
@@ -76,8 +78,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windows,
             bus,
             projectManager,
@@ -86,7 +87,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<ILocalizationService>(),
-            refresher);
+            refresher, new ComponentRegistry());
     }
 
     /// <summary>A code window on the document, on the same bus as the save, and open as far as the dock knows.</summary>
@@ -452,6 +453,9 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
     [InlineData("form")]
     public async Task ItsOwnSaveAsToTheFileItWasReadFromRewritesAsItsSaveDoes(string kind)
     {
+        // Agree to replacement so this test reaches the behavior it checks (#4505).
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning,
+            layout: MessageBoxLayout.SecondButtonDefault).Returns(MessageBoxResult.Yes);
         // A Save As is the document's own command wherever it is pointed, so one that picks the file the document
         // already lives at rewrites as its Save does, though nothing moves.
         var service = MakeService();

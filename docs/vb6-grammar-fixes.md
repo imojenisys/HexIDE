@@ -72,15 +72,20 @@ something this project can offer outward rather than something it must ask for.
 | 6 | Hex / octal `%` suffix (`&H1F%`) | lexer | add `PERCENT` to `COLORLITERAL` (hex) and `OCTALLITERAL` suffixes |
 | 7 | Trailing comment after a header or designer property value (`MultiUse = -1  'True`, `Enabled = 0   'False`) | parser | add `WS?` before `NEWLINE` in `moduleConfigElement` and `cp_SingleProperty` |
 | 8 | A member call in a `While...Wend` body (`k.Bump`, `Debug.Print x`) | parser | `whileWendStmt`'s body `block* NEWLINE*` → `(block blockSep)?`, as `doLoopStmt` has it |
-| 9 | A Print output list of separators alone (`Debug.Print ,`, `Debug.Print ;`) | parser | a second `iCS_B_MemberProcedureCall` alternative, `implicitCallStmt_InStmt? DOT PRINT WS? (COMMA \| SEMICOLON) (WS? (COMMA \| SEMICOLON))*`; `argsCall` is unchanged |
+| 9 | A Print output list of separators alone (`Debug.Print ,`, `Debug.Print ;`) | parser | a dedicated `iCS_B_MemberProcedureCall` alternative using `outputList`; `argsCall` is unchanged |
 | 10 | A lone CR as a line end (`x = 1` CR `x = x + 10`, `x = 1 + _` CR `10`) | lexer | `NEWLINE`, its continuation tail and `LINE_CONTINUATION`: `'\r'? '\n'` → `('\r'? '\n' | '\r')` |
 | 11 | `D`-exponent whole numbers (`1D3`, `1D3@`) | lexer | `INTEGERLITERAL` exponent `'E'` → `('E' | 'D')`, as fix 5 has it for `DOUBLELITERAL` |
 | 12 | A literal ending in its point (`5.`, `5.D1`, `5.#`) | lexer | `DOUBLELITERAL` `[0-9]* DOT [0-9]+` → `([0-9]+ DOT [0-9]* | DOT [0-9]+)` |
 | 13 | Option lines directly before a broken procedure (#939) | parser (server only) | `moduleOptions? NEWLINE* moduleBody?` → `(moduleOptions \| moduleBody)?` |
 | 14 | A member statement with an unspaced parenthesised argument (`Form2.Show(0)`, `Text1.Move(100)`) | parser | permit the missing `WS` in `iCS_B_MemberProcedureCall` only when the next token is `LPAREN`; retain `argsCall` so the parentheses remain an expression and pass a copy (#1064, oracle "Several forms", measurement 13) |
+| 15 | `Call` with empty parentheses (`Call Helper()`, `Call obj.Method()`) | parser | make `argsCall` optional inside the parentheses in `eCS_ProcedureCall` and `eCS_MemberProcedureCall`: `(WS? LPAREN WS? (argsCall WS?)? RPAREN)?` (#3779) |
 
 Provenance: VB6 Language Reference ("Line numbers", "If…Then…Else", "Type Declaration Characters"), each
 verified against `vb6.exe`; deliberately divergent from the Rubberduck grammar.
+
+**Fix 15:** provenance is the VB6 Language Reference's Call statement and the vb6.exe SP6 native/p-code
+[measurement in #3780](https://github.com/hexide-io/HexIDE/pull/3780), recorded under
+[`Call` with empty parentheses](vb6-fidelity-oracle/an-undeclared-name-before-a-dot.md#call-with-empty-parentheses-2026-11-12-3779).
 
 **Fix 7 has a different provenance, and a wider blast radius than its size suggests (2026-09-20).** It was
 not read out of the language reference at all — it was measured against files VB6 itself wrote: the VB98
@@ -129,6 +134,19 @@ output list, which VB6 reads as `Print #` reads its own, so the alternative is k
 dot. It admits `Form1.Print ,` too, whose VB6 behaviour is not measured and which HexIDE cannot run, since a form's
 `Print` method is not implemented. Provenance: measured against
 `vb6.exe` and its IDE's Immediate window (the oracle's "Sequential files", under "Separators with no item").
+
+Since [#3248](https://github.com/hexide-io/HexIDE/issues/3248), fix 9's alternative uses the shared
+`outputList` for all member Print lists. Adjacent items join without a separator; named calls keep their
+parentheses, and `obj!key` stays dictionary access. `Spc` and `Tab` end before a following sign, and measured
+`&` and `=` forms are syntax errors
+([measuring PR #3249](https://github.com/hexide-io/HexIDE/pull/3249)). Other operators after these clauses
+keep their previous expression parse pending measurement. A member selector after the keyword, as in
+`tab.Caption`, keeps it an expression rather than a positioning clause.
+
+Guarded bare-name and complete-call alternatives precede member calls so SLL leaves `.Print` outside
+its receiver and keeps `Hour(d)` together in #2038's concatenation workload. A following member or
+dictionary selector stays attached; the original alternatives remain as fallbacks. `ParserPredictionTests`
+and the server's `OutputListTests` guard the forty-line workload in SLL.
 
 **Fix 12 is measured, and `5..5` stays refused (2026-10-23).** `vb6.exe` compiles a literal with no digit after its
 point wherever a literal goes, as the literal it would be with one (the oracle's "A numeric literal ending in its

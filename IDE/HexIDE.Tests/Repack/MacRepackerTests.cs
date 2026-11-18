@@ -1,0 +1,678 @@
+using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Text;
+using HexIDE.IDE;
+using HexIDE.Repack;
+using SkiaSharp;
+
+namespace HexIDE.Tests.Repack;
+
+/// <summary>For a test of what macOS's own tools say about a repacked bundle.</summary>
+public sealed class MacOnlyFactAttribute : FactAttribute
+{
+    public MacOnlyFactAttribute(
+        [CallerFilePath] string? sourceFilePath = null,
+        [CallerLineNumber] int sourceLineNumber = -1)
+            : base(sourceFilePath, sourceLineNumber)
+    {
+        if (!OperatingSystem.IsMacOS())
+            Skip = "macOS-only: asks macOS's own tools about the result.";
+    }
+}
+
+/// <summary>For a test that needs files to have Unix permissions, which Linux and macOS both give it.</summary>
+public sealed class UnixOnlyFactAttribute : FactAttribute
+{
+    public UnixOnlyFactAttribute(
+        [CallerFilePath] string? sourceFilePath = null,
+        [CallerLineNumber] int sourceLineNumber = -1)
+            : base(sourceFilePath, sourceLineNumber)
+    {
+        if (OperatingSystem.IsWindows())
+            Skip = "Needs Unix file permissions.";
+    }
+}
+
+/// <summary>
+/// The macOS repack (#3413). The checks made through macOS's own tools run on macOS. The rest of a run needs only Unix
+/// permissions, so it is pinned on Linux as well, with a stand-in for the executable.
+/// </summary>
+public sealed class MacRepackerTests : IDisposable
+{
+    private const UnixFileMode Executable = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+        | UnixFileMode.GroupRead | UnixFileMode.GroupExecute | UnixFileMode.OtherRead | UnixFileMode.OtherExecute;
+
+    private const UnixFileMode PlainFile = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+
+    private const string StockPlist = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>CFBundleName</key><string>HexIDE</string>
+          <key>CFBundleDisplayName</key><string>HexIDE</string>
+          <key>CFBundleIdentifier</key><string>io.hexide.HexIDE</string>
+          <key>CFBundleExecutable</key><string>HexIDE</string>
+          <key>CFBundleIconFile</key><string>hexide</string>
+          <key>CFBundlePackageType</key><string>APPL</string>
+          <key>CFBundleShortVersionString</key><string>0.6.0</string>
+          <key>CFBundleVersion</key><string>0.6.0</string>
+          <key>LSMinimumSystemVersion</key><string>13.0</string>
+          <key>NSHighResolutionCapable</key><true/>
+        </dict>
+        </plist>
+        """;
+
+    // On macOS the check is real, so the stand-in has to carry a real signature: the test host's own launcher has one.
+    private static byte[] MachO => OperatingSystem.IsMacOS()
+        ? File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "HexIDE.Tests"))
+        : [0xCF, 0xFA, 0xED, 0xFE, 7, 0, 0, 1, 9, 9, 9];
+
+    private readonly string _root = Directory.CreateTempSubdirectory("hexide-repack-mac-").FullName;
+    private string Input => Path.Combine(_root, "HexIDE.app");
+    private string Programs => Path.Combine(Input, "Contents", "MacOS");
+    private string Brand => Path.Combine(_root, "brand");
+    private string Output => Path.Combine(_root, "out");
+    private string BrandFile => Path.Combine(Brand, "brand.json");
+    private string Bundle => Path.Combine(Output, "Acme IDE.app");
+    private string RepackedExecutable => Path.Combine(Bundle, "Contents", "MacOS", "acme-ide");
+
+    public MacRepackerTests()
+    {
+        Directory.CreateDirectory(Path.Combine(Programs, "standalone"));
+        Directory.CreateDirectory(Path.Combine(Input, "Contents", "Resources"));
+        Directory.CreateDirectory(Path.Combine(Brand, "branding"));
+    }
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    private static void WriteFile(string path, byte[] content, UnixFileMode mode)
+    {
+        File.WriteAllBytes(path, content);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, mode);
+    }
+
+    private void WriteStock(byte[]? executable = null, UnixFileMode executableMode = Executable)
+    {
+        WriteFile(Path.Combine(Programs, MacRepacker.StockExecutable), executable ?? MachO, executableMode);
+        WriteFile(Path.Combine(Programs, "HexIDE.VbLspServer"), OperatingSystem.IsMacOS() ? MachO : [1, 2, 3], Executable);
+        WriteFile(Path.Combine(Programs, "standalone", "HexIDE.Standalone"), OperatingSystem.IsMacOS() ? MachO : [4, 5, 6], Executable);
+        WriteFile(Path.Combine(Programs, "HexIDE.Desktop.dll"),
+            OperatingSystem.IsMacOS() ? File.ReadAllBytes(typeof(MacRepacker).Assembly.Location) : "managed"u8.ToArray(), PlainFile);
+        if (OperatingSystem.IsMacOS())
+            RunTool("/usr/bin/codesign", "--force", "-s", "-", Path.Combine(Programs, "HexIDE.Desktop.dll"));
+        WriteFile(Path.Combine(Programs, "LICENSE"), "licence text"u8.ToArray(), PlainFile);
+        WriteFile(Path.Combine(Programs, "THIRD-PARTY-NOTICES.md"), "notices text"u8.ToArray(), PlainFile);
+        WriteFile(Path.Combine(Input, "Contents", "Info.plist"), Encoding.UTF8.GetBytes(StockPlist), PlainFile);
+        WriteFile(Path.Combine(Input, "Contents", "Resources", "hexide.icns"), "stock icon"u8.ToArray(), PlainFile);
+    }
+
+    private void WriteBrand(string name = "Acme IDE", bool logo = true)
+    {
+        var members = new List<string> { "\"schemaVersion\": 1", "\"id\": \"acme-ide\"", $"\"name\": \"{name}\"" };
+        if (logo)
+            members.Add("\"logo\": \"branding/logo.png\"");
+
+        File.WriteAllText(BrandFile, "{" + string.Join(",", members) + "}");
+        File.WriteAllBytes(Path.Combine(Brand, "branding", "logo.png"), Png(64, 32));
+    }
+
+    private static byte[] Png(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        bitmap.Erase(SKColors.OrangeRed);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    [UnixOnlyFact]
+    public void Included_files_reach_the_installable_payload_and_report()
+    {
+        WriteStock();
+        WriteBrand();
+        var include = Path.Combine(_root, "include");
+        Directory.CreateDirectory(Path.Combine(include, "addons"));
+        File.WriteAllText(Path.Combine(include, "addons", "notice.txt"), "adopter");
+
+        var result = Repacker.Run(new MacTarget(), Input, BrandFile, Output, include);
+
+        File.ReadAllText(Path.Combine(Bundle, "Contents", "MacOS", "addons", "notice.txt")).Should().Be("adopter");
+        result.IncludeDirectory.Should().Be(include);
+        result.IncludedFiles.Should().Be(1);
+        File.Exists(Path.Combine(Bundle, "Contents", "Info.plist")).Should().BeTrue();
+    }
+
+    public static bool CanInclude => !OperatingSystem.IsWindows();
+
+    [Theory(Skip = "Requires the target platform filesystem.", SkipUnless = nameof(CanInclude))]
+    [InlineData("LICENSE")]
+    [InlineData("HexIDE")]
+    [InlineData("acme-ide")]
+    [InlineData("brand.json")]
+    [InlineData("branding/logo.png")]
+    [InlineData("hexide-root.pub")]
+    [InlineData("nested/HEXIDE-FIRSTPARTY.PUB")]
+    [InlineData("revocations.json")]
+    [InlineData("revocations.sig")]
+    [InlineData("revocations-cache.json")]
+    [InlineData("revocations-cache.sig")]
+    [InlineData("revocations-cache.signed")]
+    public void Included_protected_files_are_refused_without_output(string relative)
+    {
+        WriteStock();
+        WriteBrand();
+        var include = Path.Combine(_root, "include");
+        var file = Path.Combine(include, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        File.WriteAllText(file, "replacement");
+
+        var run = () => Repacker.Run(new MacTarget(), Input, BrandFile, Output, include);
+
+        run.Should().Throw<RepackException>().Which.Message.Should().Contain(relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.Exists(Output).Should().BeFalse();
+        Directory.GetDirectories(_root, "out.partial-*").Should().BeEmpty();
+    }
+
+    [UnixOnlyFact]
+    public void Included_links_are_refused_at_the_root_or_inside()
+    {
+        WriteStock();
+        WriteBrand();
+        var include = Path.Combine(_root, "include");
+        Directory.CreateDirectory(include);
+        File.CreateSymbolicLink(Path.Combine(include, "link"), BrandFile);
+        var run = () => Repacker.Run(new MacTarget(), Input, BrandFile, Output, include);
+        run.Should().Throw<RepackException>().Which.Message.Should().Contain("link");
+        File.Delete(Path.Combine(include, "link"));
+        var link = Path.Combine(_root, "linked");
+        Directory.CreateSymbolicLink(link, include);
+        run = () => Repacker.Run(new MacTarget(), Input, BrandFile, Output, link);
+        run.Should().Throw<RepackException>().Which.Message.Should().Contain(link);
+        Directory.Exists(Output).Should().BeFalse();
+    }
+
+    [UnixOnlyFact]
+    public void Included_missing_folder_is_refused()
+    {
+        WriteStock();
+        WriteBrand();
+        var include = Path.Combine(_root, "missing");
+        var run = () => Repacker.Run(new MacTarget(), Input, BrandFile, Output, include);
+        run.Should().Throw<RepackException>().Which.Message.Should().Contain(include);
+        Directory.Exists(Output).Should().BeFalse();
+    }
+
+    [UnixOnlyFact]
+    public void Included_folder_below_a_link_is_allowed()
+    {
+        WriteStock();
+        WriteBrand();
+        var parent = Path.Combine(_root, "parent");
+        var include = Path.Combine(parent, "include");
+        Directory.CreateDirectory(include);
+        File.WriteAllText(Path.Combine(include, "extra.txt"), "adopter");
+        var link = Path.Combine(_root, "parent-link");
+        Directory.CreateSymbolicLink(link, parent);
+        Repacker.Run(new MacTarget(), Input, BrandFile, Output, Path.Combine(link, "include"));
+        File.ReadAllText(Path.Combine(Bundle, "Contents", "MacOS", "extra.txt")).Should().Be("adopter");
+    }
+
+    [UnixOnlyFact]
+    public void Included_output_ancestor_is_refused_before_staging()
+    {
+        WriteStock();
+        WriteBrand();
+        var run = () => Repacker.Run(new MacTarget(), Input, BrandFile, Output, _root);
+        run.Should().Throw<RepackException>().Which.Message.Should().Contain(_root);
+        Directory.Exists(Output).Should().BeFalse();
+        Directory.GetDirectories(_root, "out.partial-*").Should().BeEmpty();
+    }
+
+    private void ShouldRefuse(string reason)
+    {
+        var run = () => MacRepacker.Run(Input, BrandFile, Output);
+        run.Should().Throw<RepackException>().Which.Message.Should().Contain(reason);
+        Directory.Exists(Output).Should().BeFalse("a refused run writes nothing");
+        Directory.GetDirectories(_root, "out.partial-*").Should().BeEmpty("a refused run leaves nothing half-built");
+    }
+
+    private static DistributionIdentity Acme => new("acme-ide", "Acme IDE");
+
+    private static string Rewritten(DistributionIdentity brand)
+        => Encoding.UTF8.GetString(MacBundle.RewriteInfoPlist(Encoding.UTF8.GetBytes(StockPlist), brand, brand.Id));
+
+    private static string ValueOf(string plist, string key)
+    {
+        var marker = $"<key>{key}</key><string>";
+        var start = plist.IndexOf(marker, StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0, $"{key} should be there");
+        start += marker.Length;
+        return plist[start..plist.IndexOf("</string>", start, StringComparison.Ordinal)];
+    }
+
+    private static string RunTool(string tool, params string[] arguments)
+    {
+        var start = new ProcessStartInfo(tool, arguments) { RedirectStandardError = true, RedirectStandardOutput = true };
+        using var process = Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        process.ExitCode.Should().Be(0, output);
+        return output;
+    }
+
+    // --- Which platform's repack runs ---
+
+    [MacOnlyFact]
+    public void A_mac_build_is_repacked_as_one()
+    {
+        WriteStock();
+
+        RepackTarget.For(Input).Should().BeOfType<MacTarget>();
+    }
+
+    [LinuxOnlyFact]
+    public void A_mac_build_is_refused_on_linux()
+    {
+        WriteStock();
+
+        var choose = () => RepackTarget.For(Input);
+
+        choose.Should().Throw<RepackException>().Which.Message.Should().Contain("has to be repacked on macOS");
+    }
+
+    [WindowsOnlyFact]
+    public void A_mac_build_is_refused_on_windows()
+    {
+        WriteStock();
+
+        var choose = () => RepackTarget.For(Input);
+
+        choose.Should().Throw<RepackException>().Which.Message.Should().Contain("has to be repacked on macOS");
+    }
+
+    // --- What gets refused ---
+
+    [UnixOnlyFact]
+    public void A_file_that_is_not_a_mac_executable_is_refused()
+    {
+        WriteStock(executable: [0x7F, (byte)'E', (byte)'L', (byte)'F', 2, 1]);
+        WriteBrand();
+
+        ShouldRefuse("is not a macOS executable");
+    }
+
+    [UnixOnlyFact]
+    public void A_build_that_lost_its_execute_permission_is_refused()
+    {
+        WriteStock(executableMode: PlainFile);
+        WriteBrand();
+
+        ShouldRefuse("isn't marked as executable");
+    }
+
+    [UnixOnlyFact]
+    public void A_build_without_its_licence_is_refused()
+    {
+        WriteStock();
+        WriteBrand();
+        File.Delete(Path.Combine(Programs, "LICENSE"));
+
+        ShouldRefuse("LICENSE");
+    }
+
+    [UnixOnlyFact]
+    public void A_build_that_is_already_branded_is_refused()
+    {
+        WriteStock();
+        WriteBrand();
+        File.Copy(BrandFile, Path.Combine(Programs, "brand.json"));
+
+        ShouldRefuse("isn't a stock build");
+    }
+
+    [UnixOnlyFact]
+    public void A_bundle_signed_as_a_whole_is_accepted_for_resealing()
+    {
+        WriteStock();
+        WriteBrand();
+        Directory.CreateDirectory(Path.Combine(Input, "Contents", "_CodeSignature"));
+
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        File.Exists(RepackedExecutable).Should().BeTrue();
+    }
+
+    [UnixOnlyFact]
+    public void A_brand_with_no_logo_is_refused()
+    {
+        WriteStock();
+        WriteBrand(logo: false);
+
+        ShouldRefuse("names no 'logo'");
+    }
+
+    [UnixOnlyFact]
+    public void A_property_list_with_a_key_missing_is_refused()
+    {
+        WriteStock();
+        WriteBrand();
+        File.WriteAllText(Path.Combine(Input, "Contents", "Info.plist"),
+            StockPlist.Replace("<key>CFBundleExecutable</key><string>HexIDE</string>", ""));
+
+        ShouldRefuse("has no CFBundleExecutable");
+    }
+
+    [Theory]
+    [InlineData("Acme/IDE", "'/'")]
+    [InlineData("Acme: IDE", "':'")]
+    [InlineData(".Acme", "full stop")]
+    public void A_name_that_cannot_be_a_bundles_name_is_refused(string name, string reason)
+    {
+        var check = () => MacNames.Check(name);
+
+        check.Should().Throw<RepackException>().Which.Message.Should().Contain(reason);
+    }
+
+    [UnixOnlyFact]
+    public void A_run_with_a_name_that_cannot_be_a_bundles_name_is_refused()
+    {
+        WriteStock();
+        WriteBrand(name: "Acme: IDE");
+
+        ShouldRefuse("':'");
+    }
+
+    [Fact]
+    public void A_name_Windows_would_refuse_is_fine_for_a_bundle()
+    {
+        var check = () => MacNames.Check("Acme? IDE");
+
+        check.Should().NotThrow();
+    }
+
+    // --- What a finished run holds ---
+
+    [UnixOnlyFact]
+    public void The_bundle_takes_the_name_and_the_executable_the_id()
+    {
+        WriteStock();
+        WriteBrand();
+
+        var result = MacRepacker.Run(Input, BrandFile, Output);
+
+        result.ExecutableName.Should().Be("acme-ide");
+        result.RemovedSignature.Should().BeFalse("the macOS output is re-signed rather than stripped");
+        // On macOS, sealing the bundle signs its executable afresh; macOS_accepts_the_property_list_signature_and_icon
+        // checks that seal. Elsewhere nothing signs, so the bytes are stock's.
+        if (!OperatingSystem.IsMacOS())
+            File.ReadAllBytes(RepackedExecutable).Should().Equal(MachO);
+        Payload.ModeOf(RepackedExecutable).Should().Be(Executable);
+        File.Exists(Path.Combine(Bundle, "Contents", "MacOS", MacRepacker.StockExecutable)).Should().BeFalse();
+    }
+
+    [UnixOnlyFact]
+    public void The_property_list_describes_the_brand_and_stocks_icon_is_gone()
+    {
+        WriteStock();
+        WriteBrand();
+
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        var plist = File.ReadAllText(Path.Combine(Bundle, "Contents", "Info.plist"));
+        ValueOf(plist, "CFBundleName").Should().Be("Acme IDE");
+        ValueOf(plist, "CFBundleExecutable").Should().Be("acme-ide");
+        ValueOf(plist, "CFBundleIconFile").Should().Be("acme-ide");
+        File.Exists(Path.Combine(Bundle, "Contents", "Resources", "acme-ide.icns")).Should().BeTrue();
+        File.Exists(Path.Combine(Bundle, "Contents", "Resources", "hexide.icns")).Should().BeFalse();
+    }
+
+    [UnixOnlyFact]
+    public void Every_other_file_is_as_published_and_the_helpers_keep_their_names_and_permissions()
+    {
+        WriteStock();
+        WriteBrand();
+
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        var programs = Path.Combine(Bundle, "Contents", "MacOS");
+        File.ReadAllText(Path.Combine(programs, "LICENSE")).Should().Be("licence text");
+        File.ReadAllText(Path.Combine(programs, "THIRD-PARTY-NOTICES.md")).Should().Be("notices text");
+        Payload.ModeOf(Path.Combine(programs, "HexIDE.VbLspServer")).Should().Be(Executable);
+        Payload.ModeOf(Path.Combine(programs, "standalone", "HexIDE.Standalone")).Should().Be(Executable);
+        File.ReadAllBytes(Path.Combine(Input, "Contents", "Resources", "hexide.icns")).Should().Equal("stock icon"u8.ToArray(), "the input is never written to");
+    }
+
+    [UnixOnlyFact]
+    public void The_brands_files_land_beside_the_programs_where_the_IDE_looks()
+    {
+        WriteStock();
+        WriteBrand();
+
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        var identity = DistributionDescriptor.Resolve(Path.Combine(Bundle, "Contents", "MacOS"));
+        identity.Id.Should().Be("acme-ide");
+        identity.OpenLogo().Should().NotBeNull();
+    }
+
+    // --- The bundle's identity and icon ---
+
+    [Fact]
+    public void The_bundle_identifier_comes_from_the_id_and_cannot_be_stocks()
+    {
+        var identifier = MacBundle.Identifier(Acme);
+
+        identifier.Should().Be("io.hexide.distribution.acme-ide");
+        identifier.Should().NotBe("io.hexide.HexIDE");
+        identifier.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.').Should().BeTrue("that is all a bundle identifier may hold");
+    }
+
+    [Fact]
+    public void Only_the_five_identity_values_change_in_the_property_list()
+    {
+        var plist = Rewritten(Acme);
+
+        ValueOf(plist, "CFBundleName").Should().Be("Acme IDE");
+        ValueOf(plist, "CFBundleDisplayName").Should().Be("Acme IDE");
+        ValueOf(plist, "CFBundleIdentifier").Should().Be("io.hexide.distribution.acme-ide");
+        ValueOf(plist, "CFBundleExecutable").Should().Be("acme-ide");
+        ValueOf(plist, "CFBundleIconFile").Should().Be("acme-ide");
+        ValueOf(plist, "CFBundleShortVersionString").Should().Be("0.6.0");
+        ValueOf(plist, "LSMinimumSystemVersion").Should().Be("13.0");
+        plist.Should().Contain("<key>NSHighResolutionCapable</key><true />", "XML writes an empty element with this space");
+        plist.Should().Contain("""<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">""");
+    }
+
+    [Fact]
+    public void A_name_with_characters_XML_reserves_is_escaped()
+    {
+        var plist = Rewritten(new DistributionIdentity("acme-ide", "Acme & <Co>"));
+
+        ValueOf(plist, "CFBundleName").Should().Be("Acme &amp; &lt;Co&gt;");
+    }
+
+    private static readonly (string Type, int Size)[] IconEntries =
+    [
+        ("ic04", 16), ("ic05", 32), ("ic11", 32), ("ic12", 64), ("ic07", 128),
+        ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024),
+    ];
+
+    private static string Root()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "LspServer")))
+            directory = directory.Parent;
+        return directory!.FullName;
+    }
+
+    private static Dictionary<string, byte[]> Elements(byte[] icon)
+    {
+        Encoding.ASCII.GetString(icon, 0, 4).Should().Be("icns");
+        BinaryPrimitives.ReadInt32BigEndian(icon.AsSpan(4)).Should().Be(icon.Length);
+        var elements = new Dictionary<string, byte[]>();
+        for (var at = 8; at < icon.Length;)
+        {
+            var length = BinaryPrimitives.ReadInt32BigEndian(icon.AsSpan(at + 4));
+            length.Should().BeGreaterThanOrEqualTo(8);
+            (at + length).Should().BeLessThanOrEqualTo(icon.Length);
+            elements.Add(Encoding.ASCII.GetString(icon, at, 4), icon[(at + 8)..(at + length)]);
+            at += length;
+        }
+        return elements;
+    }
+
+    private static byte[][] DecodeArgb(byte[] data, int size)
+    {
+        data.AsSpan(0, 4).ToArray().Should().Equal("ARGB"u8.ToArray());
+        var channels = new byte[4][];
+        var at = 4;
+        for (var channel = 0; channel < 4; channel++)
+        {
+            channels[channel] = new byte[size * size];
+            var pixel = 0;
+            while (pixel < size * size)
+            {
+                var control = data[at++];
+                var count = control < 128 ? control + 1 : control - 128 + 3;
+                (pixel + count).Should().BeLessThanOrEqualTo(size * size);
+                if (control < 128)
+                {
+                    Array.Copy(data, at, channels[channel], pixel, count);
+                    at += count;
+                }
+                else
+                    Array.Fill(channels[channel], data[at++], pixel, count);
+                pixel += count;
+            }
+        }
+        at.Should().Be(data.Length);
+        return channels;
+    }
+
+    private static void CompareArgb(byte[] data, int size, byte[] png)
+    {
+        var channels = DecodeArgb(data, size);
+        using var bitmap = SKBitmap.Decode(png);
+        bitmap.Width.Should().Be(size);
+        bitmap.Height.Should().Be(size);
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var color = bitmap.GetPixel(x, y);
+            var i = y * size + x;
+            channels[0][i].Should().Be(color.Alpha);
+            if (color.Alpha == 0) continue;
+            Math.Abs(channels[1][i] - color.Red).Should().BeLessThanOrEqualTo(1);
+            Math.Abs(channels[2][i] - color.Green).Should().BeLessThanOrEqualTo(1);
+            Math.Abs(channels[3][i] - color.Blue).Should().BeLessThanOrEqualTo(1);
+        }
+    }
+
+    private static void CheckIcon(byte[] icon, byte[] logo)
+    {
+        var elements = Elements(icon);
+        elements.Keys.Should().BeEquivalentTo(IconEntries.Select(e => e.Type));
+        var rendered = IconResources.Render(logo, IconEntries.Select(e => e.Size).Distinct().ToArray())
+            .ToDictionary(e => e.Size, e => e.Png);
+        foreach (var (type, size) in IconEntries)
+        {
+            if (type is "ic04" or "ic05")
+                CompareArgb(elements[type], size, rendered[size]);
+            else
+            {
+                using var actual = SKBitmap.Decode(elements[type]);
+                using var expected = SKBitmap.Decode(rendered[size]);
+                actual.Width.Should().Be(size);
+                actual.Height.Should().Be(size);
+                actual.Pixels.Should().Equal(expected.Pixels);
+            }
+        }
+    }
+
+    [Fact]
+    public void Apple_iconutil_fixture_decodes_to_the_stock_images()
+    {
+        var fixtures = Path.Combine(Root(), "IDE", "HexIDE.Tests", "Repack", "Fixtures");
+        var elements = Elements(File.ReadAllBytes(Path.Combine(fixtures, "apple-iconutil-ic04-ic05.icns")));
+        CompareArgb(elements["ic04"], 16, File.ReadAllBytes(Path.Combine(fixtures, "stock-16.png")));
+        CompareArgb(elements["ic05"], 32, File.ReadAllBytes(Path.Combine(fixtures, "stock-32.png")));
+    }
+
+    // Stock's small images are almost all opaque or clear, so they can't show whether Apple stores colour straight or
+    // premultiplied by alpha. This one can: every pixel is (200, 100, 50), with alpha 17 * x along each row. Apple keeps
+    // the colour, within a rounding error that grows as alpha falls (measured at most 255 / alpha). Premultiplied
+    // storage would scale it, to (13, 7, 3) at alpha 17.
+    [Fact]
+    public void Apple_iconutil_stores_colour_straight_beside_alpha()
+    {
+        var fixtures = Path.Combine(Root(), "IDE", "HexIDE.Tests", "Repack", "Fixtures");
+        var elements = Elements(File.ReadAllBytes(Path.Combine(fixtures, "apple-iconutil-alpha-ramp-ic04.icns")));
+        var channels = DecodeArgb(elements["ic04"], 16);
+        for (var i = 0; i < 16 * 16; i++)
+        {
+            var alpha = 17 * (i % 16);
+            channels[0][i].Should().Be((byte)alpha);
+            if (alpha == 0)
+                continue;
+            Math.Abs(channels[1][i] - 200).Should().BeLessThanOrEqualTo(255 / alpha);
+            Math.Abs(channels[2][i] - 100).Should().BeLessThanOrEqualTo(255 / alpha);
+            Math.Abs(channels[3][i] - 50).Should().BeLessThanOrEqualTo(255 / alpha);
+        }
+    }
+
+    [Fact]
+    public void The_generated_icon_decodes_at_every_size()
+    {
+        var logo = Png(64, 32);
+        CheckIcon(MacIcon.FromLogo(logo), logo);
+    }
+
+    [Fact]
+    public void The_stock_icon_decodes_at_every_size()
+    {
+        var icon = File.ReadAllBytes(Path.Combine(Root(), "IDE", "HexIDE", "Icons", "AppIcon", "hexide.icns"));
+        CheckIcon(icon, Elements(icon)["ic10"]);
+    }
+
+    // --- What macOS itself says ---
+
+    [MacOnlyFact]
+    public void macOS_accepts_the_property_list_signature_and_icon()
+    {
+        WriteStock();
+        WriteBrand();
+
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        RunTool("/usr/bin/plutil", "-lint", Path.Combine(Bundle, "Contents", "Info.plist"));
+
+        RunTool("/usr/bin/codesign", "--verify", "--strict", "--deep", Bundle);
+
+        var iconset = Path.Combine(_root, "acme.iconset");
+        RunTool("/usr/bin/iconutil", "-c", "iconset", "-o", iconset, Path.Combine(Bundle, "Contents", "Resources", "acme-ide.icns"));
+        File.Exists(Path.Combine(iconset, "icon_512x512@2x.png")).Should().BeTrue();
+    }
+
+    [MacOnlyFact]
+    public void A_sealed_bundle_is_resealed_after_branding()
+    {
+        WriteStock();
+        WriteBrand();
+        // Sealed as scripts/macos-bundle.sh seals a published build: each file first, then the bundle, which signs the
+        // executable, since codesign resolves the executable's own path to the bundle.
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(Input, "Contents", "MacOS"), "*", SearchOption.AllDirectories))
+        {
+            if (Path.GetFileName(file) != "HexIDE")
+                RunTool("/usr/bin/codesign", "--force", "-s", "-", file);
+        }
+        RunTool("/usr/bin/codesign", "--force", "-s", "-", Input);
+        RunTool("/usr/bin/codesign", "--verify", "--strict", "--deep", Input);
+
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        RunTool("/usr/bin/codesign", "--verify", "--strict", "--deep", Bundle);
+    }
+}

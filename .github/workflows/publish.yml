@@ -9,7 +9,7 @@ name: Publish Release
 # nobody targets — the "Windows" zip contained riscv64 Linux binaries. RID-specific is 47.5 MB / 17.4 MB.
 #
 # ── Two flavours per platform ─────────────────────────────────────────────────────────────────────
-#   framework-dependent  ~26-32 MB archived — the IDE needs the .NET 10 Runtime installed
+#   framework-dependent  ~26-32 MB archived — the IDE needs the .NET 11 Runtime installed
 #   self-contained       ~90-102 MB archived — includes .NET; native libraries still required
 # Measured from the v0.1.0 assets across all six RIDs. Both now carry the same self-contained single-file
 # standalone runner (~105 MB unpacked on win-x64, measured 2026-10-26), so the framework-dependent figure is
@@ -30,14 +30,9 @@ name: Publish Release
 # mac legs' made programs are unverified rather than known broken.
 #
 # ── Signing ───────────────────────────────────────────────────────────────────────────────────────
-# Nothing here is signed or notarised. macOS builds are ad-hoc signed only, which is what stops Apple
-# Silicon killing an unsigned arm64 binary outright — it is NOT Gatekeeper approval. macOS ships as
-# .tar.gz rather than .zip because tar does not propagate com.apple.quarantine, so Gatekeeper never
-# engages. That is a known gap, not a supported guarantee: if it stops working, the macOS download
-# needs a real Developer ID certificate.
-# What that would take -- membership, certificate, hardened-runtime entitlements, notarytool and
-# stapling, and the bundle restructure it depends on -- is written up in docs/macos-signing.md so it
-# does not have to be re-derived under pressure.
+# macOS bundles are sealed ad hoc, without a signing identity or notarisation.
+# Downloaded builds can carry quarantine, including through tar (#4507), so macOS
+# says it cannot verify HexIDE. See docs/macos-signing.md for notarisation prerequisites.
 
 on:
   workflow_dispatch:
@@ -85,6 +80,49 @@ jobs:
             exit 1
           fi
 
+  # The revocation list hexide.io serves must verify against the root this release trusts. If it doesn't, every copy
+  # ignores it and revocation does nothing, which went unnoticed until #4534. The check needs no key.
+  revocations:
+    name: Check hexide.io's revocation list
+    needs: preflight
+    runs-on: ubuntu-latest
+    # It only reads the repository and fetches a public URL; the workflow's contents: write is for the release job.
+    permissions:
+      contents: read
+    env:
+      # 1 fails the release when the published list doesn't verify. 0 only warns: it was 0 until #4534 re-signed the
+      # list with the root key, since a failing step would have blocked every release.
+      REVOCATIONS_MUST_VERIFY: 1
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '11.0.x'
+      - name: Verify the published list against the shipped root
+        shell: bash
+        run: |
+          set -uo pipefail
+          url=$(grep -oP '(?<=RevocationListUrl = ")[^"]+' IDE/HexIDE.Core/IDE/SettingsDefaults.cs)
+          root=IDE/HexIDE/Addins/Trust/hexide-root.pub
+          dir=$(mktemp -d)
+          if [ -z "$url" ]; then
+            problem="couldn't read RevocationListUrl from SettingsDefaults.cs"
+          elif ! curl -fsSL --retry 3 -o "$dir/revocations.json" "$url" \
+              || ! curl -fsSL --retry 3 -o "$dir/revocations.sig" "$url.sig"; then
+            problem="couldn't fetch $url and its .sig"
+          elif ! dotnet run --project IDE/HexIDE.AddinPacker -f net11.0 -c Release -- verify-revocations \
+              --json "$dir/revocations.json" --sig "$dir/revocations.sig" --root "$root"; then
+            problem="$url doesn't verify against $root, so every copy of this release ignores it and revokes nothing"
+          else
+            echo "$url verifies against $root"
+            exit 0
+          fi
+          if [ "$REVOCATIONS_MUST_VERIFY" = 1 ]; then
+            echo "::error::$problem"
+            exit 1
+          fi
+          echo "::warning::$problem (only a warning: REVOCATIONS_MUST_VERIFY is 0)"
+
   build:
     name: ${{ matrix.name }}
     needs: preflight
@@ -100,6 +138,7 @@ jobs:
           - { name: windows-amd64, runner: windows-latest,  rid: win-x64,    os: win }
           - { name: windows-arm64, runner: windows-11-arm,  rid: win-arm64,  os: win }
           - { name: linux-amd64,   runner: ubuntu-latest,   rid: linux-x64,  os: linux }
+          - { name: linux-arm,     runner: ubuntu-latest,   rid: linux-arm,  os: linux }
           - { name: linux-arm64,   runner: ubuntu-24.04-arm, rid: linux-arm64, os: linux }
           - { name: macos-arm64,   runner: macos-latest,    rid: osx-arm64,  os: mac }
           # Last x86_64 macOS image on GitHub Actions, retiring Fall 2027 alongside Rosetta 2.
@@ -109,7 +148,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '11.0.x'
 
       - name: Restore first-party signing key (if configured)
         shell: bash
@@ -144,15 +183,25 @@ jobs:
         shell: bash
         run: echo "SHORT_SHA=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
 
+      # The signing tool runs during the build, so cross-publishing needs a host copy even when the
+      # shipped executables target Arm. Keep it outside the staged payload.
+      - name: Publish host add-in packer
+        if: matrix.rid == 'linux-arm'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet publish HexIDE.AddinPacker -f net11.0 -c Release -r linux-x64 --self-contained false -o bin/addin-packer-host/
+          echo "ADDIN_PACKER_OVERRIDE=-p:AddinPacker=$PWD/bin/addin-packer-host/HexIDE.AddinPacker.dll" >> "$GITHUB_ENV"
+
       # The staging loop below copies bin/standalone into each flavour's standalone/.
       - name: Publish HexIDE.Standalone (${{ matrix.rid }}, single-file, self-contained)
-        run: dotnet publish HexIDE.Standalone -f net10.0 -c Release -r ${{ matrix.rid }} -p:SourceRevisionId=${{ env.SHORT_SHA }} -o bin/standalone/
+        run: dotnet publish HexIDE.Standalone -f net11.0 -c Release -r ${{ matrix.rid }} -p:SourceRevisionId=${{ env.SHORT_SHA }} -o bin/standalone/
 
       - name: Publish HexIDE.Desktop (framework-dependent)
-        run: dotnet publish HexIDE.Desktop -f net10.0 -c Release -r ${{ matrix.rid }} --self-contained false -p:SourceRevisionId=${{ env.SHORT_SHA }} -o bin/fdd/
+        run: dotnet publish HexIDE.Desktop -f net11.0 -c Release -r ${{ matrix.rid }} --self-contained false -p:SourceRevisionId=${{ env.SHORT_SHA }} ${{ env.ADDIN_PACKER_OVERRIDE }} -o bin/fdd/
 
       - name: Publish HexIDE.Desktop (self-contained)
-        run: dotnet publish HexIDE.Desktop -f net10.0 -c Release -r ${{ matrix.rid }} --self-contained true -p:SourceRevisionId=${{ env.SHORT_SHA }} -o bin/sc/
+        run: dotnet publish HexIDE.Desktop -f net11.0 -c Release -r ${{ matrix.rid }} --self-contained true -p:SourceRevisionId=${{ env.SHORT_SHA }} ${{ env.ADDIN_PACKER_OVERRIDE }} -o bin/sc/
 
       - name: Stage both flavours
         shell: bash
@@ -188,18 +237,8 @@ jobs:
           TAG='${{ inputs.tag }}'
           VERSION="${TAG#v}"
           for flavour in fdd sc; do
-            # Signing happens on the STAGED TREE, before the .app exists, and that ordering is
-            # load-bearing rather than tidiness.
-            #
-            # codesign canonicalises the path of a bundle's CFBundleExecutable to the BUNDLE. Once
-            # bin/$flavour/HexIDE sits at HexIDE.app/Contents/MacOS/HexIDE, signing "that path" no
-            # longer signs the file: it tries to seal the whole bundle, which this layout cannot do,
-            # and the failure was swallowed by the "|| true" below. Verifying it reported the
-            # unsealed bundle rather than the binary. That is why every other Mach-O verified while
-            # the main executable alone came back UNSIGNED -- it was the only file codesign resolved
-            # to something else, and it had never actually been signed in any build. Here it is an
-            # ordinary Mach-O in an ordinary directory. Signatures are embedded in the file, so the
-            # cp -R into the bundle preserves them.
+            # Sign and check apphosts before bundle assembly: codesign resolves the main
+            # executable's bundled path to the bundle itself.
             SRC="bin/$flavour"
 
             # codesign decides what counts as a "code object" partly from the execute bit, so any
@@ -222,16 +261,7 @@ jobs:
                 fi
               done
 
-            # The gate is per-binary, never per-bundle. The .app is deliberately not sealed: a .NET
-            # publish payload in Contents/MacOS is not a valid signable bundle (four apphosts, a
-            # *.runtimeconfig.json beside each, standalone/, per-language satellite directories).
-            # Plain codesign dies on a runtimeconfig.json it cannot sign; --deep dies with "bundle
-            # format unrecognized". Sealing would mean moving the payload to Contents/Resources and
-            # shimming assembly resolution for all four executables -- a restructure, not a flag.
-            # See docs/macos-signing.md. Nothing depends on it: Gatekeeper is unsatisfiable without
-            # a Developer ID either way, and .tar.gz keeps quarantine from engaging. What matters is
-            # that every Mach-O carries a signature, so assert exactly that -- which is also what
-            # catches the "|| true" above silently swallowing a failure.
+            # Keep the per-Mach-O gate as well as the bundle script's strict seal check.
             unsigned=0
             while IFS= read -r -d '' f; do
               if file -b "$f" | grep -q '^Mach-O'; then
@@ -244,29 +274,7 @@ jobs:
             fi
             echo "signed: every Mach-O in $flavour verified"
 
-            APP="bin/$flavour-app/HexIDE.app"
-            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-            cp -R "bin/$flavour/." "$APP/Contents/MacOS/"
-            cp HexIDE/Icons/AppIcon/hexide.icns "$APP/Contents/Resources/hexide.icns"
-            cat > "$APP/Contents/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>HexIDE</string>
-            <key>CFBundleDisplayName</key><string>HexIDE</string>
-            <key>CFBundleIdentifier</key><string>io.hexide.HexIDE</string>
-            <key>CFBundleExecutable</key><string>HexIDE</string>
-            <key>CFBundleIconFile</key><string>hexide</string>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-            <key>CFBundleVersion</key><string>${VERSION}</string>
-            <key>LSMinimumSystemVersion</key><string>13.0</string>
-            <key>NSHighResolutionCapable</key><true/>
-          </dict>
-          </plist>
-          PLIST
+            ../scripts/macos-bundle.sh "$SRC" "bin/$flavour-app/HexIDE.app" "$VERSION"
           done
 
       - name: Smoke-check the staged output
@@ -354,10 +362,7 @@ jobs:
           tar -czf ./bin/hexide-${{ matrix.name }}.tar.gz -C ./bin/fdd .
           tar -czf ./bin/hexide-${{ matrix.name }}-selfcontained.tar.gz -C ./bin/sc .
 
-      # .tar.gz, not .zip. A .zip unpacked by Finder carries com.apple.quarantine onto every extracted
-      # file, and on macOS 15+ an unsigned app then shows "Apple could not verify ... is free of
-      # malware" with Move to Trash / Done and NO Open button — the Control-click bypass was removed.
-      # tar does not propagate the attribute, so the app opens normally.
+      # Quarantine can propagate through this archive too (#4507).
       - name: Archive (macOS)
         if: matrix.os == 'mac'
         run: |
@@ -370,11 +375,11 @@ jobs:
           path: ./IDE/bin/hexide-${{ matrix.name }}*.*
           if-no-files-found: error
 
-  # A single release job. Six matrix legs each calling action-gh-release would race to create the same
+  # A single release job. Seven matrix legs each calling action-gh-release would race to create the same
   # release, and the loser can drop its assets.
   release:
     name: Publish release
-    needs: build
+    needs: [build, revocations]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -413,12 +418,11 @@ jobs:
             **Which download?**
             - **Windows x64:** `hexide-windows-amd64-setup.exe` — installs for all users; includes .NET.
             - `hexide-<platform>-selfcontained.*` — portable archive; includes .NET.
-            - `hexide-<platform>.*` — smaller, but needs the [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0) installed.
+            - `hexide-<platform>.*` — smaller, but needs the [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0) installed.
 
             [Download and run instructions](https://github.com/hexide-io/HexIDE/blob/${{ inputs.tag }}/README.md#download-and-run), including Linux extraction and launch steps.
 
-            Nothing here is signed or notarised.
+            No build has a signing identity or is notarised.
             **Windows** shows a SmartScreen warning: More info → Run anyway.
-            **macOS** — extract in Terminal with `tar -xzf <file>.tar.gz`. Unpacking with Finder
-            instead applies a quarantine flag that an unsigned app cannot clear.
-            **Linux** self-contained still needs native libraries, including the distro's `libX11`, `libICE`, `libSM`, `fontconfig` and ICU.
+            **macOS** says it can't verify HexIDE the first time, because the build isn't notarised: choose Done, then System Settings → Privacy & Security → Open Anyway, and confirm with an administrator's password.
+            **Linux** self-contained still needs native libraries, including the distro's `libX11`, `libICE`, `libSM`, `fontconfig` and ICU. Native Wayland (`auto` or `wayland`) also needs `libwayland-client`, `libwayland-cursor` and `libxkbcommon`, plus `libEGL` and `libwayland-egl` for GPU rendering.

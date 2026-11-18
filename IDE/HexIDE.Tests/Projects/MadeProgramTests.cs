@@ -75,11 +75,10 @@ public class MadeProgramTests : IDisposable
         var sidecar = Substitute.For<IUserSidecarService>();
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"), windowManager,
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"), windowManager,
             Substitute.For<IEventBus>(), projectManager, Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), sidecar, new FileBaselineStore(),
-            Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IHeaderRefresher>());
+            Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 }
 
@@ -101,7 +100,7 @@ public sealed class MadeProgramFactAttribute : FactAttribute
         if (!OperatingSystem.IsWindows()) Skip = "A made program is started on Windows only: elsewhere it needs a desktop session.";
         else if (!File.Exists(Runner))
             Skip = $"No runner at {Runner}. From IDE/, run "
-                 + "`dotnet publish HexIDE.Standalone -f net10.0 -o ../artifacts/make-runtime/standalone/` to run this.";
+                 + "`dotnet publish HexIDE.Standalone -f net11.0 -o ../artifacts/make-runtime/standalone/` to run this.";
     }
 
     private static string RepoRoot()

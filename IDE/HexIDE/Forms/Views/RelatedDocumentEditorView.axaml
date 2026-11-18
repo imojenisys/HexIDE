@@ -10,12 +10,21 @@
              xmlns:classic="clr-namespace:Classic.Avalonia.Theme;assembly=Classic.Avalonia.Theme"
              mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="400"
              x:DataType="viewModels:RelatedDocumentEditorViewModel"
+             x:Name="Root"
              x:Class="HexIDE.Forms.Views.RelatedDocumentEditorView">
     <input:CommandManager.CommandBindings>
         <!-- Bound to this editor's OWN save. The VB6 code editor binds Save to the form path for every
              document it hosts, which is why Ctrl+S does nothing in a .bas today (#244). -->
         <input:CommandBinding Command="{x:Static vb:ApplicationCommands.SaveCommand}"
                               ExecutingCommand="{CompiledBinding Save}" />
+        <input:CommandBinding Command="{x:Static vb:ApplicationCommands.CompleteWordCommand}"
+                              ExecutingCommand="{CompiledBinding #Root.TriggerCompletion}" />
+        <input:CommandBinding Command="{x:Static vb:ApplicationCommands.ParameterInfoCommand}"
+                              ExecutingCommand="{CompiledBinding #Root.TriggerSignatureHelp}" />
+        <input:CommandBinding Command="{x:Static vb:ApplicationCommands.FormatDocumentCommand}"
+                              CanExecute="CanFormatDocument" Executed="FormatDocumentExecuted" />
+        <input:CommandBinding Command="{x:Static vb:ApplicationCommands.FormatSelectionCommand}"
+                              CanExecute="CanFormatSelection" Executed="FormatSelectionExecuted" />
     </input:CommandManager.CommandBindings>
 
     <DockPanel>
@@ -45,7 +54,14 @@
                                      Document="{CompiledBinding Document}"
                                      HorizontalScrollBarVisibility="Auto"
                                      VerticalScrollBarVisibility="Visible"
-                                     Padding="10,2,0,2" />
+                                     Padding="10,2,0,2">
+                <avaloniaEdit:TextEditor.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuItem Header="{DynamicResource Str.CodeEditor.Context.FormatDocument}" Command="{x:Static vb:ApplicationCommands.FormatDocumentCommand}" />
+                        <MenuItem Header="{DynamicResource Str.CodeEditor.Context.FormatSelection}" Command="{x:Static vb:ApplicationCommands.FormatSelectionCommand}" />
+                    </MenuFlyout>
+                </avaloniaEdit:TextEditor.ContextFlyout>
+            </avaloniaEdit:TextEditor>
         </classic:ClassicBorderDecorator>
     </DockPanel>
 </UserControl>

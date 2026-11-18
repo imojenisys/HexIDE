@@ -17,6 +17,31 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
 
 ---
 
+## Desktop foreground after Continue
+
+### D33. Continue restores the window active at Ctrl+Break — fixed
+- **VB6:** F5 restores the form active at the break, including a modal form with its owner behind it.
+  F8 and Shift+F8 leave the IDE in front; F5 after those steps still restores the same form
+  ([SP6 measurements, 2026-11-17](vb6-fidelity-oracle/break-on-an-idle-program-and-a-step-off-an-event-handler.md#which-window-comes-to-the-front-continue-a-step-and-a-modal-form-2026-11-17-4262-ide)).
+- **HexIDE:** remembers the active program window before the Pause notification raises the IDE, and
+  `ContinueProject` requests its activation once if still visible. Steps retain that window without activating it;
+  ending or starting a run forgets it. Breakpoint and `Stop` continuations and external debugging are unchanged.
+- **Status:** **fixed** (#4262), with headless platform activation-request tests, and checked live on Windows (hexide-mcp,
+  2026-11-18, the oracle's project and steps, reading `GetForegroundWindow`). The foreground matched VB6 at every step:
+  Run, a real Ctrl+Break, F8 (read after the first and the sixth), F5, Ctrl+Break then Shift+F8, and F5 with modal
+  Form2 open. With Form2 open, though, F5 left Form1 behind the IDE: D36. Hidden/unloaded windows, Ctrl+F8, Step Out,
+  and steps completing without re-entering code remain unmeasured.
+
+### D36. After F5, other modeless forms can stay behind the IDE (#4667)
+- **VB6:** F5 brings the modal form forward with its owner directly behind it, and brings the other program forms back
+  ([SP6 measurements](vb6-fidelity-oracle/break-on-an-idle-program-and-a-step-off-an-event-handler.md#which-window-comes-to-the-front-continue-a-step-and-a-modal-form-2026-11-17-4262-ide),
+  [#4618's ownership measurements](https://github.com/hexide-io/HexIDE/issues/4618)).
+- **HexIDE:** modal forms now have OS ownership: the shown explicit owner, or the shown calling form when omitted
+  (#4618). Their taskbar button is suppressed during the modal loop; closing preserves the existing activation events.
+  Headless tests check ownership and events; Windows F5 z-order still needs live verification.
+- **Remaining:** other modeless forms have no shared hidden owner, so bringing every program form back is still
+  **not implemented**, tracked by [#4667](https://github.com/hexide-io/HexIDE/issues/4667).
+
 ## Edit-and-Continue
 
 ### D1. True E&C is a permanent wall
@@ -47,8 +72,8 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
     restores their enabled states afterwards. Headless tests cover both owners and Yes/No; native enabled-state
     verification on the running IDE remains required.
   - **Remaining differences:** ownership still differs from VB6, and the program isn't paused for the prompt in
-    run mode, so Timers keep firing. Floating a code window currently hides it instead (#1361).
-- **HexIDE:** the interpreter can apply *no* edit live, so **every** edit while running/paused pops that same
+    run mode, so Timers keep firing. Code windows no longer float at all, so they stay in the IDE as VB6's did (#1361).
+- **HexIDE:** the interpreter can apply *no* edit live, so keyboard edits while running/paused pop that same
   prompt (OK = reset + keep the edit; Cancel = revert). So HexIDE over-prompts relative to VB6 (it resets even for a
   comment).
 - **Why:** honest + muscle-memory-recognisable — VB6's own dialog, surfaced for the whole edit set the interpreter
@@ -71,9 +96,17 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
   This fixes HexIDE's reset affordance; it does not establish new VB6 behaviour. Undo and Redo remain
   unmeasured and unchanged (#710, #513).
 - **"Every edit" is unmeasured for the routes that are not keystrokes.** Replace All, formatting, Insert File,
-  rename, an add-in's `ApplyEdits`/`SetContent` and automation's `set_file_content` while paused have not been
+  rename and an add-in's `ApplyEdits`/`SetContent` while paused have not been
   checked against the prompt. Paste, cut and Delete were assumed covered until they were tested, and were not.
   Tracked as [#710](https://github.com/hexide-io/HexIDE/issues/710).
+
+- **Automation edits (#3191, 2026-11-06):** measured in
+  [the issue](https://github.com/hexide-io/HexIDE/issues/3191), `set_file_content` and document-mode
+  `type_text` do not prompt and leave the run using its starting code, including modules and forms not
+  loaded yet. This is intentional for preparing the next run. Their replies now explain when the edits
+  take effect, and that breakpoints, and while paused the break location, keep the running code's line
+  numbers. Debug-state and breakpoint replies name documents
+  changed since start until the run ends. Keyboard-mode typing keeps the reset prompt.
 
 ### D3. E&C prompt fires per-keystroke, not on line-leave
 - **VB6:** evaluates an edit when you **leave the line** (or on Run/Continue), so you can finish typing a line /
@@ -88,17 +121,24 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
 
 ## Stepping
 
-### D4. Step Into past the end of a procedure returns to the caller; a top-level handler disarms
-- **VB6:** stepping off the end of a proc returns to the caller (breaking there while stepping); off the end of the
-  outermost event handler clears the step and the next event runs free.
-- **HexIDE:** matches this. Step is a one-shot: off the end of a NESTED proc it breaks at the caller's next statement
-  (Step Into always breaks at the next executed statement); off the end of the OUTERMOST event handler it is
-  **disarmed at the event-dispatch boundary** (`VBWindowContext.ExecuteSub`), so it does NOT leak into the next event.
-- **History:** from Phase 2 through the first P5 cut the one-shot instead **carried** into the next event's first
-  statement (a documented divergence — the faithful proc-end-clear had introduced 7 defects in the Phase-2 review, so
-  it was removed). The v2·P5 dispatch-idle disarm restored the VB6 behaviour after both P5 adversarial reviewers
-  independently flagged the leak (a Step Over leaving `target=1` fired on *every* subsequent event).
-- **Status:** **resolved (v2·P5)**. Matches VB6's "next event runs free."
+### D4. A step carries from an outermost event into the next event
+- **VB6:** Step Into and Step Over remain armed when the outermost event handler returns: the IDE shows [run], and
+  the next event breaks at its handler's declaration line before any statement runs. Break while idle enters break
+  mode at once, with no current statement. Continue clears the step; Into/Over resume and arm it for the next event.
+  Measured in the VB6 IDE on 2026-11-16, in [#4261's comments](https://github.com/hexide-io/HexIDE/issues/4261) and the
+  oracle's [Break on an idle program, and a step off the end of an event handler](vb6-fidelity-oracle/break-on-an-idle-program-and-a-step-off-an-event-handler.md)
+  (oracle PR #4270), also #4269. VB6's toolbar at that point remains unmeasured.
+- **HexIDE:** matches these measured positions, including the declaration's current-statement bar and live handler
+  frame. Idle Break has no bar or frame: Show/Set Next Statement, Step Out, Run To Cursor and Call Stack are disabled.
+- **History:** from Phase 2 through the first P5 cut the one-shot step **carried** into the next event's first
+  statement (a documented divergence: the faithful proc-end-clear had introduced 7 defects in the Phase-2 review, so
+  it was removed). The v2·P5 dispatch-idle disarm then cleared it at idle, on what was taken to be VB6's behaviour,
+  after both P5 adversarial reviewers flagged the leak (a Step Over leaving `target=1` fired on *every* subsequent
+  event). That rule was never measured, and #4270 overturned it. The disarm had protected against stale depth targets
+  and nested events stealing a step. Into/Over now carry only after the outermost chain returns; events raised within
+  that chain retain the existing depth rule. #2320's clearing of break-mode chrome and release of frozen events at
+  idle remains in place.
+- **Status:** **resolved (#4261, #4269)**. Step Out across idle and the step positions through a startup `Sub Main` were measured on 2026-11-18 ([oracle](vb6-fidelity-oracle/break-on-an-idle-program-and-a-step-off-an-event-handler.md#step-out-across-idle-and-stepping-through-a-startup-sub-main-or-form-2026-11-18-4449-ide)): Step Out carries into the next event as Into and Over do, and past `Sub Main`'s end Into and Out carry while Over does not. HexIDE keeps its previous behaviour until [#4449](https://github.com/hexide-io/HexIDE/issues/4449) matches them.
 
 ### D5. Step Over / Step Out (v2·P5)
 - **VB6:** Shift+F8 (Step Over — run a called proc to completion, break at the next statement in the current frame),
@@ -107,7 +147,7 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
   activation is pushed, NOT the live stack size — so an overlapping re-entrant event frame can't inflate it): Step
   Over breaks when the executing frame's depth ≤ the armed depth (a called Sub runs to completion; a non-call
   statement is same-depth so it behaves like Step Into — matches VB6); Step Out breaks when depth < the armed depth
-  (the proc returned). A never-consumed step is disarmed at the event-dispatch boundary (see D4). Module top-level
+  (the proc returned). Into/Over carry across the outermost event-dispatch boundary (D4); Out retains its previous disarm. Module top-level
   code has depth 0 (below any proc), so Step Over from top-level does not descend into a callee and Step Out from a
   top-level-called proc reaches the top-level caller.
 - **Why per-frame (not live count):** the first P5 cut read the live `ActivationStack.Count` with a `Max(1, …)`
@@ -180,17 +220,17 @@ some are refinements we may take. Format: **What → VB6 → HexIDE → Why → 
 Font reads on the supported intrinsic controls now return the shared Font object (#934), rather than a String or Null. Its Locals
 property expansion remains unimplemented; the object is currently a leaf labelled Font.
 
-### D9. Locals show only already-executed `Dim`s; value formatting is approximate
+### D9. Locals value formatting is approximate
 - **VB6:** the Locals window lists **every** declared local from procedure entry (unset ones show as `Empty`/0/""),
   and formats values per the VBA locale conventions.
-- **HexIDE:** locals appear **only once their `Dim` statement has executed** (the interpreter allocates a local's
-  slot lazily when its `Dim` runs), so a local declared later in the proc is absent until stepped past. Value
-  formatting is a close-but-not-identical approximation (strings quoted; `True`/`False`; `#yyyy-MM-dd HH:mm:ss#`
-  dates in the invariant culture; `Nothing`/`Empty`/`Null`; objects/arrays/UDTs show their type and expand). An
-  object- or UDT-typed array labels its header as `Variant()` (the element class/type name isn't recoverable from
-  the array's stored element type) while its populated elements label correctly.
-- **Why:** lazy `Dim` allocation is the interpreter's execution model; exact VBA value formatting is a rabbit hole
-  not worth chasing for a tyre-kicking debugger.
+- **HexIDE:** every declared local is allocated at procedure entry, before the body runs, including one in a branch
+  that is never taken (#172), so Locals lists it from the start as VB6 does. This entry used to record the opposite:
+  the interpreter once allocated a local only when its `Dim` ran. Value formatting is a close-but-not-identical
+  approximation (strings quoted; `True`/`False`; `#yyyy-MM-dd HH:mm:ss#` dates in the invariant culture;
+  `Nothing`/`Empty`/`Null`; objects/arrays/UDTs show their type and expand). An array of objects or of a class
+  gives its element type and bounds in its header, `Class1(1 to 2)`, since #2700 (see D30), where it used to read
+  `Variant()`. Whether a UDT-typed array's header still reads `Variant()` has not been re-checked.
+- **Why:** exact VBA value formatting is a rabbit hole not worth chasing for a tyre-kicking debugger.
 - **Status:** **by design** (approximation). Arrays are capped at 500 shown elements with a "… N more" marker (a
   visible, non-silent cap).
 
@@ -332,6 +372,11 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
 - **Status:** **by design** (a real tree-walker limit, not an artificial cap). Run To Cursor (P7a) has no such limit —
   it's a one-shot breakpoint, matched by line at any depth.
 
+External sessions delegate Set Next Statement to adapters advertising `supportsGotoTargetsRequest`
+via `gotoTargets` and `goto`; the interpreter granularity limit above does not constrain the adapter
+([#2914](https://github.com/hexide-io/HexIDE/issues/2914)). A refused move keeps the caret and scroll
+position, and so does a refused step. What VB6 does with the caret there hasn't been measured.
+
 ### D19. Step Into from design mode runs the program without breaking
 - **VB6:** F8 in design mode starts the program and breaks on the first executable line, so the developer watches
   it begin one statement at a time.
@@ -350,6 +395,10 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   on one. So Step Into from idle breaks on the first statement of `Form_Initialize`, or of `Form_Load` when there is
   none, and a step off the end of Initialize goes on into Load (pinned in `FormInstanceTests`). A `Sub Main` start
   is not re-measured.
+- **Overturned, 2026-11-18:** VB6 does stop on declarations. F8 on a startup form breaks at
+  `Private Sub Form_Initialize()`, and a step off Initialize's end stops at `Private Sub Form_Load()`. A `Sub Main`
+  start breaks at `Sub Main()` ([oracle](vb6-fidelity-oracle/break-on-an-idle-program-and-a-step-off-an-event-handler.md#step-out-across-idle-and-stepping-through-a-startup-sub-main-or-form-2026-11-18-4449-ide)). So HexIDE's start, which skips declarations, diverges
+  again, and [#4449](https://github.com/hexide-io/HexIDE/issues/4449) tracks matching it.
 
 ### D20. A step from a function's last statement skips `End Function` — FIXED
 - **VB6:** stops there (measured 2026-10-26, #2172; the oracle's [A breakpoint on a procedure's End line or its
@@ -358,14 +407,18 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   the calling line `x = F()` again. A Sub's `End Sub` behaved the same. Measured with Step Over (Shift+F8); `F = 1`
   calls nothing, so Step Into has nothing different to do there.
 - **HexIDE:** a called procedure's natural end now passes through the debugger gate before returning (#2172).
-  Entry procedures retain breakpoint-only End positions: startup stepping advances from Initialize's last
-  statement into Load's first statement, as required by #2172's supervisor review. Before that, paused on
+  Event handlers also stop on `End Sub` ([#4619](https://github.com/hexide-io/HexIDE/issues/4619)), as measured
+  in [the idle-break oracle](vb6-fidelity-oracle/break-on-an-idle-program-and-a-step-off-an-event-handler.md).
+  The startup dispatch and `Sub Main` retain breakpoint-only End positions pending measurement (#4449 for
+  `Sub Main`): startup stepping advances from Initialize's last statement into Load's first statement, as
+  required by #2172's supervisor review. Before that, paused on
   `Twice = n * 2`, the only statement of a `Private Function`, a Step Into went straight to the caller's next line
   without stopping on `End Function` (2026-09-22).
 - **Why it happened:** the walk's gate ran before each statement of a body, and the `End` line isn't one, so there
   was nothing to stop on.
-- **Status:** **fixed** by [#2172](https://github.com/hexide-io/HexIDE/issues/2172); headless breakpoint and step
-  regression tests cover the boundary. It is the stepping side of D29. First recorded on
+- **Status:** **fixed** by [#2172](https://github.com/hexide-io/HexIDE/issues/2172) and
+  [#4619](https://github.com/hexide-io/HexIDE/issues/4619); headless breakpoint and step regression tests cover
+  called procedures and pointer/Timer event handlers. It is the stepping side of D29. First recorded on
   [#656](https://github.com/hexide-io/HexIDE/issues/656).
 
 ### D29. A breakpoint on a procedure's `End` line or its declaration line never pauses — FIXED
@@ -401,6 +454,20 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   the granularity: a nested handler finishes before the raiser's next statement, the end of its block, or the return
   of a call, rather than inside the very expression that raised it.
 
+### D31. An error unwinding a deep recursion gives up the thread every 32 procedures
+- **VB6:** an error, Stop or End unwinds the stack without giving up the thread. It isn't a place where VB6 runs
+  `DoEvents`.
+- **HexIDE:** under the debugger, in the IDE or a made EXE, a run-time error, a compile error met while running, or
+  Stop's and End's signal yields the UI thread once at every 32nd procedure it passes on the way down (#3250). It's the
+  same yield the time slice makes, and the event pump still lets nothing in (D21). So no event procedure runs inside the
+  unwind. What can happen in it is repainting, input reaching the IDE, and Ctrl+Break. An unwind shallower than 32
+  procedures, the usual one, never yields.
+- **Why:** the time slice leaves the frames it yielded across waiting on their callees. On #3228's 64 MiB UI thread,
+  .NET then ran their continuations inline inside one another as the error unwound, and each throw cost more than the
+  last. Error 28 from the 5,000-call cap took 138 s to reach its handler, against 0.8 s on a 1.5 MiB thread. A yield
+  starts the nesting again from the dispatcher: it takes about 2.5 s now.
+- **Status:** **deliberate**. Avoiding it would need an unwind that doesn't pass through each frame's await.
+
 ### D22. A compile error met while a program runs is a run-time error dialog, and the run carries on
 - **VB6:** a compile error found while the program runs, such as a call to a Sub that does not exist, is shown in
   the compile-error box (OK and Help), and the IDE stops at that line. That is how it is commonly described; it is
@@ -409,7 +476,9 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   dialog. End is enabled; Continue, Debug and Help are not. End ends the run. Closed any other way, the dialog
   leaves the run going, with the event procedure that met the error abandoned, as after a run-time error in an
   event procedure. A syntax error found before the run begins is a start that never became a run: it is reported in
-  the same dialog, with the module it is in named, and nothing runs.
+  the same dialog, and nothing runs. Parse-time compile errors with a line also carry their module and
+  whole-file line through `get_last_runtime_error` ([#3960](https://github.com/hexide-io/HexIDE/issues/3960));
+  errors without a line remain unlocated. The dialog text and buttons are unchanged.
 - **Why:** one route for every error a run meets. Sub Main's compile errors already went through that dialog
   (#754), and a separate compile-error box would answer the same error two ways. A tree-walker meets a compile error
   only when it reaches the statement, so stopping before the run began is not possible for it.
@@ -562,10 +631,10 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
   first line of code, and is migrated as its project opens, each mark moved down onto the statement it was set
   on (task 3.17). Sidecar version 3 anchors code marks after the full header, so a conflicted external header
   change that never reaches the stores no longer moves those marks on reopen (#884). Its stored offsets are
-  converted at the persistence boundary; the stores and every public surface still use file lines. A newly
-  created form's header still first appears at its first designer change, save or reload
-  ([#885](https://github.com/hexide-io/HexIDE/issues/885)); version 3 can now distinguish its code marks from
-  marks already in a header.
+  converted at the persistence boundary; the stores and every public surface still use file lines. New forms,
+  including a project template's `Form1`, hold their header from creation
+  ([#885](https://github.com/hexide-io/HexIDE/issues/885)). Breakpoints and bookmarks set before the first save
+  reopen on the same statements; version 3 needs no additional numbering record.
 - **Numbered D23 when task 3.16 recorded it**, and renumbered in #273's documentation pass: merging main brought
   in main's own D23 (#1011, cited from `VBWindowContext`), which came first.
 
@@ -593,37 +662,78 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
 
 ---
 
-### D27. Watch context outside break mode (#2290)
+### D32. Watch context outside break mode (#2290)
 - **VB6:** module-wide watches cannot see procedure locals. An undefined name shows
   `<Expression not defined in context>` with type `Empty`, including at design time and after End.
   A valid but inactive context shows `<Out of context>` with type `Empty`.
   [Measured table](vb6-fidelity-oracle/a-watch-and-its-context.md).
 - **HexIDE:** paused watches now respect the stored module/procedure scope and read a caller's frame.
-  Outside break mode all rows still show the localized out-of-context value with a blank type.
-- **Why:** design-time resolution needs collected declarations without a live interpreter frame; this first
-  slice changes evaluation of live frames only. The all-procedures placeholder still lacks a stored module
-  at design time and uses the paused module. Explicit module contexts are supported within that module.
-- **Status:** **partial**, #2290. Remaining: design-time/after-End resolution and context selection/storage.
-  Recursion, cross-module contexts, Break When types and running-state refresh were not measured and
-  keep their previous behavior.
+  Outside break mode all rows still show the localized out-of-context value. At design time and after
+  End their type is `Empty`; while running it remains blank (running-state refresh was not measured).
+- **Why, design time and after End: out of bounds, by design.** With nothing running there is no frame to
+  look a name up in, so telling `<Expression not defined in context>` from `<Out of context>` means asking whether
+  the name is declared anywhere. That is the undeclared-name question the CST-not-AST boundary in CLAUDE.md walls, the
+  same one that keeps `VbScopeAnalyzer`'s Option Explicit check compiled out. Restricting it to a bare name doesn't
+  change what it asks. The pre-pass's tables can't answer it either: a procedure's locals aren't collected until it
+  runs, so a lookup there would confidently call a local undefined, which is worse than today's text. A language
+  engine over the LSP seam, such as RDCore, is where that answer would come from. Ruled on #2290, 2026-11-16.
+- **Why, the stored context:** the all-procedures placeholder still lacks a stored module at design time and uses
+  the paused module. Explicit module contexts are supported within that module. This part is in bounds and is
+  [#4354](https://github.com/hexide-io/HexIDE/issues/4354): Add Watch offers a Module and a Procedure, as VB6's does.
+- **Status:** **partial by design** for design-time and after-End name resolution (above). Context selection and
+  storage remain, as #4354. Cross-module contexts are measured and followed since #4481: a procedure's or class's watch
+  reads its frame below the paused one in any module, and a standard module's watch is live wherever the program is
+  paused. Recursion, frames more than one level down across modules, Break When types and running-state refresh were
+  not measured and keep their previous behavior.
 
-### D30. Locals rows for a control or a form, beyond what is measured (#2329, #2700)
-- **VB6:**
-  - **The Type column:** an object row's Type gives the declared type, then the class: `Object/Timer` for a `Dim t As
-    Object`, `Timer/Timer` for a control under `Me`, `Form/Form1` for a Timer's `Parent`, and `Variant/Object/Timer` for an
-    `Item` row.
-  - **The rows a control lists:** the members its type has, and no others. That is measured for a Timer, whose seven are
-    on #2329.
-- **HexIDE:**
-  - **The Type column:** an object row gives its class alone, as `Timer`.
-  - **A Timer** lists VB6's seven rows, each with its declared type.
-  - **Every other control** lists every property HexIDE can read, sorted by name, and a raising read shows no type.
-  - **An array** is a row named `Grid()` of type `Long()`, where VB6's is `Grid` of type `Long(1 to 2)` (measured on
-    #2698). It sorts by its name all the same.
+### D34. A watch on (All Modules), or on a standard module, doesn't evaluate in design mode (#4452, #4481)
+- **VB6:** a watch added with Module (All Modules) evaluates in design mode as well as at a break. Before the program
+  runs, a standard module's `Public g As Long` reads 0 / Long and `1 + 1` reads 2 / Integer (measured on #4452). So does
+  a watch scoped to a standard module: `g` at `Module1` reads 0 / Long (measured on #4481). A watch scoped to a class
+  or to a procedure reads `<Out of context>` (hexide-int, vb6.exe SP6;
+  [the oracle page](vb6-fidelity-oracle/a-watch-and-its-context.md)).
+- **HexIDE:** while paused it evaluates as VB6's does, against the project's Public module-level names only. Outside
+  break mode it reads `<Out of context>`, like every other watch.
+- **Why:** HexIDE evaluates only in break mode, and its Immediate window doesn't evaluate in design mode either
+  (`DebugController.EvaluateAsync` returns nothing unless paused). Building design-mode evaluation for watches alone
+  was ruled out (supervisor, #4452, 2026-11-17).
+- **Status:** divergence by decision.
+
+### D35. The Watches window lists watches in the order they were added (#4543) — fixed
+- **VB6:** the rows sort by Context, then Expression, a blank Context first and Expression case-sensitive: added as `v` at
+  `Class1.X(Let)`, `m` at `Class1` and `g` at `Module1`, they read `m`, `v`, `g` (measured, hexide-int, vb6.exe SP6;
+  [the oracle page](vb6-fidelity-oracle/a-watch-and-its-context.md)).
+- **HexIDE:** read `v`, `m`, `g`, the order they were added in (live, 2026-11-18, found checking #4481). Since #4543 the
+  interpreter's rows sort by the displayed Context, then Expression, ordinal and stable, and `get_watches` follows them:
+  the same three read `m`, `v`, `g` (live, 2026-11-18). External debugger watches keep the order added; nothing is
+  measured for them.
+- **Status:** **fixed** (#4543). Contexts that differ only in case, ties, and when VB6 re-sorts are unmeasured.
+
+### D30. Locals rows beyond what is measured (#2329, #2700)
+- **VB6, measured** (hexide-int, #2289, #2329, #2700; oracle #2698 and #2702):
+  - **The Type column** gives a live object's declared type, then its class: `Object/Class1`, `Timer/Timer` for a control
+    under `Me`, `Variant/Object/Class1` in a Variant. `Nothing` reads as the declared type alone, and an array as its
+    element type and bounds, `Class1(1 to 2)`.
+  - **A class instance** lists its variables and its properties, sorted by name.
+  - **A control** lists the members its type has, and no others. A Timer's seven are on #2329.
+- **HexIDE:** all of the above for variables, members, array elements, `Item` rows and a Timer's `Parent`, since #2700.
+  What differs:
+  - **A class instance's properties aren't listed,** only its variables: reading a `Property Get` runs the program's code,
+    which can't run while it is paused (D15).
+  - **Every control but a Timer** lists every property HexIDE can read, and a raising read shows no type.
+  - **A watch's value keeps its own type,** as `Class1`, since an expression has no declaration. VB6's watch rows aren't
+    measured.
+  - **A module's variables keep their declaration order,** where an object's members are sorted. VB6's module row isn't
+    measured with variables in it.
+  - **An array of more than one dimension** writes its bounds as `Long(1 to 2, 0 to 3)`, which is inferred, not measured.
+    So are an undimensioned array's `String()` and an empty one's `String(0 to -1)`.
+  - **A Variant holding an array** keeps HexIDE's earlier row, `v()` of type `Integer()`, since VB6's isn't measured.
+  - **A UDT** reads as its type name, `TPoint`, as before. VB6's isn't measured.
+  - **`Me`'s own row** reads as its class alone, `Class1` in a class's method and `Form1` on a form, as before. VB6's isn't
+    measured for either.
 - **Why:** each control's member list, and the declared types its rows show, have to be measured on `vb6.exe` one class at
-  a time. The Type column's form needs measuring for class instances, Variants, Nothing and arrays first (#2700).
+  a time.
 - **Status:** **open**.
-  - The Type column is #2700.
   - Other controls' member lists follow as each is measured.
   - `get_locals` marks a row that reopens an object open above it, such as a Timer's `Parent` under `Me`, with `repeats`,
     and leaves its children out. The Locals window opens it, as VB6's does.
@@ -633,8 +743,11 @@ recorded in #1866; the dockable pane uses selection/double-click rather than VB6
 ## Deferred debugger surfaces (not divergences yet — just not built)
 
 Immediate USER-CALL execution (calling a user Sub/Function from the Immediate window — the deadlock-prone part, D15;
-assignment/Set landed in P7c, D14); modern per-line conditional breakpoints / hit counts (deferred additive Evolution
-item — VB6's watch-based Break-When-True/Changed shipped in P6b). Tracked in
+assignment/Set landed in P7c, D14); hit counts (additive Evolution
+item — VB6's watch-based Break-When-True/Changed shipped in P6b). Condition… edits per-line expressions
+with gutter glyphs/tooltips and sidecar persistence (#2914). Interpreter runs evaluate these expressions
+in the executing frame using the read-only watch evaluator, skip false results and stop with the expression
+and error in Immediate on evaluation failure (#3005); capable DAP adapters evaluate them. Tracked in
 [`MISSING_FEATURES.md`](MISSING_FEATURES.md) and the spec's v2 list (P8). Serious/compiled debugging belongs to a
 compiled backend over DAP. *(Landed since this list was written: Watches + Break-When-True/Changed + Data Tips (P6), Run To Cursor
 + Set Next Statement + Immediate assignment/Set (P7), the Locals property/control surface incl. the form-`Me` +

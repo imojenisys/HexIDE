@@ -14,7 +14,7 @@ internal static class IdeShutdown
         // dialogs shut from under them — so that path is left alone, and the IDE staying up is then
         // a correct outcome rather than the bug below.
         //
-        // A running program owns windows the main window does not: its VBFormRuntime, and any MsgBox
+        // A running program owns windows the main window does not: its running form, and any MsgBox
         // or InputBox layered over that. Under ShutdownMode.OnLastWindowClose those keep the app
         // alive after the main window goes, and the symptom lands on whoever builds next —
         // "file is locked by HexIDE.Desktop" — which looks nothing like a shutdown problem.
@@ -37,7 +37,7 @@ internal static class IdeShutdown
         {
             foreach (var w in lifetime.Windows.Reverse().ToList())
             {
-                if (w == mainWindow || !w.IsVisible)
+                if (w == mainWindow || !w.IsVisible || MainViewViewModel.DockFactory.IsToolHostWindow(w))
                     continue;
                 w.Close();
                 closed++;

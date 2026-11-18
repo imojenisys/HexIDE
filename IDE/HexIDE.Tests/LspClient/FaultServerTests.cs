@@ -28,10 +28,11 @@ namespace HexIDE.Tests.LspClient;
 /// with the foreign-server tests and a follow-up.
 /// </para>
 /// </summary>
-public sealed class FaultServerTests : IAsyncDisposable
+public sealed class FaultServerTests(ITestOutputHelper output) : IAsyncDisposable
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
     private readonly List<IAsyncDisposable> _owned = [];
+    private ILspTransport? _transport;
 
     public async ValueTask DisposeAsync()
     {
@@ -51,12 +52,12 @@ public sealed class FaultServerTests : IAsyncDisposable
         server.Start();
         _owned.Add(server);
 
-        var transport = Substitute.For<ILspTransport>();
+        var transport = _transport = Substitute.For<ILspTransport>();
         transport.IsAlive.Returns(true);
         transport.CanReconnect.Returns(false);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
             .Returns(ci => Task.FromResult<IJsonRpcMessageHandler?>(
-                new HeaderDelimitedMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
+                new LspMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
         var log = new RecordingLogger();
         var client = new VBLspClient(transport, log, DocumentLanguage.Vb6, workspace: null,
             initializeTimeout: TimeSpan.FromSeconds(10));
@@ -94,11 +95,13 @@ public sealed class FaultServerTests : IAsyncDisposable
         client.IsRunning.Should().BeTrue();
 
         var watch = Stopwatch.StartNew();
+        var stopClock = Stopwatch.StartNew();
         await Within(client.StopAsync(), TimeSpan.FromSeconds(10), "a server that ignores shutdown must not hold the client open");
 
         watch.Elapsed.Should().BeGreaterThanOrEqualTo(VBLspClient.ShutdownTimeout - TimeSpan.FromMilliseconds(100),
             "the client waits its shutdown deadline for an answer that never comes, and not less");
         await Eventually(() => server.Saw("exit"), TimeSpan.FromSeconds(5), "exit still follows an unanswered shutdown");
+        output.WriteLine($"StopAsync: {stopClock.Elapsed.TotalMilliseconds:F0} ms");
         client.IsRunning.Should().BeFalse();
     }
 
@@ -113,12 +116,37 @@ public sealed class FaultServerTests : IAsyncDisposable
 
         _ = client.OpenDocumentAsync(Uri, new string('x', 4 * 1024 * 1024), Token); // never completes: nobody reads it
 
+        var stopClock = Stopwatch.StartNew();
         await Within(client.StopAsync(), TimeSpan.FromSeconds(15),
             "a server that stops reading must not hold the client open, however full the pipe");
+        output.WriteLine($"StopAsync: {stopClock.Elapsed.TotalMilliseconds:F0} ms");
         client.IsRunning.Should().BeFalse();
+        _transport!.DidNotReceive().TryEndOutput();
     }
 
     // ---- Requests ----
+
+    [Fact]
+    public async Task A_refusal_written_with_its_error_before_its_id_ends_the_request_and_not_the_connection()
+    {
+        // rumdl 0.2.79's reply, byte for byte but the id (#2760): `error` comes before `id`, and carries the method name as its
+        // `data`, so the data is read before StreamJsonRpc knows the request it answers. An add-in's request a server does not
+        // know is the ordinary way to meet it.
+        var (client, _, _) = Connect(s => s.Script = async (message, server) =>
+        {
+            if ((string?)message["method"] != "probe/unknown") return false;
+            var body = Encoding.UTF8.GetBytes(
+                $$"""{"jsonrpc":"2.0","error":{"code":-32601,"message":"Method not found","data":"probe/unknown"},"id":{{message["id"]!.ToJsonString()}}}""");
+            await server.WriteRawAsync([.. Encoding.ASCII.GetBytes($"Content-Length: {body.Length}\r\n\r\n"), .. body]);
+            return true;
+        });
+        await client.StartAsync(Token);
+
+        var asking = () => client.SendCustomRequestAsync("probe/unknown", System.Text.Json.JsonDocument.Parse("{}").RootElement, cancellationToken: Token);
+
+        await asking.Should().ThrowAsync<RemoteMethodNotFoundException>();
+        client.IsRunning.Should().BeTrue("a refused request is not a lost connection");
+    }
 
     [Fact]
     public async Task A_request_the_server_never_answers_comes_back_empty_at_its_deadline()
@@ -151,7 +179,9 @@ public sealed class FaultServerTests : IAsyncDisposable
         await Within(hover, TimeSpan.FromSeconds(10), "a reply that stops halfway ends at the request's deadline");
         (await hover).Should().BeNull();
 
+        var stopClock = Stopwatch.StartNew();
         await Within(client.StopAsync(), TimeSpan.FromSeconds(15), "stopping does not wait for the rest of a stalled message");
+        output.WriteLine($"StopAsync: {stopClock.Elapsed.TotalMilliseconds:F0} ms");
     }
 
     [Fact]

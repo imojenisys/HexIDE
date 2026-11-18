@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Threading;
 using Avalonia.Headless.XUnit;

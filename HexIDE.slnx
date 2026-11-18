@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/IDE/">
+    <Project Path="IDE/HexIDE.Office/HexIDE.Office.csproj" />
     <Project Path="IDE/HexIDE.Core/HexIDE.Core.csproj" />
     <Project Path="IDE/HexIDE.TwinBasic/HexIDE.TwinBasic.csproj" />
     <Project Path="IDE/HexIDE.TwinBasic.Tests/HexIDE.TwinBasic.Tests.csproj" />
@@ -9,12 +10,14 @@
     <Project Path="IDE/HexIDE.Desktop/HexIDE.Desktop.csproj" />
     <Project Path="IDE/HexIDE.Lsp/HexIDE.Lsp.csproj" />
     <Project Path="IDE/HexIDE.LspGuard/HexIDE.LspGuard.csproj" />
+    <Project Path="IDE/HexIDE.Repack/HexIDE.Repack.csproj" />
     <Project Path="IDE/HexIDE.Lsp.TestHost/HexIDE.Lsp.TestHost.csproj" />
     <Project Path="IDE/HexIDE.Dap/HexIDE.Dap.csproj" />
     <Project Path="IDE/HexIDE.Dap.TestAdapter/HexIDE.Dap.TestAdapter.csproj" />
     <Project Path="IDE/HexIDE.Lsp.TestServer/HexIDE.Lsp.TestServer.csproj" />
     <Project Path="IDE/HexIDE.Runtime/HexIDE.Runtime.csproj" />
     <Project Path="IDE/HexIDE.Runtime.Tests/HexIDE.Runtime.Tests.csproj" />
+    <Project Path="IDE/HexIDE.Runtime.Integration.Tests/HexIDE.Runtime.Integration.Tests.csproj" />
     <Project Path="IDE/HexIDE.Tests/HexIDE.Tests.csproj" />
     <Project Path="IDE/HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj" />
     <Project Path="IDE/HexIDE.Standalone/HexIDE.Standalone.csproj" />
@@ -29,6 +32,5 @@
     <File Path="README.md" />
     <File Path="docs/lsp-client.md" />
     <File Path="docs/lsp-server-features.md" />
-    <File Path="docs/ROADMAP.md" />
   </Folder>
 </Solution>

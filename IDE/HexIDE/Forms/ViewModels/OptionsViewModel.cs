@@ -32,9 +32,12 @@ public partial class OptionsViewModel : ObservableObject, IDialog
     private readonly IDeveloperModeService _devMode;
     private readonly ILocalizationService _localization;
     private readonly IEventBus _eventBus;
+    private readonly Func<string, Task<bool>>? _confirmAddinWithdrawal;
+    private readonly Func<IReadOnlyList<HexIDE.Lsp.ServerChatToolsCandidate>>? _serverChatTools;
     private readonly string _originalTheme;
     private readonly string _originalLanguage;
     private readonly List<IOptionsPage> _pages = [];
+    private readonly List<AddinOptionsPageViewModel> _addinPages = [];
     private readonly List<OptionsNodeViewModel> _keyedNodes = [];
 
     public string Title => _localization.GetString("Str.Options.Title");
@@ -47,7 +50,7 @@ public partial class OptionsViewModel : ObservableObject, IDialog
     [ObservableProperty]
     private OptionsNodeViewModel? _selectedNode;
 
-    /// <summary>The page ViewModel for the right-hand pane; null when a group node is selected.</summary>
+    /// <summary>The page ViewModel for the right-hand pane; null when a category without an overview is selected.</summary>
     public object? CurrentPage => SelectedNode?.Page;
 
     /// <summary>True when a resettable first-party settings page is selected — gates "Restore Defaults".</summary>
@@ -62,8 +65,12 @@ public partial class OptionsViewModel : ObservableObject, IDialog
     public OptionsViewModel(ISettingsService settings, IThemeService themeService, IKeymapService keymapService,
                             ILanguageSwitchService languageSwitch, IAddinRegistry addinRegistry,
                             AddinOptionsService addinOptions, IDeveloperModeService devMode,
-                            ILocalizationService localization, IEventBus eventBus, string? initialNodeKey = null)
+                            ILocalizationService localization, IEventBus eventBus, string? initialNodeKey = null, IWindowManager? windows = null,
+                            Func<string, Task<bool>>? confirmAddinWithdrawal = null,
+                            Func<IReadOnlyList<HexIDE.Lsp.ServerChatToolsCandidate>>? serverChatTools = null)
     {
+        _confirmAddinWithdrawal = confirmAddinWithdrawal;
+        _serverChatTools = serverChatTools;
         _settings = settings;
         _themeService = themeService;
         _keymapService = keymapService;
@@ -76,7 +83,7 @@ public partial class OptionsViewModel : ObservableObject, IDialog
         _originalTheme = themeService.ActiveTheme;
         _originalLanguage = languageSwitch.ActiveLanguage;
 
-        BuildTree();
+        BuildTree(windows);
         SelectedNode = RootNodes.FirstOrDefault(n => n.Key == initialNodeKey) ?? FirstLeaf(RootNodes);
 
         // The Language page lives in this dialog and previews live, so re-localize the tree (and the
@@ -91,18 +98,18 @@ public partial class OptionsViewModel : ObservableObject, IDialog
         OnPropertyChanged(nameof(Title));
     }
 
-    private void BuildTree()
+    private void BuildTree(IWindowManager? windows)
     {
         var environment = Group("Str.Options.Node.Environment")
             .Add(Leaf(new EnvironmentGeneralPageViewModel(_settings), "Str.Options.Node.General"))
             .Add(Leaf(new ThemePageViewModel(_settings, _themeService), "Str.Options.Node.Theme"))
             .Add(Leaf(new LanguagePageViewModel(_settings, _languageSwitch, _localization, CustomizeLanguage), "Str.Options.Node.Language"))
-            .Add(Leaf(new KeymapPageViewModel(_settings, _keymapService), "Str.Options.Node.Keymap"))
+            .Add(Leaf(new KeymapPageViewModel(_settings, _keymapService, _localization, windows), "Str.Options.Node.Keymap"))
             .Add(Leaf(new ToolbarsPageViewModel(_settings), "Str.Options.Node.Toolbars"));
 
         var editor = Group("Str.Options.Node.Editor")
             .Add(Leaf(new EditorGeneralPageViewModel(_settings), "Str.Options.Node.General"))
-            .Add(Leaf(new EditorFormattingPageViewModel(_settings), "Str.Options.Node.Formatting"));
+            .Add(Leaf(new EditorFormattingPageViewModel(_settings, _themeService, _localization), "Str.Options.Node.Formatting"));
 
         var designer = Group("Str.Options.Node.FormDesigner")
             .Add(Leaf(new FormDesignerGridPageViewModel(_settings), "Str.Options.Node.Grid"));
@@ -113,6 +120,9 @@ public partial class OptionsViewModel : ObservableObject, IDialog
 
         // A leaf like any other page, so a reset there is committed on OK and forgotten on Cancel (#2073).
         RootNodes.Add(Leaf(new WorkspaceArtifactPageViewModel(_localization), "Str.LspArtifact.Title"));
+        // Whether AI Chat may use each language server's tools, over the server's own entry (#4257).
+        if (_serverChatTools is { } servers)
+            RootNodes.Add(Leaf(new ServerChatToolsPageViewModel(_settings, servers, _localization), "Str.Options.Node.ServerChatTools"));
         BuildAddinsGroup();
 
         // Developer node — last in the tree, and only when the session is in developer mode.
@@ -120,10 +130,10 @@ public partial class OptionsViewModel : ObservableObject, IDialog
             RootNodes.Add(Leaf(new DeveloperPageViewModel(_settings), "Str.Options.Node.Developer"));
     }
 
-    /// <summary>Creates a localized grouping node and records it for live re-localization.</summary>
-    private OptionsNodeViewModel Group(string key)
+    /// <summary>Creates a localized category node and records it for live re-localization.</summary>
+    private OptionsNodeViewModel Group(string key, object? page = null)
     {
-        var node = new OptionsNodeViewModel(_localization.GetString(key), page: null, key: key);
+        var node = new OptionsNodeViewModel(_localization.GetString(key), page: page, key: key);
         _keyedNodes.Add(node);
         return node;
     }
@@ -137,14 +147,18 @@ public partial class OptionsViewModel : ObservableObject, IDialog
     {
         var addins = _addinRegistry.GetAll();
 
-        var group = Group("Str.Options.Node.AddIns");
+        var overview = new AddinsOverviewPageViewModel(addins);
+        var group = Group("Str.Options.Node.AddIns", overview);
         if (addins.Count == 0)
-            group.Add(Group("Str.Options.Node.NoAddins"));
+            group.Add(Group("Str.Options.Node.NoAddins", overview));
         foreach (var info in addins)
         {
-            var page = new AddinOptionsPageViewModel(_addinRegistry, info, _addinOptions.GetFactoryFor(info.AssemblyPath));
+            var page = new AddinOptionsPageViewModel(_addinRegistry, info, _addinOptions.GetFactoryFor(info.AssemblyPath), _confirmAddinWithdrawal, _localization, _settings, _addinOptions.ServersFor(info.Id));
+            _addinPages.Add(page);
             // Add-in node label is the add-in's own name — not localized (no key).
-            group.Add(new OptionsNodeViewModel(page.Title, page));
+            group.Add(string.IsNullOrWhiteSpace(info.Title)
+                ? Group("Str.Options.Addin.Unnamed", page)
+                : new OptionsNodeViewModel(page.Title, page));
         }
         RootNodes.Add(group);
     }
@@ -185,6 +199,8 @@ public partial class OptionsViewModel : ObservableObject, IDialog
     {
         foreach (var page in _pages) page.SaveToSettings();
         _settings.Save();
+        foreach (var page in _pages.OfType<IDisposable>()) page.Dispose();
+        foreach (var page in _addinPages) page.Dispose();
         Log.Debug("OptionsViewModel: OK — settings saved");
         _localization.LanguageChanged -= OnLanguageChanged;
         CloseRequested?.Invoke(true);
@@ -196,6 +212,8 @@ public partial class OptionsViewModel : ObservableObject, IDialog
         // Both Theme and Language preview live, so revert both to their pre-dialog values.
         // The language revert is silent (no gate) — Cancel is itself the confirmation.
         _localization.LanguageChanged -= OnLanguageChanged;
+        foreach (var page in _pages.OfType<IDisposable>()) page.Dispose();
+        foreach (var page in _addinPages) page.Dispose();
         _themeService.Apply(_originalTheme);
         _languageSwitch.Apply(_originalLanguage);
         Log.Debug("OptionsViewModel: Cancel — changes discarded");

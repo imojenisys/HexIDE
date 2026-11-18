@@ -12,9 +12,9 @@ internal sealed partial class VBTreeView
     {
         base.Render(context);
         context.DrawRectangle(Brushes.White, null, new Rect(Bounds.Size));
-        DrawEdge(context);
+        VBClientEdge.Draw(context, Bounds.Size, sunken, singleBorder);
         using var clip = context.PushClip(new Rect(ClientEdge, ClientEdge,
-            Math.Max(0, Bounds.Width - 2 * ClientEdge), Math.Max(0, Bounds.Height - 2 * ClientEdge)));
+            ClientWidth, ClientHeight));
         var row = 0;
         foreach (var root in Nodes.Roots) DrawNode(root, 0);
 
@@ -22,8 +22,8 @@ internal sealed partial class VBTreeView
         {
             const double height = RowHeight;
             var step = indentation * 96 / 2540;
-            var x = ClientEdge + (depth + 1) * step;
-            var y = ClientEdge + row++ * height;
+            var x = ClientEdge + (depth + 1) * step - horizontal.Value;
+            var y = ClientEdge + (row++ - vertical.Value) * height;
             var center = y + height / 2;
             var branch = x - step / 2;
             var pen = new Pen(Brushes.Gray, 1);
@@ -64,28 +64,6 @@ internal sealed partial class VBTreeView
             context.DrawText(text, new Point(x + 2, y));
             if (node.Expanded)
                 foreach (var child in node.ChildNodes) DrawNode(child, depth + 1);
-        }
-    }
-
-    private void DrawEdge(DrawingContext context)
-    {
-        if (sunken)
-        {
-            Ring(0, VbSystemColor.Btnshadow, VbSystemColor.Btnhighlight);
-            Ring(1, VbSystemColor._3DDKSHADOW, VbSystemColor._3DLIGHT);
-        }
-        if (singleBorder) Ring(sunken ? 2 : 0, VbSystemColor.Windowframe, VbSystemColor.Windowframe);
-
-        void Ring(int inset, VbSystemColor top, VbSystemColor bottom)
-        {
-            var rect = new Rect(inset + 0.5, inset + 0.5,
-                Math.Max(0, Bounds.Width - 2 * inset - 1), Math.Max(0, Bounds.Height - 2 * inset - 1));
-            var first = new Pen(VBColor.FromSystemColor(top).ToBrush());
-            var last = new Pen(VBColor.FromSystemColor(bottom).ToBrush());
-            context.DrawLine(first, rect.TopLeft, rect.TopRight);
-            context.DrawLine(first, rect.TopLeft, rect.BottomLeft);
-            context.DrawLine(last, rect.BottomLeft, rect.BottomRight);
-            context.DrawLine(last, rect.TopRight, rect.BottomRight);
         }
     }
 

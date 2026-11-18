@@ -5,9 +5,18 @@ namespace HexIDE.Projects;
 
 public interface IProjectService
 {
-    Task CreateNewProject();
+    /// <summary>Shows the project chooser, unloading existing projects only after confirmation when requested.</summary>
+    Task CreateNewProject(bool replaceExisting = false);
     Task CreateNewProject(IProjectTemplate template);
+
+    /// <summary>
+    /// Makes a new project from the first first-party Standard EXE template registered, as <c>--newproject</c> does (#3411
+    /// slice 10b). Today that's VB6's.
+    /// </summary>
+    Task CreateDefaultProject();
     Task UnloadAllProjects();
+    Task<bool> SaveProjectFileText(HexIDE.Forms.ViewModels.ProjectFileDocumentViewModel tab);
+    Task<bool> ConfirmProjectFileClose(HexIDE.Forms.ViewModels.ProjectFileDocumentViewModel tab);
     Task UnloadProject(ProjectDefinition project);
     /// <summary>Removes a form or module from its project, offering to save unsaved changes first.</summary>
     Task RemoveDocument(DocumentIdentity document);
@@ -82,7 +91,8 @@ public interface IProjectService
     /// False for an automation caller. No refusal is shown as a dialog: it comes back as false, or as the
     /// <see cref="HexIDE.IDE.SourceEncodingRefusal"/> when the code page cannot hold the text, which names the
     /// character. A dialog would hold the caller's reply until a person dismissed it. The picker is NOT
-    /// suppressed, so a caller must not ask for one nobody will answer: check
+    /// suppressed for pathless documents or Save As. Existing scratch files are persisted in place.
+    /// A caller must not ask for a picker nobody will answer: check
     /// <see cref="HexIDE.IDE.ScriptedFileDialogs.WouldShowPicker"/> first.
     /// </param>
     /// <exception cref="HexIDE.IDE.SourceEncodingRefusal">The form's code page cannot hold its text. Nothing
@@ -120,6 +130,58 @@ public interface IProjectService
 
     /// <summary>The module counterpart: whether saving would change what was last loaded or saved.</summary>
     bool HasUnsavedChanges(ModuleDefinition module);
+
+    /// <summary>The project-file counterpart, using the save prompt's dirty check.</summary>
+    bool HasUnsavedChanges(ProjectDefinition project);
+
+    /// <summary>
+    /// The name of the first loaded project with anything the save prompt on exit would offer to save, its project file,
+    /// a form or a module, after open editors are applied to the model as that prompt does; or null when there is none.
+    /// </summary>
+    string? FirstUnsavedProjectName();
+
+    /// <summary>
+    /// Asked before an add-in is turned off or its consent withdrawn, while its format can still write: whether any form,
+    /// UserControl or PropertyPage it reads has unsaved changes, and if so what to do, as closing a project asks. Save writes
+    /// them now, Don't Save lets them go, and Cancel keeps the add-in.
+    /// </summary>
+    /// <param name="addinId">The add-in's manifest id.</param>
+    /// <returns>True when the add-in may be taken out: nothing was unsaved, they were saved, or the user let them go.</returns>
+    Task<bool> ConfirmAddinWithdrawal(string addinId);
+
+    /// <summary>
+    /// Every loaded project that has something unsaved, with what a save would write for each of its unsaved files,
+    /// for crash recovery's backup (hexide-io/HexIDE#499). Writes nothing. Call it on the UI thread: it first brings in
+    /// whatever an open editor or designer holds ahead of its model, as a save does.
+    /// </summary>
+    IReadOnlyList<HexIDE.Recovery.UnsavedProject> CaptureUnsavedWork();
+
+    /// <summary>
+    /// Puts recovered work into <paramref name="form"/>, as a reload from disk would, but leaves its baselines as they
+    /// are, so it reads as unsaved and only a save writes it (hexide-io/HexIDE#499). False when the text can't be read.
+    /// </summary>
+    bool ApplyRecovered(FormDefinition form, HexIDE.Recovery.UnsavedFile content);
+
+    /// <summary>The module counterpart of <see cref="ApplyRecovered(FormDefinition, HexIDE.Recovery.UnsavedFile)"/>.</summary>
+    bool ApplyRecovered(ModuleDefinition module, HexIDE.Recovery.UnsavedFile content);
+
+    /// <summary>Whether <paramref name="form"/> already renders as <paramref name="content"/>, so restoring it would change nothing.</summary>
+    bool RecoveredMatches(FormDefinition form, HexIDE.Recovery.UnsavedFile content);
+
+    /// <summary>The module counterpart of <see cref="RecoveredMatches(FormDefinition, HexIDE.Recovery.UnsavedFile)"/>.</summary>
+    bool RecoveredMatches(ModuleDefinition module, HexIDE.Recovery.UnsavedFile content);
+
+    /// <summary>
+    /// Adds a recovered form or module that <paramref name="project"/> doesn't have, with no file, and returns it. Null
+    /// when it has no content, its name is taken, or its text can't be read.
+    /// </summary>
+    object? AddRecovered(ProjectDefinition project, HexIDE.Recovery.UnsavedDocument document);
+
+    /// <summary>
+    /// Rebuilds a project that had no file when its run ended, from its backup, as an unsaved project holding its
+    /// documents, and loads it. Null when the backup can't be put back.
+    /// </summary>
+    Task<ProjectDefinition?> RestoreUnsavedProject(HexIDE.Recovery.UnsavedProject backup);
 
     Task MakeProject();
     Task MakeProject(ProjectDefinition project);

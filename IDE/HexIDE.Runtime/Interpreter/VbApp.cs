@@ -31,7 +31,6 @@ public record AppInfo(
     string LegalCopyright = "",
     string LegalTrademarks = "",
     string Comments = "",
-    bool CommonDialogReferenced = false,
     IReadOnlyList<Components.InBox.RuntimeLibrary>? ControlLibraries = null,
     string CommandLine = "",
     string? ProjectName = null,
@@ -51,7 +50,7 @@ public record AppInfo(
 
         return new AppInfo(
             // With no Title=, F5 uses the project file name (#2413). Keep the unsaved fallback.
-            Title: PreSectionValue(project, "Title")
+            Title: project.PreSectionValue("Title")
                 ?? (path is null ? project.Name : System.IO.Path.GetFileNameWithoutExtension(path)),
 
             // The PROJECT FILE's name, not project.Name and not ExeName32. Measured under F5 with all
@@ -63,53 +62,22 @@ public record AppInfo(
             Major: PreSectionInt(project, "MajorVer") ?? 1,
             Minor: PreSectionInt(project, "MinorVer") ?? 0,
             Revision: PreSectionInt(project, "RevisionVer") ?? 0,
-            CompanyName: PreSectionValue(project, "VersionCompanyName") ?? "",
-            FileDescription: PreSectionValue(project, "VersionFileDescription") ?? "",
-            LegalCopyright: PreSectionValue(project, "VersionLegalCopyright") ?? "",
-            LegalTrademarks: PreSectionValue(project, "VersionLegalTrademarks") ?? "",
-            Comments: PreSectionValue(project, "VersionComments") ?? "",
-            // The .vbp's Object= line, or a form's: VB6 writes both for a form that holds the control (#1084).
-            CommonDialogReferenced: project.UnknownPreSectionLines.Any(l => CommonDialogConstants.IsReference(l.RawLine))
-                || project.Forms.Any(f => f.HeaderLines.Any(CommonDialogConstants.IsReference)),
+            CompanyName: project.PreSectionValue("VersionCompanyName") ?? "",
+            FileDescription: project.PreSectionValue("VersionFileDescription") ?? "",
+            LegalCopyright: project.PreSectionValue("VersionLegalCopyright") ?? "",
+            LegalTrademarks: project.PreSectionValue("VersionLegalTrademarks") ?? "",
+            Comments: project.PreSectionValue("VersionComments") ?? "",
             // The in-box control libraries the project references, whose constants then resolve (#1082).
             ControlLibraries: Components.InBox.RuntimeLibraries.ReferencedBy(project),
             // Project Properties' "Command Line Arguments", which is what Command gives under F5, and HexIDE runs as F5 runs.
-            CommandLine: PreSectionValue(project, "Command32") ?? "",
+            CommandLine: project.PreSectionValue("Command32") ?? "",
             ProjectName: project.Name,
-            HasProjectHelpFile: !string.IsNullOrEmpty(PreSectionValue(project, "HelpFile")),
+            HasProjectHelpFile: !string.IsNullOrEmpty(project.PreSectionValue("HelpFile")),
             ResourceFilePath: Win32Resources.PathFor(project));
     }
 
-    /// <summary>
-    /// Read a <c>key=value</c> line the project loader kept verbatim.
-    /// </summary>
-    /// <remarks>
-    /// These keys are deliberately read from the preserved lines rather than promoted into the project
-    /// model. Modelling a key means the writer owns emitting it, and the <c>.vbp</c> currently round-trips
-    /// byte-for-byte against VB6's own files — not worth risking that gate to read a caption.
-    /// </remarks>
-    internal static string? PreSectionValue(ProjectElements.ProjectDefinition project, string key)
-    {
-        foreach (var (_, raw) in project.UnknownPreSectionLines)
-        {
-            var line = raw.TrimStart();
-            if (!line.StartsWith(key + "=", System.StringComparison.OrdinalIgnoreCase)) continue;
-
-            var value = line[(key.Length + 1)..].Trim();
-
-            // Quoted titles read back without either quote under F5 and compiled p-code (#2413).
-            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-                value = value[1..^1];
-            else if (value.Length >= 1 && value[0] == '"')
-                value = value[1..];
-
-            return value;
-        }
-        return null;
-    }
-
     private static int? PreSectionInt(ProjectElements.ProjectDefinition project, string key)
-        => int.TryParse(PreSectionValue(project, key), System.Globalization.NumberStyles.Integer,
+        => int.TryParse(project.PreSectionValue(key), System.Globalization.NumberStyles.Integer,
             System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null;
 }
 
@@ -147,7 +115,7 @@ public class VbApp(AppInfo info) : ICSharpProxy, ICSharpPropertyBag
                 var mode = LoggingNumber(args[1]);
                 if (mode is not (1 or 2 or 3 or 18))
                     throw new NotImplementedException("App.StartLogging mode is unmeasured (#2552)");
-                var path = (string)args[0].Value!;
+                var path = (string)args[0].WithoutOddBytes("VbApp argument").Value!;
                 if (mode == 3 && path.Length != 0)
                     throw new NotImplementedException("App.StartLogging NT with a nonempty path is unmeasured (#2552)");
                 logMode = mode == 18 ? 1 : mode;
@@ -184,7 +152,7 @@ public class VbApp(AppInfo info) : ICSharpProxy, ICSharpPropertyBag
             _ => throw new NotImplementedException("App.LogEvent type is unmeasured (#2552)"),
         };
         var message = args[0].Type == Vb6Value.ValueType.String
-            ? (string)args[0].Value!
+            ? (string)args[0].WithoutOddBytes("VbApp argument").Value!
             : LoggingNumber(args[0]).ToString(System.Globalization.CultureInfo.InvariantCulture);
         if (!loggingStarted)
         {
@@ -261,7 +229,7 @@ public class VbApp(AppInfo info) : ICSharpProxy, ICSharpPropertyBag
             case "helpfile":
                 if (value.Type != Vb6Value.ValueType.String)
                     throw new NotImplementedException("App.HelpFile conversion is not implemented (#2551)");
-                helpFile = (string)value.Value!;
+                helpFile = (string)value.WithoutOddBytes("VbApp text use").Value!;
                 return true;
             case "taskvisible":
                 if (value.Type != Vb6Value.ValueType.Boolean)

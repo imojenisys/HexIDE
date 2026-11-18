@@ -20,11 +20,8 @@ public class ToolbarDesignerPersistenceTests
 
     private static string CorpusDirectory()
     {
-        for (var at = new DirectoryInfo(AppContext.BaseDirectory); at is not null; at = at.Parent)
-        {
-            var candidate = Path.Join(at.FullName, "corpus", "inbox-controls", "saved", "toolbar");
-            if (Directory.Exists(candidate)) return candidate;
-        }
+        var candidate = Path.Join(RepoTree.Root(), "corpus", "inbox-controls", "saved", "toolbar");
+        if (Directory.Exists(candidate)) return candidate;
         throw new DirectoryNotFoundException("The Toolbar corpus ships with the repository.");
     }
 
@@ -52,7 +49,7 @@ public class ToolbarDesignerPersistenceTests
         designer.AllComponents.Should().NotContain(c => c.Instance.BaseClass.Name == "Toolbar");
 
         designer.SelectedComponent = designer.AllComponents.Single(c => c.Name == "Form1");
-        properties.Properties.Single(p => p.PropertyClass == VBProperties.CaptionProperty).Value = "Edited";
+        properties.Properties.OfType<PropertyViewModel>().Single(p => p.PropertyClass == VBProperties.CaptionProperty).Value = "Edited";
         designer.CommitLayout();
         var (text, bytes) = new FormSerializer().Serialize(file, "Form1.frm");
         Encoding.ASCII.GetBytes(text).Should().Equal(Encoding.ASCII.GetBytes(source.Replace(

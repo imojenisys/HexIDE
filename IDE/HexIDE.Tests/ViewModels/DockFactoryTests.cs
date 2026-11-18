@@ -1,5 +1,8 @@
+using Avalonia;
 using Avalonia.VisualTree;
+using Avalonia.Headless;
 using System.Linq;
+using System.Text.Json;
 using Dock.Model.Core;
 using Dock.Model.Controls;
 using System.Runtime.CompilerServices;
@@ -21,7 +24,45 @@ namespace HexIDE.Tests.ViewModels;
 
 public class DockFactoryTests
 {
-    private static (MainViewViewModel.DockFactory factory, ImmediateToolViewModel immediate) CreateFactory(LayoutManifest? manifest = null, ToolBoxToolViewModel? toolbox = null)
+    private static LayoutManifest RoundTripManifest(LayoutManifest manifest) =>
+        ReadManifest(LayoutManifestJson.Serialize(manifest));
+
+    private static LayoutManifest ReadManifest(string json)
+    {
+        var manifest = LayoutManifestJson.Deserialize(json);
+        if (manifest == null)
+        {
+            string? error = null;
+            try
+            {
+                // LayoutManifestJson's own options, to recover the exception its corrupt-file fallback hides.
+                JsonSerializer.Deserialize<LayoutManifest>(json, LayoutManifestJson.Options);
+            }
+            catch (JsonException exception)
+            {
+                error = exception.ToString();
+            }
+            manifest.Should().NotBeNull("manifest JSON must round-trip. JSON: {0}; reader exception: {1}",
+                json, error ?? "no JsonException was thrown");
+        }
+        return manifest!;
+    }
+
+    [Fact]
+    public void ReadManifest_UnreadableManifest_ReportsJsonAndUnderlyingException()
+    {
+        var json = LayoutManifestJson.Serialize(LayoutManifest.Default)
+            .Replace("\"left\"", "\"unknownRegion\"", StringComparison.Ordinal);
+
+        Action read = () => ReadManifest(json);
+
+        var failure = read.Should().Throw<Exception>().Which;
+        failure.Message.Should().Contain(json);
+        failure.Message.Should().Contain(nameof(JsonException));
+        failure.Message.Should().Contain("$.tools[0].region");
+    }
+
+    internal static (MainViewViewModel.DockFactory factory, ImmediateToolViewModel immediate) CreateFactory(LayoutManifest? manifest = null, ToolBoxToolViewModel? toolbox = null, ILocalizationService? localization = null)
     {
         var docDock = Substitute.For<IDocumentDockService>();
         var eventBus = Substitute.For<IEventBus>();
@@ -29,8 +70,8 @@ public class DockFactoryTests
         var projectManager = Substitute.For<IProjectManager>();
         var projectService = Substitute.For<IProjectService>();
         var editorService = Substitute.For<IEditorService>();
-        var loc = Substitute.For<ILocalizationService>();
-        loc.ActiveLanguage.Returns("en");
+        var loc = localization ?? Substitute.For<ILocalizationService>();
+        if (localization == null) loc.ActiveLanguage.Returns("en");
 
         // ToolBoxToolViewModel loads Avalonia bitmaps in its ctor; bypass since the tree never renders.
         var toolBox = toolbox ?? (ToolBoxToolViewModel)RuntimeHelpers.GetUninitializedObject(typeof(ToolBoxToolViewModel));
@@ -41,7 +82,7 @@ public class DockFactoryTests
         var watches = new WatchesToolViewModel(loc, new HexIDE.Debugging.WatchService(), Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.IDE.IWindowManager>());
         var callStack = new CallStackToolViewModel(loc, Substitute.For<HexIDE.Runtime.Debugging.IDebugController>());
         var projectExplorer = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, loc);
-        var colorPalette = new ColorPaletteToolViewModel(docDock);
+        var colorPalette = new ColorPaletteToolViewModel(docDock, loc);
         var objectBrowser = new ObjectBrowserToolViewModel(projectManager, Substitute.For<ILspClient>(),
             editorService, Substitute.For<IComponentRegistry>(), Substitute.For<ITypeLibraryService>(),
             Substitute.For<IFocusedProjectUtil>(), loc,
@@ -66,8 +107,280 @@ public class DockFactoryTests
         var factory = new MainViewViewModel.DockFactory(
             toolBox, projectExplorer, properties, formLayout,
             immediate, locals, watches, callStack, colorPalette, objectBrowser, translationEditor,
-            languageServers, protocolInspector, wss, new DockFactoryReference());
+            languageServers, protocolInspector, wss, new DockFactoryReference(), new HexIDE.Tools.OutlineToolViewModel(
+                Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IDocumentDockService>()), loc);
         return (factory, immediate);
+    }
+
+    [Fact]
+    public void Every_builtin_and_addin_uses_its_saved_layout_key_for_automation()
+    {
+        var (factory, _) = CreateFactory();
+        var root = factory.CreateLayout();
+        var tools = (System.Collections.Generic.Dictionary<string, IDockable>)typeof(MainViewViewModel.DockFactory)
+            .GetField("toolsByKey", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(factory)!;
+        var automation = typeof(MainViewViewModel).Assembly.GetType("HexIDE.Automation.ToolAutomation");
+        automation.Should().NotBeNull();
+        var keyOf = automation!.GetMethod("KeyOf")!;
+        tools.Should().HaveCount(14);
+        foreach (var (key, tool) in tools)
+            keyOf.Invoke(null, [tool]).Should().Be(key);
+
+        var first = new HexIDE.Addins.AddinToolWindowViewModel("inspector", "Inspector", () => new object(), "sample");
+        factory.RegisterAddinTool(root, first);
+        keyOf.Invoke(null, [first]).Should().Be("addin:" + first.Id);
+        var (restarted, _) = CreateFactory();
+        var again = new HexIDE.Addins.AddinToolWindowViewModel("inspector", "Prüfer", () => new object(), "sample");
+        restarted.RegisterAddinTool(restarted.CreateLayout(), again);
+        keyOf.Invoke(null, [again]).Should().Be(keyOf.Invoke(null, [first]));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EmptyDocumentContentUsesActiveLanguage(bool frameworkCreated)
+    {
+        var loc = Substitute.For<ILocalizationService>();
+        loc.GetString("Str.Dock.NoDocumentsOpen").Returns("Keine Dokumente geöffnet");
+        var (factory, _) = CreateFactory(localization: loc);
+        factory.CreateLayout();
+        var dock = frameworkCreated ? factory.CreateDocumentDock() : factory.DocumentDock!;
+
+        dock.EmptyContent.Should().Be("Keine Dokumente geöffnet");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EmptyDocumentContentFollowsLanguageSwitch(bool frameworkCreated)
+    {
+        var loc = Substitute.For<ILocalizationService>();
+        loc.GetString("Str.Dock.NoDocumentsOpen").Returns("No documents open");
+        var (factory, _) = CreateFactory(localization: loc);
+        var root = factory.CreateLayout();
+        var dock = frameworkCreated ? factory.CreateDocumentDock() : factory.DocumentDock!;
+        // A split's new dock goes into the layout beside the first, as Dock's New Horizontal Document Dock puts it:
+        // the switch reaches the docks in the layout, and one that has left it needs no text.
+        if (frameworkCreated) factory.AddDockable(root, dock);
+
+        loc.GetString("Str.Dock.NoDocumentsOpen").Returns("Keine Dokumente geöffnet");
+        loc.LanguageChanged += Raise.Event<Action>();
+
+        dock.EmptyContent.Should().Be("Keine Dokumente geöffnet");
+    }
+
+    [AvaloniaFact]
+    public void EmptyDocumentContentIsBracketedInPseudo()
+    {
+        var loc = new LocalizationService();
+        loc.Apply("en");
+        var (factory, _) = CreateFactory(localization: loc);
+        factory.CreateLayout();
+
+        loc.Apply("pseudo");
+
+        var text = factory.DocumentDock!.EmptyContent.Should().BeOfType<string>().Subject;
+        text.Should().StartWith("⟦").And.EndWith("⟧");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, 649, false)]
+    [InlineData(true, 649, false)]
+    [InlineData(true, 380, false)]
+    [InlineData(true, 380, true)]
+    public void ResultsHeightSurvivesSavedLayout(bool savedStack, double windowHeight, bool collapsed)
+    {
+        Avalonia.Application.Current!.Styles.Add(new Avalonia.Themes.Simple.SimpleTheme());
+        Avalonia.Application.Current.Styles.Add(new Dock.Avalonia.Themes.Simple.DockSimpleTheme());
+        var (factory, immediate) = CreateFactory();
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+        factory.PlaceTool(root, immediate, rightFallback: false);
+        if (savedStack)
+        {
+            DockLayoutNode ToolNode(string key, double proportion) => new("tool", proportion,
+                Dock.Model.Core.Orientation.Horizontal, Alignment.Bottom, null, [key], key, []);
+            var original = factory.CaptureManifest(root);
+            DockLayoutNode Stack(DockLayoutNode node) => node.Context == nameof(factory.MiddleDock)
+                ? node with { Children = [new("document", collapsed ? 0 : 0.370, Dock.Model.Core.Orientation.Horizontal,
+                    Alignment.Unset, null, [], null, []), ToolNode("immediate", collapsed ? 0.481 : 0.111),
+                    ToolNode("locals", 0.144), ToolNode("callStack", 0.144), ToolNode("watches", 0.231)] }
+                : node with { Children = node.Children.Select(Stack).ToArray() };
+            var saved = original with
+            {
+                Tools = original.Tools.Select(t => t.Key is "locals" or "callStack" or "watches"
+                    ? t with { Open = true } : t).ToArray(),
+                Topology = Stack(original.Topology!)
+            };
+            (factory, immediate) = CreateFactory(RoundTripManifest(saved));
+            root = factory.CreateLayout();
+            factory.InitLayout(root);
+        }
+        var loc = new LocalizationService();
+        loc.Apply("en");
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns([]);
+        var documents = Substitute.For<IDocumentDockService>();
+        documents.OpenDocuments.Returns([]);
+        var results = new FindReferencesToolViewModel(Substitute.For<ILspClient>(), Substitute.For<IEditorService>(),
+            projects, documents, loc);
+        var host = new Dock.Avalonia.Controls.DockControl { Layout = root };
+        host.DataTemplates.Add(new Avalonia.Controls.Templates.FuncDataTemplate<FindReferencesToolViewModel>(
+            (_, _) => new FindReferencesToolView()));
+        var window = new Avalonia.Controls.Window { Content = host, Width = 1200, Height = windowHeight };
+        window.SetRenderScaling(1.5);
+        try
+        {
+            window.Show();
+            LayoutWindow(window);
+            if (collapsed)
+            {
+                factory.DocumentDock!.GetVisibleBounds(out _, out _, out _, out var loadedHeight);
+                loadedHeight.Should().BeGreaterThanOrEqualTo(120);
+            }
+            var slot = (IToolDock)immediate.Owner!;
+            factory.AddDockable(slot, results);
+            slot.ActiveDockable = results;
+            results.ShowLocations(Enumerable.Range(0, 12).Select(i => new HexIDE.Lsp.Messages.Location(
+                "untitled:P/M.bas", new(new(i, 0), new(i, 1)))));
+            for (var i = 0; i < 5; i++) LayoutWindow(window);
+            var view = host.GetVisualDescendants().OfType<FindReferencesToolView>().Single();
+            var list = (Avalonia.Controls.ListBox)view.Content!;
+            var row = (Avalonia.Controls.ListBoxItem)list.ContainerFromIndex(0)!;
+            factory.DocumentDock!.GetVisibleBounds(out _, out _, out _, out var documentHeight);
+            documentHeight.Should().BeGreaterThanOrEqualTo(120);
+            if (windowHeight == 649)
+                list.GetVisualDescendants().OfType<Avalonia.Controls.ScrollViewer>().Single().Viewport.Height
+                    .Should().BeGreaterThanOrEqualTo(6 * row.Bounds.Height, $"savedStack={savedStack}, list height={list.Bounds.Height} DIP");
+            if (windowHeight == 380 && !collapsed)
+            {
+                documentHeight.Should().BeApproximately(120, 1);
+                var viewport = list.GetVisualDescendants().OfType<Avalonia.Controls.ScrollViewer>().Single().Viewport.Height;
+                viewport.Should().BeLessThan(6 * row.Bounds.Height);
+            }
+            var saved = RoundTripManifest(factory.CaptureManifest(root));
+            System.Collections.Generic.IEnumerable<DockLayoutNode> Descendants(DockLayoutNode node) =>
+                new[] { node }.Concat(node.Children.SelectMany(Descendants));
+            Descendants(saved.Topology!).Single(n => n.Kind == "document").Proportion.Should().BeGreaterThan(0);
+
+            saved.Tools.Single(t => t.Key == "immediate").Proportion.Should().Be(slot.Proportion);
+            var (restored, restoredImmediate) = CreateFactory(saved);
+            restored.InitLayout(restored.CreateLayout());
+            restoredImmediate.Owner!.Proportion.Should().Be(slot.Proportion);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void CollapsedDocumentsAreNotSaved(bool debounced)
+    {
+        var (factory, _) = CreateFactory();
+        var layout = factory.CreateLayout();
+        factory.InitLayout(layout);
+        factory.DocumentDock!.SetVisibleBounds(0, 0, 800, 0);
+        var state = Substitute.For<IWindowStateService>();
+        var vm = (MainViewViewModel)RuntimeHelpers.GetUninitializedObject(typeof(MainViewViewModel));
+        void Set(string name, object value) => typeof(MainViewViewModel)
+            .GetField(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(vm, value);
+        var project = TestHelpers.CreateProject();
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns([project]);
+        var editors = Substitute.For<IEditorService>();
+        Set("projectManager", projects);
+        Set("editorService", editors);
+        Set("dockFactory", factory);
+        Set("windowStateService", state);
+        Set("_lastSavedLayoutJson", "previous valid layout");
+        Set("_layoutSaveTimer", new Avalonia.Threading.DispatcherTimer());
+        Set("_layout", layout);
+
+        if (debounced)
+            typeof(MainViewViewModel).GetMethod("FlushLayoutSaveDebounced",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(vm, null);
+        else
+            vm.SaveLayout();
+
+        typeof(MainViewViewModel).GetField("_lastSavedLayoutJson",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(vm)
+            .Should().Be("previous valid layout");
+        state.DidNotReceive().SaveLayoutManifestJson(Arg.Any<string>());
+        if (!debounced) editors.Received(1).SaveOpenDocuments(project);
+        else editors.DidNotReceive().SaveOpenDocuments(Arg.Any<HexIDE.Runtime.ProjectElements.ProjectDefinition>());
+    }
+
+    [AvaloniaFact]
+    public void ServerNavigationCanOpenAndReuseATabWithoutTakingFocus()
+    {
+        var (factory, _) = CreateFactory();
+        factory.InitLayout(factory.CreateLayout());
+        using var service = new DocumentDockService(new DockFactoryReference { Value = factory },
+            Substitute.For<IEventBus>());
+        using var first = new HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel(
+            Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(),
+            Substitute.For<ISettingsService>());
+        using var second = new HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel(
+            Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(),
+            Substitute.For<ISettingsService>());
+        service.OpenDocument(first);
+        var focused = factory.DocumentDock!.FocusedDockable;
+
+        service.OpenDocument(second, takeFocus: false);
+        service.OpenDocuments.Should().Contain(second);
+        factory.DocumentDock.ActiveDockable.Should().BeSameAs(first);
+        factory.DocumentDock.FocusedDockable.Should().BeSameAs(focused);
+        service.TryActivate<HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel>(vm => vm == second, false)
+            .Should().BeTrue();
+        factory.DocumentDock.ActiveDockable.Should().BeSameAs(first);
+
+        service.TryActivate<HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel>(vm => vm == second, true)
+            .Should().BeTrue();
+        factory.DocumentDock.ActiveDockable.Should().BeSameAs(second);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("list")]
+    [InlineData("close")]
+    [InlineData("activate")]
+    [InlineData("active")]
+    public void TabServiceSeesFactorySplit(string operation)
+    {
+        var (factory, _) = CreateFactory();
+        factory.InitLayout(factory.CreateLayout());
+        using var service = new DocumentDockService(new DockFactoryReference { Value = factory },
+            Substitute.For<IEventBus>());
+        var original = factory.DocumentDock!;
+        var first = new Document { Title = "First" };
+        var moved = new Document { Title = "Moved" };
+        factory.AddDockable(original, first);
+        factory.AddDockable(original, moved);
+        var split = factory.CreateDocumentDock();
+        split.VisibleDockables = factory.CreateList<IDockable>();
+        factory.MoveDockable(original, split, moved, null);
+        factory.SplitToDock(original, split, DockOperation.Bottom);
+        factory.SetFocusedDockable(original, first);
+        original.ActiveDockable = first;
+        split.ActiveDockable = moved;
+
+        switch (operation)
+        {
+            case "list": service.AllTabs.Should().Equal(first, moved); break;
+            case "close":
+                service.TryCloseAny(t => t.Title == "Moved").Should().BeTrue();
+                split.VisibleDockables.Should().BeEmpty();
+                break;
+            case "activate":
+                service.TryActivateAny(t => t.Title == "Moved").Should().BeTrue();
+                split.ActiveDockable.Should().BeSameAs(moved);
+                break;
+            case "active":
+                factory.SetFocusedDockable(split, moved);
+                service.ActiveTab.Should().BeSameAs(moved);
+                break;
+        }
     }
 
     private static void LayoutWindow(Avalonia.Controls.Window window)
@@ -79,6 +392,74 @@ public class DockFactoryTests
             window.UpdateLayout();
         }
         finally { System.Threading.ExecutionContext.Restore(context!); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("toolbox", false)]
+    [InlineData("toolbox", true)]
+    [InlineData("properties", false)]
+    [InlineData("properties", true)]
+    public void ReopenedTool_HasVisibleBoundsInItsLastColumn(string key, bool resized)
+    {
+        // #895: tree membership alone missed a pane that reopened with zero bounds.
+        Avalonia.Application.Current!.Styles.Add(new Avalonia.Themes.Simple.SimpleTheme());
+        Avalonia.Application.Current.Styles.Add(new Dock.Avalonia.Themes.Simple.DockSimpleTheme());
+        var toolbox = new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(),
+            new ComponentRegistry(), Substitute.For<ILocalizationService>());
+        var (factory, _) = CreateFactory(toolbox: toolbox);
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+        var main = (IDock)root.DefaultDockable!;
+        var right = (IDock)main.VisibleDockables![4];
+        var dock = key == "toolbox" ? (IToolDock)main.VisibleDockables[0]
+            : right.VisibleDockables!.OfType<IToolDock>().Last();
+        var tool = (Tool)dock.ActiveDockable!;
+        factory.KeyOf(tool).Should().Be(key);
+        if (resized)
+        {
+            main.VisibleDockables[0].Proportion = 0.19;
+            right.Proportion = 0.31;
+            dock.Proportion = key == "toolbox" ? 0.19 : 0.37;
+        }
+        var host = new Dock.Avalonia.Controls.DockControl { Layout = root };
+        var window = new Avalonia.Controls.Window { Content = host, Width = 1000, Height = 700 };
+        window.SetRenderScaling(1.5);
+        try
+        {
+            window.Show();
+            LayoutWindow(window);
+            Rect Bounds()
+            {
+                var chrome = host.GetVisualDescendants().OfType<Dock.Avalonia.Controls.ToolChromeControl>()
+                    .Single(c => ReferenceEquals(c.DataContext, tool.Owner));
+                return new Rect(chrome.TranslatePoint(default, host)!.Value, chrome.Bounds.Size);
+            }
+            var before = Bounds();
+            before.Width.Should().BeGreaterThan(0);
+            before.Height.Should().BeGreaterThan(0);
+            for (var cycle = 0; cycle < 3; cycle++)
+            {
+                factory.CloseDockable(tool);
+                LayoutWindow(window);
+                factory.CaptureManifest(root).Tools.Single(t => t.Key == key).Open.Should().BeFalse();
+                factory.PlaceTool(root, tool, rightFallback: true);
+                LayoutWindow(window);
+                var after = Bounds();
+                after.Width.Should().BeGreaterThan(0);
+                after.Height.Should().BeGreaterThan(0);
+                if (key == "toolbox")
+                    after.Right.Should().BeLessThan(host.Bounds.Width / 2);
+                else
+                    after.Left.Should().BeGreaterThan(host.Bounds.Width / 2);
+                after.X.Should().BeApproximately(before.X, 1);
+                after.Y.Should().BeApproximately(before.Y, 1);
+                after.Width.Should().BeApproximately(before.Width, 1);
+                after.Height.Should().BeApproximately(before.Height, 1);
+                factory.CaptureManifest(root).Tools.Single(t => t.Key == key).Region.Should()
+                    .Be(key == "toolbox" ? DockRegion.Left : DockRegion.Right);
+            }
+        }
+        finally { window.Close(); }
     }
 
     [AvaloniaTheory]
@@ -114,7 +495,7 @@ public class DockFactoryTests
                 if (restart)
                 {
                     var saved = factory.CaptureManifest(root);
-                    (factory, _) = CreateFactory(LayoutManifestJson.Deserialize(LayoutManifestJson.Serialize(saved)),
+                    (factory, _) = CreateFactory(RoundTripManifest(saved),
                         (ToolBoxToolViewModel)tool);
                     root = factory.CreateLayout();
                     factory.InitLayout(root);
@@ -210,7 +591,7 @@ public class DockFactoryTests
             for (var restart = 0; restart < 2; restart++)
             {
                 System.IO.File.WriteAllText(file, LayoutManifestJson.Serialize(factory.CaptureManifest(root)));
-                (factory, immediate) = CreateFactory(LayoutManifestJson.Deserialize(System.IO.File.ReadAllText(file)));
+                (factory, immediate) = CreateFactory(ReadManifest(System.IO.File.ReadAllText(file)));
                 root = factory.CreateLayout();
                 factory.InitLayout(root);
                 factory.CaptureManifest(root).Tools.Single(t => t.Key == (addin ? "addin:sample" : "immediate"))
@@ -287,7 +668,7 @@ public class DockFactoryTests
         }
         main.VisibleDockables[0] = split;
         factory.InitLayout(root);
-        var saved = LayoutManifestJson.Deserialize(LayoutManifestJson.Serialize(factory.CaptureManifest(root)))!;
+        var saved = RoundTripManifest(factory.CaptureManifest(root));
         var key = addin ? "addin:sample" : "immediate";
         saved.Tools.Single(t => t.Key == key).Open.Should().BeTrue();
         saved.Tools.Single(t => t.Key == key).Region.Should().Be(DockRegion.Left);
@@ -300,7 +681,7 @@ public class DockFactoryTests
         if (addin)
         {
             // A save before add-in registration must retain its slot too.
-            var pending = LayoutManifestJson.Deserialize(LayoutManifestJson.Serialize(restoredFactory.CaptureManifest(restoredRoot)))!;
+            var pending = RoundTripManifest(restoredFactory.CaptureManifest(restoredRoot));
             (restoredFactory, _) = CreateFactory(pending);
             restoredRoot = restoredFactory.CreateLayout();
             restoredFactory.InitLayout(restoredRoot);
@@ -383,7 +764,7 @@ public class DockFactoryTests
         dock.Proportion = 0.42;
 
         factory.CloseDockable(closeContainer ? dock : immediate);
-        var saved = LayoutManifestJson.Deserialize(LayoutManifestJson.Serialize(factory.CaptureManifest(root)))!;
+        var saved = RoundTripManifest(factory.CaptureManifest(root));
         saved.Tools.Single(t => t.Key == "immediate").Open.Should().BeFalse();
         if (restart)
         {
@@ -415,7 +796,7 @@ public class DockFactoryTests
             new("immediate", true, DockRegion.Bottom, 3, 0.6),
             new("objectBrowser", true, DockRegion.Document, 4, null),
         ]));
-        var (factory, _) = CreateFactory(LayoutManifestJson.Deserialize(json));
+        var (factory, _) = CreateFactory(ReadManifest(json));
 
         var root = factory.CreateLayout();
         factory.InitLayout(root);
@@ -423,7 +804,7 @@ public class DockFactoryTests
         var restored = factory.CaptureManifest(root);
         restored.LeftProportion.Should().Be(0.17);
         restored.RightProportion.Should().Be(0.29);
-        foreach (var expected in LayoutManifestJson.Deserialize(json)!.Tools.Where(t => t.Key != "futureTool"))
+        foreach (var expected in ReadManifest(json).Tools.Where(t => t.Key != "futureTool"))
         {
             var actual = restored.Tools.Single(t => t.Key == expected.Key);
             actual.Open.Should().BeTrue();
@@ -461,10 +842,30 @@ public class DockFactoryTests
         var m = factory.CaptureManifest(root);
 
         m.Tools.Where(t => t.Open).Select(t => t.Key)
-            .Should().BeEquivalentTo("toolbox", "project", "properties", "formLayout");
+            .Should().BeEquivalentTo("toolbox", "project", "properties");
         m.Tools.Single(t => t.Key == "properties").Region.Should().Be(DockRegion.Right);
         m.Tools.Single(t => t.Key == "properties").Order.Should().Be(1);
         m.Tools.Single(t => t.Key == "immediate").Open.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ResetLayout_ClosesSavedOpenFormLayout()
+    {
+        var saved = LayoutManifest.Default with
+        {
+            Tools = LayoutManifest.Default.Tools.Select(t => t.Key == "formLayout"
+                ? t with { Open = true } : t).ToArray()
+        };
+        var (factory, _) = CreateFactory(RoundTripManifest(saved));
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+        factory.CaptureManifest(root).Tools.Single(t => t.Key == "formLayout").Open.Should().BeTrue();
+
+        root = factory.ResetLayout(root);
+        factory.InitLayout(root);
+
+        factory.CaptureManifest(root).Tools.Single(t => t.Key == "formLayout").Should().Be(
+            new ToolLayoutState("formLayout", false, DockRegion.Right, 2, null));
     }
 
     [Fact]
@@ -519,6 +920,144 @@ public class DockFactoryTests
 
         factory.CaptureManifest(root).Tools.Single(t => t.Key == "immediate").Open.Should().BeFalse();
     }
+    [Fact]
+    public void FullEditor_RemovesAllPanels_PreservesTheDocumentDockAndTabs()
+    {
+        var (factory, _) = CreateFactory();
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+        var documents = factory.DocumentDock!;
+        var editor = new Dock.Model.Mvvm.Controls.Document { Id = "editor" };
+        documents.VisibleDockables!.Add(editor);
+        var browserLayout = LayoutManifest.Default with
+        {
+            Tools = LayoutManifest.Default.Tools.Select(t => t.Key == "objectBrowser" ? t with { Open = true } : t).ToArray(),
+        };
+        root = factory.ApplyLayout(browserLayout);
+        factory.InitLayout(root);
+        factory.InitDockable(editor, documents);
+        var tools = new HexIDE.Addins.AddinToolWindowService();
+        using var window = tools.Register("output", "Output", null, () => new object());
+        factory.PlaceTool(root, tools.Tools.Single(), true);
+
+        var saved = factory.CaptureManifest(root);
+        var full = factory.ApplyLayout(LayoutManifest.FullEditor);
+        factory.InitLayout(full);
+        factory.CaptureManifest(full).Tools.Should().OnlyContain(t => !t.Open);
+        factory.DocumentDock.Should().BeSameAs(documents);
+        documents.VisibleDockables.Should().Contain(editor);
+        documents.ActiveDockable.Should().BeSameAs(editor);
+
+        var restored = factory.ApplyLayout(saved);
+        factory.InitLayout(restored);
+        factory.CaptureManifest(restored).Tools.Should().Equal(saved.Tools);
+        documents.VisibleDockables.Should().Contain(editor);
+    }
+
+    [Theory]
+    [InlineData(DockRegion.Left, true)]
+    [InlineData(DockRegion.Right, true)]
+    [InlineData(DockRegion.Bottom, true)]
+    [InlineData(DockRegion.Document, true)]
+    [InlineData(DockRegion.Left, false)]
+    public void LegacyAddinKey_InTopology_RestoresAndDropsTheLegacyKey(DockRegion region, bool open)
+    {
+        const string key = "addin:addin:17:com.hexide.aichat:aiChat";
+        var manifest = LayoutManifest.Default with
+        {
+            Tools = LayoutManifest.Default.Tools.Append(new ToolLayoutState(key, true, region, 1, 0.4)).ToArray(),
+        };
+        var (source, _) = CreateFactory(manifest);
+        var original = source.CreateLayout();
+        source.InitLayout(original);
+        var tools = new HexIDE.Addins.AddinToolWindowService();
+        using var handle = tools.ForOwner("com.hexide.aichat").Register("aiChat", "AI Chat", null, () => new object());
+        var tool = tools.Tools.Single();
+        source.RegisterAddinTool(original, tool);
+        if (!open) source.CloseDockable(tool);
+        var legacy = ReadManifest(LayoutManifestJson.Serialize(source.CaptureManifest(original))
+            .Replace(key, "addin:aiChat", StringComparison.Ordinal));
+        legacy.Topology.Should().NotBeNull();
+
+        var (restored, _) = CreateFactory(legacy);
+        var root = restored.CreateLayout();
+        restored.InitLayout(root);
+        var newTools = new HexIDE.Addins.AddinToolWindowService();
+        using var replacement = newTools.ForOwner("com.hexide.aichat").Register("aiChat", "AI Chat", null, () => new object());
+        restored.RegisterAddinTool(root, newTools.Tools.Single());
+        restored.SkippedTools.Should().BeEmpty();
+        var captured = restored.CaptureManifest(root);
+        captured.Tools.Single(t => t.Key == key).Open.Should().Be(open);
+        if (!open) restored.PlaceTool(root, newTools.Tools.Single(), true);
+        captured = restored.CaptureManifest(root);
+        captured.Tools.Single(t => t.Key == key).Region.Should().Be(region);
+        LayoutManifestJson.Serialize(captured).Should().NotContain("\"addin:aiChat\"");
+    }
+
+    [Fact]
+    public void RestoreAddinWindow_UsesToolKeys_AndDefersMissingWindow()
+    {
+        var manifest = LayoutManifestJson.Deserialize("""
+            {"version":2,"leftProportion":0.1,"rightProportion":0.2,"tools":[
+              {"key":"addin:addin:5:owner:output","open":true,"region":"bottom","order":0,"proportion":0.4},
+              {"key":"addin:addin:6:absent:output","open":true,"region":"right","order":0}
+            ]}
+            """)!;
+        var (factory, _) = CreateFactory(manifest);
+        var tools = new HexIDE.Addins.AddinToolWindowService();
+        using var first = tools.ForOwner("owner").Register("output", "Owner", null, () => new object());
+        using var second = tools.ForOwner("other").Register("output", "Other", null, () => new object());
+
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+        foreach (var tool in tools.Tools) factory.RegisterAddinTool(root, tool);
+        factory.CloseDockable(tools.Tools[1]);
+        var captured = factory.CaptureManifest(root);
+        captured.Tools.Single(t => t.Key == "addin:addin:5:owner:output").Should().Be(manifest.Tools[0]);
+        captured.Tools.Single(t => t.Key == "addin:addin:5:other:output").Open.Should().BeFalse();
+        factory.SkippedTools.Should().Equal(manifest.Tools[1]);
+        captured.Tools.Should().Contain(manifest.Tools[1]);
+    }
+
+    [Fact]
+    public void ProtocolInspector_IsIncludedInCapturedLayouts()
+    {
+        var (factory, _) = CreateFactory();
+        var root = factory.CreateLayout();
+        factory.CaptureManifest(root).Tools.Should().Contain(t => t.Key == "protocolInspector" && !t.Open);
+    }
+
+    [Theory]
+    [InlineData(DockRegion.Left, "toolbox")]
+    [InlineData(DockRegion.Document, "objectBrowser")]
+    public void CaptureManifest_PreservesToolOrderWithinTabGroups(DockRegion region, string builtIn)
+    {
+        var manifest = LayoutManifest.Default with
+        {
+            Tools = new[]
+            {
+                new ToolLayoutState("addin:a", true, region, 2, null),
+                new ToolLayoutState(builtIn, true, region, 1, null),
+                new ToolLayoutState("addin:b", true, region, 0, null),
+            },
+        };
+        var (factory, _) = CreateFactory(manifest);
+        var tools = new HexIDE.Addins.AddinToolWindowService();
+        using var a = tools.Register("a", "A", null, () => new object());
+        using var b = tools.Register("b", "B", null, () => new object());
+        var root = factory.CreateLayout();
+        factory.InitLayout(root);
+
+        foreach (var tool in tools.Tools) factory.RegisterAddinTool(root, tool);
+        var captured = factory.CaptureManifest(root);
+        captured.Tools.Single(t => t.Key == builtIn).Order.Should().Be(1);
+        captured.Tools.Single(t => t.Key == "addin:a").Order.Should().Be(2);
+        captured.Tools.Single(t => t.Key == "addin:b").Order.Should().Be(0);
+        var restored = factory.ApplyLayout(captured);
+        factory.InitLayout(restored);
+        factory.CaptureManifest(restored).Tools.Should().Equal(captured.Tools);
+    }
+
 
     [Theory]
     [InlineData(false)]
@@ -552,7 +1091,7 @@ public class DockFactoryTests
         var manifest = factory.CaptureManifest(root);
         manifest.Tools.Single(t => t.Key == key).Should().Be(home with { Open = true });
 
-        var (restoredFactory, _) = CreateFactory(LayoutManifestJson.Deserialize(LayoutManifestJson.Serialize(manifest)));
+        var (restoredFactory, _) = CreateFactory(RoundTripManifest(manifest));
         var restoredRoot = restoredFactory.CreateLayout();
         restoredFactory.InitLayout(restoredRoot);
         restoredFactory.CaptureManifest(restoredRoot).Tools.Single(t => t.Key == key).Open.Should().BeTrue();

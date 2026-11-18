@@ -92,6 +92,17 @@ public class FormSerializer
             if (children.Any(c => c.BaseClass is UserControlComponentClass))
                 children = children.OrderBy(c => c.BaseClass is UserControlComponentClass uc
                     ? uc.Setting("Windowless") : c.BaseClass is ComponentBaseClass { IsWindowless: true }).ToList();
+            else if (container.PreservedChildSubtrees.Count == 0)
+            {
+                // #1517 / oracle PR #4518. Rendering uses the saved plane order even before a designer opens,
+                // so the load-time render baseline stays clean when that designer later flushes its order.
+                // Nonvisual icons and menus keep their slots; carried blocks retain their ordinal-based placement.
+                var visual = children.Where(c => c.BaseClass.IsVisual && c.BaseClass is not MenuComponentClass)
+                    .OrderBy(c => c.BaseClass is ComponentBaseClass { IsWindowless: true }).ToArray();
+                var at = 0;
+                children = children.Select(c => c.BaseClass.IsVisual && c.BaseClass is not MenuComponentClass
+                    ? visual[at++] : c).ToList();
+            }
             var preserved = container.PreservedChildSubtrees;
             var before = CarriedOrder.ChildrenBefore(children.Count, preserved);
             var preservedIndex = 0;
@@ -100,7 +111,7 @@ public class FormSerializer
                 while (preservedIndex < preserved.Count && before[preservedIndex] <= childIndex)
                     WriteVerbatimBlock(preserved[preservedIndex++]);
                 if (childIndex < children.Count)
-                    WriteComponentTree(children[childIndex]);
+                    WriteComponentTree(children[childIndex], container.BaseClass is MenuComponentClass);
             }
         }
 
@@ -114,7 +125,7 @@ public class FormSerializer
 
         // Begin/End maintain the indent level themselves, so recursing here is all the nesting needs:
         // VB6's three-space step per level falls out of it.
-        void WriteComponentTree(ComponentInstance component)
+        void WriteComponentTree(ComponentInstance component, bool isSubMenu)
         {
             if (!written.Add(component))
                 throw new InvalidOperationException(
@@ -125,7 +136,7 @@ public class FormSerializer
             var inBox = component.BaseClass as InBoxComponentClass;
             vb.Begin(inBox?.TypeNameOf(component) ?? component.BaseClass.VBTypeName, component.GetPropertyOrDefault(VBProperties.NameProperty)!);
             vb.BeginSortedProperties();
-            WriteAllProperties(vb, component, citations);
+            WriteAllProperties(vb, component, citations, isSubMenu);
             vb.EndSortedProperties();
             if (component.BaseClass is RichTextBoxComponentClass)
                 RichTextBoxPersistence.Write(vb, component, citations);
@@ -281,7 +292,7 @@ public class FormSerializer
         WriteOuter("Width", VBProperties.WidthProperty, outerRect.WidthOffsetTwips);
     }
 
-    private void WriteAllProperties(VbFrmFormatSerializer vb, ComponentInstance instance, CompanionCitations citations)
+    private void WriteAllProperties(VbFrmFormatSerializer vb, ComponentInstance instance, CompanionCitations citations, bool isSubMenu = false)
     {
         var inBox = instance.BaseClass as InBoxComponentClass;
         var userControl = instance.BaseClass as UserControlComponentClass;
@@ -297,6 +308,30 @@ public class FormSerializer
             if (Omit(prop.Name) || prop == VBProperties.NameProperty)
                 continue;
 
+            if (instance.BaseClass is MenuComponentClass)
+            {
+                var value = instance.GetBoxedPropertyOrDefault(prop);
+                if (prop == MenuComponentClass.ShortcutProperty)
+                {
+                    var shortcut = VBMenuShortcut.Canonicalize(value as string ?? "");
+                    if (shortcut.Length > 0)
+                        vb.WriteRawProperty(prop.Name, shortcut);
+                    continue;
+                }
+                if (prop == MenuComponentClass.NegotiatePositionProperty)
+                {
+                    if (value is int position && position != 0)
+                        vb.WriteRawProperty(prop.Name, position.ToString(CultureInfo.InvariantCulture)
+                            + (position is >= 1 and <= 3 ? "  '" + new[] { "", "Left", "Middle", "Right" }[position] : ""));
+                    continue;
+                }
+                if (prop == VBProperties.WindowListProperty && isSubMenu)
+                    continue;
+                if ((prop == VBProperties.EnabledProperty || prop == VBProperties.VisibleProperty) && Equals(value, true)
+                    || prop == VBProperties.HelpContextIDProperty && Equals(value, 0))
+                    continue;
+            }
+
             // An in-box control's own properties go in the run after its extender's (#1082).
             if (inBox is not null && inBox.OwnProperties.Contains(prop))
                 continue;
@@ -307,6 +342,11 @@ public class FormSerializer
                 (prop == VBProperties.WidthProperty
                  || prop == VBProperties.HeightProperty
                  || prop == VBProperties.VisibleProperty))
+                continue;
+
+            // The VB6 IDE drops even an explicit MousePointer = 0 (#1970).
+            if (prop == VBProperties.MousePointerProperty
+                && instance.GetPropertyOrDefault(VBProperties.MousePointerProperty) == VBCursorType.Default)
                 continue;
 
             if (prop == VBProperties.IntervalProperty && instance.BaseClass is TimerComponentClass
@@ -370,13 +410,17 @@ public class FormSerializer
                 continue;
             if (instance.BaseClass is RichTextBoxComponentClass && RichTextBoxPersistence.IsOwnProperty(raw.Name))
                 continue;
-            if (Omit(raw.Name) || inBox is SSTabComponentClass && IsSSTabOwnLine(raw.Name)
+            if (Omit(raw.Name) || inBox is ListViewComponentClass && IsListViewOwnProperty(raw.Name)
+                || inBox is SSTabComponentClass && IsSSTabOwnLine(raw.Name)
                 || inBox is not null && IsOwnRunLine(inBox, raw.Name))
                 continue;
             if (instance.BaseClass.Properties.Any(p =>
                     string.Equals(p.Name, raw.Name, StringComparison.OrdinalIgnoreCase) && instance.TryGetBoxedProperty(p, out _)))
                 continue;
-            vb.WriteVerbatimProperty(raw.Name, raw.Lines.Select(line => citations.Cite(line, raw.Records)).ToList());
+            if (raw.EditedValue is { } editedValue)
+                vb.WriteRawProperty(raw.Name, editedValue);
+            else
+                vb.WriteVerbatimProperty(raw.Name, raw.Lines.Select(line => citations.Cite(line, raw.Records)).ToList());
         }
     }
 
@@ -454,7 +498,11 @@ public class FormSerializer
         || (inBox is StatusBarComponentClass && name.Equals("Panels", StringComparison.OrdinalIgnoreCase))
         || inBox is ImageListComponentClass && name.Equals("Images", StringComparison.OrdinalIgnoreCase)
         || inBox.CarriedOwnProperties.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
-        || inBox.CarriedPropertyOrder.Contains(name, StringComparer.OrdinalIgnoreCase);
+        || inBox.CarriedPropertyOrder.Contains(name, StringComparer.OrdinalIgnoreCase)
+        || inBox is SliderComponentClass && (SliderComponentClass.FileProperties.Contains(name, StringComparer.OrdinalIgnoreCase)
+            || name.Equals("Text", StringComparison.OrdinalIgnoreCase))
+        // An own property whose saved value couldn't be read is kept as its line, and goes back in the own run (#1222).
+        || inBox.OwnProperties.Any(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// An in-box control's second run (#1082), written after its extender's as VB6 writes it (measured): <c>_ExtentX</c>,
@@ -464,6 +512,11 @@ public class FormSerializer
     private static void WriteOwnProperties(VbFrmFormatSerializer vb, ComponentInstance instance, InBoxComponentClass inBox,
         CompanionCitations citations)
     {
+        if (inBox is ListViewComponentClass)
+        {
+            WriteListViewProperties(vb, instance, citations);
+            return;
+        }
         ComponentInstance.UnknownRawProperty? Carried(string name) =>
             instance.UnknownRawProperties.FirstOrDefault(r => r.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) is
                 { Name: not null } raw ? raw : null;
@@ -480,6 +533,34 @@ public class FormSerializer
 
         var readX = Carried("_ExtentX");
         var readY = Carried("_ExtentY");
+        // Slider's own properties remain view-only. Preserve even file-only values that the runtime clamps or
+        // ignores; missing extents likewise stay missing until a measured resize supplies new ones (#1091).
+        if (inBox is SliderComponentClass)
+        {
+            var basis = instance.GetPropertyOrDefault(InBoxComponentClass.ExtentBasisProperty);
+            var unchangedSize = basis is not null
+                && basis.Width == instance.GetPropertyOrDefault(VBProperties.WidthProperty)
+                && basis.Height == instance.GetPropertyOrDefault(VBProperties.HeightProperty);
+            if (!unchangedSize)
+            {
+                var resized = inBox.ExtentsToWrite(instance, ValueOf(readX), ValueOf(readY));
+                vb.WriteProperty("_ExtentX", typeof(int), resized.X);
+                vb.WriteProperty("_ExtentY", typeof(int), resized.Y);
+            }
+            if (!unchangedSize && Carried("_Version") is null)
+                vb.WriteProperty("_Version", typeof(int), inBox.LibraryOf(instance).PersistedVersion);
+            foreach (var raw in instance.UnknownRawProperties)
+            {
+                if (raw.Name.Equals("Text", StringComparison.OrdinalIgnoreCase) || !IsOwnRunLine(inBox, raw.Name))
+                    continue;
+                if (!unchangedSize && (raw.Name.Equals("_ExtentX", StringComparison.OrdinalIgnoreCase)
+                    || raw.Name.Equals("_ExtentY", StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                WriteCarried(raw);
+            }
+            return;
+        }
+
         var extents = inBox.ExtentsToWrite(instance, ValueOf(readX), ValueOf(readY));
         if (ValueOf(readX) == extents.X && ValueOf(readY) == extents.Y)
         {
@@ -510,6 +591,11 @@ public class FormSerializer
         else if (inBox is not ImageListComponentClass)
             vb.WriteProperty("_Version", typeof(int), inBox.LibraryOf(instance).PersistedVersion);
 
+        if (inBox is FlatScrollBarComponentClass && instance.GetPropertyOrDefault(FlatScrollBarComponentClass.SavedProperty) is null)
+        {
+            vb.WriteProperty("Arrows", typeof(int), 65536);
+            vb.WriteProperty("Orientation", typeof(int), 1638401);
+        }
         if (inBox is MaskedEdBoxComponentClass)
         {
             MaskedEdBoxPersistence.Write(vb, instance);
@@ -529,8 +615,13 @@ public class FormSerializer
             if (inBox is StatusBarComponentClass && (property == StatusBarComponentClass.StyleProperty
                 || property == StatusBarComponentClass.SimpleTextProperty || property == StatusBarComponentClass.ShowTipsProperty))
                 continue;
-            var value = instance.GetBoxedPropertyOrDefault(property);
-            if (value is not null && (inBox.IsAlwaysWritten(property) || !Equals(value, property.BoxedDefaultValue(inBox))))
+            // A saved value HexIDE couldn't read stays as the file wrote it, in its place, until something sets the
+            // property. Writing the default beside it put the property in the block twice, and the next save kept only
+            // the default: `Appearance = O`, a typo for 0, became 1 (#1222).
+            if (!instance.TryGetBoxedProperty(property, out _) && Carried(property.Name) is { } unread)
+                WriteCarried(unread);
+            else if (instance.GetBoxedPropertyOrDefault(property) is { } value
+                && (inBox.IsAlwaysWritten(property) || !Equals(value, property.BoxedDefaultValue(inBox))))
                 vb.WriteProperty(property.Name, property.PropertyType, value);
             foreach (var (name, after) in inBox.CarriedOwnProperties)
                 if (ReferenceEquals(after, property) && Carried(name) is { } carried)
@@ -562,5 +653,44 @@ public class FormSerializer
             }
             else if (Carried("Images") is { } images) WriteCarried(images);
         }
+    }
+
+    private static bool IsListViewOwnProperty(string name) =>
+        ListViewComponentClass.Instance.Member(name) is not null
+        || name.StartsWith("ColumnHeader(", StringComparison.OrdinalIgnoreCase)
+        || name is "_ExtentX" or "_ExtentY" or "_Version" or "NumItems" or "AllowReorder" or "ColHdrIcons";
+
+    // Own properties stay read-only in the designer. Carry their complete runs, including duplicate OLE lines
+    // and flat column blocks; only the extender's editable properties are rendered from the model (#1085).
+    private static void WriteListViewProperties(VbFrmFormatSerializer vb, ComponentInstance instance,
+        CompanionCitations citations)
+    {
+        var loaded = instance.GetPropertyOrDefault(ListViewComponentClass.FilePropertiesProperty);
+        var basis = instance.GetPropertyOrDefault(InBoxComponentClass.ExtentBasisProperty);
+        var width = instance.GetPropertyOrDefault(VBProperties.WidthProperty);
+        var height = instance.GetPropertyOrDefault(VBProperties.HeightProperty);
+        var resized = basis is null || basis.Width != width || basis.Height != height;
+        if (resized)
+        {
+            vb.WriteProperty("_ExtentX", typeof(int), InBoxComponentClass.Extent((int)Math.Round(width)));
+            vb.WriteProperty("_ExtentY", typeof(int), InBoxComponentClass.Extent((int)Math.Round(height)));
+        }
+        foreach (var raw in instance.UnknownRawProperties.Where(raw => IsListViewOwnProperty(raw.Name)))
+        {
+            if (resized && (raw.Name.Equals("_ExtentX", StringComparison.OrdinalIgnoreCase)
+                || raw.Name.Equals("_ExtentY", StringComparison.OrdinalIgnoreCase)))
+                continue;
+            vb.WriteVerbatimProperty(raw.Name, raw.Lines.Select(line => citations.Cite(line, raw.Records)).ToList());
+        }
+        if (loaded is not null)
+            return;
+        vb.WriteProperty("LabelWrap", typeof(bool), true);
+        vb.WriteProperty("HideSelection", typeof(bool), true);
+        vb.WriteProperty("_Version", typeof(int), 393217);
+        vb.WriteProperty("ForeColor", typeof(int), unchecked((int)0x80000008));
+        vb.WriteProperty("BackColor", typeof(int), unchecked((int)0x80000005));
+        vb.WriteProperty("BorderStyle", typeof(int), 1);
+        vb.WriteProperty("Appearance", typeof(int), 1);
+        vb.WriteProperty("NumItems", typeof(int), 0);
     }
 }

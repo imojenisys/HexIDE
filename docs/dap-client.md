@@ -12,7 +12,9 @@ are [#1168](https://github.com/hexide-io/HexIDE/issues/1168).
 
 Construct `DapConnection` with readable adapter output and writable adapter input. Successful construction
 transfers ownership of both streams. Reading begins immediately; consume `Events` through a single consumer.
-The caller supplies any UI dispatch, event handling and session policy.
+A full event queue pauses stream reading, so pressure reaches the adapter's pipe rather than ending the
+connection. Keep draining events independently of requests: a response on the same stream can be behind
+queued events. The caller supplies any UI dispatch, event handling and session policy.
 
 `RequestAsync(command, arguments, cancellationToken)` sends a DAP request. Arguments are an optional JSON
 object. A successful response retains the complete JSON message; a failed response raises
@@ -38,9 +40,10 @@ Defaults in `DapConnectionOptions`:
 | Queued events | 256 |
 | Request deadline, including writer wait | 30 seconds |
 
-The limits are configurable per connection. A full event queue closes the connection explicitly rather
-than dropping state or growing memory indefinitely. Consumers must drain output events as well as debugger
-state events. The pending-request limit refuses additional work without closing a healthy connection.
+The limits are configurable per connection. A full event queue pauses stream reading until its consumer
+makes room. Consumers must drain output events as well as debugger state events, independently of pending
+responses on the same stream. The pending-request limit refuses additional work without closing a healthy
+connection.
 
 Timeout/cancellation ends the local request wait; it does not undo remote execution. There is no retry or
 automatic DAP cancel request. A late response to an abandoned request is ignored. Cancellation or failure
@@ -110,18 +113,41 @@ The session has a single launch and cannot be restarted. Dispose it and create a
 `LaunchAsync(adapterId, arguments, breakpoints, token)` sends initialize with one-based coordinates and
 native paths, starts launch, waits for initialized, replaces each supplied source's breakpoints, selects
 advertised default exception filters, and sends configurationDone only when supported. It awaits the launch
-response **after** configuration, since adapters may defer that response. Initialized may arrive before the
+response **after** configuration, since adapters may defer that response. During every configuration
+request it also watches for launch failure: a refusal immediately faults startup with the adapter
+message, releases ownership, and prevents further configuration requests (#4160). An early successful
+launch response does not skip or reorder configuration. Initialized may arrive before the
 initialize response. All startup work shares a 60-second deadline (configurable for a supplied connection),
 in addition to the wire request limits. Failed/cancelled startup releases the owned connection/process.
 The returned breakpoint responses retain verified flags, relocated lines and adapter messages.
 
-Consume the bounded `Updates` channel promptly from one background reader. Each update carries a snapshot
-and, where applicable, the original event, including output and extension fields. Overflow ends the connection
-and exposes a fault through `Snapshot`; it never silently drops live debugger state. `Completion` means the
-event reader and owned cleanup have finished. `ProcessCompletion`, available for process-backed sessions,
+Consume the bounded `Updates` channel from one background reader that never awaits a DAP response before
+reading its next update. Each update carries a snapshot and, where applicable, the original event, including
+output and extension fields. A full queue waits for room, backpressuring the connection's bounded event queue
+and then the adapter's pipe. Floods slow the adapter without dropping output or faulting the session. The IDE
+drains waiting updates in batches, applies them in order in one UI dispatch, and joins consecutive output
+texts into one output notification. Inspection and Run To Cursor restoration run independently of the reader.
+`Completion` means the event reader and owned cleanup have finished. `ProcessCompletion`, available for process-backed sessions,
 retains exit code, forced termination and stderr/cleanup diagnostics. A program's terminated event sets
 Ended but does not imply the adapter process exited: call `DisconnectAsync` to send disconnect with
 terminateDebuggee and then dispose. Plain disposal is the bounded fallback, not a protocol disconnect.
+
+`DisconnectAsync` awaits the response before disposal closes stdin, then drains queued events while its
+consumer continues reading updates; a `terminated` event during that wait leaves the connection open. `DapSessionTests.Terminated_during_disconnect_keeps_stdin_open_until_the_response`
+checks this order with a held response and observes stdin EOF only after the reply. Cancellation,
+timeout and transport failure still permit bounded cleanup without a response (#3894).
+
+For an adapter process, the reply doesn't end what it writes. debugpy answers `disconnect` and then sends a
+`debugpySockets` event. So `DisconnectAsync` waits for 250 ms without an incoming message (restarted by each message, capped by
+`ShutdownTimeout`, and ended early by stdout EOF), then closes stdin and goes on reading the adapter's stdout
+until the adapter closes it, for at most `ShutdownTimeout`, before disposal closes the rest. It used to close stdout
+on the reply too, and when that won the race, debugpy's late write failed with a broken pipe and it exited 1 (#3894).
+The quiet window mitigates debugpy's race when stdin ends between its reply and trailing event (#4580);
+there is no DAP signal for "done writing", and measured debugpy 1.8.22 waits for stdin EOF before ending stdout
+([measurement](https://github.com/hexide-io/HexIDE/issues/4580)).
+`DapProcessTests.Disconnect_reads_what_the_adapter_writes_after_its_reply` checks that an event written 300 ms after
+the reply still reaches the capture. A session over a bare connection closes on the reply as before, since its
+stream may never end.
 
 Stopped snapshots carry a session-specific `DapStop`. Pass it to Threads/StackTrace/Scopes/VariablesAsync.
 The raw response retains thread/frame IDs (including frame zero), source paths/references, variable
@@ -134,11 +160,21 @@ running state and partial-thread resumes are not implemented.
 overwrites a later stopped event on receipt of its response. A definitive refusal restores a fresh stop;
 timeout/cancellation is uncertain and ends the session rather than claiming it is still paused. `PauseAsync`
 requests a break while running; only a stopped event confirms it. Capabilities retain the initialize response.
+`SetNextStatementAsync(stop, path, line, threadId)` requires `supportsGotoTargetsRequest`, queries
+`gotoTargets` and resumes with `goto` using the first returned target. Empty targets and adapter refusals
+retain stopped inspection; a successful move takes its location from the next stopped event.
 `EvaluateAsync(stop, frameId, expression)` sends adapter-specific Immediate syntax with `context: repl`.
 Frame zero is valid. The raw result preserves type, variable reference and extension fields. The stop is
 validated before and after the request; callers must also validate their selected-frame identity before
 presenting the result. REPL evaluation has no optional capability flag and can have side effects. A failed
 or timed-out request is never retried. The IDE displays result text/errors and refreshes selected-frame locals.
+MCP `evaluate` returns output delivered during that evaluation followed by the response result, and
+reports an adapter refusal as `success: false` with its message in `error` (#4323). Output already read
+is awaited through a local delivery barrier in the connection event and session update queues, acknowledged
+after earlier updates in the same UI batch. The barrier waits for room in a full event queue and follows
+the session publication chain; session shutdown cancels the wait. The update reader only acknowledges
+delivery; it never waits for a DAP response.
+The Immediate window receives output events separately, so it still prints each event only once.
 `EvaluateWatchAsync(stop, frameId, expression)` uses `context: watch` and preserves result text, type and
 variable references. The Watches window owns a separate external list for the IDE session and discards
 replies superseded by frame/stop changes or edits. Watch requests do not refresh Locals recursively.
@@ -151,6 +187,106 @@ replacements per source, separates requested and resolved lines, and applies mat
 Verification appears in the editor gutter; source edits remain session-only. Dynamic capability changes
 remain a future session operation.
 
+## Protocol coverage
+
+The table below is generated from Microsoft's
+[`debugAdapterProtocol.json`](https://github.com/microsoft/debug-adapter-protocol/blob/d2387e875a1ec4c2ed9964edea22617c81651cc0/debugAdapterProtocol.json),
+pinned to commit `d2387e875a1ec4c2ed9964edea22617c81651cc0` (#3302).
+Its SHA-256 is `5dc16664b5cd7a08a769c14dc19be900dc4c3e7d227cd922583780d25480877a`,
+**computed here**, not publisher-attested. The pinned
+[`License.txt`](https://github.com/microsoft/debug-adapter-protocol/blob/d2387e875a1ec4c2ed9964edea22617c81651cc0/License.txt)
+states documentation is CC BY 3.0 US and code is MIT; it also includes CC BY 4.0 legal text.
+The schema is a test fixture fetched into gitignored `artifacts/dap-schema/`, never a release asset.
+The table uses protocol names and implementation facts, without reproducing schema descriptions.
+
+✅ means a named request is sent by `DapSession`, or an event has specific handling in `DapSession`
+or `ExternalDebugService`. This is command/event coverage, not a claim that every optional argument,
+capability or multi-thread behavior is implemented. ○ means no such implementation. The generic
+`DapConnection.RequestAsync` API and forwarding/capturing arbitrary events do not count as feature support.
+All reverse requests are rejected. → is client to adapter; ← is adapter to client. The schema identifies
+reverse requests in their descriptions; other requests travel to the adapter and events to the client.
+
+`DapProtocolCoverageDocTests` compares the entire generated block against the schema and source code,
+including support marks and headline counts. Do not hand-edit the table. To regenerate it:
+
+```sh
+HEXIDE_UPDATE_DAP_COVERAGE=1 dotnet test --project IDE/HexIDE.Tests/HexIDE.Tests.csproj -- --filter-method '*CoverageMatchesSchemaAndClientCode'
+```
+
+The schema downloads on demand and every copy, including an override, must match the pinned digest.
+`HEXIDE_DAP_SCHEMA` selects a local copy; `HEXIDE_FOREIGN_LSP_DOWNLOAD=0` disables downloading.
+Unavailable schemas skip the table check visibly; `HEXIDE_REQUIRE_FOREIGN_LSP=1` (also `true` or `yes`)
+makes an ordinary availability test fail instead. A corrupt schema fails even outside CI.
+
+<!-- BEGIN GENERATED DAP COVERAGE -->
+The pinned schema defines **62 messages**. HexIDE implements 27 of the 62 at the command/event level.
+
+| Support | Message | Kind | Direction |
+|---|---|---|---|
+| ✅ | `breakpoint` | event | ← |
+| ○ | `capabilities` | event | ← |
+| ✅ | `continued` | event | ← |
+| ○ | `exited` | event | ← |
+| ✅ | `initialized` | event | ← |
+| ✅ | `invalidated` | event | ← |
+| ○ | `loadedSource` | event | ← |
+| ○ | `memory` | event | ← |
+| ○ | `module` | event | ← |
+| ✅ | `output` | event | ← |
+| ○ | `process` | event | ← |
+| ○ | `progressEnd` | event | ← |
+| ○ | `progressStart` | event | ← |
+| ○ | `progressUpdate` | event | ← |
+| ✅ | `stopped` | event | ← |
+| ✅ | `terminated` | event | ← |
+| ○ | `thread` | event | ← |
+| ○ | `attach` | request | → |
+| ○ | `breakpointLocations` | request | → |
+| ○ | `cancel` | request | → |
+| ○ | `completions` | request | → |
+| ✅ | `configurationDone` | request | → |
+| ✅ | `continue` | request | → |
+| ○ | `dataBreakpointInfo` | request | → |
+| ○ | `disassemble` | request | → |
+| ✅ | `disconnect` | request | → |
+| ✅ | `evaluate` | request | → |
+| ✅ | `exceptionInfo` | request | → |
+| ✅ | `goto` | request | → |
+| ✅ | `gotoTargets` | request | → |
+| ✅ | `initialize` | request | → |
+| ✅ | `launch` | request | → |
+| ○ | `loadedSources` | request | → |
+| ○ | `locations` | request | → |
+| ○ | `modules` | request | → |
+| ✅ | `next` | request | → |
+| ✅ | `pause` | request | → |
+| ○ | `readMemory` | request | → |
+| ○ | `restart` | request | → |
+| ○ | `restartFrame` | request | → |
+| ○ | `reverseContinue` | request | → |
+| ✅ | `scopes` | request | → |
+| ✅ | `setBreakpoints` | request | → |
+| ○ | `setDataBreakpoints` | request | → |
+| ✅ | `setExceptionBreakpoints` | request | → |
+| ○ | `setExpression` | request | → |
+| ○ | `setFunctionBreakpoints` | request | → |
+| ○ | `setInstructionBreakpoints` | request | → |
+| ○ | `setVariable` | request | → |
+| ○ | `source` | request | → |
+| ✅ | `stackTrace` | request | → |
+| ○ | `stepBack` | request | → |
+| ✅ | `stepIn` | request | → |
+| ○ | `stepInTargets` | request | → |
+| ✅ | `stepOut` | request | → |
+| ✅ | `terminate` | request | → |
+| ○ | `terminateThreads` | request | → |
+| ✅ | `threads` | request | → |
+| ✅ | `variables` | request | → |
+| ○ | `writeMemory` | request | → |
+| ○ | `runInTerminal` | reverse request | ← |
+| ○ | `startDebugging` | reverse request | ← |
+<!-- END GENERATED DAP COVERAGE -->
+
 ## Verification
 
 `HexIDE.Tests/DebugAdapter/DapConnectionTests.cs` provides an independent peer that reads and writes literal
@@ -161,12 +297,20 @@ stderr pressure, exit codes, final responses, pending requests and process-tree 
 `DapCaptureTests` checks correlation, exact bodies, retention, local outcomes, capture overflow, process
 diagnostics and path pseudonymisation through the shared exporter.
 `DapSessionTests` checks handshake ordering, capability gating, breakpoint replies, stale inspections,
-fast stops, refused/cancelled resumes, startup deadlines, terminal state, output and overflow.
+fast stops, refused/cancelled resumes, startup deadlines, terminal state, output floods, ordered backpressure and disposal while
+queues are full.
 
 ```text
-dotnet test IDE/HexIDE.Tests -- --filter-class "*DapConnectionTests"
-dotnet test IDE/HexIDE.Tests -- --filter-class "*DapProcessTests"
+dotnet test --project IDE/HexIDE.Tests/HexIDE.Tests.csproj -- --filter-class "*DapConnectionTests"
+dotnet test --project IDE/HexIDE.Tests/HexIDE.Tests.csproj -- --filter-class "*DapProcessTests"
 ```
+
+Launch-file breakpoint entries accept `condition`, `hitCondition` and `logMessage` strings (#4143).
+Each is sent only with the corresponding adapter capability; unsupported fields are omitted with one
+localized notice per field per session, keeping the breakpoint. Launch conditions take precedence over
+gutter conditions. `ExternalDebugServiceTests` captures the requests to `HexIDE.Dap.TestAdapter` and checks
+initial/live wire fields, capability omissions, notice lifetime, Run To Cursor preservation and removal.
+See [external debug sessions](debug-launch.md) for the launch format.
 
 The opt-in [real adapter smoke](dap-adapter-smoke.md) launches a separately installed adapter and its real
 components. It is not downloaded or run by ordinary CI; the smoke executable is built with the IDE solution.
@@ -175,9 +319,21 @@ components. It is not downloaded or run by ordinary CI; the smoke executable is 
 
 - Rich launch settings UI and workspace preparation, including any VB6 project conversion.
 - Multi-thread inspection.
-- Command-specific MCP routing and conditional/hit-count breakpoints.
+- Command-specific MCP inspection and gutter editing for hit conditions and log messages.
 - External break-condition watches, dynamic capabilities and further capability-dependent UI.
 - Automated acquisition and cross-platform real-adapter acceptance in CI.
-- Add-in registration through [#891](https://github.com/hexide-io/HexIDE/issues/891).
+- An add-in contributing a debug adapter, [#891](https://github.com/hexide-io/HexIDE/issues/891). An add-in can already
+  contribute a launch ([debug-launch.md](debug-launch.md#a-launch-an-add-in-contributes)).
 
 Protocol reference: [Debug Adapter Protocol specification](https://microsoft.github.io/debug-adapter-protocol/specification).
+
+MCP run control follows the menu routes for `step_into` (`stepIn`), `step_over` (`next`),
+`step_out` (`stepOut`), `continue_program` (`continue`) and `break_program` (`pause`). Replies
+wait up to two seconds for the new stopped stack, report its top source frame or running/ended,
+and preserve the adapter's refusal message. `set_next_statement` resolves a saved module to its
+source path for the capability-gated `gotoTargets`/`goto` route. In a stopped external session,
+`run_to_cursor` adds a temporary breakpoint to the saved source's user set, keeping conditions,
+and continues only if the adapter verifies the exact target line. The next stop (including a user
+breakpoint or exception first), End or a failure restores the user set, and an ended session takes
+the temporary line with it. Replies report the
+actual stop and identify a stop before the cursor target (#4045; live check pending).

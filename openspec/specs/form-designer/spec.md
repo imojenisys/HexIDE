@@ -19,6 +19,127 @@ operations do.
 > [#1458](https://github.com/hexide-io/HexIDE/issues/1458). Cut and paste within a form keeps it (#1453).
 
 ## Requirements
+
+### Requirement: Windowless controls draw below windowed siblings regardless of file order
+
+Within each container, the designer SHALL draw Label, Shape, Line and Image below windowed siblings,
+regardless of their block order in the file. The existing first-block-on-top rule SHALL remain within
+each plane. An unedited form SHALL remain clean and SHALL NOT be rewritten. A save after an edit SHALL
+write windowed blocks before windowless blocks, preserving each plane's order and every property,
+including TabIndex, as measured in [#1517](https://github.com/hexide-io/HexIDE/issues/1517) and
+[oracle PR #4518](https://github.com/hexide-io/HexIDE/pull/4518).
+
+#### Scenario: A Label precedes a button in a hand-edited form
+
+- **WHEN** the form opens with a Label block before a CommandButton block in the same container
+- **THEN** the Label draws underneath the button and the form has no unsaved changes
+- **WHEN** the developer edits the code and saves
+- **THEN** the button block precedes the Label block, with their property lines unchanged
+- **AND** the same rule applies independently to nested containers
+
+### Requirement: A control designer double-click writes its measured default event
+
+The designer SHALL use the declared default event independently of event-list order, matching the
+[VB6 SP6 measurements in #4411](https://github.com/hexide-io/HexIDE/issues/4411) from
+[oracle PR #4460](https://github.com/hexide-io/HexIDE/pull/4460).
+
+#### Scenario: Double-click a measured in-box control
+
+- **WHEN** a control in this table is double-clicked
+- **THEN** the code window opens its named handler, creating it if absent
+
+| Controls | Event |
+|---|---|
+| PictureBox, Label, CommandButton, CheckBox, OptionButton, ListBox, Image | Click |
+| TextBox, ComboBox, HScrollBar, VScrollBar | Change |
+| Frame | DragDrop(Source As Control, X As Single, Y As Single) |
+| Timer | Timer |
+| Shape, Line | None: open code without creating a handler |
+
+#### Scenario: An unmeasured control or control-array element
+
+- **WHEN** a control outside the measured table is double-clicked
+- **THEN** its first-event behavior is retained pending measurement
+- **WHEN** a control-array element's handler is created
+- **THEN** its existing `Index As Integer` argument is retained pending measurement
+- **AND** runtime DragDrop delivery is unchanged
+
+#### Scenario: Double-click a TextBox
+
+- **WHEN** the user double-clicks Text1 in the designer
+- **THEN** the code window opens Text1_Change, creating its stub if absent, even if KeyDown is listed first
+
+#### Scenario: Double-click a Frame or Shape
+
+- **WHEN** the user double-clicks Frame1
+- **THEN** the code window creates or navigates to Frame1_DragDrop with the measured arguments
+- **WHEN** the user double-clicks Shape1
+- **THEN** the code window opens without creating an event handler
+
+### Requirement: Refuse negative designer control sizes
+
+The Properties window and `add_control`, `move_control` and `set_control_property` SHALL refuse a
+negative Width or Height before changing any control, recording undo or saving. Zero and positive
+sizes SHALL retain existing behaviour. Negative Left and Top SHALL remain allowed.
+
+#### Scenario: Refuse a negative size atomically
+- **WHEN** a designer edit supplies a negative Width or Height
+- **THEN** the control collection, properties, undo history and saved file remain unchanged
+- **AND** the Properties window shows a localized "Invalid property value" refusal
+- **AND** an automation reply explains that VB6 cannot load a form holding a negative size, naming
+  #589 where that was measured, and reports the control's unchanged state, or that no control was created
+
+
+### Requirement: Properties window filter
+
+The Properties window SHALL offer a localized live filter above its Alphabetic and Categorized tabs.
+Matching SHALL use a case-insensitive substring of the property name, independently of category collapse.
+
+#### Scenario: Narrow and restore the property list
+- **WHEN** the user types a property-name fragment
+- **THEN** both tabs show only matching properties, and categories without matching children are omitted
+- **WHEN** the filter is cleared
+- **THEN** the full property lists return, preserving category expansion state
+
+
+### Requirement: Unmodelled properties remain visible and read-only
+
+The Properties window SHALL append every raw property carried by the selected modelled component
+that has no editable design-time adapter after its modelled properties in both tabs, as greyed
+read-only rows included in name filtering. Text values
+SHALL retain the file's textual representation; a property with a binary record or companion citation
+SHALL show a localized `(binary)` marker instead. Displaying these rows SHALL NOT alter the saved form
+or companion bytes. This is the presentation contract decided in [#158](https://github.com/hexide-io/HexIDE/issues/158).
+
+#### Scenario: Inspect a carried property
+
+- **WHEN** a selected component carries an unmodelled textual property
+- **THEN** both tabs show its name and saved value after the modelled rows, without an editor
+- **AND** saving after inspecting or filtering the row preserves the form and companion byte for byte
+
+#### Scenario: Inspect a binary record
+
+- **WHEN** the carried property cites a companion record
+- **THEN** its value is the localized binary marker, never the citation or binary bytes
+
+### Requirement: PictureBox designer bitmap assignment honors AutoSize
+When a bitmap is assigned to a PictureBox with AutoSize True, the designer SHALL set Width and Height to the bitmap's pixel dimensions plus two pixels on each side for the default 3-D Fixed Single border, or no extra pixels with BorderStyle None. It SHALL record those dimensions with the picture edit as one undo step. This implements the measured bitmap cases in [#922's oracle](../../../docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md); Label AutoSize remains pending; runtime bitmap sizing is specified in [container-controls](../container-controls/spec.md).
+
+#### Scenario: A 40 by 30 bitmap is assigned
+- **WHEN** the designer assigns a 40 by 30 pixel bitmap to an AutoSize PictureBox
+- **THEN** the model holds 44 by 34 pixels with the default border, or 40 by 30 with none
+- **AND** saving writes 660 by 510 twips with the default border, or 600 by 450 with none
+- **AND** undo restores the picture and both previous dimensions together
+
+#### Scenario: Stored dimensions and explicit assignments hold
+- **WHEN** a form loads, the picture is cleared, or Width is assigned explicitly
+- **THEN** AutoSize does not recompute the dimensions
+
+#### Scenario: An unmeasured picture or border is used
+- **WHEN** AutoSize would fit a non-bitmap picture or a flat Fixed Single border
+- **THEN** the designer refuses sizing once with the not-implemented message explaining that the size is unmeasured
+- **AND** it restores the picture without reporting a file-load or invalid-property error
+
 ### Requirement: The designer SHALL draw a form's client area at the size it is saved and run with
 The area a form's controls are designed in SHALL be its client area, `ClientWidth` by `ClientHeight`, the size its
 window has at run time. The frame and caption bar SHALL be drawn outside it, and dragging the frame's handles SHALL
@@ -93,6 +214,17 @@ both are deferred together rather than half-built.
 #### Scenario: Dragging a region across a container
 - **WHEN** a dragged region crosses a container and the controls it holds
 - **THEN** both the container and those controls are selected
+
+### Requirement: Dragging SHALL preserve the control's declared size
+A move SHALL leave Width and Height unchanged, including when layout rounds the arranged bounds at display
+scaling above 100%. A resize SHALL start from the declared dimensions where they are set, falling back to
+arranged dimensions for automatically sized elements.
+
+#### Scenario: Move a control at 150% display scaling
+- **GIVEN** a control whose declared size is 81 by 33 DIP (1215 by 495 twips)
+- **WHEN** the developer drags it to a new position at 150% display scaling
+- **THEN** its declared size remains 81 by 33 DIP
+- **AND** its saved Width and Height remain 1215 and 495 twips
 
 ### Requirement: Dragging one selected control SHALL move the whole selection
 Dragging any control that is part of the selection SHALL move every selected control by the same
@@ -260,7 +392,7 @@ control SHALL be written back once, from the block it was read as.
 Unseen, it is edited around blindly. VB6's box is an empty PictureBox; labelling it is HexIDE's one divergence.
 
 #### Scenario: A control recording only its extents
-- **WHEN** a form holds an ImageList, which records `Left`, `Top`, `_ExtentX` and `_ExtentY` and no `Width` or `Height`
+- **WHEN** a form holds a control HexIDE does not model that records `Left`, `Top`, `_ExtentX` and `_ExtentY` and no `Width` or `Height`
 - **THEN** its box is at `Left` and `Top`, 1200 by 480 twips, as VB6 draws it, whatever the extents say
 
 #### Scenario: A control inside a Frame
@@ -271,13 +403,23 @@ Unseen, it is edited around blindly. VB6's box is an empty PictureBox; labelling
 - **WHEN** the developer presses on the box
 - **THEN** nothing is selected and no region drag begins
 
+### Requirement: Control preview captions use grayscale antialiasing
+The designer SHALL render control text with grayscale antialiasing before composing its bitmap preview.
+Running CheckBox and OptionButton captions SHALL also use grayscale antialiasing, independently of their
+bullet's aliased edges (#917).
+
+#### Scenario: An outline font supplies a control caption
+- **WHEN** a CommandButton is previewed in the designer, or a CheckBox or OptionButton is rendered at run time
+- **THEN** its caption contains intermediate shades at glyph edges rather than only foreground and background pixels
 
 ### Requirement: Export a picture property's payload
 The Properties window SHALL offer Export picture on modeled Picture, Icon, MouseIcon and DragIcon properties
 holding a nonempty, length-consistent VB6-framed StdPicture record. Export SHALL write only the image payload
 chosen by a save picker, without changing the property, designer history, form or companion file. It SHALL NOT
 export opaque OCX property bags, unframed bytes or malformed records. Cancellation SHALL write nothing, and a
-write failure SHALL be reported to the user.
+write failure SHALL be reported to the user. Before replacing an existing file, export SHALL ask
+"{0} already exists. Do you want to replace it?", with the full destination path substituted for {0},
+under the title "Export Picture" without an ellipsis. Both strings SHALL use dedicated localized keys.
 
 #### Scenario: Export a form's icon
 - **GIVEN** a form's Icon holds a VB6-framed StdPicture record
@@ -333,6 +475,38 @@ command. A form the runtime loader cannot create SHALL report its existing unsup
 - **THEN** those edits are discarded and the designer remains unchanged
 - **AND** no Load, Resize, Click, QueryUnload or other VB event procedure runs
 
+### Requirement: Designer instantiation failures are contained per control
+
+The designer SHALL catch an exception from a control's designer instantiation, layout or drawing, log the exception, and show a disabled placeholder at that control's bounds with its name and the exception message. The view-only label SHALL be localized. The failed preview SHALL NOT prevent the form from remaining open. The designer SHALL exclude a failed preview from the Properties object selector and multi-selection. If a selected preview fails, the designer SHALL select the form instead and remove the failed preview from multi-selection.
+
+#### Scenario: A registered component refuses its designer instance
+
+- **WHEN** a form containing a registered component whose designer instantiation throws is opened
+- **THEN** the designer shows the failed control's name and reason in a disabled placeholder at its bounds
+- **AND** its canvas item is disabled and the form stays open
+- **AND** opening the preview does not change the serialized form
+
+#### Scenario: A control refuses while it is drawn
+
+- **WHEN** a form is opened whose StatusBar has a spring panel beside a Contents panel with text, which the StatusBar refuses to lay out
+- **THEN** the designer shows that StatusBar's name and reason in a disabled placeholder at its bounds, and the form stays open
+- **AND** opening the preview does not change the serialized form
+
+#### Scenario: A selected control preview fails
+
+- **WHEN** a selected control fails to produce its designer preview
+- **THEN** Properties shows the form and its object selector excludes the failed control
+- **AND** multi-selection excludes the failed control, including subsequent attempts to select it
+
+#### Scenario: Save edits elsewhere after a preview fails
+
+- **GIVEN** a form read from writer-normalized text containing a control whose preview fails
+- **WHEN** another control is moved and the form's caption is changed, and the full writer saves the form
+- **THEN** the edits appear in the output and the untouched control's block is byte-identical to its input block
+- **AND** that block is identical to the output with a working preview, including modelled children, companion citations and unmodelled properties
+
+`DesignerInstantiationFailureTests` also opens VB6's own save of a TabStrip form (`corpus/inbox-controls/saved/tabstrip`), whose preview refuses. After the form's caption is edited, the TabStrip's block is saved as VB6's bytes, identical to a save that never built the preview (#2405). A failed preview therefore changes nothing in what is written. Whether every control's block matches VB6's bytes after an edit is the writer's round-trip fidelity, not a property of the preview.
+
 ### Requirement: ImageList designer icon
 The designer SHALL show a modelled MSComctlLib.ImageList as a 38 × 38 box with a two-pixel raised edge.
 The outer top/left SHALL use 3D light, inner top/left highlight, inner bottom/right shadow, and outer
@@ -344,3 +518,137 @@ Runtime invisibility and the measured unsnapped placement SHALL remain unchanged
 - **WHEN** an ImageList is placed on a form
 - **THEN** its raised box contains the original vector drawing rather than a text stand-in
 - **AND** changing theme updates its brushes
+
+### Requirement: Load a picture from the Properties window
+The Properties window SHALL offer an ellipsis button on modeled Picture, Icon, DragIcon and MouseIcon rows.
+It SHALL open the IDE file-dialog service's single-file picker and validate the selected file with the existing
+companion picture decoder. An accepted picture SHALL replace the property's record as one undoable designer
+change and save through the existing companion writer. Cancelling SHALL change nothing. A file the reader cannot
+read SHALL be refused with a localized message naming the file, retaining the old picture.
+This is the scoped decision in [#2653](https://github.com/hexide-io/HexIDE/issues/2653); clearing and file-type
+filters remain unchanged. Record framing is measured in
+[the serialization oracle](../../../docs/vb6-fidelity-oracle/serialization--file-format-fidelity.md).
+
+#### Scenario: Replace a picture and undo
+- **WHEN** a picture file the decoder accepts is chosen from a picture row's ellipsis button
+- **THEN** the row and control hold that picture and saving and reopening retains it
+- **AND** one undo restores the previous picture
+
+#### Scenario: Cancel or refuse a file
+- **WHEN** the picker is cancelled or the chosen file cannot be read as a picture
+- **THEN** the property and undo history remain unchanged
+- **AND** a refused file produces a message naming it
+
+### Requirement: Confirm picture export replacement
+The Properties window's picture export SHALL ask an explicit Yes/No question naming an existing destination
+before replacing it, including when a scripted file-picker answer chose the path. Only Yes SHALL permit
+replacement, staged and flushed through the atomic writer. A new destination SHALL be created exclusively.
+
+#### Scenario: Decline replacement
+- **WHEN** picture export chooses an existing file and the replacement question is declined or dismissed
+- **THEN** the existing bytes remain unchanged
+
+#### Scenario: Accept replacement
+- **WHEN** the replacement question is answered Yes
+- **THEN** the destination contains the exported picture payload
+
+### Requirement: Missing symbol fonts use drawable Unicode equivalents
+Label, CommandButton, CheckBox and OptionButton captions SHALL use the same symbol-font mapping in the designer
+and at run time. Missing Charset 2 fonts SHALL use the equivalents chosen in
+[#1133](https://github.com/hexide-io/HexIDE/issues/1133), keeping original text for unmapped or undrawable glyphs.
+This rendering substitution SHALL NOT change Caption/Text readback or permit setting a missing font at run time.
+
+#### Scenario: A form names a symbol font
+- **WHEN** a Charset 2 font is installed
+- **THEN** its caption retains its GDI private-use mapping
+- **WHEN** Wingdings, Wingdings 2, Wingdings 3 or Webdings is missing (family names compared without regard to case)
+- **THEN** its caption uses the byte-to-scalar facts in WG2 N4384 (UTC L2/12-368), section 7
+- **WHEN** Marlett is missing
+- **THEN** its caption uses the short table chosen in #1133
+
+#### Scenario: A symbol precedes an access key
+- **WHEN** a missing Wingdings caption is `M&J` and the host can draw both equivalents
+- **THEN** the displayed text contains U+1F4A3 followed by U+263A
+- **AND** the access-key underline follows the two-unit U+1F4A3 and marks U+263A
+- **AND** Caption still reads `M&J`
+
+### Requirement: Edit a control array's design-time Index
+
+The Properties window and `set_control_property` SHALL share an editable Index for each modelled
+control. Edits SHALL support undo and form save/load. Invalid edits SHALL be refused before mutation
+or saving. Automation replies SHALL name the resulting element or plain control.
+
+#### Scenario: Create and move a one-element array
+- **WHEN** a plain control's initially empty Index is set to an integer from 0 through 32767
+- **THEN** it becomes that element of the array bearing its name
+- **AND WHEN** Index is changed to another free value in that range
+- **THEN** the element moves and the saved form reloads with its new Index
+- **AND** new and moved Index lines use the serializer’s normal property indentation and value columns;
+  untouched VB6-written array lines are preserved verbatim
+
+#### Scenario: Refuse an invalid array edit
+- **WHEN** Index is set to -1, 32768, non-integer text, or an index a same-name sibling holds
+- **THEN** the edit is refused without changing the model or saving
+- **AND** the Properties window gives localized instructions without measurement notes, distinguishing
+  a sibling holding the same Index from a same-name sibling with no Index
+- **AND** automation refusals explain the VB6 file-load rule measured in
+  [#2701 / measuring PR #4074](https://github.com/hexide-io/HexIDE/issues/2701), for the
+  [control-array oracle](../../../docs/vb6-fidelity-oracle/control-arrays.md)
+
+#### Scenario: Clear an element
+- **WHEN** a lone element's Index is cleared
+- **THEN** it becomes a plain control and undo restores its Index
+- **BUT WHEN** same-name siblings remain
+- **THEN** clearing is refused with a localized instruction naming the sibling
+- **AND** this rule is reasoned from the indexed-first mixed form measurement (missing-Index log, plain
+  control outside the array, Index raises 343), not measured VB6 IDE behaviour; reverse file order and
+  IDE prompts remain unmeasured
+- **AND** existing event signatures and new handler stubs remain unchanged, tracked by
+  [#4205](https://github.com/hexide-io/HexIDE/issues/4205); renaming to join an array remains #1397
+
+### Requirement: Designer keyboard selection follows measured tab order
+
+Tab and Shift+Tab in the designer SHALL move the selection through every control with a TabIndex in
+pure TabIndex order across the whole form, wrapping without including the form. TabStop, Visible, Enabled
+and containment SHALL NOT exclude a control or group it with its container; Labels and containers are
+stops too, as measured in [#4211](https://github.com/hexide-io/HexIDE/issues/4211). With several controls
+selected, traversal SHALL start from the primary (last selected) control and produce a single selection.
+Escape SHALL select the form, and focus SHALL stay
+in the designer, except while a mouse button is held: then Escape SHALL leave the selection alone, so a drag
+that is abandoned and let go where it began leaves its control where it was.
+
+#### Scenario: Creation order differs from TabIndex
+
+- **GIVEN** Command1, Text1 and Check1 created in that order with TabIndex 2, 0 and 1
+- **WHEN** Tab is pressed from the form and then repeatedly
+- **THEN** selection visits Text1, Check1, Command1 and Text1, with focus in the designer
+- **AND** Shift+Tab reverses that cycle, and Shift+Tab from the form selects Command1
+
+#### Scenario: Children precede their Frame by TabIndex
+
+- **GIVEN** Command1 (0), Text2 inside Frame1 (1), Text1 (2), Frame1 (3), Command3 (4), Command2 inside Frame1 (5), Label1 (6), hidden Check1 (7) and disabled Option1 (8), with Text1's TabStop False
+- **WHEN** Tab is pressed repeatedly from the form
+- **THEN** each control is selected in that order and the cycle wraps to Command1
+- **AND** Shift+Tab traverses the reverse order
+
+#### Scenario: Tab replaces a multiple selection
+
+- **GIVEN** Command3 (8) then Text1 (1) selected, with Text1 primary
+- **WHEN** Tab is pressed
+- **THEN** Check1 (2) alone is selected
+
+#### Scenario: Escape on a form with TabStop False
+
+- **GIVEN** a form where one control has TabStop False
+- **WHEN** a control is selected and Escape is pressed
+- **THEN** the form is selected
+
+#### Scenario: Escape during a held move
+
+- **WHEN** a control is being moved with the button held, and Escape is pressed
+- **THEN** the selection does not change, and letting go where the move began leaves the control where it was
+
+#### Scenario: The design-time caption buttons
+
+- **WHEN** focus moves through the designer
+- **THEN** the form's minimize, maximize and close buttons never take it

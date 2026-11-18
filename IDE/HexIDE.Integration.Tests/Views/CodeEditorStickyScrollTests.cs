@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using Avalonia.VisualTree;
 using AvaloniaEdit;
 using System.Linq;

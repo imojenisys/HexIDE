@@ -6,13 +6,14 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using HexIDE.Controls;
+using HexIDE.Dialogs;
 using HexIDE.Forms.ViewModels;
 using HexIDE.Forms.Views;
 using HexIDE.Localization;
-using HexIDE.Runtime.Dialogs;
 using HexIDE.Utils;
 
 namespace HexIDE.IDE;
@@ -20,6 +21,25 @@ namespace HexIDE.IDE;
 public class WindowManager : IWindowManager
 {
     private readonly ILocalizationService _localization;
+    private int _nativeDialogs;
+    public bool IsNativeDialogOpen => _nativeDialogs > 0;
+
+    internal async Task<T> TrackNativeDialog<T>(Func<Task<T>> show, string? title = null, string? suggestedFileName = null)
+    {
+        _nativeDialogs++;
+#if DEBUG
+        var token = ScriptedFileDialogs.NativePickerOpened(title, suggestedFileName);
+#endif
+        try { return await show(); }
+        finally
+        {
+            _nativeDialogs--;
+#if DEBUG
+            ScriptedFileDialogs.NativePickerClosed(token);
+#endif
+        }
+    }
+
 
     // Avalonia's modal windows use this native API, but its reference assembly hides it. Keep the bridge local
     // rather than opting the whole project into unstable APIs; desktop regression tests exercise it (#1366).
@@ -31,7 +51,7 @@ public class WindowManager : IWindowManager
         _localization = localization;
     }
 
-    private Window GetTopWindow(IClassicDesktopStyleApplicationLifetime lifetime)
+    internal Window GetTopWindow(IClassicDesktopStyleApplicationLifetime lifetime)
     {
         foreach (var window in lifetime.Windows)
         {
@@ -41,6 +61,10 @@ public class WindowManager : IWindowManager
 
         return lifetime.MainWindow ?? throw new Exception("No main window and trying to open a window, fatal error");
     }
+
+    private Window GetIdeDialogOwner(IClassicDesktopStyleApplicationLifetime desktop)
+        => desktop.MainWindow is { IsVisible: true, WindowState: not WindowState.Minimized } main
+            ? main : GetTopWindow(desktop);
 
     public Task ShowManagedWindow(MDIWindow window) => ShowManagedWindow(window, blockBehind: true);
 
@@ -65,7 +89,7 @@ public class WindowManager : IWindowManager
         return WindowTask();
     }
 
-    private Task ShowManagedWindow(out MDIWindow window, string? title = null, object? content = null, bool canClose = true)
+    internal Task ShowManagedWindow(out MDIWindow window, string? title = null, object? content = null, bool canClose = true)
     {
         window = new MDIWindow()
         {
@@ -79,6 +103,8 @@ public class WindowManager : IWindowManager
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
+        if (!ProgramDialogs.IsProgramBox(content))
+            window.Classes.Add("ideDialog");
         return ShowManagedWindow(window);
     }
 
@@ -120,12 +146,13 @@ public class WindowManager : IWindowManager
 
     public async Task<string?> InputBox(string prompt, string? caption, string defaultText, bool isProgramDialog = false)
     {
-        caption ??= "HexIDE";
+        if (isProgramDialog)
+            return await ProgramDialogs.ShowInputBox(this, prompt, caption, defaultText);
+        caption ??= Distribution.DisplayName;
         if (Static.SingleView)
         {
             var inputBox = new InputBox
             {
-                IsProgramDialog = isProgramDialog,
                 Prompt = prompt,
                 Text = defaultText
             };
@@ -150,10 +177,10 @@ public class WindowManager : IWindowManager
         else if (Application.Current!.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             string? result = null;
-            var inputBox = new InputBox { IsProgramDialog = isProgramDialog, Prompt = prompt, Text = defaultText };
+            var inputBox = new InputBox { Prompt = prompt, Text = defaultText };
             var window = MakeDialogWindow(caption, inputBox);
             inputBox.TextRequest += r => { result = r; window.Close(); };
-            await window.ShowDialog(GetTopWindow(desktop));
+            await window.ShowDialog(GetIdeDialogOwner(desktop));
             return result;
         }
         else
@@ -168,6 +195,12 @@ public class WindowManager : IWindowManager
     internal async Task<MessageBoxResult> TaskModalMessageBox(IClassicDesktopStyleApplicationLifetime desktop, string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner)
     {
         owner ??= GetTopWindow(desktop);
+        return await HoldDesktopWindows(desktop,
+            () => ShowDesktopMessageBox(desktop, text, caption ?? Distribution.DisplayName, buttons, icon, owner));
+    }
+
+    private static async Task<T> HoldDesktopWindows<T>(IClassicDesktopStyleApplicationLifetime desktop, Func<Task<T>> show)
+    {
         var held = desktop.Windows.Select(window => (Window: window, WasEnabled: window.IsEnabled)).ToArray();
         try
         {
@@ -177,7 +210,7 @@ public class WindowManager : IWindowManager
                 // IsEnabled holds Avalonia input; the native window must also refuse activation and clicks (#1366).
                 if (window.PlatformImpl is { } platform) SetNativeEnabled(platform, false);
             }
-            return await ShowDesktopMessageBox(desktop, text, caption ?? "HexIDE", buttons, icon, owner);
+            return await show();
         }
         finally
         {
@@ -191,24 +224,35 @@ public class WindowManager : IWindowManager
         }
     }
 
-    private Task<MessageBoxResult> ShowDesktopMessageBox(IClassicDesktopStyleApplicationLifetime desktop, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner, bool isProgramDialog = false)
+    // Only the default button is read from the layout: the IDE's own boxes are laid out as the IDE lays them out.
+    private static int DefaultButtonOf(MessageBoxLayout layout) => layout.HasFlag(MessageBoxLayout.SecondButtonDefault) ? 1 : 0;
+
+    private Task<MessageBoxResult> ShowDesktopMessageBox(IClassicDesktopStyleApplicationLifetime desktop, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner,
+        MessageBoxLayout layout = MessageBoxLayout.None)
     {
-        var messageBox = new MessageBox { IsProgramDialog = isProgramDialog, Text = text, Buttons = buttons, Icon = icon };
+        var messageBox = new MessageBox
+        {
+            Text = text, Buttons = buttons, Icon = icon, DefaultButton = DefaultButtonOf(layout),
+            IsSecurityPrompt = layout.HasFlag(MessageBoxLayout.SecurityPrompt),
+        };
         var window = MakeDialogWindow(caption, messageBox);
         return messageBox.ShowAndWait(window, owner ?? GetTopWindow(desktop));
     }
 
-    public async Task<MessageBoxResult> MessageBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner, bool isProgramDialog = false)
+    public async Task<MessageBoxResult> MessageBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner, bool isProgramDialog = false, MessageBoxLayout layout = MessageBoxLayout.None)
     {
-        caption ??= "HexIDE";
+        if (isProgramDialog)
+            return await ProgramDialogs.ShowMessageBox(this, text, caption, buttons, icon, owner, layout);
+        caption ??= Distribution.DisplayName;
         if (Static.SingleView)
         {
             var messageBox = new MessageBox
             {
-                IsProgramDialog = isProgramDialog,
                 Text = text,
                 Buttons = buttons,
-                Icon = icon
+                Icon = icon,
+                DefaultButton = DefaultButtonOf(layout),
+                IsSecurityPrompt = layout.HasFlag(MessageBoxLayout.SecurityPrompt),
             };
             var task = ShowManagedWindow(out var window, caption, messageBox, false);
 
@@ -232,7 +276,7 @@ public class WindowManager : IWindowManager
         {
             // A person's close answers as Windows' does, or is refused where the box has none, and a box hidden with
             // its owner keeps waiting (see ShowAndWait).
-            return await ShowDesktopMessageBox(desktop, text, caption, buttons, icon, owner, isProgramDialog);
+            return await ShowDesktopMessageBox(desktop, text, caption, buttons, icon, owner ?? GetIdeDialogOwner(desktop), layout);
         }
         else
             throw new NotImplementedException();
@@ -240,7 +284,7 @@ public class WindowManager : IWindowManager
 
     public async Task ShowAbout(AboutDialogOptions options)
     {
-        var vm = new AboutDialogViewModel(options);
+        var vm = new AboutDialogViewModel(options, _localization);
         var dialog = new AboutDialog { DataContext = vm };
         var title = string.Format(_localization.GetString("Str.WindowManager.AboutTitle"), options.Title);
 
@@ -254,7 +298,7 @@ public class WindowManager : IWindowManager
         {
             var window = MakeDialogWindow(title, dialog);
             vm.CloseRequested += window.Close;
-            await window.ShowDialog(GetTopWindow(desktop));
+            await window.ShowDialog(GetIdeDialogOwner(desktop));
         }
         else
             throw new NotImplementedException();
@@ -304,10 +348,19 @@ public class WindowManager : IWindowManager
         return result;
     }
 
-    public async Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null)
+    internal FontDialog CreateFontDialog(FontDialogViewModel vm)
+    {
+        var dialog = new FontDialog { DataContext = vm };
+        dialog.ShowSizeError = async key => await MessageBox(_localization.GetString(key),
+            _localization.GetString("Str.WindowManager.FontTitle"), MessageBoxButtons.Ok, MessageBoxIcon.None,
+            TopLevel.GetTopLevel(dialog) as Window);
+        return dialog;
+    }
+
+    public async Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null, bool isProgramDialog = false)
     {
         var vm = new FontDialogViewModel(initial);
-        var dialog = new FontDialog { DataContext = vm };
+        var dialog = CreateFontDialog(vm);
         FontDialogResult? result = null;
 
         if (Static.SingleView)
@@ -322,7 +375,7 @@ public class WindowManager : IWindowManager
             var window = MakeDialogWindow(_localization.GetString("Str.WindowManager.FontTitle"), dialog);
             vm.AcceptRequested += r => { result = r; window.Close(); };
             vm.CancelRequested += window.Close;
-            await window.ShowDialog(GetTopWindow(desktop));
+            await window.ShowDialog(isProgramDialog ? GetTopWindow(desktop) : GetIdeDialogOwner(desktop));
         }
         else
             throw new NotImplementedException();
@@ -333,8 +386,7 @@ public class WindowManager : IWindowManager
     public async Task<IReadOnlyList<string>?> OpenFilePickerAsync(FilePickerOpenOptions options)
     {
 #if DEBUG
-        // An automation client cannot reach a native dialog — it is outside the control tree, and a modal
-        // one stops the automation server answering at all. An armed answer replaces the question a person
+        // An automation client cannot reach a native dialog — it is outside the control tree. An armed answer replaces the question a person
         // would have answered, and nothing else: every line below the picker is the code a real click
         // reaches. Compiled out of a shipped build along with the server it exists for.
         if (ScriptedFileDialogs.TryTake(options.AllowMultiple, out var scripted,
@@ -347,7 +399,7 @@ public class WindowManager : IWindowManager
 
         var topLevel = TopLevel.GetTopLevel(GetTopWindow(classic))!;
 
-        var files = await topLevel.StorageProvider.OpenFilePickerAsync(options);
+        var files = await TrackNativeDialog(() => topLevel.StorageProvider.OpenFilePickerAsync(options), options.Title, options.SuggestedFileName);
 
         return files.Select(f => f.TryGetLocalPath())
             .Where(x => x != null)
@@ -355,7 +407,7 @@ public class WindowManager : IWindowManager
             .ToList();
     }
 
-    public async Task<string?> SaveFilePickerAsync(FilePickerSaveOptions options)
+    public async Task<string?> SaveFilePickerAsync(FilePickerSaveOptions options, string? directory = null)
     {
 #if DEBUG
         if (ScriptedFileDialogs.TryTake(takesSeveral: false, out var scripted, "a save picker"))
@@ -367,7 +419,10 @@ public class WindowManager : IWindowManager
 
         var topLevel = TopLevel.GetTopLevel(GetTopWindow(classic))!;
 
-        var file = await topLevel.StorageProvider.SaveFilePickerAsync(options);
+        if (directory is not null)
+            options.SuggestedStartLocation = await topLevel.StorageProvider.TryGetFolderFromPathAsync(directory);
+
+        var file = await TrackNativeDialog(() => topLevel.StorageProvider.SaveFilePickerAsync(options), options.Title, options.SuggestedFileName);
 
         return file?.TryGetLocalPath();
     }
@@ -403,7 +458,7 @@ public class WindowManager : IWindowManager
 
     internal async Task<bool> ShowDialog(IClassicDesktopStyleApplicationLifetime desktop, IDialog dialog)
     {
-        var owner = GetTopWindow(desktop);
+        var owner = dialog is RuntimeErrorViewModel ? GetTopWindow(desktop) : GetIdeDialogOwner(desktop);
         if (dialog is LanguageRevertGateViewModel)
         {
             // Activation can still point at the main window while Options is open (#623).
@@ -427,16 +482,32 @@ public class WindowManager : IWindowManager
             // Let the window measure itself at content size, then unlock for user resizing
             window.Opened += (_, _) => window.SizeToContent = SizeToContent.Manual;
         }
+        if (dialog is RuntimeErrorViewModel runtimeError)
+        {
+            // The active form owns the error, but VB6 also holds the IDE (#1297, measured SP6).
+            var result = await HoldDesktopWindows(desktop, () => window.ShowDialog<bool>(owner));
+            if (!result && runtimeError.CanDebug(null)) desktop.MainWindow?.Activate();
+            return result;
+        }
         return await window.ShowDialog<bool>(owner);
     }
 
-    private static Window MakeDialogWindow(string title, Control content) => new Window
+    internal Window MakeDialogWindow(string title, Control content)
     {
-        Title = title,
-        Content = content,
-        SizeToContent = SizeToContent.WidthAndHeight,
-        WindowStartupLocation = WindowStartupLocation.CenterOwner,
-        CanResize = false,
-        ShowActivated = true
-    };
+        var window = new Window
+        {
+            Title = title,
+            Content = content,
+            FlowDirection = ProgramDialogs.IsProgramBox(content)
+                ? FlowDirection.LeftToRight
+                : _localization.FlowDirection,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowActivated = true
+        };
+        if (!ProgramDialogs.IsProgramBox(content))
+            IdeDialogChrome.Apply(window);
+        return window;
+    }
 }

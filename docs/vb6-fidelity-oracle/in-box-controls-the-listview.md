@@ -199,6 +199,40 @@ ProgressBar](in-box-controls-the-progressbar.md).
 - `ListItems.Count =` is 383. `Set ListItems = Nothing` is **438**.
 - `Clear` leaves the columns.
 
+#### Removing the SelectedItem (2026-11-17)
+
+**The question:** what is `SelectedItem` once the item it names is removed? The events program's line under
+[Events](#events) saw the item that moved up into its Index, but there item 4 was selected while `SelectedItem` was
+item 5. So which item was removed couldn't be read back from the log.
+
+**The probe:** a form holding a report-view ListView with one column. Its Form_Load shows the form, then for each row
+clears the list and adds five items, keyed `k1` to `k5`. It sets up the row in code and logs `SelectedItem`'s key,
+`Index` and `Selected`, which items are selected, and `Count`. It logs again after a `DoEvents`, which changed nothing in
+any row. Built as native code and as p-code, which gave the same log line for line.
+
+| Row | Before | Then | SelectedItem | Selected items |
+|---|---|---|---|---|
+| R1 | `ListItems(3).Selected = True` | `Remove 3` | **k4, Index 3, Selected False** | none |
+| R2 | `Set SelectedItem = ListItems(3)` | `Remove "k3"` | k4, Index 3, Selected False | none |
+| R3 | `ListItems(5).Selected = True` | `Remove 5`, the last item | **k4, Index 4, Selected False** | none |
+| R4 | 3 selected, then `Selected = False`, leaving SelectedItem k3 | `Remove 3` | k4, Index 3, Selected False | none |
+| R5 | MultiSelect, 1 and 3 selected, SelectedItem k3 | `Remove 3` | k4, Index 3, Selected False | **k1, still** |
+| R6 | `ListItems(4).Selected = True` | `Remove 2` | k4, Index 3, Selected True | k4 |
+| R7 | `ListItems(3).Selected = True` | `Clear` | `Nothing` | none |
+| R8 | `ListItems(1).Selected = True` | `Remove 1` | k2, Index 1, Selected False | none |
+| R9 | items 5 to 2 removed, leaving k1 selected | `Remove 1`, the only item | **`Nothing`** | none |
+| R10 | as R1 | `Remove 3`, then `Add , "k9"` | k4, Index 3, Selected False | none |
+
+**The rule these rows give:**
+- **Removing the SelectedItem moves it to the item now at the same Index**, or to the new last item when it was last.
+  That item is **not selected**: the selection doesn't move with it.
+- **Other selected items stay selected** (R5).
+- **Whether the removed item was selected makes no difference** (R4 against R1).
+- **No items left means `Nothing`:** after `Clear` (R7) or removing the only item (R9).
+- **Removing an item before the SelectedItem only shifts its Index** (R6), as the [Selection](#selection) table's last row
+  showed.
+- **A later `Add` doesn't move it** (R10).
+
 ### Sorting
 
 **The comparison,** with `Sorted = True`, ascending, on 26 items added in this order: `b B a10 a2 10 9 "" Zeta alpha _x
@@ -273,8 +307,12 @@ text.
 | click a column header | **ColumnClick and nothing else**: no MouseDown, MouseUp or Click |
 | double-click a column header | one ColumnClick |
 
-- **MouseDown and MouseUp give X and Y in twips** from the control's top-left. A click 50 pixels across and 42 down gave
-  750 and 630.
+- **MouseDown, MouseMove and MouseUp give X and Y in client-area twips, inside the edge.** The later console
+  measurement (issue #1086, issuecomment-6449003235, native matching p-code; supervisor correction on #1085,
+  2026-10-27) corrects the earlier claim that the origin was the outer top-left. With BorderStyle 1 and Appearance 1,
+  the edge is 3 pixels: 21 pixels from the outer corner gives X 270, and (40, 30) gives (555, 405).
+  Flat appearance gives X 315 and (600, 450), respectively. The earlier (50, 42) → (750, 630) observation remains
+  recorded, but does not establish an outer-corner origin for the default edge.
 - **ItemClick is raised for an item already selected,** on every click on it.
 - **SelectedItem can be Nothing inside ItemClick.** It read Nothing in the Ctrl+click's ItemClick and in the
   Shift+click's last one, and named the clicked item by Click.
@@ -331,6 +369,25 @@ the pointer rested when the program started.
 - **MouseDown, MouseMove and MouseUp all report the same point** for a click.
 - The ListView's default edge is 3 pixels, where the TreeView's is 2: the ListView's defaults are BorderStyle 1 with
   Appearance 1, the 3D edge and a line inside it.
+
+#### The other two ListView edges (2026-10-28, #2730)
+
+**The probe:** the one above, with the two TreeViews replaced by ListViews, so four ListViews, each 2400 × 1500 twips.
+L3 had Appearance 1 and no BorderStyle line, which loads as 0, as "A block missing a line", under "The saved files" below, records. L4 had
+Appearance 0 and BorderStyle 1. L1 and L2 were as before, measured again in the same run. Built native and as p-code,
+which logged the same events. Each read back its own BorderStyle and Appearance as set; L3 read BorderStyle 0.
+
+| ListView | Edge, each side, from GetClientRect | Click 21,21 px in: X, Y | Click 40,30 px in: X, Y |
+|---|---|---|---|
+| L3, Appearance 1, BorderStyle 0 | **2 px** | **285, 285** | 570, 420 |
+| L4, Appearance 0, BorderStyle 1 | **1 px** | **300, 300** | 585, 435 |
+| L1, Appearance 1, BorderStyle 1: its defaults | 3 px | 270, 270 | 555, 405 |
+| L2, Appearance 0, BorderStyle 0 | none | 315, 315 | 600, 450 |
+
+- **With Appearance 1 and BorderStyle 0 the edge is 2 pixels**, the TreeView's default edge, and a click lands where it
+  does on a default TreeView. That is the combination both corpus ListView forms load as.
+- **The edge adds up**: 2 pixels for Appearance 1's 3D edge, 1 for BorderStyle 1's line, so 3 with both, 1 with the
+  line alone and none with neither.
 
 ### Label editing, in full (2026-10-27, #1085)
 
@@ -457,7 +514,7 @@ inside AfterLabelEdit too. It changed only after AfterLabelEdit returned.
 - **The run-time reads:** EXEs read every property back, natively and as p-code.
   - The first read the second form as written by hand, which is where the missing-line values below come from.
   - The second read VB6's own save of the third form, the round trip from VB6's writer to its reader.
-- **The corpus:** VB6's saves are in `corpus/inbox-controls/pending/listview/` and `listview-columns/`.
+- **The corpus:** VB6's saves are in `corpus/inbox-controls/saved/listview/` and `listview-columns/`.
 
 **Double-clicked onto a form,** VB6 writes this block (corpus `defaults/`):
 
@@ -586,4 +643,16 @@ NumItems 0 written, and no BackColor or BorderStyle.
 
 ### In HexIDE
 
-A form holding a ListView is refused at load, as any in-box control HexIDE doesn't model is (#1085).
+The #1085 object model implements ListItems, ColumnHeaders, ListSubItems and column-bounded SubItems, Text defaults,
+Long counts/indexes, keys, item string tags, selection and checkbox state, measured properties, sorting and FindItem.
+Sorted additions wait for a dispatcher turn, including DoEvents. It draws text in all four views, Report headers and
+subitems, selection/focus and checkboxes. Mouse input, the measured navigation events and cancellable label editing
+are implemented. Part C loads text-only saved properties and flat columns, including the distinct file
+defaults and HIMETRIC widths; C2 carries saved own-property runs and flat columns verbatim while writing
+designer extender edits and resize extents. Both corpus saves round-trip with their companions. Own-property
+and column editing remains unavailable; the canonical edit writer for those properties is still to come. The
+designer previews the name and optional checkbox without resolving ImageList bindings. ListView ImageList binding
+remains unimplemented after merging #1083. Unmeasured conversions,
+member edges and error descriptions are refused rather than supplied with inferred values; see MISSING_LANGUAGE.md's
+ListView implementation
+boundaries, including the unresolved SortOrder timing. These are implementation notes, not additional measurements.

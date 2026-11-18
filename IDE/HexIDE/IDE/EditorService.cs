@@ -1,13 +1,18 @@
 using System;
+using System.Linq;
+using System.Collections.Generic;
 using HexIDE.Forms.ViewModels;
 using HexIDE.Lsp;
+using HexIDE.Language;
+using HexIDE.Localization;
+using HexIDE.Lsp.Messages;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.VisualDesigner;
 using Serilog;
 
 namespace HexIDE.IDE;
 
-public class EditorService : IEditorService
+public partial class EditorService : IEditorService
 {
     private readonly IDocumentDockService documentDockService;
     private readonly Func<CodeEditorViewModel> codeEditorViewModelFactory;
@@ -15,6 +20,9 @@ public class EditorService : IEditorService
     private readonly Func<ProjectDocumentViewModel> projectDocumentViewModelFactory;
     private readonly Func<FormEditViewModel> formEditViewModelFactory;
     private readonly Func<IProjectManager> projectManager;
+    private readonly ILocalizationService localization;
+    private readonly IEventBus? events;
+    private readonly Func<IProjectService>? projects;
 
     /// <param name="projectManager">
     /// Resolved lazily, and that is load-bearing rather than stylistic: <c>ProjectManager</c> takes an
@@ -27,7 +35,8 @@ public class EditorService : IEditorService
         Func<RelatedDocumentEditorViewModel> relatedDocumentEditorViewModelFactory,
         Func<ProjectDocumentViewModel> projectDocumentViewModelFactory,
         Func<FormEditViewModel> formEditViewModelFactory,
-        Func<IProjectManager> projectManager)
+        Func<IProjectManager> projectManager, ILocalizationService localization, IEventBus? events = null,
+        Func<IProjectService>? projects = null)
     {
         this.documentDockService = documentDockService;
         this.codeEditorViewModelFactory = codeEditorViewModelFactory;
@@ -35,6 +44,9 @@ public class EditorService : IEditorService
         this.projectDocumentViewModelFactory = projectDocumentViewModelFactory;
         this.formEditViewModelFactory = formEditViewModelFactory;
         this.projectManager = projectManager;
+        this.localization = localization;
+        this.events = events;
+        this.projects = projects;
     }
 
     public string? DocumentNameForUri(string uri)
@@ -51,6 +63,46 @@ public class EditorService : IEditorService
         return null;
     }
 
+    public CodeEditorViewModel? OpenCodeForUri(string uri) => OpenCodeForUri(uri, true);
+
+    public CodeEditorViewModel? OpenCodeForUri(string uri, bool takeFocus)
+    {
+        foreach (var project in projectManager().LoadedProjects)
+        {
+            foreach (var module in project.Modules)
+            {
+                if (!Names(uri, DocumentIdentity.For(module), module.AbsolutePath)) continue;
+                EditCode(module, takeFocus);
+                return documentDockService.OpenDocuments.OfType<CodeEditorViewModel>()
+                    .FirstOrDefault(vm => vm.ModuleDefinition == module);
+            }
+            foreach (var form in project.Forms)
+            {
+                if (!Names(uri, DocumentIdentity.For(form), form.AbsolutePath)) continue;
+                EditCode(form, takeFocus);
+                return documentDockService.OpenDocuments.OfType<CodeEditorViewModel>()
+                    .FirstOrDefault(vm => vm.FormDefinition == form || vm.ModuleDefinition?.FormPart == form);
+            }
+        }
+        return null;
+    }
+
+    public DocumentIdentity? CodeDocumentForUri(string uri)
+    {
+        foreach (var project in projectManager().LoadedProjects)
+        {
+            foreach (var module in project.Modules)
+                if (Names(uri, DocumentIdentity.For(module), module.AbsolutePath)) return DocumentIdentity.For(module);
+            foreach (var form in project.Forms)
+                if (Names(uri, DocumentIdentity.For(form), form.AbsolutePath)) return DocumentIdentity.For(form);
+        }
+        return null;
+    }
+
+    public CodeEditorViewModel? FindOpenCode(DocumentIdentity document) =>
+        documentDockService.OpenDocuments.OfType<CodeEditorViewModel>()
+            .FirstOrDefault(editor => editor.OpenDocument == document);
+
     public void RestoreCaret(DocumentIdentity document, int offset)
     {
         foreach (var editor in documentDockService.OpenDocuments)
@@ -66,7 +118,115 @@ public class EditorService : IEditorService
     }
 
     /// <inheritdoc />
-    public bool NavigateTo(string uri, int line, int column)
+    public bool NavigateTo(string uri, int line, int column) => NavigateTo(uri, line, column, true);
+
+    public string? ApplyWorkspaceEdit(WorkspaceEdit edit, Func<string, RenameDocumentSnapshot?> documentFor)
+    {
+        var source = documentDockService.ActiveTab as CodeEditorViewModel
+            ?? documentDockService.OpenDocuments.OfType<CodeEditorViewModel>().FirstOrDefault();
+        var changes = edit.DocumentChanges ?? edit.Changes?.Select(pair =>
+            new TextDocumentEdit(new(pair.Key, null), pair.Value)).ToArray() ?? [];
+        var codeChanges = new List<TextDocumentEdit>();
+        var carried = new List<(RelatedDocumentEditorViewModel Editor, List<TextChange> Changes)>();
+        foreach (var change in changes)
+        {
+            var related = change.Kind is null && change.TextDocument is { } target && change.Edits is not null
+                ? documentDockService.OpenDocuments.OfType<RelatedDocumentEditorViewModel>()
+                    .FirstOrDefault(editor => editor.RelatedDocument is { } document
+                        && Names(target.Uri, null, document.AbsolutePath)) : null;
+            if (related is null)
+            {
+                codeChanges.Add(change);
+                continue;
+            }
+            if (change.Edits!.Length == 0) continue;
+            var uri = change.TextDocument!.Uri;
+            string Refuse(bool stale = false) => string.Format(localization.GetString(stale
+                ? "Str.CodeEditor.QuickFix.ChangedTarget" : "Str.CodeEditor.QuickFix.Refused"), related.RelatedDocument!.Name);
+            var local = LspDocumentSession.VersionsFor(related.LanguageClient, uri);
+            var snapshot = documentFor(uri);
+            if (snapshot is not null && (snapshot.Text != related.Document.Text
+                    || (change.TextDocument.Version is null && snapshot.VersionChanged))
+                || local is { } known && known.Current != known.Sent
+                || change.TextDocument.Version is { } version && snapshot is { } sent && version != sent.Version
+                || snapshot is null && related.IsModified)
+                return Refuse(stale: true);
+            if (carried.Any(item => item.Editor == related)) return Refuse();
+            var resolved = new List<TextChange>();
+            foreach (var textEdit in change.Edits)
+            {
+                bool Valid(Position position) => position.Line >= 0 && position.Line < related.Document.LineCount
+                    && position.Character >= 0 && position.Character <= related.Document.GetLineByNumber(position.Line + 1).Length;
+                if (textEdit.NewText is null || !Valid(textEdit.Range.Start) || !Valid(textEdit.Range.End)) return Refuse();
+                int Offset(Position position) => related.Document.GetLineByNumber(position.Line + 1).Offset + position.Character;
+                var start = Offset(textEdit.Range.Start);
+                var end = Offset(textEdit.Range.End);
+                if (end < start) return Refuse();
+                resolved.Add(new(start, end - start, textEdit.NewText));
+            }
+            resolved = resolved.Select((item, index) => (item, index))
+                .OrderByDescending(entry => entry.item.Offset).ThenByDescending(entry => entry.index)
+                .Select(entry => entry.item).ToList();
+            for (var i = 1; i < resolved.Count; i++)
+                if (resolved[i].Offset + resolved[i].Length > resolved[i - 1].Offset) return Refuse();
+            carried.Add((related, resolved));
+        }
+
+        // Validate every carried buffer before the code applier commits anything. It in turn validates
+        // all code targets before writing; only then can the prepared carried edits be committed.
+        if (carried.Count == 0)
+            return source is null ? localization.GetString("Str.Lsp.NoWorkspaceEditor")
+                : source.ApplyRename(edit, "", documentFor, codeAction: true, takeFocus: false);
+        if (codeChanges.Count > 0)
+        {
+            if (source is null) return localization.GetString("Str.Lsp.NoWorkspaceEditor");
+            if (source.ApplyRename(new(DocumentChanges: codeChanges.ToArray()), "", documentFor,
+                    codeAction: true, takeFocus: false) is { } refusal) return refusal;
+        }
+        foreach (var (editor, edits) in carried)
+        {
+            using (editor.Document.RunUpdate())
+                foreach (var change in edits)
+                    editor.Document.Replace(change.Offset, change.Length, change.Text);
+        }
+        return null;
+    }
+
+    public bool ShowDocument(ShowDocumentParams request)
+    {
+        if (request.External) return false;
+        var start = request.Selection?.Start;
+        if (!NavigateTo(request.Uri, (start?.Line ?? 0) + 1, (start?.Character ?? 0) + 1, request.TakeFocus))
+            return false;
+        if (request.Selection is not { } range) return true;
+        foreach (var open in documentDockService.OpenDocuments)
+        {
+            var matches = open switch
+            {
+                CodeEditorViewModel code => code.OpenDocument is { } identity
+                    && Names(request.Uri, identity, identity.AbsolutePath),
+                RelatedDocumentEditorViewModel related => related.RelatedDocument is { } document
+                    && Names(request.Uri, null, document.AbsolutePath),
+                _ => false
+            };
+            if (!matches || open is not ISearchableDocument editor) continue;
+            int Offset(Position position)
+            {
+                var line = editor.Document.GetLineByNumber(Math.Clamp(position.Line, 0, editor.Document.LineCount - 1) + 1);
+                return line.Offset + Math.Clamp(position.Character, 0, line.Length);
+            }
+            var from = Offset(range.Start);
+            var to = Math.Max(from, Offset(range.End));
+            editor.SelectionLength = 0;
+            editor.CaretOffset = from;
+            editor.SelectionStart = from;
+            editor.SelectionLength = to - from;
+            break;
+        }
+        return true;
+    }
+
+    private bool NavigateTo(string uri, int line, int column, bool takeFocus)
     {
         if (string.IsNullOrWhiteSpace(uri)) return false;
 
@@ -77,7 +237,7 @@ public class EditorService : IEditorService
             foreach (var module in project.Modules)
             {
                 if (!Names(uri, DocumentIdentity.For(module), module.AbsolutePath)) continue;
-                EditCode(module);
+                EditCode(module, takeFocus);
                 PlaceCaret(vm => vm.ModuleDefinition == module, line, column);
                 return true;
             }
@@ -85,7 +245,7 @@ public class EditorService : IEditorService
             foreach (var form in project.Forms)
             {
                 if (!Names(uri, DocumentIdentity.For(form), form.AbsolutePath)) continue;
-                EditCode(form);
+                EditCode(form, takeFocus);
                 // EditCode(form) redirects a UserControl or PropertyPage to its module, so the editor that
                 // opened may be keyed on the module rather than the form. Accept either.
                 PlaceCaret(
@@ -96,9 +256,15 @@ public class EditorService : IEditorService
             foreach (var carried in project.RelatedDocuments)
             {
                 if (!Names(uri, null, carried.AbsolutePath)) continue;
-                EditRelatedDocument(carried);
-                // Carried files open in the plain-text editor, which is a different view model with no
-                // caret to place. Opening it is the whole of what can be honoured here.
+                EditRelatedDocument(carried, takeFocus);
+                foreach (var open in documentDockService.OpenDocuments)
+                {
+                    if (open is not RelatedDocumentEditorViewModel editor || editor.RelatedDocument != carried) continue;
+                    if (line < 1 || line > editor.Document.LineCount) break;
+                    var target = editor.Document.GetLineByNumber(line);
+                    editor.NavigateToOffset(Math.Min(target.Offset + Math.Max(column - 1, 0), target.EndOffset));
+                    break;
+                }
                 return true;
             }
         }
@@ -154,7 +320,7 @@ public class EditorService : IEditorService
             // longer agree with us about, and an offset past the end throws inside AvaloniaEdit.
             if (line < 1 || line > editor.Document.LineCount) return;
             var docLine = editor.Document.GetLineByNumber(line);
-            editor.CaretOffset = Math.Min(docLine.Offset + Math.Max(column - 1, 0), docLine.EndOffset);
+            editor.NavigateToOffset(Math.Min(docLine.Offset + Math.Max(column - 1, 0), docLine.EndOffset));
             return;
         }
     }
@@ -181,15 +347,17 @@ public class EditorService : IEditorService
     /// a VB6 language server and a faithfulness gate. None of those describe a text file.
     /// </para>
     /// </summary>
-    public void EditRelatedDocument(RelatedDocumentDefinition? relatedDocument)
+    public void EditRelatedDocument(RelatedDocumentDefinition? relatedDocument) => EditRelatedDocument(relatedDocument, true);
+
+    private void EditRelatedDocument(RelatedDocumentDefinition? relatedDocument, bool takeFocus)
     {
         if (relatedDocument == null) return;
 
         Log.Debug("EditorService: EditRelatedDocument({Name})", relatedDocument.Name);
-        if (documentDockService.TryActivate<RelatedDocumentEditorViewModel>(vm => vm.RelatedDocument == relatedDocument))
+        if (documentDockService.TryActivate<RelatedDocumentEditorViewModel>(vm => vm.RelatedDocument == relatedDocument, takeFocus))
             return;
 
-        documentDockService.OpenDocument(relatedDocumentEditorViewModelFactory().Initialize(relatedDocument));
+        documentDockService.OpenDocument(relatedDocumentEditorViewModelFactory().Initialize(relatedDocument), takeFocus);
     }
 
     /// <summary>
@@ -210,7 +378,17 @@ public class EditorService : IEditorService
         documentDockService.OpenDocument(projectDocumentViewModelFactory().Initialize(project));
     }
 
-    public void EditCode(FormDefinition? form)
+    public void EditProjectFile(ProjectFileSource source)
+    {
+        if (source.Path == null) return;
+        if (documentDockService.TryActivate<ProjectFileDocumentViewModel>(vm => vm.Source.Owner == source.Owner))
+            return;
+        documentDockService.OpenDocument(new ProjectFileDocumentViewModel(source, events, projects?.Invoke()));
+    }
+
+    public void EditCode(FormDefinition? form) => EditCode(form, true);
+
+    private void EditCode(FormDefinition? form, bool takeFocus)
     {
         if (form == null) return;
 
@@ -227,30 +405,32 @@ public class EditorService : IEditorService
         {
             if (module.FormPart != form) continue;
             Log.Debug("EditorService: EditCode(form={FormName}) — routing to its module", form.Name);
-            EditCode(module);
+            EditCode(module, takeFocus);
             return;
         }
 
         Log.Debug("EditorService: EditCode(form={FormName})", form.Name);
-        if (documentDockService.TryActivate<CodeEditorViewModel>(vm => vm.FormDefinition == form))
+        if (documentDockService.TryActivate<CodeEditorViewModel>(vm => vm.FormDefinition == form, takeFocus))
         {
             Log.Debug("EditorService: EditCode — existing editor activated");
             return;
         }
         Log.Debug("EditorService: EditCode — opening new code editor");
-        documentDockService.OpenDocument(codeEditorViewModelFactory().Initialize(form));
+        documentDockService.OpenDocument(codeEditorViewModelFactory().Initialize(form), takeFocus);
     }
 
-    public void EditCode(ModuleDefinition? module)
+    public void EditCode(ModuleDefinition? module) => EditCode(module, true);
+
+    private void EditCode(ModuleDefinition? module, bool takeFocus)
     {
         if (module == null) return;
         Log.Debug("EditorService: EditCode(module={ModuleName})", module.Name);
-        if (documentDockService.TryActivate<CodeEditorViewModel>(vm => vm.ModuleDefinition == module))
+        if (documentDockService.TryActivate<CodeEditorViewModel>(vm => vm.ModuleDefinition == module, takeFocus))
         {
             Log.Debug("EditorService: EditCode — existing editor activated");
             return;
         }
         Log.Debug("EditorService: EditCode — opening new code editor");
-        documentDockService.OpenDocument(codeEditorViewModelFactory().Initialize(module));
+        documentDockService.OpenDocument(codeEditorViewModelFactory().Initialize(module), takeFocus);
     }
 }

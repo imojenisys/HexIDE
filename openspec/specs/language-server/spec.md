@@ -13,6 +13,69 @@ the kind of thing that erodes silently unless it is a requirement.
 
 ## Requirements
 
+### Requirement: Background parser warm-up
+The bundled stdio server SHALL schedule a representative SLL-to-LL parse with error recovery on a
+background task without waiting before starting its read loop or publishing the synthetic diagnostics.
+It SHALL log the duration and prediction stage on completion, and log failures without stopping the server.
+
+#### Scenario: A new server session
+- **WHEN** the bundled server starts and its synthetic LL parse is still running
+- **THEN** it can answer initialize and accept document notifications
+- **AND** document analysis may run concurrently with the warm-up
+
+### Requirement: VB6 mechanical source limits produce compatibility warnings
+The bundled server SHALL warn on a logical line's 25th continuation, counting each extra 1,023-character
+piece of a physical line as one continuation. It SHALL also warn on a physical line over 1,023 characters,
+explaining VB6's piece-reading behaviour, split-number/string syntax errors and possible silent tail loss.
+These notices SHALL be warnings only: HexIDE keeps its existing execution behaviour and the whole source.
+The server SHALL NOT predict "Statement too complex" from the fitted expression budget (#3203).
+
+#### Scenario: Continuations cross VB6's measured edge
+- **WHEN** a logical line has 25 continuations, including long-line pieces
+- **THEN** the 25th carries a warning saying VB6 refuses it and HexIDE runs it
+- **AND** 24 continuations carry no continuation-limit warning
+
+#### Scenario: A physical line crosses VB6's piece length
+- **WHEN** a physical line has 1,024 characters
+- **THEN** the line carries a warning explaining the compatibility risk
+- **AND** a 1,023-character line carries no physical-line-length warning
+
+### Requirement: Clean exit stops the input loop quietly
+After answering `shutdown` and receiving `exit`, the server SHALL stop its input loop and exit with
+code 0 and empty stderr, whether the client closes stdin or leaves it open. EOF without a preceding
+`exit` SHALL still report the input fault on stderr. An `exit` without a previously answered
+`shutdown` SHALL stop the input loop with code 1 and empty stderr.
+
+#### Scenario: A client stops the server normally
+- **WHEN** the client receives the `shutdown` response and sends `exit`
+- **THEN** the server exits with code 0 and empty stderr without waiting for EOF
+
+#### Scenario: A client exits without shutdown
+- **WHEN** the client sends `exit` without an answered `shutdown`
+- **THEN** the server exits with code 1 and empty stderr without waiting for EOF
+
+#### Scenario: Input closes unexpectedly
+- **WHEN** stdin closes without an `exit` notification
+- **THEN** stderr reports the read fault
+
+### Requirement: Caught crashes have a distinct exit code
+An exception caught by the process entry point SHALL be logged as fatal and exit with code 2,
+distinct from code 0 after an answered `shutdown` and code 1 for `exit` without one.
+This requirement SHALL NOT change errors handled internally by the server framework.
+
+#### Scenario: The entry point catches a crash
+- **WHEN** server construction or execution throws an exception that reaches the entry point
+- **THEN** it logs the exception as fatal and the process exits with code 2
+
+### Requirement: Startup is visible without tracing
+The server SHALL send an informational `window/logMessage` after the client's `initialized`
+notification, confirming startup with the same name and version advertised by `initialize`.
+This notification SHALL be independent of the trace level and SHALL preserve file logging.
+
+#### Scenario: A client leaves tracing off
+- **WHEN** the client completes initialization with tracing off
+- **THEN** it receives a type 3 `window/logMessage` confirming startup, server name and version
+
 ### Requirement: The source tree SHALL be uniformly permissively licensed
 The language server and every artifact it embeds SHALL be permissively licensed, and the tree SHALL NOT
 contain a copyleft licence file, a copyleft-derived grammar, or test inputs derived from a copyleft
@@ -117,17 +180,34 @@ turns a normal interaction into a visible failure.
 - **WHEN** a definition is requested at a position with nothing to resolve
 - **THEN** an empty result is returned rather than an error
 
-### Requirement: The server SHALL parse a document once per change
-The server SHALL parse a changed document once and share the resulting tree across the features that need
-it, rather than parsing separately per feature.
+### Requirement: The server SHALL analyse a document once per change
+The server SHALL analyse a changed document once and share the tree that analysis keeps across the features
+that need it, rather than parsing separately per feature. The analysis MAY parse the text again to recover,
+and SHALL keep one tree from those parses for every feature to read.
 
-Diagnostics, document symbols and completion all want the same tree for the same text. Parsing once is
-both faster and safer: separate parses of the same document can disagree if the text changes between them,
-producing symbols that do not match the diagnostics beside them.
+Separate parses per feature can disagree if the text changes between them. A recovery parse cannot: it reads
+the same text inside the same analysis.
 
 #### Scenario: A change requiring diagnostics and symbols
 - **WHEN** a document changes and both diagnostics and symbols are produced
-- **THEN** both are derived from a single parse of that text
+- **THEN** both are derived from the one tree that document's analysis kept for that text
+
+#### Scenario: SLL abandons a parse of valid code
+- **WHEN** the fast SLL prediction abandons a parse, as it does on VB6's call-versus-array ambiguity
+- **THEN** the text is read again with full LL, reusing the lexed tokens, and only that tree is kept
+
+#### Scenario: A conditional block nobody can choose
+- **WHEN** the parse stumbles inside a conditional-compilation block whose branch cannot be chosen
+- **THEN** the text is read again with each such block's last branch, and the tree of whichever parse got
+  further is kept
+
+#### Scenario: An error in a protected line
+- **WHEN** an error lands in the file's header or in a member's `Attribute` lines
+- **THEN** the text is read again with those lines blanked, and that tree is kept
+
+#### Scenario: An analysis abandoned at the parse budget
+- **WHEN** a changed document's parse exceeds the parse budget
+- **THEN** no tree is kept for it, and the features that read a tree go on reading the previous one
 
 ### Requirement: Option prefixes preserve procedure parsing on syntax errors
 The server SHALL retain the same procedure tree and syntax diagnostics for a malformed procedure preceded
@@ -397,3 +477,12 @@ Traversal SHALL continue with subsequent statements after a bounded subtree is s
 - **WHEN** a parsed module contains 100,000 additions followed by declarations and another procedure
 - **THEN** symbol and declaration collection completes and retains the later declarations and procedure
 - **AND** Option Explicit checking can still report an undeclared reference in a later statement
+
+### Requirement: Completion excludes VB free text
+The bundled server SHALL return an empty completion list at a position inside an apostrophe comment,
+Rem comment or string literal, including an unfinished literal or doubled quotes, and in continued
+comments (#3577).
+
+#### Scenario: A completion request within a comment
+- **WHEN** completion is requested after `on` in `' Typed on`
+- **THEN** the completion list has no items

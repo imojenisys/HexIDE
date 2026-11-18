@@ -166,6 +166,9 @@ public partial class FormDefinition : INotifyPropertyChanged
         OwningModule = module;
     }
 
+    /// <summary>A recovered load error allows editing and Save As, but never overwriting the source (#4179).</summary>
+    public bool LoadedWithErrors { get; set; }
+
     public string? AbsolutePath
     {
         get => absolutePath;
@@ -197,7 +200,12 @@ public partial class FormDefinition : INotifyPropertyChanged
         }
     }
 
-    public void UpdateCode(string newCode) => Code = newCode;
+    public void UpdateCode(string newCode)
+    {
+        if (Code == newCode) return;
+        Code = newCode;
+        OnPropertyChanged(nameof(Code));
+    }
 
     public void UpdateComponents(IReadOnlyList<ComponentInstance> components)
     {
@@ -252,9 +260,8 @@ public partial class FormDefinition : INotifyPropertyChanged
 
     /// <summary>
     /// This form's designer half as its file has it: the first line of the file through the root <c>End</c>
-    /// inclusive, as read, or as last rendered — by the write that created the file, a committed designer change,
-    /// or a save. Null for a form HexIDE created that none of those has rendered yet: one with no file, untouched
-    /// in the designer (hexide-io/HexIDE#885).
+    /// inclusive, as read, or as last rendered — at creation by ProjectService for a template or Add Form (#885), a committed
+    /// designer change, or a save. Null when no caller has read or rendered a designer half.
     /// </summary>
     /// <remarks>
     /// <b>Kept as text as well as parsed into <see cref="Components"/>, because the two answer different
@@ -388,6 +395,7 @@ public partial class FormDefinition : INotifyPropertyChanged
     /// </summary>
     public void AdoptFidelityState(FormDefinition fresh)
     {
+        LoadedWithErrors = fresh.LoadedWithErrors;
         UnfaithfulSaveCauses = fresh.UnfaithfulSaveCauses;
         UnfaithfulSaveReason = fresh.UnfaithfulSaveReason;
         MaxUnreproducibleNestingDepth = fresh.MaxUnreproducibleNestingDepth;
@@ -448,7 +456,8 @@ public partial class FormDefinition : INotifyPropertyChanged
     public void RecordLoadedCompanionBlobCount(int count) => LoadedCompanionBlobCount = count;
 
     /// <summary>
-    /// How many distinct companion offsets this form's designer file CITED when it was loaded.
+    /// How many distinct companion offsets this form's designer file CITED when it was loaded. Cleared after a
+    /// successful save without companion content, so the previous file's citations cannot claim an orphan at a new path.
     ///
     /// Distinct from <see cref="LoadedCompanionBlobCount"/> in the case that matters: a companion nothing
     /// cites is read by falling back to a flat walk, so it yields records while this stays zero. That is

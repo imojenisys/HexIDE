@@ -35,7 +35,7 @@ internal static class IdeServer
 
         builder.Services.AddSingleton(context);
         // What the program prints, for the replies of the tools that run and stop it (#2531).
-        ProgramPrinted.Shared.Attach(context.ProjectRunnerService, () => context.ProjectRunnerService.IsRunning);
+        ProgramPrinted.Shared.Attach(context.ProjectRunnerService);
         builder.Services.AddHttpContextAccessor();
         // A call from another agent session is refused before anything else (#1306), and an exception a tool did not
         // catch is reported with its type and message rather than the SDK's bare "An error occurred invoking" (#603).
@@ -43,7 +43,7 @@ internal static class IdeServer
                 .AddMcpServer()
                 // Stateless, so a client attached before a relaunch is still answered after it. See McpTransport.
                 .WithHttpTransport(McpTransport.Configure)
-                .WithTools<HexIdeTools>(ReplyJson.Options), session)
+                .WithTools(ToolSchemas.For(new HexIdeTools(context, new HttpContextAccessor()))), session)
             // A modal dialog open once a call is done is named in its reply (#681), and so is a held button (#2231).
             .WithRequestFilters(filters => filters
                 .AddCallToolFilter(OpenDialogNote.Filter)

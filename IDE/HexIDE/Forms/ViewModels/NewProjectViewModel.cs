@@ -34,27 +34,32 @@ public partial class NewProjectViewModel : ObservableObject, IDialog
     /// </summary>
     public string? ResultFilePath { get; private set; }
 
+    public bool HasNoTemplates => Templates.Count == 0;
+    public bool HasNoInstalledTemplates { get; }
+
     public ObservableCollection<ProjectTemplateViewModel> Templates { get; } = new();
     public ObservableCollection<RecentProjectEntryViewModel> RecentProjects { get; } = new();
-    public FileBrowserViewModel FileBrowser { get; } = new();
+    public FileBrowserViewModel FileBrowser { get; }
 
     public DelegateCommand OkNew { get; }
     public DelegateCommand OkExisting { get; }
     public DelegateCommand OkRecent { get; }
     public DelegateCommand Cancel { get; }
 
-    public NewProjectViewModel(IWindowManager windowManager, IRecentProjectsService recentProjectsService, ISettingsService settingsService, IPersonalityService personalityService, ILocalizationService localization, AddinProjectTemplateService? addinProjectTemplateService = null)
+    public NewProjectViewModel(IWindowManager windowManager, IRecentProjectsService recentProjectsService, ISettingsService settingsService, IProfileService profileService, ILocalizationService localization, AddinProjectTemplateService? addinProjectTemplateService = null)
     {
         _recentProjectsService = recentProjectsService;
         _settingsService = settingsService;
         _localization = localization;
+        FileBrowser = new FileBrowserViewModel(localization);
+        HasNoInstalledTemplates = addinProjectTemplateService is { HasTemplates: false };
         DontShowOnStartup = !settingsService.PromptForProjectOnStartup;
         // New tab
         OkNew = new DelegateCommand(() =>
         {
             if (SelectedTemplate?.Supported == false)
             {
-                windowManager.MessageBox(string.Format(_localization.GetString("Str.NewProject.Msg.VersionDoesNotSupport"), SelectedTemplate.Name), "HexIDE", MessageBoxButtons.Ok, MessageBoxIcon.Information);
+                windowManager.MessageBox(string.Format(_localization.GetString("Str.NewProject.Msg.VersionDoesNotSupport"), SelectedTemplate.DisplayName), Distribution.DisplayName, MessageBoxButtons.Ok, MessageBoxIcon.Information);
                 return;
             }
             ResultFilePath = null;
@@ -93,7 +98,7 @@ public partial class NewProjectViewModel : ObservableObject, IDialog
         Cancel = new DelegateCommand(() => CloseRequested?.Invoke(false), () => true);
 
         // Populate templates
-        Templates.AddRange(personalityService.AvailableProjectTypes.Select(template => new ProjectTemplateViewModel(template)));
+        Templates.AddRange(profileService.AvailableProjectTypes.Select(template => new ProjectTemplateViewModel(template, _localization)));
         if (addinProjectTemplateService is not null)
             Templates.AddRange(addinProjectTemplateService.Templates.Select(template => new ProjectTemplateViewModel(template)));
         SelectedTemplate = Templates.FirstOrDefault();

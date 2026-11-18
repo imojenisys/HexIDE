@@ -7,19 +7,20 @@
         <IsPackable>false</IsPackable>
         <OutputType>Exe</OutputType>
         <IsTestProject>true</IsTestProject>
-        <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
-        <!-- Without this a failing run prints a COUNT and a path to a .log nobody has: CI cannot
-             say which test failed, which cost a hunt the first time it happened. With it, the name,
-             the assertion message, the file and line, and the stack all reach the console. -->
-        <TestingPlatformShowTestsFailure>true</TestingPlatformShowTestsFailure>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="Avalonia.Headless" />
         <PackageReference Include="Avalonia.Headless.XUnit" />
         <PackageReference Include="AwesomeAssertions" />
+        <!-- CI's ViewModel step names what was running when a run is too slow or hangs (#2128). -->
+        <PackageReference Include="Microsoft.Testing.Extensions.HangDump" />
         <PackageReference Include="NSubstitute" />
-        <PackageReference Include="xunit.v3" />
+        <PackageReference Include="xunit.v3.mtp-v2" />
+        <PackageReference Include="Microsoft.Testing.Extensions.Telemetry" />
+        <PackageReference Include="Microsoft.Testing.Extensions.TrxReport.Abstractions" />
+        <PackageReference Include="Microsoft.Testing.Platform" />
+        <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
         <PackageReference Include="xunit.analyzers" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />
     </ItemGroup>
 
@@ -35,6 +36,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="../HexIDE.Office/HexIDE.Office.csproj" />
         <ProjectReference Include="../HexIDE.Lsp.TestHost/HexIDE.Lsp.TestHost.csproj" ReferenceOutputAssembly="false" />
         <ProjectReference Include="..\HexIDE.Dap\HexIDE.Dap.csproj" />
         <ProjectReference Include="..\HexIDE.Lsp.TestServer\HexIDE.Lsp.TestServer.csproj" />
@@ -48,6 +50,7 @@
         <ProjectReference Include="..\HexIDE.AIChat\HexIDE.AIChat.csproj" />
         <!-- PackageSigner is used to produce signed fixtures for the verifier tests. -->
         <ProjectReference Include="..\HexIDE.AddinPacker\HexIDE.AddinPacker.csproj" />
+        <ProjectReference Include="..\HexIDE.Repack\HexIDE.Repack.csproj" />
     </ItemGroup>
 
     <!-- Exercise the actual Debug automation server, including its generated native stubs.
@@ -56,15 +59,16 @@
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
         <PackageReference Include="ModelContextProtocol.AspNetCore" />
         <ProjectReference Include="../HexIDE.Desktop/HexIDE.Desktop.csproj" SetConfiguration="Configuration=Debug" />
-        <!-- The SDK compiler parses the unsafe-code guard; no extra package is needed. -->
-        <Reference Include="Microsoft.CodeAnalysis" HintPath="$(MSBuildToolsPath)/Roslyn/bincore/Microsoft.CodeAnalysis.dll" />
-        <Reference Include="Microsoft.CodeAnalysis.CSharp" HintPath="$(MSBuildToolsPath)/Roslyn/bincore/Microsoft.CodeAnalysis.CSharp.dll" />
+        <!-- Use the same parser under dotnet and Visual Studio MSBuild. -->
+        <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
     </ItemGroup>
 
     <!-- VB6's Template tree is found one way in both test projects: the folder or the one above it, a set variable
          that finds nothing failing rather than skipping (#1440). -->
     <ItemGroup>
         <Compile Include="..\HexIDE.Runtime.Tests\Vb6Template.cs" Link="Infrastructure\Vb6Template.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\LspSessionLeakGuard.cs" Link="Infrastructure\LspSessionLeakGuard.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\LspSessionLeakGuardTests.cs" Link="Infrastructure\LspSessionLeakGuardTests.cs" />
     </ItemGroup>
 
     <!-- Keep the executable helper's dependency manifest and dependencies together, rather than
@@ -83,5 +87,11 @@
         <Copy SourceFiles="@(_LspTestHostFiles)"
               DestinationFolder="$(OutDir)LspTestHost/%(_LspTestHostFiles.RecursiveDir)" SkipUnchangedFiles="true" />
     </Target>
+
+    <!-- Redirect before any test can read or write the contributor's IDE profile (#3805). -->
+    <ItemGroup>
+        <Compile Include="..\HexIDE.Integration.Tests\TemporaryProfile.cs" Link="Infrastructure\TemporaryProfile.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\TemporaryProfileTests.cs" Link="Infrastructure\TemporaryProfileTests.cs" />
+    </ItemGroup>
 
 </Project>

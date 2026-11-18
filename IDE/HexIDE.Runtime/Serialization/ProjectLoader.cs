@@ -36,17 +36,35 @@ public sealed class ProjectLoader
     /// The files the host's code page couldn't decode, which were read byte for byte instead: the project file by its name,
     /// a member by its path as the project file gives it.
     /// </param>
-    public sealed record Result(ProjectDefinition Project, SerializedProject Serialized, IReadOnlyList<string> ReadByteForByte);
+    /// <param name="ProjectFileBytes">The project file's bytes, read from disk or encoded from proposed text.</param>
+    public sealed record Result(ProjectDefinition Project, SerializedProject Serialized, IReadOnlyList<string> ReadByteForByte,
+        byte[] ProjectFileBytes);
 
     /// <summary>Load the project at <paramref name="projectPath"/>. Errors short of an unreadable project file go to the sink.</summary>
     public async Task<Result> LoadAsync(string projectPath, IDeserializeErrorSink errorSink)
+    {
+        var (projectText, projectBytes, projectEncoding, projectByteForByte) = await Vb6TextFile.ReadDocumentAsync(projectPath, null, HostAnsi);
+        return await LoadContentAsync(projectPath, projectText, projectBytes, projectEncoding, projectByteForByte, errorSink);
+    }
+
+    /// <summary>
+    /// Reads proposed project text without writing it. Members still resolve relative to the project's real path.
+    /// Text that cannot be saved in the project's encoding is refused before any member is read (#3915).
+    /// </summary>
+    public Task<Result> LoadTextAsync(string projectPath, string text, Vb6TextEncoding encoding, IDeserializeErrorSink errorSink)
+    {
+        var bytes = Vb6TextFile.EncodeDocument(projectPath, text, encoding);
+        return LoadContentAsync(projectPath, text, bytes, encoding, false, errorSink);
+    }
+
+    private async Task<Result> LoadContentAsync(string projectPath, string projectText, byte[] projectBytes,
+        Vb6TextEncoding projectEncoding, bool projectByteForByte, IDeserializeErrorSink errorSink)
     {
         var projectDeserializer = new ProjectDeserializer();
         var formDeserializer = new FormDeserializer();
         var readByteForByte = new List<string>();
         var projectDir = Path.GetDirectoryName(projectPath)!;
 
-        var (projectText, _, projectEncoding, projectByteForByte) = await Vb6TextFile.ReadDocumentAsync(projectPath, null, HostAnsi);
         if (projectByteForByte)
             readByteForByte.Add(Path.GetFileName(projectPath));
         var serializedProject = projectDeserializer.Deserialize(projectText, errorSink);
@@ -67,6 +85,12 @@ public sealed class ProjectLoader
             try
             {
                 var moduleAbsolutePath = Path.Join(projectDir, SerializedProject.ToHostPath(modulePath));
+                if (!File.Exists(moduleAbsolutePath))
+                {
+                    errorSink.LogError("Str.ProjectLoad.MemberNotFound", "Project file not found: {0}", modulePath);
+                    project.PreserveItemLine(ItemLineFor(moduleKind, moduleName, modulePath), serializedProject.ModuleLineSlots[index]);
+                    continue;
+                }
                 var module = new ModuleDefinition(project, moduleName, moduleKind);
                 module.AbsolutePath = moduleAbsolutePath;
                 var (moduleSource, _, moduleEncoding, moduleByteForByte) = await ReadSourceAsync(moduleAbsolutePath, ProjectEncodingRecords.Read(serializedProject.ExtensionTail, modulePath));
@@ -116,7 +140,7 @@ public sealed class ProjectLoader
             {
                 if (!File.Exists(formAbsolutePath))
                 {
-                    errorSink.LogError("Str.ProjectLoad.FormNotFound", "Form file not found: {0}", formPath);
+                    errorSink.LogError("Str.ProjectLoad.MemberNotFound", "Project file not found: {0}", formPath);
                     // Preserve the Form= line so the missing node survives an open->save round-trip
                     // (mirrors modules, whose lines are kept when their files are absent). Not loaded into
                     // the model — Project Explorer shows the preserved entry with a missing-file marker.
@@ -187,12 +211,27 @@ public sealed class ProjectLoader
             try
             {
                 var moduleAbsolutePath = Path.Join(projectDir, SerializedProject.ToHostPath(modulePath));
+                if (!File.Exists(moduleAbsolutePath))
+                {
+                    errorSink.LogError("Str.ProjectLoad.MemberNotFound", "Project file not found: {0}", modulePath);
+                    project.PreserveItemLine(ItemLineFor(moduleKind, moduleName, modulePath), serializedProject.ModuleLineSlots[index]);
+                    continue;
+                }
                 var module = new ModuleDefinition(project, moduleName, moduleKind);
                 module.AbsolutePath = moduleAbsolutePath;
                 var (moduleSource, _, moduleEncoding, moduleByteForByte) = await ReadSourceAsync(moduleAbsolutePath, ProjectEncodingRecords.Read(serializedProject.ExtensionTail, modulePath));
                 module.TextEncoding = moduleEncoding;
                 // .bas/.cls: strip the VB6 header so Code is the body only (no-op for .pag/.ctl).
-                var (preservedHeader, moduleBody) = ModuleFileFormat.SplitHeader(moduleSource, moduleKind);
+                int[]? lineMap = null;
+                var oldHeaderLines = 0;
+                var designerAsModule = ModuleFileFormat.HandlesHeader(moduleKind) && ModuleFileFormat.IsDesignerFile(moduleSource);
+                var (preservedHeader, moduleBody) = designerAsModule ? ("", moduleSource)
+                    : ModuleFileFormat.SplitHeader(moduleSource, moduleKind, out lineMap, out oldHeaderLines);
+                if (designerAsModule)
+                    module.MarkUnfaithfulToSave(UnfaithfulSaveCause.DesignerFileAsModule,
+                        $"'{project.Name}' listed '{moduleAbsolutePath}' as a code module, but it is a designer file.");
+                module.LoadedLineMap = lineMap;
+                module.LoadedOldHeaderLines = oldHeaderLines;
 
                 module.RecordOriginalHeader(preservedHeader);
 
@@ -227,6 +266,24 @@ public sealed class ProjectLoader
             }
         }
 
+        // Decide after every member has loaded: a later module can collide too. Collisions are unmeasured
+        // (#3774), so keep the project-line name for those rather than choosing a winner by load order.
+        var names = project.Modules.Select(m => (Module: m, Original: m.Name,
+            Loaded: ModuleFileFormat.HandlesHeader(m.Kind)
+                ? ModuleFileFormat.ModuleNameFor(m.Name,
+                    m.UnfaithfulSaveCauses.HasFlag(UnfaithfulSaveCause.DesignerFileAsModule) ? m.Code : m.OriginalHeader) : m.Name)).ToArray();
+        foreach (var item in names)
+        {
+            if (names.Any(other => other.Module != item.Module &&
+                    (string.Equals(other.Original, item.Loaded, StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(other.Loaded, item.Loaded, StringComparison.OrdinalIgnoreCase))) ||
+                project.Forms.Any(f => string.Equals(f.Name, item.Loaded, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            if (!string.Equals(item.Original, item.Loaded, StringComparison.OrdinalIgnoreCase))
+                item.Module.ProjectLineName = item.Original;
+            item.Module.Name = item.Loaded;
+        }
+
         // Always retain the startup form NAME so Startup= survives round-trip even when its .frm was
         // missing and no FormDefinition was created (the live StartupForm, if found, takes precedence).
         project.StartupFormName = serializedProject.StartupFormName;
@@ -237,7 +294,8 @@ public sealed class ProjectLoader
                 StringComparison.OrdinalIgnoreCase))
             project.StartsAtSubMain = true;
         else if (serializedProject.StartupFormName != null)
-            project.StartupForm = project.Forms.FirstOrDefault(x => x.Name == serializedProject.StartupFormName);
+            project.StartupForm = project.Forms.FirstOrDefault(x =>
+                string.Equals(x.Name, serializedProject.StartupFormName, StringComparison.OrdinalIgnoreCase));
 
         foreach (var reference in serializedProject.References)
             project.AddReference(reference);
@@ -247,8 +305,9 @@ public sealed class ProjectLoader
         for (var i = 0; i < serializedProject.PreservedItemLines.Count; i++)
             project.PreserveItemLine(serializedProject.PreservedItemLines[i], serializedProject.PreservedItemLineSlots[i]);
         project.ExtensionTail = serializedProject.ExtensionTail;
+        project.VbaBitness = ProjectEncodingRecords.ReadBitness(serializedProject.ExtensionTail);
 
-        return new Result(project, serializedProject, readByteForByte);
+        return new Result(project, serializedProject, readByteForByte, projectBytes);
     }
 
     private async Task<(string Text, byte[] Bytes, Vb6TextEncoding Encoding, bool ByteForByte)> ReadSourceAsync(string path, Vb6TextEncoding? recorded)

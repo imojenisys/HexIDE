@@ -18,7 +18,50 @@ public partial class VB6BuiltIns
     private static void RegisterFormat(Dictionary<string, BuiltinFn> d)
     {
         d["Format"] = (_, a, _) => FormatValue(a);
+        d["FormatNumber"] = (_, a, _) => FormatFigure(a, "Number");
+        d["FormatCurrency"] = (_, a, _) => FormatFigure(a, "Currency");
+        d["FormatPercent"] = (_, a, _) => FormatFigure(a, "Percent");
         d["FormatDateTime"] = (_, a, _) => FormatDateTimeValue(a);
+    }
+
+    // #2515: measured en-GB, native and p-code. Keep the 256-digit anomaly explicit rather than
+    // inferring a storage-width rule from a single observation.
+    private static Vb6Value FormatFigure(IReadOnlyList<Vb6Value> a, string kind)
+    {
+        if (!Supplied(a, 0) || a.Count > 5)
+            throw new NotImplementedException("Formatting with this argument list is not implemented yet");
+        int digits = Supplied(a, 1)
+            ? Convert.ToInt32(NarrowNum(a[1], Vb6Value.ValueType.Integer).Value) : -1;
+        if (digits == -2 || (kind == "Currency" && digits == 256)) throw InvalidCall();
+        if (digits < -2 || (digits > 99 && digits != 256))
+            throw new NotImplementedException("Formatting with this number of decimal digits is not implemented yet");
+        bool leading = FigureFlag(a, 2, true);
+        bool parens = FigureFlag(a, 3, false);
+        bool grouping = FigureFlag(a, 4, true);
+        if (a[0].IsNull || a[0].Type == Vb6Value.ValueType.EmptyVariant) return new Vb6Value("");
+        decimal value = a[0].Value is VbDate date ? (decimal)date.Serial : NumToDecimal(a[0]);
+        if (kind == "Percent") value *= 100m;
+        bool negative = value < 0m;
+        var nf = VbLocale.Current.NumberFormat;
+        string mask = (grouping ? "#,##" : "") + (leading || kind == "Percent" ? "0" : "#");
+        int width = digits == -1 ? 2 : digits == 256 ? 0 : digits;
+        if (width > 0) mask += "." + new string('0', width);
+        string number = FormatPlainNumeric(Math.Abs(value), mask);
+        if (digits == 256) number += nf.NumberDecimalSeparator;
+        string result = (kind == "Currency" ? nf.CurrencySymbol : "") + number
+            + (kind == "Percent" ? "%" : "");
+        return new Vb6Value(negative ? parens ? "(" + result + ")" : nf.NegativeSign + result : result);
+    }
+
+    private static bool FigureFlag(IReadOnlyList<Vb6Value> a, int index, bool defaultValue)
+    {
+        if (!Supplied(a, index)) return defaultValue;
+        int flag = Convert.ToInt32(NarrowNum(a[index], Vb6Value.ValueType.Integer).Value);
+        return flag switch
+        {
+            -2 => defaultValue, -1 => true, 0 => false, 5 => throw InvalidCall(),
+            _ => throw new NotImplementedException("Formatting with this tri-state value is not implemented yet"),
+        };
     }
 
     private static Vb6Value FormatDateTimeValue(IReadOnlyList<Vb6Value> a)
@@ -90,7 +133,7 @@ public partial class VB6BuiltIns
         // A non-numeric string under a numeric mask is returned unchanged (verified: Format("abc","0.00")="abc").
         if (HasUnquotedPlaceholder(fmt))
         {
-            if (v.Value is string ns && !decimal.TryParse(ns, NumberStyles.Any, cc, out _))
+            if (v.WithoutOddBytes("VB6BuiltIns.Format text use").Value is string ns && !decimal.TryParse(ns, NumberStyles.Any, cc, out _))
                 return new Vb6Value(ns);
             return new Vb6Value(FormatNumericSections(v, fmt));
         }
@@ -439,7 +482,9 @@ public partial class VB6BuiltIns
 
         int exp = abs == 0 ? 0 : (int)Math.Floor(Math.Log10(abs));
         int mantFrac = OnlyPlaceholders(mantMask.Contains('.') ? mantMask[(mantMask.IndexOf('.') + 1)..] : "").Length;
-        decimal mant = abs == 0 ? 0m : Math.Round((decimal)(abs / Math.Pow(10, exp)), mantFrac, MidpointRounding.AwayFromZero);
+        // The 15-digit Decimal value, as the fixed masks see it (#4017): .NET 11's (decimal) cast keeps more digits, so
+        // 2.675 became 2.67499999... and rounded to 2.67E+00, where .NET 10 gave 2.68E+00.
+        decimal mant = abs == 0 ? 0m : Math.Round(VbNumeric.FloatingToDecimal(abs / Math.Pow(10, exp)), mantFrac, MidpointRounding.AwayFromZero);
         if (mant >= 10m) { mant /= 10m; exp++; mant = Math.Round(mant, mantFrac, MidpointRounding.AwayFromZero); }
 
         string expSign = exp < 0 ? "-" : (signChar == '+' ? "+" : "");
@@ -456,8 +501,9 @@ public partial class VB6BuiltIns
     {
         if (v.Value is decimal m) return m;
         if (v.Value is bool b) return b ? -1m : 0m;
-        if (Vb6Value.TryNumericToDouble(v, out var d)) return (decimal)d;
-        if (v.Value is string s && decimal.TryParse(s, NumberStyles.Any, VbLocale.Current, out var ds)) return ds;
+        if (v.Value is float f) return VbNumeric.FloatingToDecimal(f, 7);
+        if (Vb6Value.TryNumericToDouble(v, out var d)) return VbNumeric.FloatingToDecimal(d);
+        if (v.WithoutOddBytes("VB6BuiltIns.Format text use").Value is string s && decimal.TryParse(s, NumberStyles.Any, VbLocale.Current, out var ds)) return ds;
         throw new VBRunTimeException(VBStandardError.TypeMismatch);
     }
 

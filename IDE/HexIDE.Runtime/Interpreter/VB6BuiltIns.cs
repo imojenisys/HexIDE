@@ -59,8 +59,21 @@ public partial class VB6BuiltIns
     /// <summary>The program's open files (#1145), which FreeFile and EOF read and the file statements use.</summary>
     internal VbFiles Files { get; } = new();
 
+    // #4302 measures these LongLong inputs only. Other intrinsic uses need #1548's oracle rows.
+    private static readonly HashSet<string> LongLongInputs = new(StringComparer.OrdinalIgnoreCase)
+    { "CLngLng", "CLngPtr", "CInt", "CLng", "CDbl", "CStr", "TypeName", "VarType", "Hex", "Oct", "Str", "Format", "LenB", "Abs", "Int", "Fix", "Sgn" };
+
+    internal VbaBitness VbaBitness { get; init; }
+
+    internal Func<Vb6Value, string, Task<Vb6Value>>? ResolveDefaultForUse { get; set; }
+
     public async Task<Vb6Value?> EvaluateBuiltInFunction(string name, List<Vb6Value> args, bool compareText = false)
     {
+        if (IsLongLongConversion(name) && VbaBitness != VbaBitness.Bit64
+            && !(VbaBitness == VbaBitness.Bit32 && name.Equals("CLngPtr", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        if (IsLongLongConversion(name) && args.Count != 1)
+            throw new NotImplementedException("This argument count for a LongLong conversion is unmeasured (#1548)");
         CheckIntrinsicArgumentCount(name, args);
 
         // An unknown name is not a built-in, and its callers say so loudly ("Sub or Function not defined", or not
@@ -71,9 +84,25 @@ public partial class VB6BuiltIns
         if (!isAsync && !Builtins.TryGetValue(name, out fn))
             return null;
 
+        if (name.Equals("ChrB", StringComparison.OrdinalIgnoreCase)) CheckChrBArgument(args[0]);
+        CheckOddByteArguments(name, args);
         CheckValueBeforeObject(name, args);
         for (var i = 0; i < args.Count; i++)
-            args[i] = ArgumentAsUsed(name, i, args[i]);
+        {
+            var arg = args[i];
+            if (ReadsArgumentValue(name, i)
+                && !(i > 0 && name.Equals("Format", StringComparison.OrdinalIgnoreCase))
+                && ResolveDefaultForUse is { } resolve)
+                arg = await resolve(arg, name.Equals("Format", StringComparison.OrdinalIgnoreCase) ? "Format"
+                    : name.Equals("Abs", StringComparison.OrdinalIgnoreCase) ? "Abs" : name);
+            args[i] = ArgumentAsUsed(name, i, arg);
+            CheckOddByteArgument(name, i, args.Count, args[i]);
+            if (args[i].Type == Vb6Value.ValueType.LongLong
+                && (i != 0 || !LongLongInputs.Contains(name)
+                    || name.Equals("LenB", StringComparison.OrdinalIgnoreCase)
+                        && args is not IntrinsicArgumentValues { LenVariableSize: 8 }))
+                throw new NotImplementedException($"Use of LongLong by {name} in this argument is unmeasured (#1548)");
+        }
 
         // The two async builtins await the standard library; every other builtin is in the sync registry.
         if (string.Equals(name, "msgbox", StringComparison.OrdinalIgnoreCase))
@@ -122,24 +151,51 @@ public partial class VB6BuiltIns
     /// before every value. <c>Filter</c> reads them itself.</item>
     /// </list>
     /// </summary>
-    private static Vb6Value ArgumentAsUsed(string name, int index, Vb6Value arg)
+    private static bool ReadsArgumentValue(string name, int index)
     {
-        // LoadPicture and the financials accept only measured argument shapes; other conversions refuse there.
-        if (string.Equals(name, "LoadPicture", StringComparison.OrdinalIgnoreCase)
+        // Picture/resource functions and the financials accept only measured argument shapes; other conversions refuse there.
+        if (name.StartsWith("LoadRes", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "LoadPicture", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "Pmt", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "FV", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "PV", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "NPer", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "IPmt", StringComparison.OrdinalIgnoreCase)
             || string.Equals(name, "PPmt", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(name, "Rate", StringComparison.OrdinalIgnoreCase)) return arg;
+            || string.Equals(name, "Rate", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "NPV", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "IRR", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, "MIRR", StringComparison.OrdinalIgnoreCase)) return false;
         if (TakesTheArgumentItself.Contains(name) || (index == 0 && TakesAnArrayFirst.Contains(name))
             || (index >= 1 && TakesItsChoicesThemselves.Contains(name))
             || (index == 1 && string.Equals(name, "Join", StringComparison.OrdinalIgnoreCase))
             || string.Equals(name, "Filter", StringComparison.OrdinalIgnoreCase)
             // GetSetting reads its default only when it is the answer (measured, #1562).
             || (index == 3 && string.Equals(name, "GetSetting", StringComparison.OrdinalIgnoreCase)))
-            return arg;
+            return false;
+        return true;
+    }
+
+    private static void CheckOddByteArguments(string name, IReadOnlyList<Vb6Value> args)
+    {
+        for (var i = 0; i < args.Count; i++) CheckOddByteArgument(name, i, args.Count, args[i]);
+    }
+
+    private static void CheckOddByteArgument(string name, int index, int count, Vb6Value arg)
+    {
+        if (arg.IsOddByteString
+            && !(index == 0 && (name.Equals("Len", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("LenB", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("TypeName", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("VarType", StringComparison.OrdinalIgnoreCase)))
+            && !(name.Equals("InStrB", StringComparison.OrdinalIgnoreCase)
+                && (index == (count >= 3 ? 1 : 0) || index == (count >= 3 ? 2 : 1))))
+            throw Vb6Value.OddBytesNotImplemented(name);
+    }
+
+    private static Vb6Value ArgumentAsUsed(string name, int index, Vb6Value arg)
+    {
+        if (!ReadsArgumentValue(name, index)) return arg;
         if (ReadsADefaultMemberIfAny.Contains(name))
             return ObjectAsValue.DefaultMemberIfAny(arg);
         return ObjectAsValue.Scalar(arg, null);
@@ -148,7 +204,7 @@ public partial class VB6BuiltIns
     // CVar among them: CVar of an object is the object, whether its default member wants an argument, as a Collection's
     // does, or not (measured, #1466: TypeName(CVar(k)) is "K1" and IsObject(CVar(k)) True for a class with a default Value).
     private static readonly HashSet<string> TakesTheArgumentItself = new(StringComparer.OrdinalIgnoreCase)
-        { "TypeName", "IsObject", "IsMissing", "Array", "CVar", "ObjPtr" };
+        { "TypeName", "IsObject", "IsMissing", "Array", "CVar", "ObjPtr", "StrPtr", "VarPtr" };
 
     private static readonly HashSet<string> ReadsADefaultMemberIfAny = new(StringComparer.OrdinalIgnoreCase)
         { "VarType", "IsNumeric", "IsEmpty", "IsNull", "IsDate", "IsError", "IsArray" };
@@ -184,7 +240,9 @@ public partial class VB6BuiltIns
         RegisterConversion(d);
         RegisterMath(d);
         RegisterFinancial(d);
+        RegisterDepreciation(d);
         RegisterArray(d);
+        RegisterResources(d);
         RegisterInspection(d);
         d["LoadPicture"] = (self, args, _) => PanelPicture.Load(args, self.Files);
         RegisterDateTime(d);
@@ -215,25 +273,33 @@ public partial class VB6BuiltIns
         d["FileAttr"] = (self, a, _) =>
         {
             var number = Convert.ToInt32(NarrowNum(a[0], Vb6Value.ValueType.Integer).Value);
-            if (Supplied(a, 1) && a[1].Type != Vb6Value.ValueType.Integer
-                && a[1].Type != Vb6Value.ValueType.Long && a[1].Type != Vb6Value.ValueType.Byte)
-                throw new NotImplementedException("FileAttr attribute conversion is not implemented: its VB6 behaviour is unmeasured (#2521)");
-            return new Vb6Value(self.Files.FileAttr(number, Supplied(a, 1) ? Convert.ToInt64(a[1].Value) : 1));
+            // ReturnType converts as CInt, including banker's rounding (#4145).
+            return new Vb6Value(self.Files.FileAttr(number, Supplied(a, 1)
+                ? Convert.ToInt64(NarrowNum(a[1], Vb6Value.ValueType.Integer).Value) : 1));
         };
         d["EOF"] = (self, a, _) => new Vb6Value(self.Files.Eof(AsInt(a[0])));
         // LOF, Loc and Seek are Longs, and Input a String (measured, #1645). Input's file number may be written #n: the
-        // expression executor reads it as a file number. InputB returns a byte string, which HexIDE has not got (#1510).
+        // expression executor reads it as a file number. InputB's byte-input conversion remains unimplemented (#1510).
         d["LOF"] = (self, a, _) => new Vb6Value(self.Files.Length(AsInt(a[0])));
         d["Loc"] = (self, a, _) => new Vb6Value(self.Files.Loc(AsInt(a[0])));
         d["Seek"] = (self, a, _) => new Vb6Value(self.Files.SeekPosition(AsInt(a[0])));
         d["Input"] = (self, a, _) => a.Count == 2
             ? new Vb6Value(self.Files.Read(AsInt(a[1]), AsInt(a[0])))
             : throw new VBCompileErrorException("Syntax error");
-        d["InputB"] = (_, _, _) => throw new NotImplementedException("InputB is not implemented: it returns a byte string, which HexIDE has not got (#1510)");
+        d["InputB"] = (_, _, _) => throw new NotImplementedException("InputB is not implemented (#1510).");
         // DoEvents, for code run with no window, as a module test's is: nothing can be waiting, so it does nothing. A program
         // running in a window reaches BasicInterpreter.CallBuiltIn first, which runs what is waiting, as VB6 does (#766).
         // VB6 returns the open-form count; Integer 0 lets both `DoEvents` and `x = DoEvents` run (documented approximation).
         d["DoEvents"] = (_, _, _) => new Vb6Value(0);
+        foreach (var name in new List<string>(d.Keys))
+        {
+            var function = d[name];
+            d[name] = (self, args, text) =>
+            {
+                CheckOddByteArguments(name, args);
+                return function(self, args, text);
+            };
+        }
         return d;
     }
 
@@ -361,7 +427,12 @@ public partial class VB6BuiltIns
         title ??= AppTitle?.Invoke();
 
         var runEnded = WatchRunEnd?.Invoke();
-        var result = await stdLib.MsgBox(text ?? "", title, buttons, icon);
+        var layout = MessageBoxLayout.None;
+        if ((style & VBMsgBoxStyle.vbMsgBoxRight) != 0)
+            layout |= MessageBoxLayout.Right;
+        if ((style & VBMsgBoxStyle.vbMsgBoxRtlReading) != 0)
+            layout |= MessageBoxLayout.RtlReading;
+        var result = await stdLib.MsgBox(text ?? "", title, buttons, icon, layout);
         // None is a box that went away without an answer. The hosts answer a person's close themselves, as Windows does
         // (measured: OK alone answers vbOK, a box with Cancel answers vbCancel, and Yes/No and Abort/Retry/Ignore
         // have no close), and keep a box waiting when its owner hides. So None means HexIDE closed the box:
@@ -404,15 +475,11 @@ public partial class VB6BuiltIns
     /// <c>Enum</c> or <c>Const</c> of the same name wins over any library.</summary>
     public bool TryGetBuiltInConstant(string name, out Vb6Value constant)
         => VB6InBoxLibraries.TryBare(name, out constant)
-           || (CommonDialogReferenced && CommonDialogConstants.TryBare(name, out constant))
            || TryControlLibraryConstant(name, out constant);
 
-    /// <summary>Whether the project references the CommonDialog control, whose constants then resolve (#1084).</summary>
-    internal bool CommonDialogReferenced { get; set; }
-
     /// <summary>
-    /// The in-box control libraries the project references, in its order (#1082). Their constants resolve as the
-    /// CommonDialog's do, after the four in-box libraries, and only while the project references the library: a bare
+    /// The in-box control libraries the project references, in its order (#1082). Their constants resolve after the four
+    /// in-box libraries, and only while the project references the library: a bare
     /// <c>ccScrollingSmooth</c> without MSCOMCTL.OCX is an undeclared variable, as in VB6. The 5.0 and 6.0 libraries
     /// declare their 152 shared names with the same values in the same enums (measured), so their order never changes a value.
     /// </summary>

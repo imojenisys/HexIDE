@@ -5,6 +5,58 @@ namespace HexIDE.Tests.Infrastructure;
 public class WorkflowActionTests
 {
     [Fact]
+    public void TestStepsSelectProjectsForTheNativeMtpRunner()
+    {
+        var workflow = File.ReadAllText(Path.Combine(RepoTree.Root(), ".github", "workflows", "build.yml"))
+            .ReplaceLineEndings("\n");
+        var commands = Regex.Matches(workflow, @"dotnet test ([^\r\n]+)");
+        commands.Should().NotBeEmpty();
+        foreach (Match command in commands)
+            command.Groups[1].Value.Should().StartWith("--project ");
+    }
+
+    [Fact]
+    public void TestReportPathsRemainProjectLocal()
+    {
+        var workflow = File.ReadAllText(Path.Combine(RepoTree.Root(), ".github", "workflows", "build.yml"))
+            .ReplaceLineEndings("\n");
+        var commands = Regex.Matches(workflow,
+            @"dotnet test --project (HexIDE\.[\w.]+)/[^\n]+(?:\n +--[^\n]+)*")
+            .Where(command => command.Value.Contains("--results-directory")).ToArray();
+        commands.Should().NotBeEmpty();
+        foreach (var command in commands)
+            command.Value.Should().Contain($"--results-directory {command.Groups[1].Value}/TestResults");
+    }
+
+    [Fact]
+    public void RequiredForeignServerStepsSkipImagePathAndPrintTheResolutionReport()
+    {
+        var workflow = File.ReadAllText(Path.Combine(RepoTree.Root(), ".github", "workflows", "build.yml"))
+            .ReplaceLineEndings("\n");
+        var steps = Regex.Matches(workflow, @"(?ms)^      - name: .*?(?=^      - name:|\z)")
+            .Select(match => match.Value).ToArray();
+        var required = steps.Where(step => step.Contains("HEXIDE_REQUIRE_FOREIGN_LSP: '1'")).ToArray();
+        required.Should().HaveCount(2);
+        foreach (var step in required)
+        {
+            step.Should().Contain("HEXIDE_FOREIGN_LSP_NO_PATH: '1'");
+            step.Should().Contain("HEXIDE_FOREIGN_LSP_REPORT: ${{ runner.temp }}/foreign-lsp.txt");
+        }
+        var jobs = Regex.Matches(workflow, @"(?ms)^  [\w-]+:\n.*?(?=^  [\w-]+:|\z)")
+            .Select(match => match.Value).Where(job => job.Contains("HEXIDE_REQUIRE_FOREIGN_LSP: '1'"));
+        foreach (var job in jobs)
+            Regex.Matches(job, "name: Report resolved foreign servers").Count.Should().Be(1);
+        var reports = steps.Where(step => step.StartsWith("      - name: Report resolved foreign servers\n")).ToArray();
+        reports.Should().HaveCount(required.Length);
+        foreach (var step in reports)
+        {
+            step.Should().Contain("if: always()");
+            step.Should().Contain("cat \"$FOREIGN_LSP_REPORT\"");
+            step.Should().Contain("FOREIGN_LSP_REPORT: ${{ runner.temp }}/foreign-lsp.txt");
+        }
+    }
+
+    [Fact]
     public void DocsOnlyDesktopChecksMatchTheRealBuildsWithoutUsingDesktopRunners()
     {
         var workflow = File.ReadAllText(Path.Combine(RepoTree.Root(), ".github", "workflows", "build.yml"))
@@ -18,22 +70,45 @@ public class WorkflowActionTests
         docs.Should().Contain("needs: changes");
         docs.Should().Contain("if: ${{ !cancelled() && needs.changes.outputs.skip == 'true' }}");
         builds.Should().Contain("if: ${{ !cancelled() && needs.changes.outputs.skip != 'true' }}");
-        docs.Should().Contain("name: build-ide (${{ matrix.name }})");
-        builds.Should().Contain("name: build-ide (${{ matrix.name }})");
+        docs.Should().Contain("name: build-ide (${{ matrix.name }}${{ matrix.name == 'windows-arm' && ', advisory' || '' }})");
+        builds.Should().Contain("name: build-ide (${{ matrix.name }}${{ matrix.name == 'windows-arm' && ', advisory' || '' }})");
         docs.Should().Contain("runs-on: ubuntu-latest");
         builds.Should().Contain("runs-on: ${{ matrix.runner }}");
 
-        var names = Regex.Matches(builds, @"\{ name: (\w+), runner: ([\w-]+) \}");
-        names.Select(match => match.Groups[1].Value).Should().BeEquivalentTo(new[] { "windows", "macos" });
+        // The matrix is a JSON list chosen by event (#4218): all three platforms for a push or a merge batch, Windows alone
+        // for a pull request's own run. The docs-only job stands in for every platform of the full list.
+        builds.Should().Contain("(github.event_name != 'pull_request' || startsWith(github.head_ref, 'batch/'))");
+        var lists = Regex.Matches(builds, @"'(\[\{""name"".*?\}\])'").Select(match => match.Groups[1].Value).ToArray();
+        lists.Should().HaveCount(2, "the full list and the pull request's own list");
+        Regex.Matches(lists[1], @"""name"":""([\w-]+)""").Select(match => match.Groups[1].Value).Should().Equal("windows");
+        var names = Regex.Matches(lists[0], @"\{""name"":""([\w-]+)"",""runner"":""([\w-]+)""\}");
+        names.Select(match => match.Groups[1].Value).Should().BeEquivalentTo(new[] { "windows", "macos", "windows-arm" });
         foreach (Match name in names)
         {
             docs.Should().MatchRegex(@"(?m)^          - \{ name: " + name.Groups[1].Value + @" \}$");
-            name.Groups[2].Value.Should().Be(name.Groups[1].Value + "-latest");
+            name.Groups[2].Value.Should().Be(name.Groups[1].Value == "windows-arm"
+                ? "windows-11-arm" : name.Groups[1].Value + "-latest");
         }
 
         docs.Should().NotContain("uses:");
         Regex.Matches(docs, @"(?m)^        run: (.+)$").Select(match => match.Groups[1].Value)
             .Should().Equal("echo 'Build skipped for a docs-only change.'");
+    }
+
+    [Fact]
+    public void WindowsArmIsAdvisoryAndKeepsTheWindowsProofsRequired()
+    {
+        var workflow = File.ReadAllText(Path.Combine(RepoTree.Root(), ".github", "workflows", "build.yml"))
+            .ReplaceLineEndings("\n");
+        var build = Regex.Match(workflow, @"(?ms)^  build-ide-desktop:\n(.*?)(?=^  [\w-]+:|\z)").Value;
+
+        build.Should().Contain("continue-on-error: ${{ matrix.name == 'windows-arm' }}");
+        build.Should().Contain("fail-fast: false");
+        build.Should().Contain("{\"name\":\"windows-arm\",\"runner\":\"windows-11-arm\"}");
+        build.Should().Contain("name: Publish the standalone runner (for the made-program test)\n        if: runner.os == 'Windows'");
+        build.Should().Contain("HEXIDE_REQUIRE_MADE_PROGRAM: ${{ runner.os == 'Windows' && '1' || '0' }}");
+        build.Should().Contain("HEXIDE_REQUIRE_FOREIGN_LSP: '1'");
+        build.Should().Contain("foreign-lsp-${{ matrix.name }}-${{ hashFiles(");
     }
 
     [Theory]

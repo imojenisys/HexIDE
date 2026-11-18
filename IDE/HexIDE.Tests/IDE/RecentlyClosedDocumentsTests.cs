@@ -9,14 +9,17 @@ using HexIDE.Localization;
 
 namespace HexIDE.Tests.IDE;
 
-public class RecentlyClosedDocumentsTests
+public class RecentlyClosedDocumentsTests : CompositionTestBase
 {
-    private static (DISetup composition, IDocumentDockService dock, IEditorService editors, MainViewViewModel root) Shell()
+    private (DISetup composition, IDocumentDockService dock, IEditorService editors, MainViewViewModel root) Shell()
     {
-        var composition = new DISetup();
+        var composition = Composition;
         var root = composition.Root;
         return (composition, composition.DocumentDockService, composition.EditorService, root);
     }
+
+    // A window closed with unsaved text leaves its session held until its project closes (#3476).
+    private void Unload(ProjectDefinition project) => Composition.EventBus.Publish(new HexIDE.Events.ProjectUnloadedEvent(project));
 
     [Fact]
     public void ClosedToolsReopenNewestFirstAndHistoryIsSessionOnly()
@@ -84,6 +87,7 @@ public class RecentlyClosedDocumentsTests
             dock.CloseAll();
         }
         finally { File.Delete(path); }
+        Unload(project);
     }
 
     [AvaloniaFact]
@@ -100,6 +104,7 @@ public class RecentlyClosedDocumentsTests
         dock.RecentlyClosed.Entries.Should().HaveCount(2);
         project.DeleteForm(form);
         dock.RecentlyClosed.Entries.Should().BeEmpty();
+        Unload(project);
     }
 
     [AvaloniaTheory]
@@ -120,6 +125,7 @@ public class RecentlyClosedDocumentsTests
         if (carried) project.DeleteRelatedDocument(related);
         else project.DeleteModule(module);
         dock.RecentlyClosed.Entries.Should().BeEmpty();
+        Unload(project);
     }
 
     [AvaloniaFact]
@@ -141,6 +147,7 @@ public class RecentlyClosedDocumentsTests
         dock.RecentlyClosed.Entries.Should().BeEmpty();
         dock.OpenDocuments.Should().ContainSingle().Which.OpenDocument.Should().Be(DocumentIdentity.For(siblingModule));
         dock.CloseAll();
+        Unload(sibling);
     }
 
     [AvaloniaFact]
@@ -166,9 +173,9 @@ public class RecentlyClosedDocumentsTests
         return Path.Combine(root.FullName, "IDE", "HexIDE.TwinBasic.Tests", "Fixtures", name);
     }
 
-    private static IEnumerable<ArchiveProjectDocument> Documents(ArchiveProjectFolder folder) =>
-        folder.Children.SelectMany(entry => entry is ArchiveProjectFolder child
-            ? Documents(child) : new[] { (ArchiveProjectDocument)entry });
+    private static IEnumerable<ContainerDocument> Documents(ContainerFolder folder) =>
+        folder.Children.SelectMany(entry => entry is ContainerFolder child
+            ? Documents(child) : new[] { (ContainerDocument)entry });
 
     private static async Task CheckArchiveHistory(IDocumentDockService dock, IEditorService editors)
     {
@@ -176,7 +183,7 @@ public class RecentlyClosedDocumentsTests
         var loc = Substitute.For<ILocalizationService>();
         loc.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         var archives = new ArchiveProjectService(dock, Substitute.For<IRecentProjectsService>(), loc,
-            Substitute.For<IWindowManager>());
+            Substitute.For<IWindowManager>(), Substitute.For<HexIDE.Language.IConditionalCodeReader>());
         try
         {
             File.Copy(Fixture("sample.twinpack"), path);

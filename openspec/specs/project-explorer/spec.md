@@ -8,7 +8,106 @@ The project file is permissive about where members live — a form in a subdirec
 traversing out of the project directory are both legal, and both occur in real projects. A tree that hides
 that arrangement leaves the developer unable to see the shape of their own project from inside the IDE.
 
+Recovery capture of project-file tab text, `.vbg` editing and add-in project-file editing are not covered
+(Refs #3915).
+
 ## Requirements
+
+### Requirement: A project with a chosen home shows its own file
+Every loaded project with a chosen home SHALL show its own file as its first child, named by filename,
+including contributed types and a group's `.vbg`. Activating it SHALL read the file directly, without
+an add-in reader, into a text tab that refreshes after saves. Saved VB6 `.vbp` files without a contributed
+form format or project-file writer SHALL open as editable text with undo and an unsaved `*` marker;
+all other project files SHALL stay read-only.
+
+#### Scenario: Reading a saved project file
+- **WHEN** the developer activates `Example.vbp` under its project
+- **THEN** an editable tab shows the file's text
+- **AND** saving changed project settings refreshes that tab with what was written
+
+#### Scenario: A working copy has no chosen home
+- **WHEN** a project has never been saved or its path is still within its working directory
+- **THEN** it has no project-file node
+
+#### Scenario: Archive projects keep their existing tree
+- **WHEN** an archive project is open
+- **THEN** its existing archive tree remains unchanged
+
+### Requirement: Proposed VB6 project text is applied before reload
+Tab Save SHALL validate VB6 text, refuse reader errors, resolve disk conflicts and ask before replacing
+unsaved model/member edits through the existing reload path. Accepted text SHALL be written verbatim
+in the project's encoding. Reload SHALL preserve the tab's position and the project's group, order
+and startup. Project/group saves, tab/project close and Exit SHALL protect unsaved tab text with
+Apply, Discard or Cancel. Later edits during apply SHALL stay unsaved.
+
+#### Scenario: Applying proposed project text through the service
+- **WHEN** proposed VB6 project text has no reader errors and all replacement questions are accepted
+- **THEN** the service writes the exact encoded text and reopens the project through the existing reload path
+- **AND** cancelling a disk-conflict, model-replacement or unsaved-member question leaves the project file untouched
+- **AND** the existing tab shows the file without an unsaved marker after a successful apply
+
+#### Scenario: Refused project-file text
+- **WHEN** the project's reader refuses the edited text or reports an error
+- **THEN** no file is written, the tab keeps its text and unsaved marker, and the IDE reports why
+
+#### Scenario: Saving or closing with unsaved project-file text
+- **WHEN** a project/group save, tab/project close or Exit encounters unsaved project-file text
+- **THEN** it asks whether to apply the text, discard it or cancel
+- **AND** Cancel writes nothing and retains the edit; Discard restores the tab from disk
+
+#### Scenario: Text arrives while a save is pending
+- **WHEN** the tab changes after Save captured the text it is applying
+- **THEN** the captured text is written and applied
+- **AND** the later edits remain modified in the same buffer, with their undo history and caret, against the new disk baseline
+
+#### Scenario: Another operation arrives during apply
+- **WHEN** the tab is applying, including while its project is unloaded and reopened
+- **THEN** a second save or close of that tab or project, Save Group or Exit is refused
+- **AND** that second request writes nothing and leaves the tab open
+
+#### Scenario: Read-only group and contributed files
+- **WHEN** a group file or a project with a contributed form format or project-file writer is opened
+- **THEN** its text tab remains read-only
+
+### Requirement: Explorer names SHALL follow the loaded group or project
+The group root SHALL notify its display name when the group's name changes. The pane title SHALL use
+localized `Project Group - {0}` for a loaded group and `Project - {0}` for a lone project without a group.
+It SHALL follow group creation or clearing, group and project renames, and language changes. With nothing
+loaded it SHALL retain the localized `Project Group - Group1` title (#3713).
+
+#### Scenario: Saving a group under a new name
+- **WHEN** saving the group changes its name
+- **THEN** the existing root node and the pane title show the new name
+
+#### Scenario: Clearing a group or changing language
+- **WHEN** the group is cleared leaving one project, or the IDE language changes
+- **THEN** the pane title reflects the loaded project and the current language
+
+#### Scenario: Adding an existing project beside another
+- **WHEN** an existing VB6 or add-in project is loaded while another project is loaded without a group
+- **THEN** the IDE SHALL create `Group1`, and the explorer shows its group root and localized group title
+- **AND** opening a lone project creates no group, while opening a `.vbg` uses that file's group
+
+### Requirement: A new group root SHALL start expanded
+The group root SHALL start expanded after adding a second project or opening a `.vbg`, showing its
+project items (#3741). Rebuilding the same group's root when the language changes SHALL preserve the
+expansion chosen by the user.
+
+#### Scenario: A group becomes visible
+- **WHEN** a second project is added or a two-project `.vbg` opens
+- **THEN** the group is expanded and both project items exist in the tree
+
+#### Scenario: A collapsed group survives a language change
+- **WHEN** the user collapses the group and changes the IDE language
+- **THEN** the rebuilt group remains collapsed
+
+### Requirement: The group root SHALL expose its displayed name to automation
+The group root's tree item SHALL use its localized display name as its accessible name through the
+same binding as the other project tree nodes (#3735). It SHALL notify that name when the group is renamed.
+
+#### Scenario: Renaming an accessible group root
+- **WHEN** the loaded group is renamed
+- **THEN** its existing tree item's accessible name matches the updated localized display label
 
 ### Requirement: The tree SHALL show members in their filesystem hierarchy
 The tree SHALL present the project's members beneath the project file, arranged by their location on disk.
@@ -179,6 +278,16 @@ was then left out of the project file when the IDE closed (#1359).
 - **WHEN** the developer chooses Add > Form on a project in the tree
 - **THEN** the new form's file exists in the project's folder and its designer is open
 
+### Requirement: The tree's Add menu offers modules and UserControls
+The Add submenu SHALL offer Module, Class Module and User Control using localized headers and their item icons.
+Each command SHALL use the selected node's project and the Project menu's creation service and next-free-name
+helper. Module and Class Module SHALL open their code editor; User Control SHALL open its designer.
+The commands SHALL be disabled without a project selection or for an add-in-contributed project.
+
+#### Scenario: Adding to a project other than the startup project
+- **WHEN** the developer chooses Add > Module, Class Module or User Control on a node in another project
+- **THEN** the new item belongs to that node's project and opens in the appropriate editor
+
 ### Requirement: Opening a project from the tree SHALL show what it contains
 Activating a project in the tree SHALL open a read-only document describing that project: its name, type,
 startup object, location, the members it holds with the kind of each, and the references it declares. A
@@ -286,8 +395,8 @@ file on disk. Removing a saved member SHALL make the project changed, and its ne
 member's entry.
 The Project menu SHALL offer the same removal for the selected Explorer member, falling back to the focused
 editor member when the Explorer has no removable selection. Its header SHALL name that member and its
-command SHALL be disabled when neither identifies a loaded member. Designers and related documents remain
-outstanding under #835.
+command SHALL be disabled when neither identifies a loaded member. Designers and carried files are not
+removable through this command.
 
 #### Scenario: Removing an unchanged saved module
 - **WHEN** the developer removes an unchanged saved module through the Explorer

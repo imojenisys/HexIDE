@@ -1,0 +1,69 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+        Headless tests of the runtime as a made program runs it: running controls drawn under Avalonia headless, in an
+        application that loads only what the Standalone runner loads. The provider's half of HexIDE.Integration.Tests
+        (#3411, #3663). It references no IDE project, so a test here can't lean on the IDE's theme, as 74 tests there
+        did without anyone seeing it (#3695).
+
+        Not part of HexIDE.Runtime.Tests, which runs its tests in parallel: a headless application runs them one at a
+        time, and would hold up that suite's 8,500.
+    -->
+    <PropertyGroup>
+        <TargetFrameworks>$(DotNetVersion)</TargetFrameworks>
+        <Nullable>enable</Nullable>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia.Headless.XUnit" />
+        <PackageReference Include="Avalonia.Skia" />
+        <PackageReference Include="AwesomeAssertions" />
+        <PackageReference Include="Microsoft.Testing.Extensions.HangDump" />
+        <PackageReference Include="NSubstitute" />
+        <PackageReference Include="xunit.v3.mtp-v2" />
+        <PackageReference Include="Microsoft.Testing.Extensions.Telemetry" />
+        <PackageReference Include="Microsoft.Testing.Extensions.TrxReport.Abstractions" />
+        <PackageReference Include="Microsoft.Testing.Platform" />
+        <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
+    </ItemGroup>
+
+    <!-- HexIDE.Integration.Tests' guards and helpers that need nothing of the IDE's, shared rather than copied. -->
+    <ItemGroup>
+        <Compile Include="..\HexIDE.Integration.Tests\CultureGuardAttribute.cs" Link="Infrastructure\CultureGuardAttribute.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\HeadlessFontWarmUp.cs" Link="Infrastructure\HeadlessFontWarmUp.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\WindowLeakGuard.cs" Link="Infrastructure\WindowLeakGuard.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\RepoTree.cs" Link="Infrastructure\RepoTree.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\WindowTestFixture.cs" Link="Infrastructure\WindowTestFixture.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\WindowLifetime.cs" Link="Infrastructure\WindowLifetime.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\Views\ContainerRuntimeHarness.cs" Link="Views\ContainerRuntimeHarness.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\Views\TabStripForm.cs" Link="Views\TabStripForm.cs" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="AwesomeAssertions" />
+        <Using Include="NSubstitute" />
+        <Using Include="Xunit" />
+        <Using Include="Avalonia.Headless.XUnit" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\HexIDE.Core\HexIDE.Core.csproj" />
+        <ProjectReference Include="..\HexIDE.Runtime\HexIDE.Runtime.csproj" />
+        <ProjectReference Include="..\HexIDE.Standalone\HexIDE.Standalone.csproj" />
+    </ItemGroup>
+
+    <!-- Redirect before any test can read or write the contributor's IDE profile (#3805). -->
+    <ItemGroup>
+        <Compile Include="..\HexIDE.Integration.Tests\TemporaryProfile.cs" Link="Infrastructure\TemporaryProfile.cs" />
+        <Compile Include="..\HexIDE.Integration.Tests\TemporaryProfileTests.cs" Link="Infrastructure\TemporaryProfileTests.cs" />
+    </ItemGroup>
+
+  <ItemGroup>
+    <!-- One cleanup per test class: xunit v3 never calls Dispose beside DisposeAsync (#3411 slice 10b-3). -->
+    <Compile Include="..\HexIDE.Tests\Infrastructure\TestClassCleanupTests.cs" Link="Infrastructure\TestClassCleanupTests.cs" />
+  </ItemGroup>
+</Project>

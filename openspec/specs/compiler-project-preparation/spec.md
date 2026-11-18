@@ -1,7 +1,7 @@
 # compiler-project-preparation Specification
 
 ## Purpose
-Prepare an owned staged project for an external compiler without changing the original project or persistent source projection. Tracks #1202.
+Prepare an owned staged project for an external compiler without changing the original project or persistent source projection. Introduced by #1202.
 
 ## Requirements
 
@@ -34,6 +34,10 @@ Preparation SHALL enforce configured project, message, aggregate data, package, 
 #### Scenario: Configuration mismatch
 - **WHEN** the compiler rejects the project for DEP or LAA configuration
 - **THEN** the mismatch is reported without changing configuration or restarting the compiler
+
+#### Scenario: Compiler never replies
+- **WHEN** the preparation deadline expires while the compiler has not replied
+- **THEN** preparation reports a timeout, closes the owned root and removes its staging folder
 
 #### Scenario: Provider completes after cancellation
 - **WHEN** an asynchronous provider returns a stream after preparation was cancelled

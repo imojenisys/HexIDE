@@ -107,6 +107,9 @@ public abstract class BaseVBTestFixture
             await run();
             return;
         }
+        var injectedGlobals = rootEnv.variableToLocation.Keys
+            .Except(new ExecutionEnvironment().variableToLocation.Keys, StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase).ToArray();
         int outputBefore;
         lock (written) outputBefore = written.Length;
         int before;
@@ -127,7 +130,7 @@ public abstract class BaseVBTestFixture
             lock (debug) printed = debug.Skip(before).ToList();
             string output;
             lock (written) output = written.ToString(outputBefore, written.Length - outputBefore);
-            dump.Record(TestContext.Current.Test?.TestDisplayName ?? GetType().Name, ++dumped, modules, printed, output, thrown);
+            dump.Record(TestContext.Current.Test?.TestDisplayName ?? GetType().Name, ++dumped, modules, printed, output, thrown, injectedGlobals);
         }
     }
 
@@ -142,6 +145,26 @@ public abstract class BaseVBTestFixture
             classModules.Length == 0 ? null : classModules) { DebugController = dbg };
         return (vb, dbg);
     }
+
+    /// <summary>As <see cref="NewDebuggable"/>, with standard modules beside the startup module as well as classes.</summary>
+    protected (BasicInterpreter vb, DebugController dbg) NewDebuggableProject(string code,
+        (string Name, string Code)[] modules, (string Name, string Code)[] classModules)
+    {
+        var dbg = new DebugController();
+        var vb = new BasicInterpreter(new MockStdLib(debug, written, dialogs, SettingsStore), context, rootEnv, code, "Module1", modules,
+            classModules) { DebugController = dbg };
+        return (vb, dbg);
+    }
+
+    protected async Task RunModulesAndClasses(string primaryCode, (string Name, string Code)[] modules,
+        (string Name, string Code)[] classModules) =>
+        await Dumped([("Module1", false, primaryCode), .. modules.Select(m => (m.Name, false, m.Code)),
+            .. classModules.Select(m => (m.Name, true, m.Code))], async () =>
+        {
+            var vb = new BasicInterpreter(new MockStdLib(debug, written, dialogs, SettingsStore), context, rootEnv,
+                primaryCode, "Module1", modules, classModules, compilationConstants: Compilation);
+            await vb.Execute();
+        });
 
     /// <summary>Run <paramref name="primaryCode"/> as the startup module "Module1", with additional named
     /// standard modules also loaded into the project-wide registry (for cross-module resolution tests).</summary>

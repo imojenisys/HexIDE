@@ -11,6 +11,17 @@ public partial class ModuleDefinition : INotifyPropertyChanged
     /// <summary>Source encoding retained through saves and path changes.</summary>
     public Vb6TextEncoding TextEncoding { get; set; } = Vb6TextEncoding.Ansi;
 
+    public string? UnfaithfulSaveReason { get; private set; }
+    public UnfaithfulSaveCause UnfaithfulSaveCauses { get; private set; }
+
+    public void MarkUnfaithfulToSave(UnfaithfulSaveCause cause, string developerReason)
+    {
+        UnfaithfulSaveCauses |= cause;
+        UnfaithfulSaveReason ??= developerReason;
+    }
+
+    public bool CanSaveFaithfully => UnfaithfulSaveCauses == UnfaithfulSaveCause.None;
+
     public ProjectDefinition Owner { get; }
     public ModuleKind Kind { get; }
 
@@ -62,6 +73,9 @@ public partial class ModuleDefinition : INotifyPropertyChanged
         set => SetField(ref absolutePath, value);
     }
 
+    /// <summary>The project-line name before the loader adopted VB_Name; used to migrate personal state.</summary>
+    public string? ProjectLineName { get; set; }
+
     public string Name
     {
         get => name;
@@ -83,7 +97,12 @@ public partial class ModuleDefinition : INotifyPropertyChanged
             : $"Attribute VB_Name = \"{name}\"\r\n";
     }
 
-    public void UpdateCode(string newCode) => Code = newCode;
+    public void UpdateCode(string newCode)
+    {
+        if (Code == newCode) return;
+        Code = newCode;
+        OnPropertyChanged(nameof(Code));
+    }
 
     /// <summary>
     /// A new UserControl or PropertyPage, joined to its designer half, as VB6's Add User Control and Add Property Page
@@ -135,6 +154,10 @@ public partial class ModuleDefinition : INotifyPropertyChanged
     /// </para>
     /// </remarks>
     public string? OriginalHeader { get; private set; }
+
+    /// <summary>Load-time file-line permutation for migrating historical sidecar marks; null when no lines moved.</summary>
+    public int[]? LoadedLineMap { get; set; }
+    public int LoadedOldHeaderLines { get; set; }
 
     public void RecordOriginalHeader(string? header) => OriginalHeader = header;
 

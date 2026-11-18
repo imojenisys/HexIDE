@@ -16,7 +16,9 @@ public partial class VB6BuiltIns
 {
     private static void RegisterInspection(Dictionary<string, BuiltinFn> d)
     {
-        d["TypeName"]  = (_, a, _) => new Vb6Value(TypeNameOf(a[0]));
+        d["TypeName"]  = (_, a, _) => a[0].Type == VT.AutomationUnsignedLong
+            ? throw new VBRunTimeException(VBStandardError.VariableUsesATypeNotSupportedInVisualBasic)
+            : new Vb6Value(TypeNameOf(a[0]));
         // Measured: VarType is LONG, despite every vbXxx code fitting an Integer — the comment here used to
         // say Integer and was wrong. Fixed declared return type, so not the magnitude rule. (#193)
         d["VarType"]   = (_, a, _) => new Vb6Value((long)TypeInfo(a[0]).code);
@@ -26,6 +28,8 @@ public partial class VB6BuiltIns
         d["IsNull"]    = (_, a, _) => new Vb6Value(a[0].Type == VT.Null);
         d["IsArray"]   = (_, a, _) => new Vb6Value(a[0].Type.IsArray);
         d["IsObject"]  = (_, a, _) => new Vb6Value(IsObjectValue(a[0]));
+        d["StrPtr"] = (_, a, _) => PointerIdentity(a);
+        d["VarPtr"] = (_, a, _) => PointerIdentity(a);
         d["ObjPtr"]    = (self, a, _) => self.ObjPtr(a);
 
         // True only for an argument the caller left out, and only where there was nothing to put in its
@@ -84,10 +88,22 @@ public partial class VB6BuiltIns
         VbScreen => "Screen",
         VbClipboard => "Clipboard",
         VbCollection => "Collection",
-        PanelPicture => throw new NotImplementedException("Panel.Picture TypeName is unmeasured (#1087)"),
+        VbCollectionEnumerator => "Unknown",
+        VbPropertyBag => "PropertyBag",
+        ListViewItems => "IListItems",
+        ListViewItem => "IListItem",
+        ListViewColumns => "IColumnHeaders",
+        ListViewColumn => "IColumnHeader",
+        ListViewSubItems => "IListSubItems",
+        ListViewSubItem => "IListSubItem",
+        Components.InBox.TabStripTabs => "ITabs",
+        Components.InBox.TabStripTab => "ITab",
+        PanelPicture => "Picture",
         StatusBarPanel => "IPanel",
         StatusBarPanels => "IPanels",
         ImageListImages => "IImages",
+        ImageComboItems => "IComboItems",
+        ImageComboItem => "IComboItem",
         ImageListImage => "IImage",
         ImageListPictureObject => "Picture",
         Components.InBox.TreeNodes => "INodes",
@@ -104,6 +120,7 @@ public partial class VB6BuiltIns
     // Maps a value to its VB6 TypeName string and VbVarType code. Arrays append "()" / add vbArray (8192).
     private static (string name, int code) TypeInfo(Vb6Value v)
     {
+        if (v.Value is VbCollectionEnumerator) return ("Unknown", 13);
         var t = v.Type;
         if (t.IsArray)
         {
@@ -122,13 +139,15 @@ public partial class VB6BuiltIns
         VTP.Byte              => ("Byte", 17),
         VTP.Integer           => ("Integer", 2),
         VTP.Long              => ("Long", 3),
-        // CommonDialog's TypeName is unmeasured; retain its existing label while correcting VarType.
+        VTP.LongLong          => ("LongLong", 20),
+        // The debugger label; the TypeName intrinsic refuses this Automation type (#4513).
         VTP.AutomationUnsignedLong => ("Long", 19),
         VTP.Single            => ("Single", 4),
         VTP.Double            => ("Double", 5),
         VTP.Currency          => ("Currency", 6),
         VTP.Decimal           => ("Decimal", 14),
         VTP.Date              => ("Date", 7),
+        VTP.OddByteString     => ("String", 8),
         VTP.String            => ("String", 8),
         VTP.Boolean           => ("Boolean", 11),
         VTP.Null              => ("Null", 1),
@@ -152,13 +171,13 @@ public partial class VB6BuiltIns
     {
         switch (v.Value)
         {
-            case byte or int or long or uint or float or double or decimal:
+            case byte or int or long or float or double or decimal:
             case bool:
                 return true;
         }
         if (v.Type == VT.EmptyVariant || v.Type == VT.Color) return true;
         if (v.Type == VT.Date) return false;
-        if (v.Value is string s) return IsNumericString(s);
+        if (v.WithoutOddBytes("VB6BuiltIns.Inspection text use").Value is string s) return IsNumericString(s);
         return false;
     }
 
@@ -202,19 +221,24 @@ public partial class VB6BuiltIns
     private static bool IsDateValue(Vb6Value v)
     {
         if (v.Type == VT.Date) return true;
-        if (v.Value is string s)
+        if (v.WithoutOddBytes("VB6BuiltIns.Inspection text use").Value is string s)
             return TryReadDate(s, out _);
         return false;
     }
 
     private static bool IsObjectValue(Vb6Value v) =>
-        v.Type == VT.Control || v.Type == VT.CSharpProxyObject || v.Type == VT.Nothing || v.Type == VT.Object;
+        v.Value is not VbCollectionEnumerator && (v.Type == VT.Control || v.Type == VT.CSharpProxyObject || v.Type == VT.Nothing || v.Type == VT.Object);
 
     // #2622's native/p-code measurements constrain identities, not addresses (measuring PRs #2624 and #2628).
     // Weak keys neither retain objects nor change Class_Terminate ownership; distinct objects never reuse an identity.
     private readonly ConditionalWeakTable<object, ObjectIdentity> objectIdentities = new();
     private long nextObjectIdentity;
     private sealed record ObjectIdentity(long Number);
+
+    private static Vb6Value PointerIdentity(IReadOnlyList<Vb6Value> args) =>
+        args is IntrinsicArgumentValues { PointerIdentity: { } identity }
+            ? new Vb6Value(identity)
+            : throw new NotImplementedException("Unmeasured pointer argument shape (#2622)");
 
     private Vb6Value ObjPtr(IReadOnlyList<Vb6Value> args)
     {

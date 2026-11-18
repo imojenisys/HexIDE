@@ -2,6 +2,10 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Avalonia.Headless.XUnit;
+using HexIDE.Bookmarks;
+using HexIDE.Debugging;
+using HexIDE.Forms.ViewModels;
 using HexIDE.IDE;
 using HexIDE.Projects;
 using HexIDE.Runtime.ProjectElements;
@@ -37,30 +41,30 @@ public class WriteAtSaveTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private ProjectService MakeService()
+    private ProjectService MakeService(IUserSidecarService? realSidecar = null, IHeaderRefresher? refresher = null, IProjectManager? manager = null)
     {
-        var projectManager = Substitute.For<IProjectManager>();
-        projectManager.LoadedProjects.Returns(_ => loaded);
+        var projectManager = manager ?? Substitute.For<IProjectManager>();
+        if (manager is null)
+            projectManager.LoadedProjects.Returns(_ => loaded);
         // Every picker is answered with the chosen folder and the name it suggests, as a developer accepting
         // each suggestion there would.
-        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>())
+        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
             .Returns(ci => Task.FromResult<string?>(
                 Path.Join(dir, ci.Arg<Avalonia.Platform.Storage.FilePickerSaveOptions>().SuggestedFileName)));
         var sidecar = Substitute.For<IUserSidecarService>();
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
             Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(),
-            sidecar,
+            realSidecar ?? sidecar,
             new FileBaselineStore(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            refresher ?? Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     /// <summary>A project as File ▸ New Project leaves it: no file and no folder.</summary>
@@ -80,6 +84,63 @@ public class WriteAtSaveTests : IDisposable
             "UserControl" => svc.AddNewUserControl(project, name, interactive: false).ContinueWith(t => DocumentIdentity.For(t.Result)),
             _ => svc.AddNewPropertyPage(project, name, interactive: false).ContinueWith(t => DocumentIdentity.For(t.Result)),
         };
+
+    // Measured in #498 and the oracle's when-a-document-gets-a-file-and-what-a-dangling-startup-does page.
+    [Theory]
+    [InlineData("Form")]
+    [InlineData("Module")]
+    public async Task PathlessMemberPickerStartsInItsSavedProjectsFolder(string kind)
+    {
+        var svc = MakeService();
+        var project = Unsaved();
+        project.AbsolutePath = Path.Join(dir, "Project1.vbp");
+        await AddNew(svc, project, kind, "NewMember");
+
+        await svc.SaveProject(project, saveAs: false);
+
+        await windowManager.Received(1).SaveFilePickerAsync(
+            Arg.Is<Avalonia.Platform.Storage.FilePickerSaveOptions>(o => o.SuggestedFileName == "NewMember." + (kind == "Form" ? "frm" : "bas")),
+            dir);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnsavedProjectCarriesOnlyThisSavesPreviousPickerDirectory(bool scratch)
+    {
+        // Agree to replacement so this test reaches the behavior it checks (#4505).
+        windowManager.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning,
+            layout: MessageBoxLayout.SecondButtonDefault).Returns(MessageBoxResult.Yes);
+        var svc = MakeService();
+        var project = Unsaved();
+        await svc.AddNewForm(project, "Form1", interactive: false);
+        await svc.AddNewModule(project, "Module1", ModuleKind.StandardModule, interactive: false);
+        if (scratch)
+        {
+            project.WorkingDirectory = Path.Join(dir, "scratch");
+            project.AbsolutePath = Path.Join(project.WorkingDirectory, "Project1.vbp");
+        }
+        var nextDirectory = Path.Join(dir, "next");
+        Directory.CreateDirectory(nextDirectory);
+        var calls = new List<(string? Name, string? Directory)>();
+        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
+            .Returns(ci =>
+            {
+                var name = ci.Arg<Avalonia.Platform.Storage.FilePickerSaveOptions>().SuggestedFileName;
+                calls.Add((name, ci.ArgAt<string?>(1)));
+                return Task.FromResult<string?>(Path.Join(name == "Module1.bas" ? nextDirectory : dir, name));
+            });
+
+        await svc.SaveProject(project, saveAs: false);
+
+        calls.Should().Equal(("Form1.frm", null), ("Module1.bas", dir), ("Project1.vbp", nextDirectory));
+        project.WorkingDirectory.Should().Be(scratch ? Path.Join(dir, "scratch") : null);
+        calls.Clear();
+        var second = Unsaved();
+        await svc.AddNewForm(second, "Form2", interactive: false);
+        await svc.SaveProject(second, saveAs: false);
+        calls[0].Should().Be(("Form2.frm", null));
+    }
 
     [Fact]
     public async Task SavingPreservesFilesAtOldStagingNames()
@@ -217,4 +278,235 @@ public class WriteAtSaveTests : IDisposable
 
         File.ReadAllText(form.AbsolutePath!).Should().StartWith(header!);
     }
+
+    [AvaloniaFact]
+    public async Task A_template_form_opens_with_the_header_its_first_save_writes()
+    {
+        var manager = new ProjectManager(Substitute.For<IEditorService>(), new EventBus());
+        var service = MakeService(manager: manager);
+        await service.CreateNewProject(Vb6ProjectType.StandardExe);
+        var project = manager.LoadedProjects.Single();
+        project.Format.Should().BeOfType<Vb6ProjectFileFormat>("a new project is made in the IDE's format (#4053)");
+        var form = project.Forms.Single();
+        using var editor = TemplateEditor(form, new BookmarkService(), new BreakpointService());
+        var header = form.DesignerText;
+
+        header.Should().NotBeNullOrEmpty();
+        editor.Document.Text.Should().StartWith(header!);
+        editor.Document.Text.Should().StartWith("VERSION 5.00");
+        await service.SaveProject(project, saveAs: false);
+
+        File.ReadAllBytes(form.AbsolutePath!).Take(Vb6TextFile.Encode(header!, form.TextEncoding).Length)
+            .Should().Equal(Vb6TextFile.Encode(header!, form.TextEncoding));
+    }
+
+    [AvaloniaFact]
+    public async Task Template_marks_set_before_first_save_reopen_on_the_same_statement()
+    {
+        var projects = new ProjectManager(Substitute.For<IEditorService>(), new EventBus());
+        await MakeService(manager: projects).CreateNewProject(Vb6ProjectType.StandardExe);
+        var project = projects.LoadedProjects.Single();
+        var form = project.Forms.Single();
+        form.UpdateCode("Private Sub Form_Load()\r\n    Debug.Print 885\r\nEnd Sub\r\n");
+        var bookmarks = new BookmarkService();
+        var breakpoints = new BreakpointService();
+        var manager = Substitute.For<IProjectManager>();
+        var sidecar = new UserSidecarService(bookmarks, breakpoints, manager)
+        {
+            Debounce = token => Task.Delay(System.Threading.Timeout.Infinite, token),
+        };
+        await sidecar.LoadAsync(project);
+        using var editor = TemplateEditor(form, bookmarks, breakpoints);
+        var line = editor.Document.GetLineByOffset(editor.Document.Text.IndexOf("    Debug.Print", StringComparison.Ordinal)).LineNumber;
+        var document = DocumentIdentity.For(form);
+        breakpoints.SetDocument(document, [line]);
+        bookmarks.SetBookmarks(document, [line]);
+        var dock = Substitute.For<IDocumentDockService>();
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        using var refresher = new HeaderRefresher(new EventBus(), dock,
+            breakpoints, bookmarks);
+
+        await MakeService(sidecar, refresher).SaveProject(project, saveAs: false);
+        await sidecar.SaveAsync(project);
+        manager.ProjectUnloaded += Raise.Event<Action<ProjectDefinition>>(project);
+        var reopened = (await new ProjectLoader().LoadAsync(project.AbsolutePath!, new ThrowingSink())).Project;
+        await sidecar.LoadAsync(reopened);
+        using var reopenedEditor = TemplateEditor(reopened.Forms.Single(), bookmarks, breakpoints);
+        var reopenedDocument = DocumentIdentity.For(reopened.Forms.Single());
+
+        breakpoints.GetBreakpoints(reopenedDocument).Should().Equal(line);
+        bookmarks.GetBookmarks(reopenedDocument).Should().Equal(line);
+        var statement = reopenedEditor.Document.GetLineByNumber(line);
+        reopenedEditor.Document.GetText(statement).Should().Be("    Debug.Print 885");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(ModuleKind.UserControl)]
+    [InlineData(ModuleKind.PropertyPage)]
+    public async Task Template_designer_modules_hold_their_header_before_the_project_is_added(ModuleKind kind)
+    {
+        var manager = new ProjectManager(Substitute.For<IEditorService>(), new EventBus());
+        var template = new ProjectTemplate("Designer", "generic", true, name =>
+        {
+            var project = new ProjectDefinition(VBProjectType.EXE, name);
+            project.AddModule(ModuleDefinition.NewDesigner(project, "Designer1", kind,
+                HexIDE.Runtime.Components.FormComponentClass.ForRoot(
+                    kind == ModuleKind.UserControl ? "VB.UserControl" : "VB.PropertyPage")));
+            return project;
+        });
+        string? headerAtAdd = null;
+        manager.ProjectLoaded += project => headerAtAdd = project.Modules.Single().FormPart!.DesignerText;
+        var service = MakeService(manager: manager);
+
+        await service.CreateNewProject(template);
+
+        headerAtAdd.Should().NotBeNullOrEmpty();
+        var module = manager.LoadedProjects.Single().Modules.Single();
+        module.FormPart!.DesignerText.Should().Be(headerAtAdd);
+    }
+
+    private static CodeEditorViewModel TemplateEditor(FormDefinition form,
+        BookmarkService bookmarks, BreakpointService breakpoints) =>
+        new CodeEditorViewModel(Substitute.For<IWindowManager>(),
+            Substitute.For<IEditorService>(), Substitute.For<IProjectService>(), new EventBus(),
+            Substitute.For<HexIDE.Lsp.ILspClient>(), Substitute.For<ISettingsService>(),
+            Substitute.For<IStatusBarService>(), bookmarks, breakpoints,
+            Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<IRunScope>(),
+            new HexIDE.Localization.LocalizationService()).Initialize(form);
+
+    private sealed class ThrowingSink : IDeserializeErrorSink
+    {
+        public void LogError(string message) => throw new InvalidOperationException(message);
+    }
+
+    // #2678: --newproject writes the initial project into its recorded scratch folder.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Saving_a_scratch_project_asks_for_members_before_the_project(bool saveAs)
+    {
+        var svc = MakeService();
+        var project = Unsaved();
+        var form = await svc.AddNewForm(project, "Form1", interactive: false);
+        var scratch = ProjectService.ProjectFilesDirectory(project);
+        try
+        {
+            await svc.SaveProjectToDirectory(project, scratch);
+            var dialogs = new List<string>();
+            windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
+                .Returns(ci =>
+                {
+                    var name = ci.Arg<Avalonia.Platform.Storage.FilePickerSaveOptions>().SuggestedFileName!;
+                    dialogs.Add(name);
+                    Directory.GetFiles(dir).Should().BeEmpty("all dialogs precede every write");
+                    return Task.FromResult<string?>(Path.Join(dir, name));
+                });
+
+            await svc.SaveAllProjects(saveAs);
+
+            dialogs.Should().Equal("Form1.frm", "Project1.vbp");
+            Directory.GetFiles(dir).Select(Path.GetFileName).Should().BeEquivalentTo(["Form1.frm", "Project1.vbp"]);
+            File.ReadAllText(Path.Join(dir, "Project1.vbp")).ReplaceLineEndings("\n")
+                .Should().Contain("Form=Form1.frm\n").And.NotContain("..");
+            form.AbsolutePath.Should().Be(Path.Join(dir, "Form1.frm"));
+            svc.HasUnsavedChanges(form).Should().BeFalse();
+        }
+        finally { Directory.Delete(scratch, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("Form")]
+    [InlineData("Module")]
+    [InlineData("UserControl")]
+    public async Task Automation_persistence_writes_the_scratch_member_without_a_picker(string kind)
+    {
+        var svc = MakeService();
+        var project = Unsaved();
+        var document = await AddNew(svc, project, kind, kind + "1");
+        var scratch = ProjectService.ProjectFilesDirectory(project);
+        try
+        {
+            await svc.SaveProjectToDirectory(project, scratch);
+            var path = document.AbsolutePath!;
+            const string code = "Private Sub Changed()\r\nEnd Sub\r\n";
+            if (document.Form is { } form)
+                form.UpdateCode(code);
+            else
+                document.Module!.UpdateCode(code);
+
+            ScriptedFileDialogs.WouldShowPicker(path).Should().BeFalse();
+            var saved = document.Form is { } savedForm
+                ? await svc.SaveForm(savedForm, saveAs: false, interactive: false)
+                : await svc.SaveModule(document.Module!, saveAs: false, interactive: false);
+
+            saved.Should().BeTrue();
+            document.AbsolutePath.Should().Be(path);
+            File.ReadAllText(path).ReplaceLineEndings("\n").Should().Contain(code.ReplaceLineEndings("\n"));
+            await windowManager.DidNotReceive().SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>());
+            Directory.GetFiles(dir).Should().BeEmpty();
+            (document.Form is { } dirtyForm ? svc.HasUnsavedChanges(dirtyForm) : svc.HasUnsavedChanges(document.Module!))
+                .Should().BeTrue("persistence does not give a scratch member a user-chosen home");
+        }
+        finally { Directory.Delete(scratch, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Scratch_members_do_not_read_as_saved()
+    {
+        var svc = MakeService();
+        var project = Unsaved();
+        var form = await svc.AddNewForm(project, "Form1", interactive: false);
+        var module = await svc.AddNewModule(project, "Module1", ModuleKind.StandardModule, interactive: false);
+        var scratch = ProjectService.ProjectFilesDirectory(project);
+        try
+        {
+            await svc.SaveProjectToDirectory(project, scratch);
+
+            svc.HasUnsavedChanges(form).Should().BeTrue();
+            svc.HasUnsavedChanges(module).Should().BeTrue();
+        }
+        finally { Directory.Delete(scratch, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 1)]
+    [InlineData(false, 2)]
+    [InlineData(true, 2)]
+    public async Task Cancelling_a_scratch_member_save_writes_nothing(bool saveAs, int cancelAt)
+    {
+        var svc = MakeService();
+        var project = Unsaved();
+        var form = await svc.AddNewForm(project, "Form1", interactive: false);
+        var module = await svc.AddNewModule(project, "Module1", ModuleKind.StandardModule, interactive: false);
+        var scratch = ProjectService.ProjectFilesDirectory(project);
+        try
+        {
+            await svc.SaveProjectToDirectory(project, scratch);
+            form.UpdateCode("Private Sub Changed()\r\nEnd Sub\r\n");
+            var original = Directory.GetFiles(scratch).ToDictionary(path => path, File.ReadAllBytes);
+            var dialogs = new List<string>();
+            windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
+                .Returns(ci =>
+                {
+                    var name = ci.Arg<Avalonia.Platform.Storage.FilePickerSaveOptions>().SuggestedFileName!;
+                    dialogs.Add(name);
+                    return Task.FromResult<string?>(dialogs.Count == cancelAt ? null : Path.Join(dir, name));
+                });
+
+            Func<Task> save = () => svc.SaveAllProjects(saveAs);
+            await save.Should().ThrowAsync<OperationCanceledException>();
+
+            dialogs.Should().Equal(new[] { "Form1.frm", "Module1.bas" }.Take(cancelAt));
+            Directory.GetFiles(dir).Should().BeEmpty();
+            foreach (var (path, bytes) in original)
+                File.ReadAllBytes(path).Should().Equal(bytes);
+            form.AbsolutePath.Should().Be(Path.Join(scratch, "Form1.frm"));
+            module.AbsolutePath.Should().Be(Path.Join(scratch, "Module1.bas"));
+            project.AbsolutePath.Should().Be(Path.Join(scratch, "Project1.vbp"));
+            svc.HasUnsavedChanges(form).Should().BeTrue();
+        }
+        finally { Directory.Delete(scratch, recursive: true); }
+    }
+
 }

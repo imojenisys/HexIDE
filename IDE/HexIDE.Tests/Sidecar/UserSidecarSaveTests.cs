@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.IO;
 using System.Text.Json.Nodes;
 using HexIDE.Bookmarks;
@@ -116,6 +117,99 @@ public sealed class UserSidecarSaveTests : IDisposable
     }
 
     // ── A. A save rewrites the sidecar; it does not rebuild it ───────────────────────────────────────────
+
+    [Fact]
+    public async Task SavingRetainsPreviousSidecarBytesForRecovery()
+    {
+        var project = Project();
+        var bookmarks = new BookmarkService();
+        var sidecar = Service(bookmarks);
+        await sidecar.LoadAsync(project);
+        bookmarks.SetBookmarks(Form1(project), [1]);
+        await sidecar.SaveAsync(project);
+        var path = SidecarOf(project);
+        var original = File.ReadAllBytes(path);
+        bookmarks.SetBookmarks(Form1(project), [2]);
+        await sidecar.SaveAsync(project);
+        var recovery = Directory.GetFiles(Path.GetDirectoryName(path)!, "*.recovery").Should().ContainSingle().Subject;
+        File.ReadAllBytes(recovery).Should().Equal(original);
+        Lines(Read(path), "codeBookmarks", "Form1").Should().Equal(2);
+    }
+
+    [Fact]
+    public async Task WhatF5RunsForAProject_IsSavedWithItsMarks_AndReadBackWhenItOpens()
+    {
+        var project = Project();
+        var choices = new RunChoiceStore();
+        var sidecar = new UserSidecarService(new BookmarkService(), new BreakpointService(), projectManager, choices)
+        {
+            Debounce = debounce.Wait,
+            ReadText = path => Task.FromResult(File.ReadAllText(path)),
+        };
+        await sidecar.LoadAsync(project);
+
+        choices.Set(project, "RDCore for HexIDE/RDCore");
+        await debounce.ElapseAsync(sidecar);
+        Read(SidecarOf(project))["runWith"]!.GetValue<string>().Should().Be("RDCore for HexIDE/RDCore",
+            "a choice is saved as a mark is, on the same debounced save");
+
+        Close(project);
+        choices.Get(project).Should().BeNull("an unloaded project's choice goes with it, and is not saved as gone");
+        Read(SidecarOf(project))["runWith"]!.GetValue<string>().Should().Be("RDCore for HexIDE/RDCore");
+        var reopened = new RunChoiceStore();
+        await new UserSidecarService(new BookmarkService(), new BreakpointService(), projectManager, reopened)
+        {
+            ReadText = path => Task.FromResult(File.ReadAllText(path)),
+        }.LoadAsync(project);
+        reopened.Get(project).Should().Be("RDCore for HexIDE/RDCore");
+    }
+
+    [Fact]
+    public async Task AChoiceMadeWhileTheSidecarIsRead_IsKept_AsAMarkMadeThenIs()
+    {
+        var project = Project();
+        File.WriteAllText(SidecarOf(project), """{ "version": 3, "runWith": "com.example.old/Old" }""");
+        var reading = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var choices = new RunChoiceStore();
+        var sidecar = new UserSidecarService(new BookmarkService(), new BreakpointService(), projectManager, choices)
+        {
+            Debounce = debounce.Wait,
+            ReadText = _ => reading.Task,
+        };
+
+        var loading = sidecar.LoadAsync(project);
+        choices.Set(project, "com.rdcore.hexide/RDCore");
+        reading.SetResult(File.ReadAllText(SidecarOf(project)));
+        await loading;
+
+        choices.Get(project).Should().Be("com.rdcore.hexide/RDCore", "the user's choice is newer than the file's");
+    }
+
+    [Fact]
+    public async Task AnExplicitInterpreterChoice_IsSavedAndReadBack()
+    {
+        var project = Project();
+        var choices = new RunChoiceStore();
+        var sidecar = new UserSidecarService(new BookmarkService(), new BreakpointService(), projectManager, choices)
+        {
+            Debounce = debounce.Wait,
+            ReadText = path => Task.FromResult(File.ReadAllText(path)),
+        };
+        await sidecar.LoadAsync(project);
+
+        choices.Set(project, "RDCore for HexIDE/RDCore");
+        choices.Set(project, null);
+        await debounce.ElapseAsync(sidecar);
+
+        Read(SidecarOf(project))["runWith"]!.GetValue<string>().Should().BeEmpty();
+        var reopened = new RunChoiceStore();
+        await new UserSidecarService(new BookmarkService(), new BreakpointService(), projectManager, reopened)
+        {
+            ReadText = path => Task.FromResult(File.ReadAllText(path)),
+        }.LoadAsync(project);
+        reopened.Get(project).Should().BeNull();
+        reopened.HasChoice(project).Should().BeTrue();
+    }
 
     [Fact]
     public async Task SavingPreservesFileAtOldStagingName()

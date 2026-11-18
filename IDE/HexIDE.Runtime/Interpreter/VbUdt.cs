@@ -6,9 +6,13 @@ namespace HexIDE.Runtime.Interpreter;
 
 /// <summary>One field of a user-defined <c>Type</c>. A scalar field carries a <see cref="Vb6Value.ValueType"/>;
 /// a nested-UDT field carries the referenced type's name (resolved against the program's type table at
-/// instantiation). Array fields also carry their bounds; fixed-length strings are deferred.</summary>
+/// instantiation). Array fields carry their bounds and String fields their declared width.</summary>
 public sealed record UdtField(string Name, Vb6Value.ValueType? ScalarType, string? UdtTypeName, string? AutoNewClass = null,
-    bool IsArray = false, IReadOnlyList<(int, int)>? Bounds = null);
+    bool IsArray = false, IReadOnlyList<(int, int)>? Bounds = null, VB6Parser.FieldLengthContext? FixedLength = null)
+{
+    internal VB6Parser.SubscriptsContext? BoundSyntax { get; init; }
+    internal IReadOnlyList<(int, int)>? ResolvedBounds { get; set; }
+}
 
 /// <summary>A user-defined <c>Type … End Type</c> definition, owned by the module that declares it.
 ///
@@ -45,6 +49,9 @@ public sealed class UdtTypeDef
 public sealed class VbUdt
 {
     public string TypeName { get; }
+
+    // LSet also copies padding; field stores overwrite their bytes when the layout is next written.
+    internal byte[]? LsetBytes { get; set; }
     private readonly Dictionary<string, Vb6Value> fields;
 
     // How a read of each field reads (#987, measured): a field declared with a scalar type is typed (`u.n * 7000` with
@@ -53,8 +60,10 @@ public sealed class VbUdt
     // store into it converts into (#221).
     private readonly IReadOnlyDictionary<string, Vb6Value.ValueType> typedFields;
     private readonly IReadOnlySet<string> variantFields;
+    private readonly IReadOnlyDictionary<string, int> fixedStringWidths;
 
     private readonly IReadOnlyDictionary<string, AutoNew> autoNewFields;
+    private readonly IReadOnlyDictionary<string, string> objectFields;
 
     public VbUdt(string typeName, Dictionary<string, Vb6Value> fields)
         : this(typeName, fields, new Dictionary<string, Vb6Value.ValueType>(), new HashSet<string>())
@@ -62,9 +71,12 @@ public sealed class VbUdt
     }
 
     public VbUdt(string typeName, Dictionary<string, Vb6Value> fields, IReadOnlyDictionary<string, Vb6Value.ValueType> typedFields,
-        IReadOnlySet<string> variantFields, IReadOnlyDictionary<string, AutoNew>? autoNewFields = null)
+        IReadOnlySet<string> variantFields, IReadOnlyDictionary<string, AutoNew>? autoNewFields = null,
+        IReadOnlyDictionary<string, string>? objectFields = null, IReadOnlyDictionary<string, int>? fixedStringWidths = null)
     {
+        this.fixedStringWidths = fixedStringWidths ?? new Dictionary<string, int>();
         this.autoNewFields = autoNewFields ?? new Dictionary<string, AutoNew>();
+        this.objectFields = objectFields ?? new Dictionary<string, string>();
         this.typedFields = typedFields;
         this.variantFields = variantFields;
         TypeName = typeName;
@@ -82,6 +94,8 @@ public sealed class VbUdt
         value = typedFields.ContainsKey(field) ? value.AsFixedType()
             : variantFields.Contains(field) ? value.AsVariant()
             : value;
+        if (objectFields.TryGetValue(field, out var declaredClass))
+            value = value.ViewedAs(declaredClass);
         return true;
     }
 
@@ -99,6 +113,10 @@ public sealed class VbUdt
         if (!fields.ContainsKey(field)) return false;
         if (typedFields.TryGetValue(field, out var declared))
             value = VbNumeric.CoerceOnStore(value, declared, ctx);
+        if (FixedStringWidthOf(field) is { } width)
+            value = FixedLengthString.Store(value, width, ctx);
+        if (objectFields.TryGetValue(field, out var declaredClass))
+            ModuleExecutionContext.CheckObjectStore(value, declaredClass.Equals("Object", StringComparison.OrdinalIgnoreCase) ? null : declaredClass, ctx);
         fields[field] = value;
         return true;
     }
@@ -112,6 +130,41 @@ public sealed class VbUdt
 
     /// <summary>Whether a field is declared As Variant, or with no As clause.</summary>
     public bool IsVariantField(string field) => variantFields.Contains(field);
+
+    internal int? FixedStringWidthOf(string field) => fixedStringWidths.TryGetValue(field, out var width) ? width : null;
+
+    internal bool HasLongLongFields => typedFields.Values.Any(type => type == Vb6Value.ValueType.LongLong)
+        || fields.Values.Any(value => value.Value is VbUdt nested && nested.HasLongLongFields);
+
+    internal void RefuseUnmeasuredLongLongLayout()
+    {
+        if (HasLongLongFields)
+            throw new NotImplementedException("The layout of a Type containing LongLong is unmeasured (#1548)");
+    }
+
+    internal bool HasFixedStringFields => fixedStringWidths.Count > 0
+        || fields.Values.Any(value => value.Value is VbUdt nested && nested.HasFixedStringFields);
+
+    // Len's packed, fixed record size (#179). Variable-sized fields need separate measurements.
+    internal long FixedRecordLength()
+    {
+        long size = 0;
+        foreach (var (name, value) in fields)
+        {
+            if (FixedStringWidthOf(name) is { } width) size += width;
+            else if (value.Value is VbUdt nested) size += nested.FixedRecordLength();
+            else if (DeclaredTypeOf(name) is { } type && type != Vb6Value.ValueType.String)
+            {
+                var writer = new VbRecordFormat.Writer();
+                VbRecordFormat.WriteTyped(writer, value, type, prefixed: false);
+                size += writer.ToArray().Length;
+            }
+            else throw new NotImplementedException("Len of a Type with variable-sized fields is not implemented (#179)");
+        }
+        return size;
+    }
+
+    internal bool IsObjectField(string field) => objectFields.ContainsKey(field);
 
     private static Vb6Value CloneValue(Vb6Value value) => value.Value switch
     {
@@ -134,7 +187,10 @@ public sealed class VbUdt
         var copy = new Dictionary<string, Vb6Value>(fields.Comparer);
         foreach (var (name, value) in fields)
             copy[name] = CloneValue(value);
-        return new VbUdt(TypeName, copy, typedFields, variantFields, autoNewFields);
+        return new VbUdt(TypeName, copy, typedFields, variantFields, autoNewFields, objectFields, fixedStringWidths)
+        {
+            LsetBytes = LsetBytes is null ? null : (byte[])LsetBytes.Clone(),
+        };
     }
 }
 
@@ -153,6 +209,8 @@ public sealed record UdtFieldRef(VbUdt Bag, string Name) : IByRefTarget
 
     /// <summary>Whether the field is a Variant.</summary>
     public bool IsVariant => Bag.IsVariantField(Name);
+
+    public int? FixedStringWidth => Bag.FixedStringWidthOf(Name);
 
     public Vb6Value Read() => Bag.TryGet(Name, out var value) ? value : Vb6Value.Variant;
 

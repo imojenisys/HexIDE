@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.Collections.Generic;
 using AvaloniaEdit.Document;
 using HexIDE.Bookmarks;
@@ -33,8 +34,8 @@ public partial class FindReplaceViewModelTests
         localization.GetString("Str.FindReplace.Msg.ScopeAllOpenDocuments").Returns("All Open Documents");
         localization.GetString("Str.FindReplace.Msg.NotFound").Returns("The search text '{0}' was not found.");
         localization.GetString("Str.FindReplace.Msg.ReplacementsMade").Returns("{0} replacement(s) made.");
-        localization.GetString("Str.FindReplace.Msg.ProtectedOnly").Returns("Protected only: {0}");
-        localization.GetString("Str.FindReplace.Msg.ReplacementsWithSkipped").Returns("{0} replaced; {1} skipped.");
+        localization.GetString("Str.FindReplace.Msg.ReadOnlyTextOnly").Returns("Protected only: {0}");
+        localization.GetString("Str.FindReplace.Msg.ReplacementsSkippingReadOnlyText").Returns("{0} replaced; {1} skipped.");
         localization.GetString("Str.FindReplace.Msg.InvalidRegex").Returns("Invalid regular expression pattern.");
         localization.GetString("Str.FindReplace.Msg.NothingToSearch")
             .Returns("There is nothing here for Find to search.");
@@ -53,7 +54,7 @@ public partial class FindReplaceViewModelTests
     /// </remarks>
     private static RelatedDocumentEditorViewModel CreateCarriedFileEditor(string text)
     {
-        var vm = new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>());
+        var vm = new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
         vm.Document.Text = text;
         return vm;
     }
@@ -1070,6 +1071,32 @@ public partial class FindReplaceViewModelTests
             Arg.Any<MessageBoxIcon>());
     }
 
+    [AvaloniaFact]
+    public async Task ReplaceAllUndoesAllReplacementsInEachWindowTogether()
+    {
+        using var active = CreateMockEditor("alpha alpha");
+        using var other = CreateMockEditor("alpha there alpha");
+        SetOpenDocuments(active, other);
+        active.Document.UndoStack.ClearAll();
+        other.Document.UndoStack.ClearAll();
+        var sut = CreateSut();
+        sut.Scope = FindScope.AllOpenDocuments;
+        sut.SearchText = "alpha";
+        sut.ReplaceText = "beta";
+
+        await sut.ReplaceAllAsync();
+
+        active.Document.Text.Should().Be("beta beta");
+        other.Document.Text.Should().Be("beta there beta");
+        active.Document.UndoStack.Undo();
+        active.Document.Text.Should().Be("alpha alpha");
+        other.Document.Text.Should().Be("beta there beta");
+        other.Document.UndoStack.Undo();
+        other.Document.Text.Should().Be("alpha there alpha");
+        active.Document.UndoStack.CanUndo.Should().BeFalse();
+        other.Document.UndoStack.CanUndo.Should().BeFalse();
+    }
+
     // --- Not found ---
 
     [AvaloniaFact]
@@ -1190,7 +1217,7 @@ public partial class FindReplaceViewModelTests
         var editorService = Substitute.For<IEditorService>();
         var projectService = Substitute.For<IProjectService>();
         var projectExplorer = new ProjectToolViewModel(projectManager, eventBus, projectService, editorService, loc);
-        var colorPalette = new ColorPaletteToolViewModel(mockDocDock);
+        var colorPalette = new ColorPaletteToolViewModel(mockDocDock, loc);
         var objectBrowser = new ObjectBrowserToolViewModel(projectManager, Substitute.For<ILspClient>(), editorService, Substitute.For<IComponentRegistry>(), Substitute.For<ITypeLibraryService>(), Substitute.For<IFocusedProjectUtil>(), loc,
             Substitute.For<ILanguageConnectionRegistry>());
         var translationEditor = new TranslationEditorViewModel(loc, Substitute.For<IUserTranslationsService>(), windowManager);
@@ -1200,6 +1227,7 @@ public partial class FindReplaceViewModelTests
         var lsRegistry = Substitute.For<ILanguageConnectionRegistry>();
         lsRegistry.Connections.Returns([]);
         lsRegistry.ConfigurationProblems.Returns([]);
+        lsRegistry.Diagnostics.Returns([]);
         var languageServers = new LanguageServersToolViewModel(
             lsRegistry, loc, new ConversationLog(), Substitute.For<IEventBus>(),
             new HexIDE.Redaction.Pseudonymiser());
@@ -1211,7 +1239,8 @@ public partial class FindReplaceViewModelTests
             immediate, locals, watches, callStack, colorPalette, objectBrowser, translationEditor,
             languageServers,
             protocolInspector,
-            windowStateService, new DockFactoryReference());
+            windowStateService, new DockFactoryReference(), new HexIDE.Tools.OutlineToolViewModel(
+                Substitute.For<HexIDE.Localization.ILocalizationService>(), Substitute.For<IDocumentDockService>()), loc);
 
         return new MainViewViewModel(
             windowManager,
@@ -1228,6 +1257,8 @@ public partial class FindReplaceViewModelTests
             translationEditor,
             languageServers,
             protocolInspector,
+            new HexIDE.Tools.Diagnostics.DiagnosticsToolViewModel(lsRegistry, Substitute.For<HexIDE.Lsp.ILspClient>(),
+                mockDocDock, editorService, loc),
             projectManager,
             Substitute.For<IFocusedProjectUtil>(),
             projectService,
@@ -1248,13 +1279,14 @@ public partial class FindReplaceViewModelTests
             new AddinOptionsService(),
             Substitute.For<IDeveloperModeService>(),
             Substitute.For<IStatusBarService>(),
-            Substitute.For<IPersonalityService>(),
+            Substitute.For<IProfileService>(),
             new AddinMenuService(),
             new AddinCommandService(),
             new AddinToolWindowService(),
             windowStateService,
             Substitute.For<HexIDE.Debugging.IBreakpointService>(),
             Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            new RecentEditsToolViewModel(new RecentEditHistory(eventBus), () => editorService, loc));
+            new RecentEditsToolViewModel(new RecentEditHistory(eventBus), () => editorService, loc), findReferences: null, callHierarchy: null, typeHierarchy: null,
+            externalDebugger: null, recoveryOffers: null, runWith: null, logFolderOpener: null, projectTemplates: new AddinProjectTemplateService());
     }
 }

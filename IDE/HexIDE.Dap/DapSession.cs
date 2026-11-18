@@ -5,15 +5,35 @@ namespace HexIDE.Dap;
 
 public enum DapSessionState { Created, Starting, Running, Stopped, Ended, Faulted }
 
-/// <summary>A stop identity, scoped to one session. Never reuse frame/variable IDs across these identities.</summary>
-public sealed record DapStop(Guid SessionId, long Generation, int? ThreadId, string Reason);
-public sealed record DapSessionSnapshot(DapSessionState State, DapStop? Stop, Exception? Failure);
+/// <summary>A stop identity, scoped to one session. Never apply inspection replies across these identities.</summary>
+public sealed record DapStop(Guid SessionId, long Generation, int? ThreadId, string Reason)
+{
+    // A refused resume expires inspection handles without becoming a new source-reveal location.
+    public long NavigationGeneration { get; init; } = Generation;
+}
+/// <summary>ResumePending invalidates requests while consumers retain the last displayed inspection.</summary>
+public sealed record DapSessionSnapshot(DapSessionState State, DapStop? Stop, Exception? Failure, bool ResumePending = false);
 public sealed record DapSessionUpdate(DapSessionSnapshot Snapshot, DapEvent? Event);
-public sealed record DapSourceBreakpoints(string Path, IReadOnlyList<int> Lines);
+public sealed record DapSourceBreakpoints(string Path, IReadOnlyList<int> Lines)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Condition { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? HitCondition { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? LogMessage { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyDictionary<int, string> HitConditions { get; init; } = new Dictionary<int, string>();
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyDictionary<int, string> LogMessages { get; init; } = new Dictionary<int, string>();
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyDictionary<int, string> Conditions { get; init; } = new Dictionary<int, string>();
+}
 
 /// <summary>
 /// Owns a connection (optionally its process), consumes its events, and coordinates one launch.
-/// Consume Updates promptly on one background reader and dispatch UI work yourself. Inspection results
+/// Consume Updates on one background reader and dispatch UI work yourself. A full queue pauses event reading;
+/// the reader must never await a DAP response before taking its next update, since replies can follow events. Inspection results
 /// must still be checked with IsCurrent at the point they are applied to the UI.
 /// </summary>
 public sealed class DapSession : IAsyncDisposable
@@ -25,8 +45,13 @@ public sealed class DapSession : IAsyncDisposable
     private readonly TaskCompletionSource _initialized = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Channel<DapSessionUpdate> _updates;
     private readonly TimeSpan _startupTimeout;
+    // How long a disconnect goes on reading an adapter process's output after its reply; null for a bare connection,
+    // whose stream may never close. A process's output ends when it exits (#3894).
+    private TimeSpan? DisconnectDrain { get; init; }
     private readonly Task _events;
     private Task? _dispose;
+    private readonly CancellationTokenSource _lifetime = new();
+    private Task _publication = Task.CompletedTask;
     private long _generation;
     private DapSessionSnapshot _snapshot = new(DapSessionState.Created, null, null);
     private JsonElement _capabilities = JsonSerializer.SerializeToElement(new { });
@@ -49,7 +74,8 @@ public sealed class DapSession : IAsyncDisposable
     public static DapSession Start(DapProcessOptions options)
     {
         var process = DapProcess.Start(options);
-        return new(process.Connection, process, null, 256) { ProcessCompletion = process.Completion };
+        return new(process.Connection, process, null, 256)
+            { ProcessCompletion = process.Completion, DisconnectDrain = options.ShutdownTimeout };
     }
 
     public Guid Id { get; } = Guid.NewGuid();
@@ -68,7 +94,13 @@ public sealed class DapSession : IAsyncDisposable
         if (arguments.ValueKind != JsonValueKind.Object) throw new ArgumentException("Launch arguments must be an object.", nameof(arguments));
         ArgumentNullException.ThrowIfNull(breakpoints);
         // Copy caller-owned collections before the first await.
-        var sources = breakpoints.Select(source => new DapSourceBreakpoints(source.Path, source.Lines.ToArray())).ToArray();
+        var sources = breakpoints.Select(source => source with
+        {
+            Lines = source.Lines.ToArray(),
+            Conditions = new Dictionary<int, string>(source.Conditions),
+            HitConditions = new Dictionary<int, string>(source.HitConditions),
+            LogMessages = new Dictionary<int, string>(source.LogMessages),
+        }).ToArray();
         foreach (var source in sources)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(source.Path);
@@ -86,7 +118,7 @@ public sealed class DapSession : IAsyncDisposable
         try
         {
             var initialize = await Request("initialize", new { clientID = "hexide", adapterID = adapterId,
-                linesStartAt1 = true, columnsStartAt1 = true, pathFormat = "path" }, token).ConfigureAwait(false);
+                linesStartAt1 = true, columnsStartAt1 = true, pathFormat = "path", supportsInvalidatedEvent = true }, token).ConfigureAwait(false);
             lock (_sync) _capabilities = initialize.Body ?? JsonSerializer.SerializeToElement(new { });
             // Some adapters answer launch only AFTER configurationDone. Never await it before configuration.
             launch = _connection.RequestAsync("launch", arguments, token);
@@ -94,19 +126,39 @@ public sealed class DapSession : IAsyncDisposable
             if (await Task.WhenAny(ready, launch).ConfigureAwait(false) == launch)
                 await launch.ConfigureAwait(false); // observe an early refusal immediately
             await ready.ConfigureAwait(false);
+            async Task<DapResponse> Configure(string command, object configuration)
+            {
+                if (launch.IsCompleted) await launch.ConfigureAwait(false);
+                using var pendingCancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var pending = Request(command, configuration, pendingCancellation.Token);
+                try
+                {
+                    await Task.WhenAny(pending, launch).ConfigureAwait(false);
+                    if (launch.IsCompleted) await launch.ConfigureAwait(false);
+                    return await pending.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Settle the abandoned request without replacing the launch refusal.
+                    pendingCancellation.Cancel();
+                    try { await pending.ConfigureAwait(false); } catch { }
+                    throw;
+                }
+            }
+
             var replies = new List<DapResponse>();
             foreach (var source in sources)
-                replies.Add(await Request("setBreakpoints", new { source = new { path = source.Path },
-                    breakpoints = source.Lines.Select(line => new { line }).ToArray() }, token).ConfigureAwait(false));
+                replies.Add(await Configure("setBreakpoints", new { source = new { path = source.Path },
+                    breakpoints = BreakpointArguments(source.Lines, source.Conditions, source.HitConditions, source.LogMessages, source.Condition, source.HitCondition, source.LogMessage) }).ConfigureAwait(false));
             var filters = Capabilities.TryGetProperty("exceptionBreakpointFilters", out var advertised)
                 ? advertised.EnumerateArray().Where(filter => filter.TryGetProperty("default", out var enabled) && enabled.ValueKind == JsonValueKind.True)
                     .Select(filter => filter.GetProperty("filter").GetString()).ToArray() : [];
             if (Capabilities.TryGetProperty("exceptionBreakpointFilters", out _))
-                await Request("setExceptionBreakpoints", new { filters }, token).ConfigureAwait(false);
+                await Configure("setExceptionBreakpoints", new { filters }).ConfigureAwait(false);
             lock (_sync)
                 if (_snapshot.State == DapSessionState.Starting) Change(DapSessionState.Running);
             if (Supports("supportsConfigurationDoneRequest"))
-                await Request("configurationDone", new { }, token).ConfigureAwait(false);
+                await Configure("configurationDone", new { }).ConfigureAwait(false);
             await launch.ConfigureAwait(false);
             if (Snapshot.State == DapSessionState.Faulted)
                 throw new IOException("Debug session failed during startup.", Snapshot.Failure);
@@ -118,6 +170,22 @@ public sealed class DapSession : IAsyncDisposable
             await DisposeAsync().ConfigureAwait(false);
             if (launch is not null) { try { await launch.ConfigureAwait(false); } catch { /* original failure wins */ } }
             throw;
+        }
+    }
+
+    /// <summary>Waits for the update consumer to deliver all events read before this call.</summary>
+    public async Task WaitForDeliveryAsync()
+    {
+        try
+        {
+            var delivered = _connection.QueueDeliveryBarrierAsync();
+            if (await Task.WhenAny(delivered, Completion).ConfigureAwait(false) != delivered)
+                throw new IOException("Debug session ended before updates were delivered.");
+            await delivered.ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or System.Threading.Channels.ChannelClosedException)
+        {
+            throw new IOException("Debug session ended before updates were delivered.", exception);
         }
     }
 
@@ -134,17 +202,38 @@ public sealed class DapSession : IAsyncDisposable
     public Task<DapResponse> ScopesAsync(DapStop stop, int frameId, CancellationToken token = default) => Inspect(stop, "scopes", new { frameId }, token);
     public Task<DapResponse> VariablesAsync(DapStop stop, int variablesReference, CancellationToken token = default) => Inspect(stop, "variables", new { variablesReference }, token);
 
-    /// <summary>Replace one source's entire set, including an empty set to clear it, while running or stopped.</summary>
-    public Task<DapResponse> SetBreakpointsAsync(string path, IReadOnlyList<int> lines, CancellationToken token = default)
+    /// <summary>Replace one source's entire set, including an empty set to clear it, while running or stopped. A <paramref name="temporaryLine"/> goes after the set with no condition, for Run To Cursor.</summary>
+    public Task<DapResponse> SetBreakpointsAsync(string path, IReadOnlyList<int> lines, CancellationToken token = default,
+        IReadOnlyDictionary<int, string>? conditions = null, int? temporaryLine = null,
+        IReadOnlyDictionary<int, string>? hitConditions = null, IReadOnlyDictionary<int, string>? logMessages = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(lines);
         var copy = lines.ToArray();
+        if (temporaryLine is < 1) throw new ArgumentOutOfRangeException(nameof(temporaryLine));
         if (copy.Any(line => line < 1)) throw new ArgumentOutOfRangeException(nameof(lines));
         if (Snapshot.State is not (DapSessionState.Running or DapSessionState.Stopped))
             throw new InvalidOperationException("The debug session is not active.");
-        return Request("setBreakpoints", new { source = new { path }, breakpoints = copy.Select(line => new { line }).ToArray() }, token);
+        return Request("setBreakpoints", new { source = new { path }, breakpoints = temporaryLine is { } target
+            ? BreakpointArguments(copy, conditions, hitConditions, logMessages).Append(new { line = target }).ToArray() : BreakpointArguments(copy, conditions, hitConditions, logMessages) }, token);
     }
+
+    private object[] BreakpointArguments(IReadOnlyList<int> lines, IReadOnlyDictionary<int, string>? conditions,
+        IReadOnlyDictionary<int, string>? hitConditions, IReadOnlyDictionary<int, string>? logMessages,
+        string? condition = null, string? hitCondition = null, string? logMessage = null) =>
+        lines.Select(line =>
+        {
+            var fields = new Dictionary<string, object> { ["line"] = line };
+            Add("condition", "supportsConditionalBreakpoints", condition ?? conditions?.GetValueOrDefault(line));
+            Add("hitCondition", "supportsHitConditionalBreakpoints", hitCondition ?? hitConditions?.GetValueOrDefault(line));
+            Add("logMessage", "supportsLogPoints", logMessage ?? logMessages?.GetValueOrDefault(line));
+            return (object)fields;
+
+            void Add(string field, string capability, string? value)
+            {
+                if (value is not null && Supports(capability)) fields[field] = value;
+            }
+        }).ToArray();
 
     /// <summary>Execute adapter-specific Immediate syntax in a stopped frame. REPL evaluation may have side effects.</summary>
     public Task<DapResponse> EvaluateAsync(DapStop stop, int frameId, string expression, CancellationToken token = default)
@@ -169,6 +258,26 @@ public sealed class DapSession : IAsyncDisposable
         return Inspect(stop, "evaluate", new { expression, frameId, context = "hover" }, token);
     }
 
+    /// <summary>What stopped the program at an exception stop. Sent only to an adapter that advertises it.</summary>
+    public Task<DapResponse> ExceptionInfoAsync(DapStop stop, int threadId, CancellationToken token = default)
+    {
+        if (!Supports("supportsExceptionInfoRequest"))
+            throw new InvalidOperationException("The adapter does not support the exceptionInfo request.");
+        return Inspect(stop, "exceptionInfo", new { threadId }, token);
+    }
+
+    /// <summary>
+    /// Asks the adapter to end the program, which it reports with a terminated event; the session stays open for the
+    /// disconnect that follows. Sent only to an adapter that advertises it: otherwise end the program with
+    /// <see cref="DisconnectAsync"/>.
+    /// </summary>
+    public async Task TerminateAsync(CancellationToken token = default)
+    {
+        if (!Supports("supportsTerminateRequest"))
+            throw new InvalidOperationException("The adapter does not support the terminate request.");
+        await Request("terminate", new { }, token).ConfigureAwait(false);
+    }
+
     private async Task<DapResponse> Inspect(DapStop stop, string command, object arguments, CancellationToken token)
     {
         CheckStop(stop);
@@ -182,10 +291,27 @@ public sealed class DapSession : IAsyncDisposable
         if (!IsCurrent(stop)) throw new InvalidOperationException("This inspection belongs to an expired debug stop.");
     }
 
+    public async Task SetNextStatementAsync(DapStop stop, string path, int line, int threadId, CancellationToken token = default)
+    {
+        if (!Supports("supportsGotoTargetsRequest")) throw new InvalidOperationException("The adapter does not support goto targets.");
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentOutOfRangeException.ThrowIfLessThan(line, 1);
+        var reply = await Inspect(stop, "gotoTargets", new { source = new { path }, line }, token).ConfigureAwait(false);
+        var targets = reply.Body!.Value.GetProperty("targets");
+        if (targets.GetArrayLength() == 0)
+            throw new DapRequestException(reply);
+        await ResumeCoreAsync(stop, "goto", new { threadId, targetId = targets[0].GetProperty("id").GetInt32() }, token).ConfigureAwait(false);
+    }
+
     /// <summary>Only continue/next/stepIn/stepOut. Invalidates inspection before sending, including adapters without continued events.</summary>
     public async Task ResumeAsync(DapStop stop, string command, int threadId, CancellationToken token = default)
     {
         if (command is not ("continue" or "next" or "stepIn" or "stepOut")) throw new ArgumentException("Not a resume command.", nameof(command));
+        await ResumeCoreAsync(stop, command, new { threadId }, token).ConfigureAwait(false);
+    }
+
+    private async Task ResumeCoreAsync(DapStop stop, string command, object arguments, CancellationToken token)
+    {
         await _commands.WaitAsync(token).ConfigureAwait(false);
         long generation = 0;
         try
@@ -194,10 +320,10 @@ public sealed class DapSession : IAsyncDisposable
             {
                 CheckStop(stop);
                 token.ThrowIfCancellationRequested();
-                Change(DapSessionState.Running);
+                Change(DapSessionState.Running, resumePending: true);
                 generation = _generation;
             }
-            try { await Request(command, new { threadId }, token).ConfigureAwait(false); }
+            try { await Request(command, arguments, token).ConfigureAwait(false); }
             catch (DapRequestException)
             {
                 lock (_sync)
@@ -215,7 +341,10 @@ public sealed class DapSession : IAsyncDisposable
                 await DisposeAsync().ConfigureAwait(false);
                 throw;
             }
-            // No post-response Running transition: a fast stopped event may already have arrived.
+            lock (_sync)
+                if (_generation == generation && _snapshot.ResumePending)
+                    Change(DapSessionState.Running);
+            // A continued or fast stopped event wins over the response.
         }
         finally { _commands.Release(); }
     }
@@ -237,6 +366,12 @@ public sealed class DapSession : IAsyncDisposable
                 if (_snapshot.State is not (DapSessionState.Ended or DapSessionState.Faulted))
                     Change(DapSessionState.Ended);
             await Request("disconnect", new { terminateDebuggee = true }, token).ConfigureAwait(false);
+            // The reply can overtake events still passing from Events to Updates. A clean disconnect
+            // drains those before disposal cancels blocked publications; consumers keep reading meanwhile.
+            // An adapter process may still write after the reply, so its output is read to its end first (#3894).
+            if (DisconnectDrain is { } drain) await _connection.CloseAfterDrainAsync(drain).ConfigureAwait(false);
+            else await _connection.DisposeAsync().ConfigureAwait(false);
+            await _events.WaitAsync(token).ConfigureAwait(false);
         }
         finally { await DisposeAsync().ConfigureAwait(false); }
     }
@@ -248,32 +383,44 @@ public sealed class DapSession : IAsyncDisposable
     {
         try
         {
-            await foreach (var message in _connection.Events.ReadAllAsync().ConfigureAwait(false))
+            await foreach (var message in _connection.Events.ReadAllAsync(_lifetime.Token).ConfigureAwait(false))
             {
+                Task publication;
                 lock (_sync)
                 {
-                    if (_snapshot.State == DapSessionState.Faulted) continue;
-                    if (_snapshot.State == DapSessionState.Ended) { Publish(message); continue; }
-                    switch (message.Event)
+                    if (message.DeliveryBarrier is not null) Publish(message);
+                    else if (_snapshot.State == DapSessionState.Faulted) continue;
+                    else if (_snapshot.State == DapSessionState.Ended) Publish(message);
+                    else
                     {
-                        case "initialized": _initialized.TrySetResult(); break;
-                        case "stopped":
-                            var body = message.Body;
-                            int? thread = body is { } b && b.TryGetProperty("threadId", out var id) ? id.GetInt32() : null;
-                            var reason = body is { } r && r.TryGetProperty("reason", out var why) ? why.GetString() ?? "unknown" : "unknown";
-                            Change(DapSessionState.Stopped, new(Id, _generation + 1, thread, reason), message: message);
-                            continue;
-                        case "continued": Change(DapSessionState.Running, message: message); continue;
-                        case "terminated": Change(DapSessionState.Ended, message: message); continue;
+                        switch (message.Event)
+                        {
+                            case "initialized": _initialized.TrySetResult(); Publish(message); break;
+                            case "stopped":
+                                var body = message.Body;
+                                int? thread = body is { } b && b.TryGetProperty("threadId", out var id) ? id.GetInt32() : null;
+                                var reason = body is { } r && r.TryGetProperty("reason", out var why) ? why.GetString() ?? "unknown" : "unknown";
+                                Change(DapSessionState.Stopped, new(Id, _generation + 1, thread, reason), message: message);
+                                break;
+                            case "invalidated" when _snapshot.Stop is { } stop:
+                                // Area/thread/frame hints may narrow a refresh; our single-stop view refreshes in full.
+                                Change(DapSessionState.Stopped, stop with { Generation = _generation + 1 }, message: message);
+                                break;
+                            case "continued": Change(DapSessionState.Running, message: message); break;
+                            case "terminated": Change(DapSessionState.Ended, message: message); break;
+                            default: Publish(message); break;
+                        }
                     }
-                    Publish(message);
+                    publication = _publication;
                 }
+                await publication.ConfigureAwait(false);
             }
             var failure = await _connection.Completion.ConfigureAwait(false);
             lock (_sync)
                 if (_snapshot.State is not (DapSessionState.Ended or DapSessionState.Faulted))
                     Change(DapSessionState.Faulted, failure: failure ?? new IOException("Debug adapter closed before termination."));
         }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (EndOfStreamException) when (Snapshot.State == DapSessionState.Ended)
         {
             // The program has already terminated. Raw transport diagnostics remain on ProcessCompletion.
@@ -284,32 +431,31 @@ public sealed class DapSession : IAsyncDisposable
             // Wake a startup waiting for initialized even when the stream closes first.
             _initialized.TrySetCanceled();
             await _owner.DisposeAsync().ConfigureAwait(false);
+            await _publication.ConfigureAwait(false);
             _updates.Writer.TryComplete();
         }
     }
 
-    private void Change(DapSessionState state, DapStop? stop = null, Exception? failure = null, DapEvent? message = null)
+    private void Change(DapSessionState state, DapStop? stop = null, Exception? failure = null, DapEvent? message = null,
+        bool resumePending = false)
     {
         ++_generation;
-        _snapshot = new(state, stop, failure);
+        _snapshot = new(state, stop, failure, resumePending);
         Publish(message);
     }
 
     private void Publish(DapEvent? message)
     {
-        if (!_updates.Writer.TryWrite(new(_snapshot, message)))
-        {
-            var failure = new IOException("Debug session update queue overflowed; consume Updates promptly.");
-            Fail(failure);
-            _ = CloseOverflowedConnectionAsync();
-            throw failure;
-        }
+        // Capture and order snapshots under _sync; the channel write runs outside it. The event reader
+        // awaits this publication before taking another event, so the bounded queue backpressures the wire.
+        _publication = PublishAsync(_publication, new(_snapshot, message));
     }
 
-    private async Task CloseOverflowedConnectionAsync()
+    private async Task PublishAsync(Task previous, DapSessionUpdate update)
     {
-        try { await _connection.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception exception) { Fail(exception); }
+        await previous.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
+        try { await _updates.Writer.WriteAsync(update, _lifetime.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
     }
 
     private void Fail(Exception exception)
@@ -319,7 +465,7 @@ public sealed class DapSession : IAsyncDisposable
             if (_snapshot.State == DapSessionState.Faulted) return;
             ++_generation;
             _snapshot = new(DapSessionState.Faulted, null, exception);
-            _updates.Writer.TryWrite(new(_snapshot, null));
+            Publish(null);
         }
     }
 
@@ -338,9 +484,10 @@ public sealed class DapSession : IAsyncDisposable
             {
                 ++_generation;
                 _snapshot = new(DapSessionState.Ended, null, null);
-                _updates.Writer.TryWrite(new(_snapshot, null));
+                Publish(null);
             }
         }
+        _lifetime.Cancel();
         await _owner.DisposeAsync().ConfigureAwait(false);
         await _events.ConfigureAwait(false);
     }

@@ -69,6 +69,8 @@ public sealed class VBProgram : IFormProgram
     private readonly List<VbObject> loaded = [];
     // The modal forms displayed, innermost last.
     private readonly List<VBWindowContext> modals = [];
+    // Most recently activated last, for choosing the next shown form when the active one hides (#3920).
+    private readonly List<VBWindowContext> activationOrder = [];
     // The form Activate was last raised for, until another is activated or it unloads.
     private VBWindowContext? active;
     private readonly TaskCompletionSource ended = new();
@@ -95,7 +97,7 @@ public sealed class VBProgram : IFormProgram
     /// How the host makes a window for another form. Null in a host that runs one form only: another form's use is then
     /// refused, naming #822.
     /// </param>
-    public VBProgram(FormDefinition startup, VBWindowContext startupContext, Debugging.IDebugController? debugController,
+    public VBProgram(FormDefinition startup, VBWindowContext startupContext, Debugging.IDebugGate? debugController,
         Func<FormDefinition, IFormView>? openForm)
         : this(startup.Owner, startup, startupContext, debugController, openForm)
     {
@@ -108,14 +110,14 @@ public sealed class VBProgram : IFormProgram
     /// </summary>
     /// <param name="rootContext">The library, state and root environment the program runs in. It is no form's handle.</param>
     /// <param name="openForm">How the host makes a window for a form, or null in a host that shows none.</param>
-    public VBProgram(ProjectDefinition project, VBWindowContext rootContext, Debugging.IDebugController? debugController,
+    public VBProgram(ProjectDefinition project, VBWindowContext rootContext, Debugging.IDebugGate? debugController,
         Func<FormDefinition, IFormView>? openForm)
         : this(project, startup: null, rootContext, debugController, openForm)
     {
     }
 
     private VBProgram(ProjectDefinition? project, FormDefinition? startup, VBWindowContext rootContext,
-        Debugging.IDebugController? debugController, Func<FormDefinition, IFormView>? openForm)
+        Debugging.IDebugGate? debugController, Func<FormDefinition, IFormView>? openForm)
     {
         this.openForm = openForm;
         if (project is not null)
@@ -191,7 +193,14 @@ public sealed class VBProgram : IFormProgram
         {
             await Events.Run("Sub Main", async () =>
             {
-                await interpreter.RunStartupSubMain();
+                var session = interpreter.DebugController?.Session;
+                interpreter.DebugController?.NotifyDispatchStarted();
+                try { await interpreter.RunStartupSubMain(); }
+                finally
+                {
+                    if (interpreter.DebugController?.Session == session)
+                        interpreter.DebugController?.NotifyDispatchIdle(carryStep: false);
+                }
                 return true;
             });
         }
@@ -230,13 +239,21 @@ public sealed class VBProgram : IFormProgram
     /// The control that has the focus in the active form's window: the first of the form's controls at or above the focused
     /// element, so a part of a control, a ComboBox's text box, is the ComboBox. Null when the focus is on none of them, as on a
     /// form with nothing that can take it (measured: Nothing, as the form's own ActiveControl is), and when no form is active.
+    /// A hidden active form, which the last visible form hiding leaves, answers with the control it last had (#2437, #3920).
     /// </summary>
+    /// <remarks>
+    /// The live focus is read while the form is shown, as before #3920: an MDIForm keeps no remembered control, and a
+    /// remembered control goes stale when the focused control unloads.
+    /// </remarks>
     public Avalonia.Controls.Control? ActiveControl
     {
         get
         {
-            if (active?.Window is not { } window
-                || Avalonia.Controls.TopLevel.GetTopLevel(window)?.FocusManager?.GetFocusedElement() is not Avalonia.LogicalTree.ILogical focused)
+            if (active?.Window is not { } window)
+                return null;
+            if (FormRoot.View(window) is { IsShown: false })
+                return (window as VBFormRuntime)?.ActiveControl;
+            if (Avalonia.Controls.TopLevel.GetTopLevel(window)?.FocusManager?.GetFocusedElement() is not Avalonia.LogicalTree.ILogical focused)
                 return null;
             return VBFormRuntime.FindControl(window, focused);
         }
@@ -265,6 +282,33 @@ public sealed class VBProgram : IFormProgram
         await context.InitializeAsync();
     }
 
+    /// <inheritdoc/>
+    public async Task<VbObject> MakeInstance(ModuleInfo form)
+    {
+        var context = Open(form, existing: null, defaultInstance: false);
+        var instance = context.FormInstance!;
+        // Initialize can call its own members. Hold the unfinished instance until New hands it to its statement.
+        instance.RefCount++;
+        try
+        {
+            await context.InitializeAsync();
+        }
+        finally
+        {
+            instance.RefCount--;
+        }
+        return instance;
+    }
+
+    /// <inheritdoc/>
+    public void Terminated(VbObject form)
+    {
+        ExecutionContext.State.ClearPendingControls(form);
+        if (contexts.Remove(form, out var context))
+            context.CloseOnce();
+        created.Remove(form);
+    }
+
     /// <summary>
     /// Load <paramref name="form"/> if it isn't loaded, inside the statement that asked. Form_Load is an event, and its
     /// error is not the statement's: an <c>On Error</c> around <c>Load Form2</c>, <c>Form2.Show</c> or a use of one of its
@@ -287,7 +331,7 @@ public sealed class VBProgram : IFormProgram
     }
 
     // A window for `form`, from the host, and its controls put into the instance: a new instance, or an unloaded one.
-    private VBWindowContext Open(ModuleInfo form, VbObject? existing)
+    private VBWindowContext Open(ModuleInfo form, VbObject? existing, bool defaultInstance = true)
     {
         if (!definitions.TryGetValue(form.Name, out var definition))
             throw new NotImplementedException($"{form.Name} has no form definition to run (#822).");
@@ -297,9 +341,9 @@ public sealed class VBProgram : IFormProgram
                 : $"{form.Name} is used after it has unloaded, and this host can't load it again yet (#822).");
         var view = openForm(definition);
         var context = view.Context;
-        context.Attach(this, form, FormCodeText.WholeFile(definition), existing);
+        context.Attach(this, form, FormCodeText.WholeFile(definition), existing, defaultInstance);
         var instance = context.FormInstance!;
-        view.SetContent(VBLoader.SpawnComponents(definition, ExecutionContext, instance.InstanceEnv, context.StandardLibrary, instance, this));
+        view.SetContent(VBLoader.SpawnComponents(definition, ExecutionContext, instance.InstanceEnv, context.StandardLibrary, instance, this, context));
         context.HoldControlsUntilLoad();
         context.CloseWindow = view.CloseForm;
         Register(context);
@@ -318,14 +362,48 @@ public sealed class VBProgram : IFormProgram
     }
 
     /// <summary>
-    /// Hide a form. While a modal form is displayed only the innermost one can be hidden: any other is 402, "Must close or
-    /// hide topmost modal form first", a modal form beneath it included (measured, #822).
+    /// Hide a form. While a modal form is displayed, hiding any form other than the innermost raises 402, "Must close or
+    /// hide topmost modal form first", after hiding it (measured, #4032). Visible = False hides a modeless form without
+    /// that error (measured, #3936).
     /// </summary>
-    internal void Hide(IFormView view)
+    /// <remarks>
+    /// A modal form beneath the innermost one is hidden and given 402 by Visible = False too, and its modal loop goes on
+    /// waiting while it is hidden: its Show vbModal returns only once it unloads (measured, native and p-code).
+    /// </remarks>
+    internal void Hide(IFormView view, bool reportModalError = true)
     {
-        if (modals.Count > 0 && !ReferenceEquals(modals[^1], view.Context))
-            throw new VBRunTimeException(VBStandardError.CodeMustCloseTopmostModalFormFirst);
+        var underModal = modals.Count > 0 && !ReferenceEquals(modals[^1], view.Context);
+        var modalBeneath = underModal && modals.Contains(view.Context);
+        var modalError = underModal && (reportModalError || modalBeneath);
+        if (modalBeneath)
+            hiddenBeneath.Add(view.Context);
+        else
+            hiddenBeneath.Remove(view.Context);
+        var next = ReferenceEquals(active, view.Context) ? NextShown(view.Context) : null;
         view.HideForm();
+        ActivateNext(next);
+        if (modalError)
+            throw new VBRunTimeException(VBStandardError.CodeMustCloseTopmostModalFormFirst);
+    }
+
+    /// <summary>
+    /// Modal forms hidden while another modal form was over them, whose modal loops go on waiting while they are hidden
+    /// (measured). Hiding one again once it is the innermost ends its loop, as Hide of the innermost always does.
+    /// </summary>
+    private readonly HashSet<VBWindowContext> hiddenBeneath = [];
+
+    private VBWindowContext? NextShown(VBWindowContext leaving) =>
+        activationOrder.LastOrDefault(context => !ReferenceEquals(context, leaving)
+            && context.FormInstance is { FormLoaded: true } && FormRoot.View(context.Window) is { IsShown: true });
+
+    private void ActivateNext(VBWindowContext? next)
+    {
+        if (next is null)
+            return;
+        // Own the transition even without a window manager; its activation notification is then harmless.
+        Activated(next);
+        if (FormRoot.View(next.Window) is { HeldBy: null } nextView)
+            nextView.ActivateForm();
     }
 
     /// <summary>
@@ -339,7 +417,7 @@ public sealed class VBProgram : IFormProgram
     /// form within this context". Other forms' events go on: Form1's Timer ticks under Form2's modal form, in compiled code
     /// and in the IDE alike (measured).
     /// </remarks>
-    internal async Task ShowModal(IFormView view)
+    internal async Task ShowModal(IFormView view, VBFormRuntime? owner)
     {
         var context = view.Context;
         if (modals.Contains(context))
@@ -350,24 +428,42 @@ public sealed class VBProgram : IFormProgram
         // form was held by undoes this one exactly.
         var held = new List<(IFormView View, IFormView? Before)>();
         foreach (var other in contexts.Values)
-            if (other.Window is IFormView otherView)
+            if (FormRoot.View(other.Window) is { } otherView)
             {
                 held.Add((otherView, otherView.HeldBy));
                 otherView.HeldBy = ReferenceEquals(other, context) ? null : view;
             }
         modals.Add(context);
         var over = interpreter.BuiltIns.WatchRunEnd?.Invoke();
+        var window = view as VBFormRuntime;
+        var showInTaskbar = window?.ShowInTaskbar ?? false;
         try
         {
-            view.ShowForm();
+            if (window is not null)
+                window.ShowModalForm(owner);
+            else
+                view.ShowForm();
             var form = context.FormInstance!;
-            await Events.WhileModal(() => form.FormLoaded && view.IsShown && over?.Invoke() != true);
+            // Hidden as the innermost form, it is done; hidden while another modal form was over it, it waits on.
+            await Events.WhileModal(() => form.FormLoaded && (view.IsShown || hiddenBeneath.Contains(context))
+                && over?.Invoke() != true);
         }
         finally
         {
+            if (window is not null)
+            {
+                window.ClearModalOwner();
+                window.ShowInTaskbar = showInTaskbar;
+            }
             modals.Remove(context);
+            hiddenBeneath.Remove(context);
             foreach (var (otherView, before) in held)
                 otherView.HeldBy = before;
+            // Ownership can raise the owner above the previously active form. Return native focus to the form the
+            // program already selected on hide/unload, after freeing it; its Activate event has already been queued.
+            if (window is not null && active is { FormInstance.FormLoaded: true } next && !ReferenceEquals(next, context)
+                && next.Window is VBFormRuntime { IsShown: true, HeldBy: null } nextView)
+                nextView.ActivateForm();
         }
         // The run ended under the modal form, by End, Stop or a fault: the statement after the Show never runs (measured
         // for End).
@@ -394,15 +490,22 @@ public sealed class VBProgram : IFormProgram
             return;
         var previous = active;
         active = context;
+        activationOrder.Remove(context);
+        activationOrder.Add(context);
         // Posted: they wait for the handler that is running. Win32 activates the window inside Show, and without this the
         // pair ran there, before the statement after the Show; headless, the activation comes after the handler anyway.
         // Show inside Load is the measured exception: Activate and initial focus run inside Load (#2436). A window is
         // shown before it is activated, so a Show's Resize has run by then.
         using var posting = context.Loading ? null : Events.Posting();
+        // Own both ends of the control focus switch: native focus can arrive before or after activation (#3932).
+        (previous?.Window as VBFormRuntime)?.BlurControl();
+        previous?.BlurForm();
         previous?.ExecuteSub("Form_Deactivate");
         context.ShowControls();
         context.ExecuteSub("Form_Activate");
         context.FocusFirstControl();
+        (context.Window as VBFormRuntime)?.RestoreControlFocus();
+        context.FocusFormWithoutControl();
     }
 
     /// <summary>A form has loaded: the program holds it until it unloads, as VB6's Forms does.</summary>
@@ -426,7 +529,11 @@ public sealed class VBProgram : IFormProgram
     {
         // The active form unloaded is given no Deactivate, and the form Windows activates next its Activate (measured, #994).
         if (ReferenceEquals(active, context))
+        {
             active = null;
+            ActivateNext(NextShown(context));
+        }
+        activationOrder.Remove(context);
         var instance = context.FormInstance!;
         var at = loaded.FindIndex(form => ReferenceEquals(form, instance));
         if (at < 0)
@@ -452,6 +559,8 @@ public sealed class VBProgram : IFormProgram
         if (finishing)
             return;
         finishing = true;
+        if (interpreter.StartupMainReturned && !interpreter.Ending)
+            await interpreter.ReleaseProgramObjects();
         // #2496 measured project order between forms, reverse creation order within each form.
         var instances = created.ToList();
         if (formOrder.Count > 0)

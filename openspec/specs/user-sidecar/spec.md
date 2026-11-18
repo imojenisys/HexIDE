@@ -48,6 +48,38 @@ mark is missing on the next opening.
 - **WHEN** another program holds the sidecar as a change is written, and the project is closed afterwards
 - **THEN** the change is in the sidecar when the project is next opened
 
+### Requirement: What F5 runs SHALL be per-user project state
+The user's choice of what F5 runs for a project, the interpreter or a launch an add-in contributes (`dap-client`),
+SHALL be kept in the sidecar as `runWith`, by the launch's add-in and title, or an empty string for an explicit
+interpreter choice. An absent `runWith` SHALL leave the project's default in effect and SHALL NOT itself cause
+a sidecar to be written.
+
+One developer runs a project under an add-in's debugger and another in the IDE, so the choice is theirs, not the
+project's, and it belongs with their breakpoints.
+
+#### Scenario: Choosing a launch for F5
+- **WHEN** the user chooses an add-in's launch for F5 and later reopens the project
+- **THEN** F5 is still set to run that launch
+
+#### Scenario: Choosing the interpreter for an add-in project
+- **WHEN** the user chooses In the IDE for a project whose default is an add-in launch and reopens it
+- **THEN** the explicit interpreter choice is retained instead of the add-in default
+
+
+### Requirement: Run with VB6 SHALL remember its last built executable
+Run with VB6 SHALL persist its successful output's filename and SHA-256 as `lastRunExe` (`fileName`,
+`hash`). The record SHALL survive reopening and sidecar saves. Run SHALL ask once before replacing
+existing output unless both fields match, with No the default; No SHALL build and run nothing.
+Make with VB6 SHALL always ask before replacement and SHALL NOT record this state (#4504).
+
+#### Scenario: Running again after reopening
+- **WHEN** a project is reopened and Run with VB6 finds its last output with the recorded filename and hash
+- **THEN** it builds and runs without a replacement question
+
+#### Scenario: Another build replaces the executable
+- **WHEN** Run with VB6 finds different bytes in the output file and the user answers No
+- **THEN** it asks once and leaves the executable untouched without building or starting it
+
 ### Requirement: The sidecar SHALL be named predictably from the project
 The sidecar SHALL be named from the project file's name with a distinct extension, in the same directory.
 
@@ -195,11 +227,21 @@ the old keys would instead have the earlier version show every mark on the wrong
 Entries SHALL be keyed within a sidecar by the document's name. The sidecar belongs to one project already, so
 the project needs no naming inside it.
 
+When a loaded module takes its file's `VB_Name` over its `.vbp` name (#3774), each mark or condition
+entry SHALL prefer the loaded name and fall back to the recorded project-line name only when that entry
+has no loaded-name key. A save SHALL key the migrated entries by the loaded name.
+
 Marks in the earlier format SHALL be recognised by where the sidecar records them, and SHALL be migrated whatever
 format the sidecar says it is in. A version that keeps content it does not understand, and has no migration,
 keeps a migrated sidecar's format and new marks and writes its own beside them, in the earlier format; read by
 the format alone, those would be taken as already migrated, and every one would be shown too high by the header's
 length.
+
+#### Scenario: A module loaded under its file name keeps earlier marks
+- **GIVEN** `Module=WName; Odd.bas`, whose file declares `VB_Name = "QName"`, and sidecar marks under `WName`
+- **WHEN** the project is opened and its sidecar saved
+- **THEN** the breakpoint, condition and bookmark remain on their lines and are keyed by `QName`
+- **AND** an existing entry under `QName` takes precedence over the corresponding `WName` entry
 
 #### Scenario: Opening a project with an earlier sidecar
 - **GIVEN** a sidecar with a breakpoint on the third line of a class's code, recorded before this change
@@ -234,6 +276,17 @@ A successful migration SHALL rewrite the sidecar immediately; a failed write SHA
 New marks SHALL NOT be written under older keys: older builds ignore the new keys and preserve them under #466,
 so their rewrites cannot leave stale header metadata beside marks they have moved. Builds predating #466 can
 still lose unknown content, as with version 2.
+
+When a module header is collected from below code at load, historical marks SHALL follow the reader's
+old-to-new line permutation. Marks on lines collected into the header SHALL be dropped. A rewritten sidecar
+SHALL record which documents' version-3 marks already use the collected order (`collectedModuleHeaders`),
+so reopening before the module is saved SHALL NOT migrate those marks twice. Missing documents' records
+SHALL be preserved with their marks. Breakpoint conditions SHALL follow their breakpoint through the same map.
+
+#### Scenario: Reopening a module before and after saving its reordered header
+- **GIVEN** historical marks on a statement in a module whose name line is below code
+- **WHEN** the project opens, rewrites its sidecar, and reopens before or after saving the module
+- **THEN** bookmarks, breakpoints and their conditions remain on that statement
 
 #### Scenario: A conflicted external header change followed by a reopen
 - **GIVEN** code bookmarks and breakpoints saved in version 3

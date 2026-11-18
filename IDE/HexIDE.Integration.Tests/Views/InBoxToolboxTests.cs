@@ -57,8 +57,29 @@ public class InBoxToolboxTests
             .And.Contain("_Version        =   393216" + Environment.NewLine + "   End");
     }
 
+    [AvaloniaFact]
+    public void FlatScrollBar_toolbox_default_is_horizontal_and_centred_as_if_750_twips_high()
+    {
+        var (_, toolbox, vm, form) = Designer(ControlLibraries.MSComCtl2);
+        var tool = toolbox.Components.Single(c => c.VBTypeName == "MSComCtl2.FlatScrollBar");
+        vm.Form.Width = 480;
+        vm.Form.Height = 360;
+        vm.SpawnControlCenter((ComponentBaseClass)tool.BaseClass!, ControlLibraries.MSComCtl2);
+        vm.CommitLayout();
+        var output = new FormSerializer().Serialize(form, "Form1.frm").frmText.ReplaceLineEndings();
+        output.Should().Contain("Height          =   255").And.Contain("Width           =   1500")
+            .And.Contain("Left            =   2850").And.Contain("Top             =   2325")
+            .And.Contain("_ExtentX        =   2646").And.Contain("_ExtentY        =   450")
+            .And.Contain("Arrows          =   65536" + Environment.NewLine + "      Orientation     =   1638401")
+            .And.NotContain("Appearance");
+        form.HeaderLines.Should().Contain(l => l.Contains("MSCOMCT2.OCX"));
+    }
+
     private static (ProjectDefinition project, ToolBoxToolViewModel toolbox, FormEditViewModel vm, FormDefinition form) Designer(
-        params RuntimeLibrary[] referenced)
+        params RuntimeLibrary[] referenced) => Designer(true, referenced);
+
+    private static (ProjectDefinition project, ToolBoxToolViewModel toolbox, FormEditViewModel vm, FormDefinition form) Designer(
+        bool alignToGrid, params RuntimeLibrary[] referenced)
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         foreach (var library in referenced)
@@ -67,9 +88,9 @@ public class InBoxToolboxTests
             "VERSION 5.00\r\nBegin VB.Form Form1\r\n   Caption = \"Form1\"\r\nEnd\r\nAttribute VB_Name = \"Form1\"\r\n", new NullSink())!;
         project.AddForm(form);
         var toolbox = new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(),
-            Substitute.For<IComponentRegistry>(), Substitute.For<ILocalizationService>());
+            new ComponentRegistry(), Substitute.For<ILocalizationService>());
         var settings = Substitute.For<ISettingsService>();
-        settings.AlignToGrid.Returns(true);
+        settings.AlignToGrid.Returns(alignToGrid);
         settings.GridWidth.Returns(8);
         settings.GridHeight.Returns(8);
         var vm = new FormEditViewModel(toolbox, Substitute.For<IEventBus>(), Substitute.For<IProjectService>(), null!, null!,
@@ -80,6 +101,34 @@ public class InBoxToolboxTests
 
     private static RuntimeLibrary?[] InBoxLibraries(ToolBoxToolViewModel toolbox) =>
         toolbox.Components.Where(c => c.BaseClass is InBoxComponentClass).Select(c => c.Library).ToArray();
+
+    [AvaloniaFact]
+    public void A_toolbox_grid_writes_the_measured_bare_block()
+    {
+        var (_, _, vm, form) = Designer(false, ControlLibraries.MSFlexGridLib);
+        var root = form.Components.Single(c => c.BaseClass is FormComponentClass);
+        root.SetProperty(VBProperties.WidthProperty, 640d);
+        root.SetProperty(VBProperties.HeightProperty, 480d);
+        vm.SpawnControlCenter(FlexGridComponentClass.Instance, ControlLibraries.MSFlexGridLib);
+        vm.CommitLayout();
+
+        var grid = form.Components.Single(c => c.BaseClass is FlexGridComponentClass);
+        grid.GetPropertyOrDefault(VBProperties.WidthProperty).Should().Be(100);
+        grid.GetPropertyOrDefault(VBProperties.HeightProperty).Should().Be(50);
+        var (text, companion) = new FormSerializer().Serialize(form, "Form1.frm");
+        text.Should().Contain("   Begin MSFlexGridLib.MSFlexGrid MSFlexGrid1 \r\n" + """
+                  Height          =   750
+                  Left            =   4050
+                  TabIndex        =   0
+                  Top             =   3225
+                  Width           =   1500
+                  _ExtentX        =   2646
+                  _ExtentY        =   1323
+                  _Version        =   393216
+               End
+            """.ReplaceLineEndings("\r\n"));
+        companion.Should().BeNull();
+    }
 
     [AvaloniaFact]
     public void RichTextBox_toolbox_placement_seeds_its_name_and_declares_its_library()
@@ -111,17 +160,17 @@ public class InBoxToolboxTests
 
     // Each referenced library offers its implemented controls after the intrinsic controls.
     [AvaloniaFact]
-    public void Each_referenced_library_offers_its_ProgressBar_after_the_intrinsic_controls()
+    public void Each_referenced_library_offers_its_implemented_controls_after_the_intrinsics()
     {
         var (_, toolbox, _, _) = Designer(ControlLibraries.MSComctlLib, ControlLibraries.ComctlLib);
 
         InBoxLibraries(toolbox).Should().Equal(ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib,
-            ControlLibraries.MSComctlLib, ControlLibraries.ComctlLib);
+            ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.ComctlLib);
         var shape = toolbox.Components.ToList().FindIndex(c => c.BaseClass is ShapeComponentClass);
         toolbox.Components[shape + 1].BaseClass.Should().BeSameAs(ProgressBarComponentClass.Instance);
         toolbox.Components[shape + 1].Name.Should().Be("ProgressBar");
         toolbox.Components.Where(c => c.Library is not null).Select(c => c.VBTypeName)
-            .Should().Equal("MSComctlLib.ProgressBar", "MSComctlLib.StatusBar", "MSComctlLib.ImageList", "ComctlLib.ProgressBar");
+            .Should().Equal("MSComctlLib.ProgressBar", "MSComctlLib.ListView", "MSComctlLib.Slider", "MSComctlLib.StatusBar", "MSComctlLib.ImageList", "ComctlLib.ProgressBar");
     }
 
     // The Components dialog is how a project comes to reference a library, and the toolbox follows it both ways.
@@ -129,13 +178,13 @@ public class InBoxToolboxTests
     public void The_toolbox_follows_the_Components_dialog()
     {
         var (project, toolbox, _, _) = Designer();
-        var dialog = new ComponentsViewModel(project);
+        var dialog = new ComponentsViewModel(project, new ComponentRegistry());
 
         dialog.Controls.Single(c => c.Library == ControlLibraries.MSComctlLib).IsSelected = true;
         dialog.ApplyCommand.Execute(null);
-        InBoxLibraries(toolbox).Should().Equal(ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib);
+        InBoxLibraries(toolbox).Should().Equal(ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib, ControlLibraries.MSComctlLib);
 
-        toolbox.SelectedComponent = toolbox.Components.First(c => c.Library is not null);
+        toolbox.SelectedComponent = toolbox.Components.Single(c => c.VBTypeName == "MSComctlLib.ListView");
         dialog.Controls.Single(c => c.Library == ControlLibraries.MSComctlLib).IsSelected = false;
         dialog.ApplyCommand.Execute(null);
         InBoxLibraries(toolbox).Should().BeEmpty();

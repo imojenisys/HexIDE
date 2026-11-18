@@ -12,8 +12,9 @@ namespace HexIDE.Addins;
 /// </summary>
 public sealed record AddinManifest
 {
-    public const int CurrentSchema = 1;
-    [JsonPropertyName("schema")]           public int Schema { get; init; } = CurrentSchema;
+    public const int CurrentSchema = 2;
+    // Omitted schema remains legacy; only the packer opts into the current format.
+    [JsonPropertyName("schema")]           public int Schema { get; init; } = 1;
     [JsonExtensionData] public Dictionary<string, JsonElement>? Unrecognized { get; set; }
     [JsonPropertyName("id")]               public string Id { get; init; } = "";
     [JsonPropertyName("title")]            public string Title { get; init; } = "";
@@ -23,6 +24,11 @@ public sealed record AddinManifest
     [JsonPropertyName("publisherId")]      public string PublisherId { get; init; } = "";
     /// <summary>The package-relative file name of the assembly that implements <c>IAddin</c>.</summary>
     [JsonPropertyName("entry")]            public string Entry { get; init; } = "";
+    /// <summary>Raw declaration retained so invalid JSON shapes fail compatibility even in developer mode.
+    /// Older schemas do not define capability declarations.</summary>
+    [JsonPropertyName("capabilities")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public JsonElement? Capabilities { get; init; }
     [JsonPropertyName("minHexideVersion")] public string? MinHexideVersion { get; init; }
     /// <summary>Optional package-relative path (forward-slash) of the publisher logo — a PNG that must
     /// also appear in <see cref="Files"/> (so it is hash-verified). Null = no logo. The verifier only
@@ -50,6 +56,14 @@ public sealed record PublisherRecord
     /// <summary>Base64 SubjectPublicKeyInfo (SPKI) of the publisher's ECDSA P-256 public key.</summary>
     [JsonPropertyName("publicKey")]      public string PublicKey { get; init; } = "";
     [JsonPropertyName("intermediateId")] public string IntermediateId { get; init; } = "";
+    /// <summary>
+    /// The protocol namespaces issued to this publisher, each a name followed by <c>.</c> (<c>rdcore.</c>), or null in a
+    /// record issued before the field existed (#4258, #4024). Read only from a record whose signature has been checked:
+    /// see <see cref="PublisherNamespaces"/>.
+    /// </summary>
+    [JsonPropertyName("namespaces")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string[]? Namespaces { get; init; }
 }
 
 /// <summary>

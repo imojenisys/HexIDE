@@ -8,7 +8,8 @@
              xmlns:system="clr-namespace:System;assembly=System.Runtime"
              mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
              x:DataType="visualDesigner:PropertiesToolViewModel"
-             x:Class="HexIDE.VisualDesigner.Views.PropertiesToolView">
+             x:Class="HexIDE.VisualDesigner.Views.PropertiesToolView"
+             ClipToBounds="True">
     <UserControl.Styles>
         <!-- Compact tab strip to match VB6 Win32 density (~18 px) -->
         <Style Selector="TabControl#TabProperties TabItem">
@@ -69,9 +70,11 @@
                 </Border.ContextMenu>
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="80" SharedSizeGroup="Key" />
+                        <!-- Fits the longest built-in property name, CausesValidation: 90 units in Segoe UI and 103 in DejaVu Sans at this size (#3389). -->
+                        <ColumnDefinition Width="110" SharedSizeGroup="Key" />
                         <ColumnDefinition Width="1" />
                         <ColumnDefinition Width="*" SharedSizeGroup="Value" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Border Background="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}">
                         <TextBlock Text="{Binding Name}" Margin="2,0,0,0" />
@@ -82,6 +85,35 @@
                     <controls:PropertyBox PropertyClass="{CompiledBinding PropertyClass}" Object="{Binding Value}" Grid.Column="2"
                                           GotFocus="PropertyGotFocus"
                                           />
+                    <Button Grid.Column="3" IsVisible="{CompiledBinding CanLoadPicture}"
+                            Command="{CompiledBinding LoadPictureCommand}"
+                            AutomationProperties.Name="{DynamicResource Str.Tool.Properties.LoadPicture}"
+                            Width="{DynamicResource {x:Static commonControls:SystemParameters.VerticalScrollBarWidthKey}}"
+                            Padding="0">
+                        <Path Data="M 0 0 L 2 0 L 2 2 L 0 2 Z M 3 0 L 5 0 L 5 2 L 3 2 Z M 6 0 L 8 0 L 8 2 L 6 2 Z"
+                              Fill="{DynamicResource {x:Static commonControls:SystemColors.WindowTextBrushKey}}" />
+                    </Button>
+                </Grid>
+            </Border>
+        </DataTemplate>
+        <DataTemplate x:Key="RawPropertyTemplate" x:DataType="visualDesigner:RawPropertyViewModel">
+            <Border Height="16"
+                    Background="{DynamicResource {x:Static commonControls:SystemColors.WindowBrushKey}}"
+                    BorderBrush="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}"
+                    BorderThickness="0,0,0,1">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="110" SharedSizeGroup="Key" />
+                        <ColumnDefinition Width="1" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Background="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}">
+                        <TextBlock Text="{CompiledBinding Name}" Margin="2,0,0,0"
+                                   Foreground="{DynamicResource {x:Static commonControls:SystemColors.GrayTextBrushKey}}" />
+                    </Border>
+                    <Border Grid.Column="1" Background="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
+                    <TextBlock Grid.Column="2" Text="{CompiledBinding Value}" Margin="2,0,0,0"
+                               Foreground="{DynamicResource {x:Static commonControls:SystemColors.GrayTextBrushKey}}" />
                 </Grid>
             </Border>
         </DataTemplate>
@@ -89,28 +121,43 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <!-- Reserve the tab strip and two 16-DIP rows; the description gives way in a short pane (#4090). -->
+            <RowDefinition Height="*" MinHeight="80" />
             <RowDefinition Height="2" />
-            <RowDefinition Height="45" />
+            <RowDefinition Height="80" />
         </Grid.RowDefinitions>
-        <ComboBox x:Name="ObjectSelector"
+        <!-- The selector and the filter sit 4 DIP in, lined up, so a high-contrast focus ring keeps its outer pixels at a docked
+             pane's edge (#3659). The tabs and rows below draw focus inside, so they keep the pane's full width. -->
+        <ComboBox x:Name="ObjectSelector" Margin="4"
                   SelectedItem="{CompiledBinding SelectedComponentProxy}"
                   ItemsSource="{CompiledBinding ComponentsProxy}">
             <ComboBox.ItemTemplate>
                 <DataTemplate x:DataType="visualDesigner:ComponentInstanceViewModel">
                     <StackPanel Orientation="Horizontal" Spacing="10">
-                        <TextBlock FontWeight="Bold" Text="{CompiledBinding Name}" />
+                        <TextBlock FontWeight="Bold" Text="{CompiledBinding AddressedName}" />
                         <TextBlock Text="{CompiledBinding BaseClassName}" />
                     </StackPanel>
                 </DataTemplate>
             </ComboBox.ItemTemplate>
         </ComboBox>
-        <TabControl Grid.Row="1" Name="TabProperties">
+        <TextBox Grid.Row="1" Name="PropertyFilter" Margin="4,0,4,4"
+                 Text="{CompiledBinding FilterText, Mode=TwoWay}"
+                 PlaceholderText="{DynamicResource Str.Tool.Properties.Filter}"
+                 AutomationProperties.Name="{DynamicResource Str.Tool.Properties.Filter}" />
+        <TabControl Grid.Row="2" Name="TabProperties">
             <TabItem Header="{DynamicResource Str.Tool.Properties.Tab.Alphabetic}" x:Name="AlphabeticPropertiesTab">
                 <ListBox SelectedItem="{CompiledBinding SelectedProperty}"
-                         ItemTemplate="{StaticResource PropertyTemplate}"
                          ItemsSource="{CompiledBinding Properties}"
                          x:Name="AlphabeticProperties">
+                    <ListBox.DataTemplates>
+                        <DataTemplate x:DataType="visualDesigner:PropertyViewModel">
+                            <ContentControl Content="{CompiledBinding}" ContentTemplate="{StaticResource PropertyTemplate}" />
+                        </DataTemplate>
+                        <DataTemplate x:DataType="visualDesigner:RawPropertyViewModel">
+                            <ContentControl Content="{CompiledBinding}" ContentTemplate="{StaticResource RawPropertyTemplate}" />
+                        </DataTemplate>
+                    </ListBox.DataTemplates>
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem">
                             <Setter Property="Padding" Value="0" />
@@ -142,6 +189,12 @@
                                             BorderThickness="1,0,0,0"
                                             Margin="15,0,0,0" />
                         </DataTemplate>
+                        <DataTemplate x:DataType="visualDesigner:RawPropertyViewModel">
+                            <ContentControl Content="{CompiledBinding}" ContentTemplate="{StaticResource RawPropertyTemplate}"
+                                            BorderBrush="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}"
+                                            BorderThickness="1,0,0,0"
+                                            Margin="15,0,0,0" />
+                        </DataTemplate>
                         <DataTemplate x:DataType="visualDesigner:PropertyCategoryViewModel">
                             <DockPanel>
                                 <ToggleButton AutomationProperties.Name="{CompiledBinding Header}" Theme="{StaticResource PropertyCategoryToggle}"
@@ -163,11 +216,11 @@
                 </controls:PropertyCategoryListBox>
             </TabItem>
         </TabControl>
-        <GridSplitter Grid.Row="2" Background="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
-        <ClassicBorderDecorator Grid.Row="3" BorderThickness="1" BorderStyle="Sunken"
+        <GridSplitter Grid.Row="3" Background="{DynamicResource {x:Static commonControls:SystemColors.ControlBrushKey}}" />
+        <ClassicBorderDecorator Grid.Row="4" BorderThickness="1" BorderStyle="Sunken"
                                 Padding="4,2"
                                 DataContext="{CompiledBinding SelectedProperty}">
-            <DockPanel x:DataType="visualDesigner:PropertyViewModel">
+            <DockPanel x:DataType="visualDesigner:BasePropertyViewModel">
                 <TextBlock DockPanel.Dock="Top" FontWeight="Bold" Text="{CompiledBinding Name}" TextWrapping="WrapWithOverflow" />
                 <TextBlock Text="{CompiledBinding Description}" TextWrapping="WrapWithOverflow" />
             </DockPanel>

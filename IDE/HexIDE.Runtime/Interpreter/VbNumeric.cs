@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Globalization;
 using Antlr4.Runtime;
 using VT = HexIDE.Runtime.Interpreter.Vb6Value.ValueType;
 
@@ -8,57 +9,61 @@ namespace HexIDE.Runtime.Interpreter;
 /// <summary>
 /// The single home for VB6 numeric semantics: the per-operator arithmetic result-type tables, checked narrowing
 /// (out-of-range -> Overflow, Err 6), and the integer <c>\</c>/<c>Mod</c> operators (operands banker's-rounded to an
-/// integer first; divide-by-zero -> Err 11). The rules here were verified against real <c>vb6.exe</c>.
+/// integer first; divide-by-zero -> Err 11). The rules here were verified against real <c>vb6.exe</c>; LongLong uses Excel x64 (#4302).
 /// </summary>
 public static class VbNumeric
 {
     // Oracle: "Numeric type pairs — five arithmetic tables" (2026-09-03).
-    // Rows/columns: Byte, Integer, Long, Single, Double, Currency, Decimal.
-    // B/I/L/S/F/C/D are those result types. + and - share AddTypes; backslash and Mod share IntegerTypes.
+    // Rows/columns: Byte, Integer, Long, Single, Double, Currency, Decimal, LongLong (#4302).
+    // B/I/L/S/F/C/D/Q are those result types. + and - share AddTypes; backslash and Mod share IntegerTypes.
     private static readonly string[] AddTypes =
     [
-        "BILSFCD", // Byte
-        "IILSFCD", // Integer
-        "LLLFFCD", // Long
-        "SSFSFCD", // Single
-        "FFFFFCD", // Double
-        "CCCCCCD", // Currency
-        "DDDDDDD", // Decimal
+        "BILSFCDQ", // Byte
+        "IILSFCDQ", // Integer
+        "LLLFFCDQ", // Long
+        "SSFSFCDF", // Single
+        "FFFFFCDF", // Double
+        "CCCCCCDC", // Currency
+        "DDDDDDDD", // Decimal
+        "QQQFFCDQ", // LongLong (#4302)
     ];
     private static readonly string[] MultiplyTypes =
     [
-        "BILSFCD", // Byte
-        "IILSFCD", // Integer
-        "LLLFFCD", // Long
-        "SSFSFFD", // Single
-        "FFFFFFD", // Double
-        "CCCFFCD", // Currency
-        "DDDDDDD", // Decimal
+        "BILSFCDQ", // Byte
+        "IILSFCDQ", // Integer
+        "LLLFFCDQ", // Long
+        "SSFSFFDF", // Single
+        "FFFFFFDF", // Double
+        "CCCFFCDC", // Currency
+        "DDDDDDDD", // Decimal
+        "QQQFFCDQ", // LongLong (#4302)
     ];
     private static readonly string[] DivideTypes =
     [
-        "FFFSFFD", // Byte
-        "FFFSFFD", // Integer
-        "FFFFFFD", // Long
-        "SSFSFFD", // Single
-        "FFFFFFD", // Double
-        "FFFFFFD", // Currency
-        "DDDDDDD", // Decimal
+        "FFFSFFDF", // Byte
+        "FFFSFFDF", // Integer
+        "FFFFFFDF", // Long
+        "SSFSFFDF", // Single
+        "FFFFFFDF", // Double
+        "FFFFFFDF", // Currency
+        "DDDDDDDD", // Decimal
+        "FFFFFFDF", // LongLong (#4302, review measurements PR #4383)
     ];
     private static readonly string[] IntegerTypes =
     [
-        "BILLLLL", // Byte
-        "IILLLLL", // Integer
-        "LLLLLLL", // Long
-        "LLLLLLL", // Single
-        "LLLLLLL", // Double
-        "LLLLLLL", // Currency
-        "LLLLLLL", // Decimal
+        "BILLLLLQ", // Byte
+        "IILLLLLQ", // Integer
+        "LLLLLLLQ", // Long
+        "LLLLLLLQ", // Single
+        "LLLLLLLQ", // Double
+        "LLLLLLLQ", // Currency
+        "LLLLLLLQ", // Decimal
+        "QQQQQQQQ", // LongLong (#4302)
     ];
     // The fifth table, ^, is uniformly Double and is encoded directly in Power.
 
     private static VT ResultType(string[] table, int left, int right) =>
-        CoreType("BILSFCD".IndexOf(table[left][right]));
+        CoreType("BILSFCDQ".IndexOf(table[left][right]));
 
     // The tables' row and column index; not a promotion ladder. Boolean and Empty index as Integer. Date has no
     // index: Add/Sub special-case it (Date+n -> Date, Date-Date -> Double), and * / \ Mod ^ coerce a Date operand
@@ -72,6 +77,7 @@ public static class VbNumeric
         if (t == VT.Double) return 4;
         if (t == VT.Currency) return 5;
         if (t == VT.Decimal) return 6;
+        if (t == VT.LongLong) return 7;
         return -1;   // Date/String/... : off the ladder
     }
 
@@ -83,7 +89,8 @@ public static class VbNumeric
         3 => VT.Single,
         4 => VT.Double,
         5 => VT.Currency,
-        _ => VT.Decimal
+        6 => VT.Decimal,
+        _ => VT.LongLong
     };
 
     /// <summary>
@@ -93,6 +100,7 @@ public static class VbNumeric
     /// </summary>
     private static Vb6Value ReadString(Vb6Value v, ParserRuleContext? ctx)
     {
+        v.RefuseOddBytes("Arithmetic");
         if (v.Type != VT.String)
             return v;
         try
@@ -152,8 +160,8 @@ public static class VbNumeric
             decimal res;
             try
             {
-                decimal a = rt == VT.Currency ? CurrencyOperand(l, ctx) : ToDecimal(l);
-                decimal b = rt == VT.Currency ? CurrencyOperand(r, ctx) : ToDecimal(r);
+                decimal a = rt == VT.Currency ? CurrencyOperand(l, ctx) : ToDecimal(l, ctx);
+                decimal b = rt == VT.Currency ? CurrencyOperand(r, ctx) : ToDecimal(r, ctx);
                 res = op == '+' ? a + b : op == '-' ? a - b : a * b;
             }
             catch (OverflowException) { throw new VBRunTimeException(ctx, VBStandardError.Overflow); }
@@ -165,6 +173,19 @@ public static class VbNumeric
             return NarrowDouble(op == '+' ? a + b : op == '-' ? a - b : a * b, rt, ctx, l.HasFixedType && r.HasFixedType);
         }
 
+        if (rt == VT.LongLong)
+        {
+            BigInteger a = ToLong(l), b = ToLong(r);
+            var result = op == '+' ? a + b : op == '-' ? a - b : a * b;
+            if (result < long.MinValue || result > long.MaxValue)
+            {
+                if (l.HasFixedType && r.HasFixedType)
+                    throw new VBRunTimeException(ctx, VBStandardError.Overflow);
+                return new Vb6Value((double)result);
+            }
+            var value = Vb6Value.NewLongLong((long)result);
+            return l.HasFixedType && r.HasFixedType ? value.AsFixedType() : value;
+        }
         long la = ToLong(l), lb = ToLong(r);
         return NarrowLong(op == '+' ? la + lb : op == '-' ? la - lb : la * lb, rt, ctx, l.HasFixedType && r.HasFixedType);
     }
@@ -188,7 +209,7 @@ public static class VbNumeric
         var rt = lr >= 0 && rr >= 0 ? ResultType(DivideTypes, lr, rr) : VT.Double;
         if (rt == VT.Decimal)
         {
-            try { return Vb6Value.NewDecimal(ToDecimal(l) / ToDecimal(r)); }
+            try { return Vb6Value.NewDecimal(ToDecimal(l, ctx) / ToDecimal(r, ctx)); }
             catch (DivideByZeroException) { throw new VBRunTimeException(ctx, VBStandardError.DivisionByZero); }
             catch (OverflowException) { throw new VBRunTimeException(ctx, VBStandardError.Overflow); }
         }
@@ -205,9 +226,12 @@ public static class VbNumeric
         RefuseBooleanOverString(l, r, "\\", ctx);
         l = ReadString(l, ctx);
         r = ReadString(r, ctx);
-        long a = RoundToLong(l, ctx), b = RoundToLong(r, ctx);
+        bool wide = l.Type == VT.LongLong || r.Type == VT.LongLong;
+        long a = wide ? RoundLongLongOperand(l, ctx) : RoundToLong(l, ctx);
+        long b = wide ? RoundLongLongOperand(r, ctx) : RoundToLong(r, ctx);
         if (b == 0)
             throw new VBRunTimeException(ctx, VBStandardError.DivisionByZero);
+        CheckLongLongDivision(l, r, a, b, ctx);
         return NarrowLong(a / b, IntResultType(l.Type, r.Type), ctx);   // C# / truncates toward zero, as VB6 \
     }
 
@@ -216,10 +240,19 @@ public static class VbNumeric
         RefuseBooleanOverString(l, r, "Mod", ctx);
         l = ReadString(l, ctx);
         r = ReadString(r, ctx);
-        long a = RoundToLong(l, ctx), b = RoundToLong(r, ctx);
+        bool wide = l.Type == VT.LongLong || r.Type == VT.LongLong;
+        long a = wide ? RoundLongLongOperand(l, ctx) : RoundToLong(l, ctx);
+        long b = wide ? RoundLongLongOperand(r, ctx) : RoundToLong(r, ctx);
         if (b == 0)
             throw new VBRunTimeException(ctx, VBStandardError.DivisionByZero);
+        CheckLongLongDivision(l, r, a, b, ctx);
         return NarrowLong(a % b, IntResultType(l.Type, r.Type), ctx);   // C# % sign follows dividend, as VB6 Mod
+    }
+
+    private static void CheckLongLongDivision(Vb6Value l, Vb6Value r, long a, long b, ParserRuleContext? ctx)
+    {
+        if ((l.Type == VT.LongLong || r.Type == VT.LongLong) && a == long.MinValue && b == -1)
+            throw new VBRunTimeException(ctx, VBStandardError.Overflow);
     }
 
     // A Boolean divided by a String, with \ or Mod, is the one shape where VB6 does not read the String as a Double:
@@ -261,8 +294,15 @@ public static class VbNumeric
             return new Vb6Value(-d);
         }
         if (v.Type == VT.Currency)
-            return MakeCurrency(-ToDecimal(v), ctx);   // -1@ remains Currency (#1073)
+            return MakeCurrency(-ToDecimal(v, ctx), ctx);   // -1@ remains Currency (#1073)
         var rt = rank <= 1 ? VT.Integer : CoreType(rank);   // Byte/Boolean negate into Integer
+        if (rt == VT.LongLong)
+        {
+            var integral = ToLong(v);
+            if (integral == long.MinValue)
+                throw new VBRunTimeException(ctx, VBStandardError.Overflow);
+            return Vb6Value.NewLongLong(-integral);
+        }
         if (rt == VT.Integer || rt == VT.Long)
             return NarrowLong(-ToLong(v), rt, ctx, v.HasFixedType);
         return NarrowDouble(-ToDouble(v), rt, ctx);
@@ -274,11 +314,16 @@ public static class VbNumeric
     /// and range-checks (out of range -> Overflow). A non-core-numeric target is left unchanged (a later phase).</summary>
     public static Vb6Value Narrow(Vb6Value v, VT target, ParserRuleContext? ctx)
     {
+        v.RefuseOddBytes("Numeric conversion");
+        if (v.Type == VT.AutomationUnsignedLong)
+            return ConvertAutomationUnsignedLong(v, target);
         if (v.Type == target)
             return v;
+        if (target == VT.LongLong)
+            return ToLongLong(v, ctx);
         if (target == VT.Byte || target == VT.Integer || target == VT.Long)
         {
-            long r = (long)Math.Round(ToDouble(v), MidpointRounding.ToEven);
+            long r = v.Type == VT.LongLong ? (long)v.Value! : (long)Math.Round(ToDouble(v), MidpointRounding.ToEven);
             return NarrowLong(r, target, ctx);
         }
         if (target == VT.Single)
@@ -288,9 +333,11 @@ public static class VbNumeric
         if (target == VT.Currency)
             return v.Type == VT.Double
                 ? CurrencyFromDouble((double)v.Value!, ctx)
-                : MakeCurrency(ToDecimal(v), ctx);
+                // #4017 measures Decimal conversions, not Single-to-Currency: keep that host conversion, with #434's
+                // overflow (CCur(1E+30) is error 6) for a Single too.
+                : MakeCurrency(v.Value is float f ? HostDecimal(f, ctx) : ToDecimal(v, ctx), ctx);
         if (target == VT.Decimal)
-            return Vb6Value.NewDecimal(ToDecimal(v));
+            return Vb6Value.NewDecimal(ToDecimal(v, ctx));
         if (target == VT.Date)
             return FromSerial(ToDouble(v), ctx);
         return v;
@@ -314,25 +361,43 @@ public static class VbNumeric
     /// scalar type, which is the whole distinction VB6 draws and HexIDE previously could not.
     /// </para>
     /// </summary>
-    public static Vb6Value CoerceOnStore(Vb6Value v, VT target, ParserRuleContext? ctx)
+    public static Vb6Value CoerceOnStore(Vb6Value v, VT target, ParserRuleContext? ctx) =>
+        CoerceOnStore(v, target, ctx, allowAutomationUnsignedLong: true);
+
+    // A late-bound CommonDialog Color write retains its unmeasured UInt refusal, including default members (#4513).
+    internal static Vb6Value CoerceOnStore(Vb6Value v, VT target, ParserRuleContext? ctx, bool allowAutomationUnsignedLong)
     {
+        if (v.IsOddByteString)
+            return target == VT.String ? v : throw Vb6Value.OddBytesNotImplemented($"Assignment to {target}");
         if (v.Type == VT.Error && (target == VT.Long || target == VT.String))
             throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch);
         if (v.Type == VT.Error)
             throw new NotImplementedException("Assignment of an Error Variant to this declared type is unmeasured (#2520)");
         if (v.Type == VT.AutomationUnsignedLong)
-            throw new NotImplementedException("Conversion of an unsigned Automation Long is not implemented (#1084)");
+        {
+            if (!allowAutomationUnsignedLong) throw UnmeasuredAutomationAssignment();
+            // Only the Integer store is measured (at 255), not CInt; overflow remains refused (#4513).
+            if (target == VT.Integer && (uint)v.Value! <= short.MaxValue)
+                return new Vb6Value((int)(uint)v.Value!);
+            return ConvertAutomationUnsignedLong(v, target);
+        }
         if (v.Type == target)
             return v;
         // A declared scalar slot takes an object's default member (ObjectAsValue).
         v = ObjectAsValue.Scalar(v, ctx);
+        if (!allowAutomationUnsignedLong && v.Type == VT.AutomationUnsignedLong)
+            throw UnmeasuredAutomationAssignment();
         if (v.Type == target)
             return v;
         // Before every branch, including String: `Dim s As String : s = Null` is Err 94, not "".
         if (v.IsNull)
             throw new VBRunTimeException(ctx, VBStandardError.InvalidUseOfNull);
         if (target == VT.String)
+        {
+            if (v.Value is VBArray { ElementType: var element } && element == VT.Byte)
+                throw new NotImplementedException("Byte-array-to-String assignment is not implemented (#1510).");
             return new Vb6Value(VbDisplay.ToText(v));
+        }
         if (target == VT.Boolean)
             return VB6BuiltIns.CBool(v);
         // A String into a Date is read as CDate reads it, a date first and then a serial (measured, #967). ToNum read the
@@ -343,6 +408,8 @@ public static class VbNumeric
         // would silently store 0 and `i = "abc"` would too. ToNum is the interpreter's own already-pinned
         // string→number rule, Err 13 and all. Routed only for Strings, so the Currency/Decimal paths below
         // keep their decimal precision instead of going through a double.
+        if (target == VT.LongLong)
+            return ToLongLong(v, ctx);
         if (v.Type == VT.String)
             return Narrow(new Vb6Value(VB6BuiltIns.ToNum(v, allowCurrency: target == VT.Long)), target, ctx);
         return Narrow(v, target, ctx);
@@ -354,10 +421,51 @@ public static class VbNumeric
     public static bool IsDeclarableScalar(VT t) =>
         !t.IsArray && (IsCoreNumeric(t) || t == VT.Decimal || t == VT.Date || t == VT.String || t == VT.Boolean);
 
+    private static NotImplementedException UnmeasuredAutomationAssignment() =>
+        new("Assignment of an unsigned Automation Long to this property is unmeasured (#4513)");
+
+    // Measured conversions in #4513 / oracle PR #4508, shared by stores and explicit conversions.
+    private static Vb6Value ConvertAutomationUnsignedLong(Vb6Value value, VT target)
+    {
+        var number = (uint)value.Value!;
+        if (target == VT.Long) return new Vb6Value((long)unchecked((int)number));
+        if (target == VT.Double) return new Vb6Value((double)number);
+        if (target == VT.String) return new Vb6Value(VbDisplay.ToText(value));
+        throw new NotImplementedException("Conversion of an unsigned Automation Long to this type is unmeasured (#4513)");
+    }
+
     /// <summary>True if <paramref name="t"/> is a fixed numeric subtype that coercion-on-store should target
     /// (i.e. a declared numeric variable, not a Variant/Empty/String/Object).</summary>
     public static bool IsCoreNumeric(VT t) =>
-        t == VT.Byte || t == VT.Integer || t == VT.Long || t == VT.Single || t == VT.Double || t == VT.Currency;
+        t == VT.Byte || t == VT.Integer || t == VT.Long || t == VT.LongLong || t == VT.Single || t == VT.Double || t == VT.Currency;
+
+    // Excel x64 C1-C14, recorded in #4302. Decimal strings must never pass through Double.
+    internal static Vb6Value ToLongLong(Vb6Value value, ParserRuleContext? ctx)
+    {
+        try
+        {
+            if (value.Type == VT.String)
+            {
+                var text = ((string)value.Value!).Trim();
+                if (text.StartsWith("&H", StringComparison.OrdinalIgnoreCase))
+                    return Vb6Value.NewLongLong(unchecked((long)ulong.Parse(text[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture)));
+                var exact = decimal.Round(decimal.Parse(text, NumberStyles.Number, VbLocale.Current), 0, MidpointRounding.ToEven);
+                return Vb6Value.NewLongLong(checked((long)exact));
+            }
+            if (value.Type == VT.LongLong || value.Type == VT.Long || value.Type == VT.Integer || value.Type == VT.Byte)
+                return Vb6Value.NewLongLong(ToLong(value));
+            if (value.Type == VT.Single || value.Type == VT.Double)
+            {
+                var number = Math.Round(ToDouble(value), MidpointRounding.ToEven);
+                if (!double.IsFinite(number) || number < -9223372036854775808d || number >= 9223372036854775808d)
+                    throw new VBRunTimeException(ctx, VBStandardError.Overflow);
+                return Vb6Value.NewLongLong(checked((long)number));
+            }
+            throw new NotImplementedException("This conversion to LongLong is unmeasured (#1548)");
+        }
+        catch (OverflowException) { throw new VBRunTimeException(ctx, VBStandardError.Overflow); }
+        catch (FormatException) { throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch); }
+    }
 
     // ===== Currency / Date helpers =====
 
@@ -380,13 +488,13 @@ public static class VbNumeric
     private static decimal CurrencyOperand(Vb6Value value, ParserRuleContext? ctx) =>
         value.Type == VT.Single || value.Type == VT.Double
             ? (decimal)CurrencyFromDouble(ToDouble(value), ctx).Value!
-            : ToDecimal(value);
+            : ToDecimal(value, ctx);
 
     private static (BigInteger Numerator, BigInteger Denominator) DoubleFraction(double value, ParserRuleContext? ctx)
     {
         if (!double.IsFinite(value))
             throw new VBRunTimeException(ctx, VBStandardError.Overflow);
-        // (decimal)d keeps only about 15 significant digits: it turns 1.00005 and 0.00015 into
+        // A 15-significant-digit Decimal conversion turns 1.00005 and 0.00015 into
         // decimal ties, losing which side their binary values occupy (#966). Decode d = mantissa * 2^exponent
         // instead. BigInteger shifts and products preserve every bit, including subnormal values.
         ulong bits = BitConverter.DoubleToUInt64Bits(value);
@@ -448,22 +556,66 @@ public static class VbNumeric
             : throw new VBRunTimeException(ctx, VBStandardError.Overflow);
     }
 
+    private static decimal HostDecimal(float f, ParserRuleContext? ctx)
+    {
+        try { return (decimal)f; }
+        catch (OverflowException) { throw new VBRunTimeException(ctx, VBStandardError.Overflow); }
+    }
+
+    private static decimal ToDecimal(Vb6Value v, ParserRuleContext? ctx)
+    {
+        try { return ToDecimal(v); }
+        catch (OverflowException) { throw new VBRunTimeException(ctx, VBStandardError.Overflow); }
+    }
+
     private static decimal ToDecimal(Vb6Value v) => v.Value switch
     {
         byte b => b,
         int i => i,
         long l => l,
-        float f => (decimal)f,
-        double d => (decimal)d,
+        float f => FloatingToDecimal(f, 7),
+        double d => FloatingToDecimal(d, 15),
         decimal m => m,
         bool bo => bo ? -1 : 0,
         _ => 0m   // EmptyVariant / null
     };
 
+    // SP6 native and p-code, PR #4017: Decimal uses 15 significant digits for a Double,
+    // 7 for a Single, half to even. CStr's rounding is different, so do not format and parse.
+    internal static decimal FloatingToDecimal(double value, int digits = 15)
+    {
+        // Range-check before rounding: an out-of-range input must not round back into Decimal.
+        decimal original = (decimal)value;
+        if (value == 0) return original;
+        var (numerator, denominator) = DoubleFraction(value, null);
+        bool negative = numerator.Sign < 0;
+        numerator = BigInteger.Abs(numerator);
+        int exponent = (int)Math.Floor(Math.Log10(Math.Abs(value)));
+        // Log10 only estimates the decade; compare exact integers at the boundary.
+        bool BelowPower(int power) => power >= 0
+            ? numerator < denominator * BigInteger.Pow(10, power)
+            : numerator * BigInteger.Pow(10, -power) < denominator;
+        while (BelowPower(exponent)) exponent--;
+        while (!BelowPower(exponent + 1)) exponent++;
+        int scale = digits - 1 - exponent;
+        // The oracle records scale-28 anomalies without a rule. Keep the host conversion there.
+        if (scale > 28) return digits == 7 ? (decimal)(float)value : original;
+        if (scale >= 0) numerator *= BigInteger.Pow(10, scale);
+        else denominator *= BigInteger.Pow(10, -scale);
+        var units = BigInteger.DivRem(numerator, denominator, out var remainder);
+        int comparison = (remainder * 2).CompareTo(denominator);
+        if (comparison > 0 || (comparison == 0 && !units.IsEven)) units++;
+        decimal result = (decimal)units;
+        if (scale >= 0) result /= (decimal)BigInteger.Pow(10, scale);
+        else result *= (decimal)BigInteger.Pow(10, -scale);
+        return negative ? -result : result;
+    }
+
     // ===== helpers =====
 
     private static VT IntResultType(VT l, VT r)
     {
+        if (l == VT.LongLong || r == VT.LongLong) return VT.LongLong;
         int li = CoreRank(l), ri = CoreRank(r);
         return li >= 0 && ri >= 0 ? ResultType(IntegerTypes, li, ri) : VT.Long;
     }
@@ -497,6 +649,7 @@ public static class VbNumeric
             if (fixedType) throw new VBRunTimeException(ctx, VBStandardError.Overflow);
             target = VT.Long;
         }
+        if (target == VT.LongLong) return Land(Vb6Value.NewLongLong(res));
         // Long
         if (res >= int.MinValue && res <= int.MaxValue) return Land(new Vb6Value((long)res));
         if (fixedType) throw new VBRunTimeException(ctx, VBStandardError.Overflow);
@@ -563,6 +716,26 @@ public static class VbNumeric
         if (v.Type == VT.EmptyVariant) { d = 0; return true; }
         if (v.Value is bool b) { d = b ? -1 : 0; return true; }
         return Vb6Value.TryNumericToDouble(v, out d);
+    }
+
+    // #4302 / PR #4383 measures in-range rounding, not diagnostics for an out-of-range partner.
+    internal static long RoundLongLongOperand(Vb6Value value, ParserRuleContext? ctx)
+    {
+        if (value.Value is decimal exact)
+        {
+            var rounded = decimal.Round(exact, 0, MidpointRounding.ToEven);
+            if (rounded < long.MinValue || rounded > long.MaxValue)
+                throw new NotImplementedException("Coercion of an out-of-range LongLong integer/bitwise operand is unmeasured (#1548)");
+            return (long)rounded;
+        }
+        if (value.Value is float or double)
+        {
+            var rounded = Math.Round(ToDouble(value), MidpointRounding.ToEven);
+            if (!double.IsFinite(rounded) || rounded < -9223372036854775808d || rounded >= 9223372036854775808d)
+                throw new NotImplementedException("Coercion of an out-of-range LongLong integer/bitwise operand is unmeasured (#1548)");
+            return (long)rounded;
+        }
+        return RoundToLong(value, ctx);
     }
 
     private static long RoundToLong(Vb6Value v, ParserRuleContext? ctx)

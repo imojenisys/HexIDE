@@ -26,7 +26,7 @@ namespace HexIDE.Runtime;
 public class VBLoader
 {
     /// <summary>
-    /// The icon a form with no Icon line runs with, where the host has one: the made program's runner gives its own. Null
+    /// The icon a form with no Icon line runs with: the runner and IDE give the neutral window icon (#4187). Null
     /// leaves Avalonia's, the executable's icon on Windows (#1594).
     /// </summary>
     public static Avalonia.Controls.WindowIcon? DefaultFormIcon { get; set; }
@@ -41,13 +41,17 @@ public class VBLoader
         ExecutionEnvironment environment,
         IBasicStandardLibrary? standardLibrary = null,
         VbObject? form = null,
-        VBProgram? program = null)
+        VBProgram? program = null,
+        VBWindowContext? windowContext = null)
     {
-        var toolbars = element.Components.Where(c => c.BaseClass is FormComponentClass)
+        if (windowContext is not null)
+            windowContext.FormDefinition = element;
+        var runtimeBlocks = element.Components.Where(c => c.BaseClass is FormComponentClass)
             .SelectMany(c => c.PreservedChildSubtrees)
-            .Select(block => (block.Text, Component: Components.InBox.ToolbarComponentClass.ReadForRuntime(block.Text)))
+            .Select(block => (block.Text, Component: (Components.InBox.ToolbarComponentClass.ReadForRuntime(block.Text)
+                ?? Components.InBox.MonthViewComponentClass.ReadForRuntime(block.Text))))
             .Where(pair => pair.Component is not null).ToDictionary(pair => pair.Text, pair => pair.Component!);
-        RefuseUnsupportedControls(element, toolbars.Keys);
+        RefuseUnsupportedControls(element, runtimeBlocks.Keys);
         var canvas = new Canvas()
         {
             ClipToBounds = true
@@ -59,6 +63,8 @@ public class VBLoader
         // transparent one shows the form's BackColor through it (#974).
         canvas.Background = Avalonia.Media.Brushes.Transparent;
         AttachedEvents.AttachFormMouse(canvas);
+        if (form is not null)
+            AvaloniaInterop.ContainerMembers.Register(canvas, Vb6Value.NewObject(form));
         var menu = new Menu();
         DockPanel.SetDock(menu, Avalonia.Controls.Dock.Top);
         var shortcuts = new List<(KeyGesture Gesture, Action Invoke)>();
@@ -83,7 +89,7 @@ public class VBLoader
         var arrayGroups = new Dictionary<string, ControlArrayGroup>(StringComparer.OrdinalIgnoreCase);
         foreach (var (nm, list) in componentsByName)
             if (list.Count > 1 || list.Any(c => TryParseControlArrayIndex(c, out _)))
-                arrayGroups[nm] = new ControlArrayGroup(nm);
+                arrayGroups[nm] = new ControlArrayGroup(nm) { Program = program };
 
         // What each block of the form became, for its Controls collection (#1060).
         var placed = new Dictionary<ComponentInstance, Control>();
@@ -94,6 +100,8 @@ public class VBLoader
             if (control is VBCommonDialog dialog)
                 dialog.host = standardLibrary ?? throw new NotImplementedException("A CommonDialog needs a dialog host (#1084)");
             placed[component] = control;
+            if (control is IVBContainerControl { ChildHost: { } childHost })
+                AvaloniaInterop.ContainerMembers.Register(childHost, new Vb6Value(control));
             AvaloniaInterop.UserControlContainers.Register(control, component.Container is { } owner ? placed.GetValueOrDefault(owner) : null);
             if (AvaloniaInterop.UserControlMembers.IsUserControl(control))
             {
@@ -105,7 +113,10 @@ public class VBLoader
                 AvaloniaInterop.UserControlMembers.Configure(control);
             }
             if (control is VBUserControl userControl && program is not null)
-                userControl.Attach(program, component.BaseClass.ClassName);
+                userControl.Attach(program, component.BaseClass.ClassName,
+                    element.RootVBTypeName == "VB.Form" ? form : null,
+                    component.GetPropertyOrDefault(VBProperties.NameProperty) ?? "",
+                    RawDouble(FormComponentOf(element), "RightToLeft") is { } rtl && rtl != 0);
             if (component.GetPropertyOrDefault(VBProperties.NameProperty) is not { } name)
                 return;
 
@@ -165,6 +176,46 @@ public class VBLoader
                 dialogs[block] = upDown;
             }
 
+        // Runtime-only until the Animation file slice (#1096); the designer keeps its block verbatim.
+        foreach (var block in element.UnknownChildSubtreeTexts)
+            if (RuntimeControlBlock(block, "MSComCtl2.Animation") is { } animationBlock)
+            {
+                var animation = new VBAnimation();
+                animation.LoadProperties(animationBlock.Properties);
+                VBProps.SetName(animation, animationBlock.Name);
+                VBProps.SetRunTimeId(animation);
+                canvas.Children.Add(animation);
+                executionContext.AllocVariable(environment, animationBlock.Name, new Vb6Value(animation));
+                dialogs[block] = animation;
+            }
+
+        foreach (var block in element.UnknownChildSubtreeTexts)
+            if (RuntimeControlBlock(block, "MSComCtl2.FlatScrollBar") is { } savedFlat)
+            {
+                var bar = (VBFlatScrollBar)Components.InBox.FlatScrollBarComponentClass.Instance.Instantiate(
+                    new ComponentInstance(Components.InBox.FlatScrollBarComponentClass.Instance, savedFlat.Name));
+                foreach (var (property, value) in savedFlat.Properties)
+                {
+                    switch (property.ToLowerInvariant())
+                    {
+                        case "left": Canvas.SetLeft(bar, Convert.ToDouble(value.Value) / 15); break;
+                        case "top": Canvas.SetTop(bar, Convert.ToDouble(value.Value) / 15); break;
+                        case "width": bar.Width = Convert.ToDouble(value.Value) / 15; break;
+                        case "height": bar.Height = Convert.ToDouble(value.Value) / 15; break;
+                        case "tabindex": Avalonia.Input.KeyboardNavigation.SetTabIndex(bar, Convert.ToInt32(value.Value)); break;
+                        case "visible": bar.IsVisible = Convert.ToInt32(value.Value) != 0; break;
+                        case "tag": bar.Tag = value.Value; break;
+                        case "tooltiptext": ToolTip.SetTip(bar, value.Value); break;
+                    }
+                }
+                bar.LoadProperties(savedFlat.Properties);
+                VBProps.SetName(bar, savedFlat.Name);
+                VBProps.SetRunTimeId(bar);
+                canvas.Children.Add(bar);
+                executionContext.AllocVariable(environment, savedFlat.Name, new Vb6Value(bar));
+                dialogs[block] = bar;
+            }
+
         foreach (var block in element.UnknownChildSubtreeTexts)
             if (RuntimeControlBlock(block, "MSComCtl2.DTPicker") is { } pickerBlock)
             {
@@ -190,8 +241,8 @@ public class VBLoader
                 dialogs[block] = picker;
             }
 
-        // The Toolbar is runtime-only until its file slice; its designer block remains carried verbatim.
-        foreach (var (block, component) in toolbars)
+        // Toolbar and MonthView are runtime-only until their file slices; designer blocks remain carried verbatim.
+        foreach (var (block, component) in runtimeBlocks)
         {
             PlaceComponentTree(component, canvas, canvas, element, (part, control, host) =>
             {
@@ -208,6 +259,35 @@ public class VBLoader
             if (matches.Length != 1 || matches[0] is not VBImageList images)
                 throw ToolbarItems.Unmeasured();
             toolbar.TrySetProperty("ImageList", new Vb6Value((Control)images));
+        }
+
+        foreach (var block in element.UnknownChildSubtreeTexts)
+            if (ImageComboBlock(block) is { } comboBlock)
+            {
+                var combo = new VBImageCombo(windowContext?.Events ?? new EventPump(), () =>
+                {
+                    windowContext?.ExecuteSub($"{comboBlock.Name}_Change");
+                    return Task.CompletedTask;
+                });
+                combo.Load(comboBlock);
+                VBProps.SetRunTimeId(combo);
+                canvas.Children.Add(combo);
+                executionContext.AllocVariable(environment, comboBlock.Name, new Vb6Value((Control)combo));
+                dialogs[block] = combo;
+            }
+
+        foreach (var list in placed.Values.OfType<VBListView>())
+        {
+            foreach (var (member, name) in list.SavedImageLists)
+            {
+                var matches = placed.Values.Where(c => VBProps.GetName(c) == name).ToArray();
+                if (matches.Length != 1 || matches[0] is not VBImageList images)
+                    throw new NotImplementedException("ListView saved ImageList reference is unmeasured (#1085)");
+                list.TrySetProperty(member, new Vb6Value((Control)images));
+            }
+            foreach (var column in list.Columns.Entries)
+                if (column.Icon.Value is int index && index != 0)
+                    list.ValidateImage("ColumnHeaderIcons", column.Icon);
         }
 
         // A menu has a name in code as a control has (#1126): a variable of its own, or an element of its menu control
@@ -233,7 +313,20 @@ public class VBLoader
         foreach (var (name, group) in arrayGroups)
             executionContext.AllocVariable(environment, name, new Vb6Value(group));
 
-        var controls = new FormControls(InFileOrder(element, placed, dialogs).OrderBy(AvaloniaInterop.UserControlMembers.Windowless), arrayGroups);
+        var fileOrder = InFileOrder(element, placed, dialogs).ToList();
+        // Preserved Animation blocks share the file's stacking order with ordinary controls (#1096).
+        if (dialogs.Values.Any(control => control is VBAnimation))
+            foreach (var control in fileOrder.AsEnumerable().Reverse())
+                if (control.Parent is Panel parent)
+                    ControlStacking.PlaceOver(control, ControlStacking.IsWindowless(control), parent);
+        var controls = new FormControls(fileOrder.OrderBy(AvaloniaInterop.UserControlMembers.Windowless), arrayGroups) { Form = form };
+        // #4371 / oracle PR #4376: the last holder in file order wins, independently for each role.
+        var defaultButton = fileOrder.OfType<VBCommandButton>().LastOrDefault(button => button.Default);
+        var cancelButton = fileOrder.OfType<VBCommandButton>().LastOrDefault(button => button.Cancel);
+        if (defaultButton is not null)
+            defaultButton.Default = true;
+        if (cancelButton is not null)
+            cancelButton.Cancel = true;
         foreach (var (block, control) in dialogs)
             if (control is VBUpDown upDown && RuntimeControlBlock(block, "MSComCtl2.UpDown") is { } saved)
                 upDown.LoadBuddy(saved.Properties, controls);
@@ -241,7 +334,11 @@ public class VBLoader
         foreach (var group in arrayGroups.Values)
             group.FormControls = controls;
         if (form is not null)
+        {
             form.Controls = controls;
+            if (form.FormWindow is { } formWindow)
+                AvaloniaInterop.FormAmbients.Register(formWindow, controls);
+        }
 
         var root = new DockPanel()
         {
@@ -280,6 +377,11 @@ public class VBLoader
             foreach (var control in controls.All)
                 AvaloniaInterop.UserControlMembers.Align(control);
         };
+        if (form?.FormWindow is Window window)
+        {
+            AvaloniaInterop.RuntimeScale.Initialize(window, canvas, element);
+            AvaloniaInterop.RuntimeDrawing.Initialize(window, canvas, FormComponentOf(element));
+        }
         return root;
     }
 
@@ -665,24 +767,13 @@ public class VBLoader
         _ => (1200, 480),
     };
 
-    // An added ListBox's row, in pixels, by the font it takes (measured, fourteen fonts): its height is 60 twips and as many
-    // rows as fit in 480, at least one.
-    private static readonly (string Font, double Size, int Row)[] AddedListBoxRows =
-    [
-        ("MS Sans Serif", 8.25, 13), ("MS Sans Serif", 9.75, 16), ("MS Sans Serif", 12, 20), ("MS Sans Serif", 13.5, 24),
-        ("Microsoft Sans Serif", 8.25, 13), ("Tahoma", 8.25, 13), ("Tahoma", 9.75, 16), ("Verdana", 8.25, 13),
-        ("Arial", 8.25, 14), ("Arial", 9.75, 16), ("Arial", 12, 18), ("Times New Roman", 12, 19), ("Courier New", 9.75, 16),
-        ("Segoe UI", 9, 15),
-    ];
-
     private static double AddedListBoxHeight(VBFont? font)
     {
-        foreach (var (name, size, row) in AddedListBoxRows)
-            if (font is { } f && string.Equals(f.FontFamilyName, name, StringComparison.OrdinalIgnoreCase) && Math.Abs(f.Size - size) < 0.01)
-            {
-                double rowTwips = row * VBScaleModeExtensions.PixelToTwips;
-                return 60 + Math.Max(1, Math.Floor(420 / rowTwips)) * rowTwips;
-            }
+        if (ListBoxRowHeights.Find(font) is { } row)
+        {
+            double rowTwips = row * VBScaleModeExtensions.PixelToTwips;
+            return 60 + Math.Max(1, Math.Floor(420 / rowTwips)) * rowTwips;
+        }
         throw new NotImplementedException(
             $"Controls.Add of a ListBox in {font?.FontFamilyName} {font?.Size} is not implemented: its height follows its font, " +
             "and was measured for fourteen fonts, not this one (#1556)");
@@ -738,6 +829,11 @@ public class VBLoader
         // none, so its children stay in twips.
         if (componentClass.TryGetChildHost(control, out var ownHost) && DeclaredScaleMode(component) is { } scaleMode)
             VBProps.SetScaleMode(ownHost, scaleMode);
+        if (control is VBPictureBox picture)
+        {
+            AvaloniaInterop.RuntimeScale.Initialize(picture, component);
+            AvaloniaInterop.RuntimeDrawing.Initialize(picture, picture.ChildHost!, component);
+        }
         // Where a 3-D bordered TextBox's or ListBox's client area starts, which is where its mouse X and Y count from: 2
         // pixels in, and at the edge when it is flat or has no border (measured with GetClientRect, #974).
         if (componentClass is TextBoxComponentClass or ListBoxComponentClass)
@@ -808,11 +904,13 @@ public class VBLoader
     /// with Err.Number 0, and a form whose code never names it ran as if it had never held it. This is an engine limit,
     /// so no On Error in the program can trap it. A form the designer opens is not refused: it shows what it holds.
     /// </summary>
-    private static void RefuseUnsupportedControls(FormDefinition element, ICollection<string> runtimeToolbars)
+    private static void RefuseUnsupportedControls(FormDefinition element, ICollection<string> runtimeBlocks)
     {
         var lines = new List<string>();
         foreach (var block in element.UnknownChildSubtreeTexts)
-            if (!runtimeToolbars.Contains(block) && RuntimeControlBlock(block, "MSComCtl2.UpDown") is null
+            if (!runtimeBlocks.Contains(block) && RuntimeControlBlock(block, "MSComCtl2.UpDown") is null
+                && RuntimeControlBlock(block, "MSComCtl2.FlatScrollBar") is null
+                && RuntimeControlBlock(block, "MSComCtl2.Animation") is null
                 && RuntimeControlBlock(block, "MSComCtl2.DTPicker") is null)
                 DescribeUncreatable(block, lines);
         foreach (var component in element.Components)
@@ -826,6 +924,17 @@ public class VBLoader
                 }
         if (lines.Count > 0)
             throw new NotImplementedException(string.Join("\n", lines.Distinct()));
+    }
+
+    private static VBSerializedComponent? ImageComboBlock(string block)
+    {
+        var first = block.TrimStart().Split('\n', 2)[0].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (first.Length < 3 || !first[1].Equals("MSComctlLib.ImageCombo", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var (component, _) = new VbFrmFormatDeserializer().Deserialize(block);
+        if (component.SubComponents.Count != 0 || component.Properties.Keys.Any(k => k.Equals("Index", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        return component;
     }
 
     /// <summary>
@@ -956,7 +1065,7 @@ public class VBLoader
     }
 
     public static Task RunForm(FormDefinition element, CancellationToken token, out VBFormRuntime window,
-        Debugging.IDebugController? debugController = null)
+        Debugging.IDebugGate? debugController = null)
     {
         var form = FormComponentOf(element);
         var shown = window = ((FormComponentClass)form.BaseClass).InstantiateWindow(form, HasMenuBar(element));
@@ -980,7 +1089,7 @@ public class VBLoader
     /// </summary>
     /// <param name="startupWindow">The startup form's window, or null for a program that starts at Sub Main.</param>
     public static Task RunMadeProgram(ProjectDefinition project, CancellationToken token, out VBFormRuntime? startupWindow,
-        Debugging.IDebugController? debugController = null)
+        Debugging.IDebugGate? debugController = null)
     {
         if (!project.StartsAtSubMain)
         {
@@ -994,7 +1103,7 @@ public class VBLoader
         // closed when the run ends so a box still open goes with it, as one over a form does.
         startupWindow = null;
         var owner = new Window();
-        var program = new VBProgram(project, new VBWindowContext(new StandaloneStandardLib(owner)), debugController, OpenWindow);
+        var program = new VBProgram(project, new VBWindowContext(new StandaloneStandardLib(owner, HexIDE.IDE.Distribution.DisplayName)), debugController, OpenWindow);
         program.Interpreter.FindStartupSubMain();
         return RunThenClose(RunSubMain(program, token), owner);
 
@@ -1058,11 +1167,11 @@ public class VBLoader
     /// a use of another form is then refused, naming #822.
     /// </param>
     public static VBProgram PrepareForm(FormDefinition element, VBWindowContext context, Action<Control> setContent,
-        Debugging.IDebugController? debugController, Func<FormDefinition, IFormView>? openForm = null)
+        Debugging.IDebugGate? debugController, Func<FormDefinition, IFormView>? openForm = null)
     {
         var program = new VBProgram(element, context, debugController, openForm);
         setContent(SpawnComponents(element, context.ExecutionContext, context.InstanceEnv, context.StandardLibrary,
-            context.FormInstance, program));
+            context.FormInstance, program, context));
         context.HoldControlsUntilLoad();
         return program;
     }

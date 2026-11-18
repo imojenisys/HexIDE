@@ -10,7 +10,6 @@ using Avalonia.Media;
 using Avalonia.Media.Fonts;
 using Avalonia.Controls;
 using HexIDE.Infrastructure;
-using HexIDE.Runtime.Interpreter;
 using HexIDE.Keymaps;
 using HexIDE.Themes;
 using HexIDE.VisualDesigner;
@@ -31,14 +30,37 @@ public partial class App : Application
         // A running program formats and reads text in the user's regional settings, as VB6 does (#777). Taken on
         // the line before the pin below, because from that line on the main thread's culture reads as invariant.
         // The pin stays: it keeps the IDE's language out of what a program computes, and source literals rely on it.
-        VbLocale.Default = CultureInfo.CurrentCulture;
+        IDE.UserRegion.Culture = CultureInfo.CurrentCulture;
         Localization.LocalizationService.OsUICulture = CultureInfo.CurrentUICulture;
         CultureInfo.DefaultThreadCurrentCulture = CultureInfo.InvariantCulture;
         CultureInfo.DefaultThreadCurrentUICulture = CultureInfo.InvariantCulture;
         LoadMarkup();
+        Name = IDE.Distribution.DisplayName;
+        ConfigureNativeMenu(OperatingSystem.IsMacOS());
     }
 
-    internal void LoadMarkup() => AvaloniaXamlLoader.Load(this);
+    internal void ConfigureNativeMenu(bool isMacOS)
+    {
+        if (!isMacOS)
+            return;
+
+        // This must precede Avalonia's after-setup callback, which otherwise supplies About Avalonia (#4511).
+        var about = new NativeMenuItem();
+        about.Bind(NativeMenuItem.HeaderProperty, this.GetResourceObservable("Str.Menu.MacApp.About"));
+        about.Click += (_, _) =>
+        {
+            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime
+                { MainWindow.DataContext: MainViewViewModel viewModel })
+                viewModel.About();
+        };
+        NativeMenu.SetMenu(this, new NativeMenu { Items = { about } });
+    }
+
+    internal void LoadMarkup()
+    {
+        Automation.WaylandToolTips.Initialize();
+        AvaloniaXamlLoader.Load(this);
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -47,6 +69,7 @@ public partial class App : Application
         LoggingSetup.ObserveCrashes();
 #if DEBUG
         DebugCrashHook.ArmFromEnvironment();
+        HexIDE.Automation.UiAutomationDriver.TrackWindows();
 #endif
 
         var envLevel = Environment.GetEnvironmentVariable("HEXIDE_LOG_LEVEL") ?? "Information";
@@ -54,13 +77,33 @@ public partial class App : Application
             envLevel, Environment.Version, Environment.OSVersion);
 
         _diSetup = new DISetup();
-        _diSetup.ThemeService.Apply(_diSetup.SettingsService.ActiveTheme);
-        _diSetup.KeymapService.Apply(_diSetup.SettingsService.ActiveKeymap);
+        RunningProgram.Current = _diSetup.RunningProgram;
+        if (Static.Profile is { } profile)
+        {
+            ((HexIDE.Themes.ThemeService)_diSetup.ThemeService).Apply(profile, (SettingsService)_diSetup.SettingsService);
+            ((HexIDE.Keymaps.KeymapService)_diSetup.KeymapService).Apply(profile, (SettingsService)_diSetup.SettingsService);
+        }
+        else
+        {
+            _diSetup.ThemeService.Apply(_diSetup.SettingsService.ActiveTheme);
+            _diSetup.KeymapService.Apply(_diSetup.SettingsService.ActiveKeymap);
+        }
+
+        if (PlatformSettings is { } platform)
+        {
+            var themes = (HexIDE.Themes.ThemeService)_diSetup.ThemeService;
+            var settings = (SettingsService)_diSetup.SettingsService;
+            themes.FollowPlatform(platform, settings, () =>
+            {
+                if (Static.Profile is { } currentProfile) themes.Apply(currentProfile, settings);
+                else themes.Apply(settings.ActiveTheme);
+            });
+        }
 
         // Register the VB6 highlighting definition and subscribe it to theme changes before any editor
         // is built, so the first paint is already correct rather than light-until-you-switch. Must
         // follow ThemeService.Apply above, which is what sets the variant this reads.
-        SyntaxHighlightingTheme.EnsureRegistered();
+        SyntaxHighlightingTheme.Configure(_diSetup.SettingsService, _diSetup.ThemeService);
         // Localization: apply the saved language pack. The default "system" follows the OS UI culture
         // each launch; a specific id pins that language. A pack-selector string only — does NOT touch
         // thread culture (the invariant lock set in Initialize() stands). Applied before the views are
@@ -86,7 +129,14 @@ public partial class App : Application
             // startup project opens. Desktop-only — file watching makes no sense headless/WASM.
             _ = _diSetup.FileWatcherService;
 
+            // Unsaved work is backed up from here on, so an exit nobody chose doesn't lose it (#499). Desktop only, as
+            // the file watcher is.
+            _diSetup.Recovery.Start();
+
             var windowStateService = _diSetup.WindowStateService;
+            // Subscribed below, after App's own handler; made here so the Windows session-end hook can use it too.
+            var exitStop = new ExitStop(desktop, _diSetup.FileWatcherService.Dispose,
+                _diSetup.LspClient.StopAsync, LoggingSetup.Shutdown, ExitStop.StopTimeout);
 
             if (Static.ForceSingleView)
             {
@@ -100,6 +150,7 @@ public partial class App : Application
                 {
                     Content = Static.MainView
                 };
+                HexIDE.IDE.BrandAssets.ApplyWindowIcon(desktop.MainWindow);
 
                 rootViewModel.ObservePropertyChanged(x => x.WindowTitle)
                     .Subscribe(title => desktop.MainWindow.Title = title);
@@ -116,9 +167,6 @@ public partial class App : Application
                 Static.SingleView = false;
                 Static.MainView = mainWindow.MainView;
 
-                var windowReady   = false;
-                var windowClosing = false;
-
                 // Restore must happen after Opened — setting WindowState before Show() has no effect
                 // in Avalonia 12 on Windows. Deferred to Background priority so the dock framework's
                 // first layout pass completes before we apply the saved state.
@@ -127,22 +175,19 @@ public partial class App : Application
                     await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(
                         () => windowStateService.RestoreWindowState(mainWindow),
                         Avalonia.Threading.DispatcherPriority.Background);
-                    windowReady = true;
-                };
-
-                // Crash-safe saves during normal use.
-                mainWindow.PropertyChanged += (_, e) =>
-                {
-                    if (windowReady && !windowClosing && e.Property == Window.WindowStateProperty)
-                        windowStateService.SaveWindowState(mainWindow);
-                };
-                mainWindow.Deactivated += (_, _) =>
-                {
-                    if (windowReady && !windowClosing && mainWindow.WindowState == Avalonia.Controls.WindowState.Normal)
-                        windowStateService.SaveWindowState(mainWindow);
+                    windowStateService.TrackWindowState(mainWindow);
                 };
 
                 var closeConfirmed = false;
+
+                // OS/TryShutdown requests arrive before Closing. Confirm unsaved work first; a
+                // cancelled save prompt must leave the language servers and file watcher running.
+                desktop.ShutdownRequested += (_, e) =>
+                {
+                    if (closeConfirmed) return;
+                    e.Cancel = true;
+                    mainWindow.Close();
+                };
 
                 // Offer to save unsaved work, then save window state. The prompt is async and Closing is
                 // not, so the first close is vetoed, the dialog awaited, and the window re-closed once
@@ -158,13 +203,15 @@ public partial class App : Application
 
                     // Window state is captured here rather than later because Closing fires before the OS
                     // restores the window from Maximized.
-                    windowClosing = true;
                     windowStateService.SaveWindowState(mainWindow);
                     rootViewModel.SaveLayout();
                     // Personal state still waiting in a debounce. A close that unloaded every project has
                     // written it already; a forced one did not unload them, and the debounce would not
                     // outlive the process.
                     _diSetup.UserSidecarService.FlushAll();
+                    // Somebody decided about the unsaved work on the way here: the save prompt was answered, there was
+                    // none, or automation asked to discard it. So the backup goes, unless a terminate signal kept it.
+                    _diSetup.Recovery.EndRun();
                 };
 
                 async void ConfirmThenClose()
@@ -190,14 +237,61 @@ public partial class App : Application
                     closeConfirmed = true;
                     mainWindow.Close();
                 }
+
+                // Windows' end of session: answer the query at once, and stop the servers only when the session
+                // really ends. Through ShutdownRequested, ExitStop's cancel vetoed every sign-out (#4646). Only on
+                // Avalonia's Win32 platform: the headless one the tests run on has no window to answer on.
+                if (OperatingSystem.IsWindows() && mainWindow.TryGetPlatformHandle() is { HandleDescriptor: "HWND" })
+                {
+                    var sessionEnd = new SessionEnd(
+                        _diSetup.ProjectService.FirstUnsavedProjectName,
+                        project => string.Format(_diSetup.LocalizationService.GetString("Str.SessionEnd.UnsavedWork"),
+                            project),
+                        // The save prompt File > Exit shows. Yes or No closes the IDE; Cancel keeps it open.
+                        () => mainWindow.Close(),
+                        StopForSessionEnd,
+                        SessionEnd.WaitInNestedFrame,
+                        CloseForSessionEnd,
+                        SessionEnd.EndBound,
+                        () => _diSetup.LspClient is HexIDE.Lsp.ILanguageConnectionRegistry registry
+                            ? registry.Connections.Where(c => c.State == HexIDE.Lsp.LanguageConnectionState.Running)
+                                .Select(c => c.Id).ToList()
+                            : [],
+                        id => _diSetup.LspClient is HexIDE.Lsp.ILanguageConnectionRegistry registry
+                            ? registry.RestartAsync(id)
+                            : Task.CompletedTask);
+                    Win32SessionEndHook.Install(sessionEnd, () => mainWindow.TryGetPlatformHandle()?.Handle ?? 0,
+                        desktop);
+                    sessionEnd.Observe();
+                    var observe = new Avalonia.Threading.DispatcherTimer { Interval = SessionEnd.ObserveEvery };
+                    observe.Tick += (_, _) => sessionEnd.Observe();
+                    observe.Start();
+                }
+
+                async Task StopForSessionEnd()
+                {
+                    _diSetup.FileWatcherService.Dispose();
+                    await Task.WhenAll(_diSetup.LspClient.StopAsync(), _diSetup.ExternalDebugger.StopAsync());
+                }
+
+                void CloseForSessionEnd()
+                {
+                    // Unsaved work left now was not answered for: the person chose Windows' "Sign out anyway" over the
+                    // save prompt, or the end was forced. Its backup is kept for the next start (#499), as on a
+                    // terminate signal.
+                    if (_diSetup.ProjectService.FirstUnsavedProjectName() is not null)
+                        _diSetup.Recovery.KeepForRecovery();
+                    // The exit File > Exit takes, without its prompt or a second stop: App's handler and ExitStop let
+                    // the request through, the add-ins are disposed, Closing saves the window state, and the
+                    // dispatcher ends once this message returns.
+                    closeConfirmed = true;
+                    exitStop.MarkStopped();
+                    desktop.TryShutdown();
+                    LoggingSetup.Shutdown();
+                }
             }
 
-            desktop.ShutdownRequested += async (_, _) =>
-            {
-                _diSetup.FileWatcherService.Dispose();
-                await _diSetup.LspClient.StopAsync();
-                LoggingSetup.Shutdown();
-            };
+            desktop.ShutdownRequested += exitStop.OnShutdownRequested;
 
             // The language pack was applied before the shell existed, so push its reading direction
             // onto the freshly-created window now (RTL packs mirror the chrome; the form-designer

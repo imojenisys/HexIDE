@@ -4,6 +4,12 @@ using HexIDE.Addins;
 
 namespace HexIDE.AIChat;
 
+/// <summary>The service’s unchanged JSON reply and optional localization metadata for the transcript.</summary>
+public sealed record IdeToolReply(string Json, string? ReasonKey = null, object[]? ReasonArguments = null)
+{
+    public static implicit operator IdeToolReply(string json) => new(json);
+}
+
 /// <summary>Executes IDE tool calls requested by the AI and returns a JSON result string.</summary>
 public sealed class IdeToolExecutor(IHexIdeHost host)
 {
@@ -95,7 +101,9 @@ public sealed class IdeToolExecutor(IHexIdeHost host)
         Encoder = HexIDE.Serialization.ReadableJsonEncoder.Instance,
     };
 
-    public async Task<string> ExecuteAsync(ToolCall call)
+    public async Task<string> ExecuteAsync(ToolCall call) => (await ExecuteReplyAsync(call)).Json;
+
+    public async Task<IdeToolReply> ExecuteReplyAsync(ToolCall call)
     {
         try
         {
@@ -129,33 +137,15 @@ public sealed class IdeToolExecutor(IHexIdeHost host)
         return Reply(new { doc.FileName, doc.Project, doc.Content });
     }
 
-    /// <remarks>
-    /// The add-in surface has no member that reads a document by name, so this opens the file, waits until the
-    /// IDE has brought it to the front, and reads the active document. It checks that the active document is the
-    /// one asked for before answering. Without that check it answered with whatever window was in front, which
-    /// for a file already open in a background tab was a different file under the name the model asked for
-    /// (hexide-io/HexIDE#273 task 3.19 review). Reading this way also moves the caret to the file's first line.
-    /// A member that reads by name would do neither; that is hexide-io/HexIDE#887.
-    /// </remarks>
     private async Task<string> GetFileContentAsync(JsonObject? args)
     {
         var (file, refusal) = FindFile(args);
         if (file is null) return refusal!;
 
-        var opened = await host.Editor.TryNavigateTo(file.FileName, 1, 1, file.Project);
-        if (!opened.Succeeded)
-            return Reply(new { error = $"Could not open {file.FileName}: {opened.Reason}" });
+        var result = await host.Editor.TryGetDocument(file.FileName, file.Project);
+        if (result.Document is not { } doc)
+            return Reply(new { error = $"Could not read {file.FileName}: {result.Reason}" });
 
-        var doc = host.Editor.GetActiveDocument();
-        if (doc is null
-            || !doc.FileName.Equals(file.FileName, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(doc.Project, file.Project, StringComparison.OrdinalIgnoreCase))
-            return Reply(new
-            {
-                error = $"Could not read {file.FileName}: the IDE opened it, but the active code window holds "
-                        + (doc is null ? "no file" : $"{doc.FileName}{(doc.Project is { } p ? $" in project {p}" : "")}")
-                        + ", so its content would not be the file asked for."
-            });
         return Reply(new { doc.FileName, doc.Project, doc.Content });
     }
 
@@ -200,17 +190,17 @@ public sealed class IdeToolExecutor(IHexIdeHost host)
     /// Content that is missing or blank is refused here: the IDE would take it as code alone, keep the header, and
     /// empty the file's code, and a truncated call is likelier than a model that means that.
     /// </remarks>
-    private async Task<string> ApplyEditAsync(JsonObject? args)
+    private async Task<IdeToolReply> ApplyEditAsync(JsonObject? args)
     {
         var fileName = Text(args, "file_name") ?? "";
         var content  = Text(args, "content");
         if (string.IsNullOrWhiteSpace(content))
-            return Reply(new
+            return new IdeToolReply(Reply(new
             {
                 success = false,
                 error = "No content was sent, so nothing was changed. Send the whole file with its header unchanged, "
                         + "or the code alone.",
-            });
+            }), "Str.AIChat.EditContentMissing");
 
         var result = await host.Editor.TrySetContent(fileName, content, Text(args, "project"));
         return result.Succeeded
@@ -228,15 +218,17 @@ public sealed class IdeToolExecutor(IHexIdeHost host)
             : Reply(new { success = false, error = result.Reason });
     }
 
-    private string RunProject() =>
+    private IdeToolReply RunProject() =>
         host.RunProject()
             ? Reply(new { success = true })
-            : Reply(new { success = false, error = "Cannot start project (none loaded or already running)" });
+            : new IdeToolReply(Reply(new { success = false, error = "Cannot start project (none loaded or already running)" }),
+                "Str.AIChat.ProjectCannotStart");
 
-    private string StopProject() =>
+    private IdeToolReply StopProject() =>
         host.StopProject()
             ? Reply(new { success = true })
-            : Reply(new { success = false, error = "No project is currently running" });
+            : new IdeToolReply(Reply(new { success = false, error = "No project is currently running" }),
+                "Str.AIChat.ProjectNotRunning");
 
     // ── helpers ──────────────────────────────────────────────────────────────
 

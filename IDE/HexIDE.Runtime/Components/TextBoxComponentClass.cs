@@ -10,6 +10,7 @@ public class TextBoxComponentClass : ComponentBaseClass
     public TextBoxComponentClass() : base([TextProperty, EnabledProperty,
         BackColorProperty, ForeColorProperty, FontProperty,
         TabStopProperty,
+        MousePointerProperty,
         TabIndexProperty,
         ToolTipTextProperty], [KeyDownEvent, KeyPressEvent, KeyUpEvent, ChangeEvent, ClickEvent, DblClickEvent, GotFocusEvent, LostFocusEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent])
     {
@@ -21,6 +22,8 @@ public class TextBoxComponentClass : ComponentBaseClass
         BackColorProperty.OverrideDefault<TextBoxComponentClass>(VBColor.FromSystemColor(VbSystemColor.Window));
         ForeColorProperty.OverrideDefault<TextBoxComponentClass>(VBColor.FromSystemColor(VbSystemColor.Windowtext));
     }
+
+    public override string? DesignerDoubleClickEvent => "Change";
 
     public override string Name => "Text";
     public override string VBTypeName => "VB.TextBox";

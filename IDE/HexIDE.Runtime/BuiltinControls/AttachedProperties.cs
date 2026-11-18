@@ -27,7 +27,15 @@ public class AttachedProperties
 
     public static readonly AttachedProperty<VBFont?> FontProperty = AvaloniaProperty.RegisterAttached<VBProps, TemplatedControl, VBFont?>("Font", null);
     public static VBFont? GetFont(AvaloniaObject element) => element.GetValue(FontProperty);
-    public static void SetFont(AvaloniaObject element, VBFont? value) => element.SetValue(FontProperty, value);
+    public static void SetFont(AvaloniaObject element, VBFont? value)
+    {
+        if (element is Control control && value is { } font
+            && AvaloniaInterop.ControlFont.DescriptorChanged(control, font))
+            return;
+        element.SetValue(FontProperty, value);
+        if (element is Control owner)
+            AvaloniaInterop.FormAmbients.Changed(owner, "Font");
+    }
 
     static AttachedProperties()
     {
@@ -49,7 +57,6 @@ public class AttachedProperties
         {
             if (e.NewValue is VBFont font)
             {
-                AvaloniaInterop.ControlFont.DescriptorChanged(control, font);
                 control.FontFamily = font.ToFontFamily();
                 control.FontWeight = font.ToFontWeight();
                 control.FontSize = font.ToFontSize();
@@ -57,7 +64,7 @@ public class AttachedProperties
                 // Only on the controls that draw a caption in their own font. It is inherited, so set on a form it would
                 // reach the form's menus, which VB6 draws in the menu font whatever the form's is.
                 if (control is VBLabel or VBCommandButton or VBCheckBox or VBOptionButton)
-                    SymbolFontText.SetSymbolGlyphs(control, SymbolFontText.UsesSymbolGlyphs(font));
+                    SymbolFontText.Apply(control, font);
             }
         });
     }

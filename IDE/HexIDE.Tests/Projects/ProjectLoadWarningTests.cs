@@ -20,7 +20,7 @@ public class ProjectLoadWarningTests : IDisposable
         Directory.CreateDirectory(dir);
         localization.GetString(Arg.Any<string>()).Returns(ci => ci.Arg<string>() switch
         {
-            "Str.ProjectLoad.FormNotFound" => "Formular fehlt: {0}",
+            "Str.ProjectLoad.MemberNotFound" => "Projektdatei fehlt: {0}",
             "Str.ProjectLoad.Heading" => "Warnungen:",
             "Str.ProjectLoad.MoreWarnings" => "Weitere: {0}",
             "Str.ProjectLoad.UnknownControl" => "Klasse {0}, Steuerelement {1}",
@@ -42,7 +42,7 @@ public class ProjectLoadWarningTests : IDisposable
         var service = new ProjectService(() => throw new InvalidOperationException(), windows,
             Substitute.For<IEventBus>(), manager, Substitute.For<IRecentProjectsService>(),
             Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(),
-            new FileBaselineStore(), localization, Substitute.For<IHeaderRefresher>());
+            new FileBaselineStore(), localization, Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
         await service.OpenProject(path);
     }
 
@@ -78,7 +78,7 @@ public class ProjectLoadWarningTests : IDisposable
     [Theory]
     [InlineData("UserControl=Control1.ctl", "Control1.ctl", "ModuleFailed", true)]
     [InlineData("Module=Module1; Module1.bas", "Module1.bas", "ModuleFailed", true)]
-    [InlineData("Form=Missing.frm", "Missing.frm", "FormNotFound", false)]
+    [InlineData("Form=Missing.frm", "Missing.frm", "MemberNotFound", false)]
     [InlineData("Form=Broken.frm", "Broken.frm", "FormFailed", false)]
     [InlineData("Form=Broken.frm", "Broken.frm", "FormFailedWithReason", true)]
     public async Task Loader_supplies_a_key_fallback_and_separate_arguments(
@@ -87,7 +87,7 @@ public class ProjectLoadWarningTests : IDisposable
         var token = TestContext.Current.CancellationToken;
         var path = Path.Join(dir, "P.vbp");
         await File.WriteAllTextAsync(path, "Type=Exe\r\nName=\"P\"\r\n" + item + "\r\n", token);
-        if (suffix != "FormNotFound")
+        if (suffix != "MemberNotFound")
             await File.WriteAllTextAsync(Path.Join(dir, member), "Begin VB.Label Label1\r\nEnd", token);
         var sink = new Sink();
         var loader = new ProjectLoader
@@ -105,7 +105,7 @@ public class ProjectLoadWarningTests : IDisposable
         var expected = suffix switch
         {
             "ModuleFailed" => $"Failed to load module {member}: read probe",
-            "FormNotFound" => $"Form file not found: {member}",
+            "MemberNotFound" => $"Project file not found: {member}",
             "FormFailed" => $"Failed to load form {member}",
             _ => $"Failed to load form {member}: read probe"
         };
@@ -117,7 +117,30 @@ public class ProjectLoadWarningTests : IDisposable
     {
         await Open("VERSION 5.00\r\nBegin VB.Form Form1\r\nEnd\r\n", "Form=Missing.frm\r\n");
         Messages.Should().ContainSingle().Which.ReplaceLineEndings("\n")
-            .Should().Be("Warnungen:\nFormular fehlt: Missing.frm");
+            .Should().Be("Warnungen:\nProjektdatei fehlt: Missing.frm");
+    }
+
+    [Theory]
+    [InlineData("Form=sub\\Missing.frm", @"sub\Missing.frm")]
+    [InlineData("Module=Named; sub\\Missing.bas", @"sub\Missing.bas")]
+    [InlineData("Class=Named; sub\\Missing.cls", @"sub\Missing.cls")]
+    [InlineData("UserControl=sub\\Missing.ctl", @"sub\Missing.ctl")]
+    [InlineData("PropertyPage=sub\\Missing.pag", @"sub\Missing.pag")]
+    public async Task Missing_members_share_a_warning_with_only_the_project_file_path(string item, string member)
+    {
+        var path = Path.Join(dir, "P.vbp");
+        await File.WriteAllTextAsync(path, "Type=Exe\r\nName=\"P\"\r\n" + item + "\r\n",
+            TestContext.Current.CancellationToken);
+        var sink = new Sink();
+
+        var result = await new ProjectLoader().LoadAsync(path, sink);
+
+        sink.Key.Should().Be("Str.ProjectLoad.MemberNotFound");
+        sink.Arguments.Should().Equal(member);
+        string.Format(sink.Fallback!, sink.Arguments).Should().Be($"Project file not found: {member}");
+        result.Project.PreservedItemLines.Should().Contain(item);
+        result.Project.Modules.Should().BeEmpty();
+        result.Project.Forms.Should().BeEmpty();
     }
 
     private sealed class Sink : IDeserializeErrorSink
@@ -164,6 +187,10 @@ public class ProjectLoadWarningTests : IDisposable
     [InlineData("Begin VB.Form Form1\r\nBegin MSComctlLib.Toolbar Bars\r\nIndex = 0\r\nEnd\r\nEnd", "Bars")]
     [InlineData("Begin VB.Form Form1\r\nBegin MSComctlLib.Toolbar Bar\r\nBegin VB.CommandButton Command1\r\nEnd\r\nEnd\r\nEnd", "Bar")]
     [InlineData("Begin VB.Form Form1\r\nBegin MSComCtl2.UpDown Spins\r\nIndex = 0\r\nEnd\r\nEnd", "Spins", "MSComCtl2.UpDown")]
+    [InlineData("Begin VB.Form Form1\r\nBegin MSComCtl2.Animation Animation1\r\nEnd\r\nEnd", null)]
+    [InlineData("Begin VB.Form Form1\r\nBegin mscomctl2.animation Animation1\r\nEnd\r\nEnd", null)]
+    [InlineData("Begin VB.Form Form1\r\nBegin MSComCtl2.Animation Clips\r\nIndex = 0\r\nEnd\r\nEnd", "Clips", "MSComCtl2.Animation")]
+    [InlineData("Begin VB.Form Form1\r\nBegin MSComCtl2.Animation Clip\r\nBegin VB.CommandButton Command1\r\nEnd\r\nEnd\r\nEnd", "Clip", "MSComCtl2.Animation")]
     public void A_carried_control_warns_only_when_HexIDE_does_not_run_it(string source, string? warned,
         string warnedType = "MSComctlLib.Toolbar")
     {
@@ -177,6 +204,19 @@ public class ProjectLoadWarningTests : IDisposable
             sink.Key.Should().Be("Str.ProjectLoad.UnknownControl");
             sink.Arguments.Should().Equal(warnedType, warned);
         }
+    }
+
+    [Fact]
+    public async Task VB6s_saved_FlatScrollBars_load_without_a_warning()
+    {
+        var path = Path.Combine(RepoTree.Root(), "corpus", "inbox-controls", "saved", "flatscrollbar", "Form1.frm");
+        var sink = new Sink();
+        var form = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "P"),
+            await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), sink, new Dictionary<int, byte[]>());
+        form.Should().NotBeNull();
+        form!.UnknownChildSubtreeTexts.Should().BeEmpty();
+        form.Components.Count(c => c.BaseClass is HexIDE.Runtime.Components.InBox.FlatScrollBarComponentClass).Should().Be(7);
+        sink.Keys.Should().BeEmpty();
     }
 
     // #1093: VB6's own save of four UpDowns, one bound to a TextBox and one double-clicked from the toolbox, loads without

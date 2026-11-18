@@ -14,6 +14,13 @@ build_arguments() {
     eval "$runner"
 }
 fail=0
+for setting in UseSharedCompilation=false MSBUILDDISABLENODEREUSE=1; do
+    if ! grep -qx "export $setting" scripts/test-linux.sh; then
+        echo "FAIL: runner must export $setting"; fail=$((fail + 1))
+    else
+        echo "ok: runner exports $setting"
+    fi
+done
 check() {
     local expected=$1
     shift
@@ -21,6 +28,7 @@ check() {
     if ! build_arguments "$@"; then
         echo "FAIL: $* (argument building failed)"; fail=$((fail + 1)); return
     fi
+    expected="<--project><${1##*/}.csproj>$expected"
     local actual
     actual=$(printf '<%s>' "${test_args[@]}")
     if [ "$actual" != "$expected" ]; then
@@ -29,13 +37,23 @@ check() {
         echo "ok: $*"
     fi
 }
-for pair in 'IDE/HexIDE.Runtime.Tests RUNTIME' 'IDE/HexIDE.Tests IDE' \
-            'IDE/HexIDE.Integration.Tests INTEGRATION' 'LspServer/HexIDE.VbLspServer.Tests LSP_SERVER' \
-            'IDE/HexIDE.TwinBasic.Tests TWINBASIC'; do
+pairs=('IDE/HexIDE.Runtime.Tests RUNTIME' 'IDE/HexIDE.Tests IDE'
+       'IDE/HexIDE.Integration.Tests INTEGRATION' 'IDE/HexIDE.Runtime.Integration.Tests RUNTIME_INTEGRATION'
+       'LspServer/HexIDE.VbLspServer.Tests LSP_SERVER' 'IDE/HexIDE.TwinBasic.Tests TWINBASIC')
+for pair in "${pairs[@]}"; do
     read -r project key <<< "$pair"
     floor=$(sed -n "s/^  MIN_TESTS_${key}: *\([0-9]*\).*/\1/p" .github/workflows/build.yml)
     check "<--><--minimum-expected-tests><$floor>" "$project"
 done
+# A suite given a floor in build.yml but not listed above would go unchecked here, and the runner could refuse it
+# while CI runs it (#3663).
+floors=$(sed -n 's/^  MIN_TESTS_\([A-Z_]*\):.*/\1/p' .github/workflows/build.yml | sort | paste -sd ' ' -)
+listed=$(for pair in "${pairs[@]}"; do echo "${pair#* }"; done | sort | paste -sd ' ' -)
+if [ "$floors" != "$listed" ]; then
+    echo "FAIL: build.yml has floors for $floors but this test checks $listed"; fail=$((fail + 1))
+else
+    echo 'ok: every floor in build.yml is checked'
+fi
 check '<--no-build><--><--minimum-expected-tests><1><--filter-class><*ExampleTests>' \
     IDE/HexIDE.Tests --no-build -- --filter-class '*ExampleTests'
 check '<--><--minimum-expected-tests><1><--filter-not-method><*Example>' \
@@ -43,6 +61,9 @@ check '<--><--minimum-expected-tests><1><--filter-not-method><*Example>' \
 check '<--><--minimum-expected-tests><1><--filter-query></*/*/Example/*>' \
     IDE/HexIDE.Tests -- --filter-query '/*/*/Example/*'
 check '<--><--minimum-expected-tests><7>' IDE/HexIDE.Tests -- --minimum-expected-tests 7
+check '<--><--minimum-expected-tests=7>' IDE/HexIDE.Tests -- --minimum-expected-tests=7
+check '<--><--minimum-expected-tests><1><--filter-method><*Example>' \
+    IDE/HexIDE.Tests -- --filter-method '*Example'
 if build_arguments IDE/Unknown.Tests >/dev/null 2>&1; then
     echo 'FAIL: an unknown project must not run without a floor'; fail=$((fail + 1))
 else

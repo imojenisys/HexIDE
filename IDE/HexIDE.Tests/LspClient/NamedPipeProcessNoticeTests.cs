@@ -71,6 +71,118 @@ public class NamedPipeProcessNoticeTests
             // The connect outcome is not what is under test; what the record holds about the process is.
             connectTimeout: TimeSpan.FromSeconds(3));
 
+    private static NamedPipeLaunch WritesManyLinesThenExits() =>
+        OperatingSystem.IsWindows()
+            ? new NamedPipeLaunch("cmd.exe", "/c \"for /L %i in (1,1,1000) do @echo line-%i 1>&2\"")
+            : new NamedPipeLaunch("/bin/sh", "-c \"i=0; while [ $i -lt 1000 ]; do echo line-$i >&2; i=$((i+1)); done\"");
+
+    [Fact]
+    public async Task ClosedCanDisposeWhileStandardErrorIsBeingRead()
+    {
+        await using var transport = new NamedPipeLspTransport(PipeName(), NamedPipeRole.Connect,
+            Substitute.For<ILogger<NamedPipeLspTransport>>(), WritesManyLinesThenExits(),
+            connectTimeout: TimeSpan.FromMinutes(2));
+        var disposed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<TransportNotice>();
+        transport.Notice += (_, notice) => seen.Enqueue(notice);
+        transport.Closed += (_, _) =>
+        {
+            // A bounded wait reproduces the lock cycle without leaving the test host hung.
+            var teardown = Task.Run(async () => await transport.DisposeAsync());
+            disposed.TrySetResult(teardown.Wait(TimeSpan.FromSeconds(5)));
+        };
+        using var connectingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var connecting = transport.ConnectAsync(new SystemTextJsonFormatter(), connectingCts.Token);
+        try
+        {
+            await ProcessNoticeWait.ForAsync(disposed.Task, "the Closed handler to finish disposal",
+                TestContext.Current.CancellationToken,
+                received: () => string.Join("; ", seen.Select(n => $"{n.Kind} '{n.Text}'")));
+            (await disposed.Task).Should().BeTrue("Closed must not hold the gate needed by teardown and the readers");
+        }
+        finally
+        {
+            await connectingCts.CancelAsync();
+            await connecting;
+        }
+    }
+
+    [Fact]
+    public async Task NoticesAreNotRetainedAfterTheFirstSubscriber()
+    {
+        await using var transport = Transport(WritesManyLinesThenExits(), PipeName());
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var count = 0;
+        transport.Notice += (_, n) =>
+        {
+            if (n.Kind == TransportNoticeKind.StandardError && Interlocked.Increment(ref count) == 1000)
+                reported.TrySetResult();
+        };
+        await transport.ConnectAsync(new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
+        await ProcessNoticeWait.ForAsync(reported.Task, "1,000 standard-error notices",
+            TestContext.Current.CancellationToken, received: () => $"{Volatile.Read(ref count)} standard-error notices");
+        var retained = (System.Collections.ICollection)typeof(NamedPipeLspTransport).GetField("_notices",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(transport)!;
+        retained.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AnImmediateExitCannotBeatTheExitHandler()
+    {
+        await using var transport = Transport(WritesToStderrThenExits(3), PipeName());
+        transport.ExitObservationEnabled = process =>
+            process.WaitForExit(30_000).Should().BeTrue("the child must exit during startup observation");
+        var order = new List<string>();
+        var gate = new Lock();
+        transport.Notice += (_, n) =>
+        {
+            if (n.Kind == TransportNoticeKind.Lifecycle)
+                lock (gate) order.Add(n.Text);
+        };
+        var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        transport.Closed += (_, _) =>
+        {
+            lock (gate) order.Add("closed");
+            closed.TrySetResult();
+        };
+
+        await transport.ConnectAsync(new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
+
+        await ProcessNoticeWait.ForAsync(closed.Task, "the immediate child's Closed event",
+            TestContext.Current.CancellationToken,
+            received: () => { lock (gate) return string.Join("; ", order); });
+        lock (gate) order.Should().Equal("process exited with code 3", "closed");
+    }
+
+    [Fact]
+    public async Task LateSubscribersReceiveTheProcessNoticesAndClosed()
+    {
+        await using var transport = Transport(WritesToStderrThenExits(3), PipeName());
+        transport.ExitObservationEnabled = process => process.WaitForExit(30_000).Should().BeTrue();
+        await transport.ConnectAsync(new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<TransportNotice>();
+        var closed = 0;
+        var replayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        EventHandler<TransportNotice> noticeHandler = (_, n) => seen.Enqueue(n);
+        EventHandler closedHandler = (_, _) =>
+        {
+            closed++;
+            replayed.TrySetResult();
+        };
+        transport.Notice += noticeHandler;
+        transport.Closed += closedHandler;
+        transport.Notice -= noticeHandler;
+        transport.Closed -= closedHandler;
+        await ProcessNoticeWait.ForAsync(replayed.Task, "the replayed Closed event",
+            TestContext.Current.CancellationToken,
+            received: () => string.Join("; ", seen.Select(n => $"{n.Kind} '{n.Text}'")));
+
+        seen.Where(n => n.Kind == TransportNoticeKind.StandardError).Select(n => n.Text)
+            .Should().Equal(First, Second);
+        seen.Should().ContainSingle(n => n.Kind == TransportNoticeKind.Lifecycle && n.Text == "process exited with code 3");
+        closed.Should().Be(1);
+    }
+
     [Fact]
     public async Task StandardOutputIsReadEvenWhenTheServerNeverCreatesItsPipe()
     {
@@ -93,7 +205,8 @@ public class NamedPipeProcessNoticeTests
         var handler = await transport.ConnectAsync(new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
         handler.Should().BeNull();
         await ProcessNoticeWait.ForAsync(reported.Task,
-            "two standard-output lines from the server that never creates its pipe", TestContext.Current.CancellationToken);
+            "two standard-output lines from the server that never creates its pipe", TestContext.Current.CancellationToken,
+            received: () => ProcessNoticeWait.Describe(seen, gate));
         lock (gate)
         {
             seen.Where(n => n.Kind == TransportNoticeKind.StandardOutput).Select(n => n.Text)
@@ -125,7 +238,8 @@ public class NamedPipeProcessNoticeTests
             new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
 
         await ProcessNoticeWait.ForAsync(reported.Task,
-            "two standard-error lines from the launched pipe server", TestContext.Current.CancellationToken);
+            "two standard-error lines from the launched pipe server", TestContext.Current.CancellationToken,
+            received: () => ProcessNoticeWait.Describe(seen, gate));
 
         List<string> lines;
         lock (gate)
@@ -156,7 +270,8 @@ public class NamedPipeProcessNoticeTests
         await transport.ConnectAsync(
             new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
         await ProcessNoticeWait.ForAsync(reported.Task,
-            "the launched pipe server exit-code notice", TestContext.Current.CancellationToken);
+            "the launched pipe server exit-code notice", TestContext.Current.CancellationToken,
+            received: () => ProcessNoticeWait.Describe(seen, gate));
 
         TransportNotice exit;
         lock (gate) exit = seen.Last(n => n.Kind == TransportNoticeKind.Lifecycle);
@@ -170,16 +285,22 @@ public class NamedPipeProcessNoticeTests
     {
         // Closed is what tears the connection down, and a record that has stopped accepting entries cannot
         // hold the one fact the reader came for.
-        await using var transport = Transport(WritesToStderrThenExits(1), PipeName());
+        await using var transport = new NamedPipeLspTransport(PipeName(), NamedPipeRole.Connect,
+            Substitute.For<ILogger<NamedPipeLspTransport>>(), WritesToStderrThenExits(1),
+            connectTimeout: TimeSpan.FromMinutes(3));
 
         var order = new List<string>();
+        var seen = new List<TransportNotice>();
         var gate = new Lock();
         var closed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         transport.Notice += (_, n) =>
         {
-            if (n.Kind != TransportNoticeKind.Lifecycle) return;
-            lock (gate) order.Add("exit-code");
+            lock (gate)
+            {
+                seen.Add(n);
+                if (n.Kind == TransportNoticeKind.Lifecycle) order.Add("exit-code");
+            }
         };
         transport.Closed += (_, _) =>
         {
@@ -187,10 +308,21 @@ public class NamedPipeProcessNoticeTests
             closed.TrySetResult();
         };
 
-        await transport.ConnectAsync(
-            new SystemTextJsonFormatter(), TestContext.Current.CancellationToken);
-        await ProcessNoticeWait.ForAsync(closed.Task, "the launched pipe server Closed event",
-            TestContext.Current.CancellationToken);
+        // A connect timeout starts deliberate teardown, which suppresses Closed. Wait for the
+        // unexpected exit first, then cancel the dial that this child will never answer.
+        using var connectingCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var connecting = transport.ConnectAsync(new SystemTextJsonFormatter(), connectingCts.Token);
+        try
+        {
+            await ProcessNoticeWait.ForAsync(closed.Task, "the launched pipe server Closed event",
+                TestContext.Current.CancellationToken,
+                received: () => ProcessNoticeWait.Describe(seen, gate));
+        }
+        finally
+        {
+            await connectingCts.CancelAsync();
+            await connecting;
+        }
 
         lock (gate) order.Should().Equal("exit-code", "closed");
     }
@@ -229,7 +361,7 @@ public class NamedPipeProcessNoticeTests
 
         await ProcessNoticeWait.ForAsync(reported.Task,
             "two standard-error lines and the exit-code notice from the server that never creates its pipe",
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken, received: () => ProcessNoticeWait.Describe(seen, gate));
 
         List<TransportNotice> notices;
         lock (gate) notices = [.. seen];
@@ -238,6 +370,54 @@ public class NamedPipeProcessNoticeTests
             "the server's own words are the whole account of a startup failure");
         notices.Should().Contain(n => n.Kind == TransportNoticeKind.Lifecycle && n.Text.Contains("code 9"),
             "and the exit code says it failed rather than finished");
+    }
+
+    [Fact]
+    public async Task AServerThatExitsWhileTeardownWaitsStillReportsItsExitCode()
+    {
+        // Teardown unsubscribed Exited and then gave the server a grace period to exit in, so a server that took
+        // that grace, by exiting just after the connect attempt gave up, was reported by nothing. Every test above
+        // depended on its server beating a 3 s connect timeout, and twice one did not (#2685). This server exits
+        // half a second after the test starts teardown: after Exited is unsubscribed, and well inside the grace.
+        var directory = Path.Combine(Path.GetTempPath(), $"hexide-2685-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var ready = Path.Combine(directory, "ready");
+            var gate = Path.Combine(directory, "gate");
+            var launch = new NamedPipeLaunch("dotnet", "", ArgumentList:
+            [
+                Path.Join(AppContext.BaseDirectory, "LspTestHost", "HexIDE.Lsp.TestHost.dll"), "teardown-probe",
+                ready, gate, Path.Combine(directory, "marker"), "500", "3",
+            ]);
+            await using var transport = new NamedPipeLspTransport(PipeName(), NamedPipeRole.Connect,
+                Substitute.For<ILogger<NamedPipeLspTransport>>(), launch, connectTimeout: TimeSpan.FromMinutes(2));
+            var seen = new List<TransportNotice>();
+            var lockSeen = new Lock();
+            transport.Notice += (_, n) => { lock (lockSeen) seen.Add(n); };
+
+            using var teardown = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            var connecting = transport.ConnectAsync(new SystemTextJsonFormatter(), teardown.Token);
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            while (!File.Exists(ready) && !connecting.IsCompleted && started.Elapsed < TimeSpan.FromMinutes(1))
+                await Task.Delay(20, TestContext.Current.CancellationToken);
+            File.Exists(ready).Should().BeTrue("the server must be running before teardown starts");
+
+            await teardown.CancelAsync();
+            await File.WriteAllTextAsync(gate, "teardown", TestContext.Current.CancellationToken);
+            (await connecting).Should().BeNull("the connect attempt was abandoned");
+
+            // ConnectAsync returns only once teardown has finished, so the report has been made if it is ever made.
+            File.Exists(Path.Combine(directory, "marker")).Should().BeTrue("the server exited by itself, inside the grace");
+            List<TransportNotice> exits;
+            lock (lockSeen) exits = seen.Where(n => n.Kind == TransportNoticeKind.Lifecycle).ToList();
+            exits.Should().ContainSingle("a server's end is reported once, and teardown must not drop it")
+                .Which.Text.Should().Be("process exited with code 3");
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]

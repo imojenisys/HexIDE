@@ -25,6 +25,134 @@ options {
     tokenVocab = VisualBasic6Lexer;
 }
 
+@members {
+    // Line is not reserved: an ordinary call still works, but a coordinate pair belongs to graphics syntax (#988).
+    private bool OrdinaryLineCallAhead()
+    {
+        if (TokenStream.LA(1) != LINE) return true;
+        var i = TokenStream.LA(2) == WS ? 3 : 2;
+        if (TokenStream.LA(i) is STEP or MINUS) return false;
+        if (TokenStream.LA(i) != LPAREN) return true;
+        var depth = 0;
+        do
+        {
+            var token = TokenStream.LA(i++);
+            if (token == TokenConstants.EOF) return true;
+            if (token == LPAREN) depth++;
+            if (token == RPAREN) depth--;
+            if (depth == 1 && token == COMMA) return false;
+        } while (depth > 0);
+        return true;
+    }
+
+    // Keep inline-If branches and a continued Debug.Print statement outside the preceding list.
+    // Both refusals are measured in corpus/conformance/results.json.
+    private bool OutputAdjacentAhead()
+    {
+        var i = TokenStream.LA(1) == WS ? 2 : 1;
+        // A left-recursive value attaches on exit; only a positioning token admits another signed item.
+        if (TokenStream.LA(i) is PLUS or MINUS)
+        {
+            for (var parent = Context; parent != null; parent = parent.Parent as ParserRuleContext)
+            {
+                if (parent is not OutputListContext list) continue;
+                for (var child = list.ChildCount - 1; child >= 0; child--)
+                    if (list.GetChild(child) is OutputList_ExpressionContext item)
+                        return item.SPC() != null || item.TAB() != null;
+                break;
+            }
+        }
+        if (TokenStream.LA(i) is ELSE or ELSEIF) return false;
+        if (!string.Equals(TokenStream.LT(i).Text, "Debug", StringComparison.OrdinalIgnoreCase)) return true;
+        i++;
+        if (TokenStream.LA(i) == WS) i++;
+        return TokenStream.LA(i) != DOT || TokenStream.LA(i + 1) != PRINT;
+    }
+
+    // Keep a simple .Print receiver outside the output list in SLL (#3248).
+    // The explicit context argument makes this predicate local to this rule's own prediction.
+    private bool MemberPrintReceiverAhead(ParserRuleContext context)
+    {
+        if (context.Parent is not ICS_B_MemberProcedureCallContext
+            || TokenStream.LA(2) != DOT || TokenStream.LA(3) != PRINT) return false;
+        var after = TokenStream.LA(4) == WS ? 5 : 4;
+        return TokenStream.LA(after) is not (DOT or LPAREN);
+    }
+
+    // Prefer a complete simple call in SLL, but leave a following member/dictionary selector attached.
+    private bool StandaloneCallAhead()
+    {
+        var i = 2;
+        if (Atn.NextTokens(Atn.ruleToStartState[RULE_typeHint]).Contains(TokenStream.LA(i))) i++;
+        if (TokenStream.LA(i) == WS) i++;
+        if (TokenStream.LA(i) != LPAREN) return false;
+        do
+        {
+            var depth = 0;
+            do
+            {
+                var token = TokenStream.LA(i++);
+                if (token == TokenConstants.EOF) return false;
+                if (token == LPAREN) depth++;
+                if (token == RPAREN) depth--;
+            } while (depth > 0);
+        } while (TokenStream.LA(i) == LPAREN);
+        if (TokenStream.LA(i) == WS) i++;
+        return TokenStream.LA(i) is not (DOT or EXCLAMATIONMARK);
+    }
+
+    // In output lists a name followed by parentheses stays a call (#3248), never two items.
+    private bool OutputBareNameAhead(bool standalone = false)
+    {
+        var inOutput = standalone;
+        for (var parent = Context; parent != null; parent = parent.Parent as ParserRuleContext)
+        {
+            if (parent is OutputList_ExpressionContext) { inOutput = true; break; }
+            if (parent is BlockStmtContext) break;
+        }
+        if (!inOutput) return true;
+        var i = 2;
+        if (TokenStream.LA(1) == L_SQUARE_BRACKET)
+        {
+            while (TokenStream.LA(i) is not (R_SQUARE_BRACKET or TokenConstants.EOF)) i++;
+            if (TokenStream.LA(i) == R_SQUARE_BRACKET) i++;
+        }
+        if (standalone && TokenStream.LA(i) == EXCLAMATIONMARK
+            && Atn.NextTokens(Atn.ruleToStartState[RULE_ambiguousIdentifier]).Contains(TokenStream.LA(i + 1))) return false;
+        if (Atn.NextTokens(Atn.ruleToStartState[RULE_typeHint]).Contains(TokenStream.LA(i))) i++;
+        if (TokenStream.LA(i) == WS) i++;
+        return TokenStream.LA(i) != LPAREN && (!standalone || TokenStream.LA(i) != DOT);
+    }
+
+    // Only the measured +, -, & and = boundaries change here (#3248, measuring PR #3249).
+    // Other operators after a positioning clause retain their existing expression parse until measured.
+    private bool OutputValueAhead()
+    {
+        if (TokenStream.LA(1) is not (SPC or TAB)) return true;
+        var i = 2;
+        if (TokenStream.LA(i) == WS) i++;
+        // A member receiver such as tab.Caption is a name, not a positioning clause.
+        if (TokenStream.LA(i) == DOT) return true;
+        if (TokenStream.LA(i) == LPAREN)
+        {
+            var argument = i + 1;
+            if (TokenStream.LA(argument) == WS) argument++;
+            if (TokenStream.LA(argument) == RPAREN) return true; // Empty calls retain their unmeasured expression fallback.
+            var depth = 0;
+            do
+            {
+                var token = TokenStream.LA(i++);
+                if (token == TokenConstants.EOF) return false;
+                if (token == LPAREN) depth++;
+                if (token == RPAREN) depth--;
+            } while (depth > 0);
+            if (TokenStream.LA(i) == WS) i++;
+        }
+        return TokenStream.LA(i) is POW or MULT or DIV or IDIV or MOD or NEQ or LT or GT or LEQ or GEQ
+            or LIKE or IS or AND or OR or XOR or EQV or IMP;
+    }
+}
+
 // module ----------------------------------
 
 startRule
@@ -252,6 +380,10 @@ blockStmt
     | returnStmt
     | rmdirStmt
     | rsetStmt
+    | scaleStmt
+   | lineStmt
+   | psetStmt
+   | circleStmt
     | savepictureStmt
     | saveSettingStmt
     | seekStmt
@@ -318,6 +450,8 @@ deftypeStmt
         | DEFBYTE
         | DEFINT
         | DEFLNG
+        | DEFLNGLNG
+        | DEFLNGPTR
         | DEFCUR
         | DEFSNG
         | DEFDBL
@@ -377,7 +511,8 @@ filecopyStmt
 
 // `For _ Each` - WS? between the two keywords; see the note on selectCaseStmt.
 forEachStmt
-    : FOR WS? EACH WS ambiguousIdentifier typeHint? WS IN WS valueStmt blockSep (block blockSep)? NEXT (
+    : FOR WS? EACH WS ambiguousIdentifier typeHint? WS IN WS collection=implicitCallStmt_InStmt
+       {!System.Array.Exists(new[] { "Nothing", "True", "False", "Null", "Empty" }, keyword => string.Equals($collection.text, keyword, System.StringComparison.OrdinalIgnoreCase))}? blockSep (block blockSep)? NEXT (
         WS ambiguousIdentifier
     )?
     ;
@@ -535,13 +670,14 @@ openStmt
     ;
 
 outputList
-    : outputList_Expression (WS? (SEMICOLON | COMMA) WS? outputList_Expression?)*
-    | outputList_Expression? (WS? (SEMICOLON | COMMA) WS? outputList_Expression?)+
+    : outputList_Expression (WS? (SEMICOLON | COMMA) WS? outputList_Expression? | {OutputAdjacentAhead()}? WS? outputList_Expression)*
+    | (SEMICOLON | COMMA) WS? outputList_Expression? (WS? (SEMICOLON | COMMA) WS? outputList_Expression? | {OutputAdjacentAhead()}? WS? outputList_Expression)*
     ;
 
 outputList_Expression
-    : (SPC | TAB) (WS? LPAREN WS? argsCall WS? RPAREN)?
-    | valueStmt
+    : {!OutputValueAhead()}? (SPC | TAB) (WS? LPAREN WS? argsCall WS? RPAREN
+        | {TokenStream.LA(TokenStream.LA(1) == WS ? 2 : 1) != LPAREN}?)
+    | {OutputValueAhead()}? valueStmt
     ;
 
 printStmt
@@ -606,6 +742,44 @@ rmdirStmt
 
 rsetStmt
     : RSET WS implicitCallStmt_InStmt WS? EQ WS? valueStmt
+    ;
+
+// VB6 graphics use coordinates and positional omissions, rather than tuple arithmetic (#988).
+lineStmt
+   : (receiver=implicitCallStmt_InStmt DOT WS?)? LINE WS?
+     (startPoint=graphicsPoint WS?)? MINUS WS? endPoint=graphicsPoint
+     (WS? COMMA WS? colour=graphicsValue? (WS? COMMA WS? graphicsBox)?)?
+   ;
+
+psetStmt
+   : (receiver=implicitCallStmt_InStmt DOT WS?)? PSET WS? graphicsPoint (WS? COMMA WS? graphicsValue)?
+   ;
+
+circleStmt
+   : (receiver=implicitCallStmt_InStmt DOT WS?)? CIRCLE WS? graphicsPoint WS? COMMA WS? graphicsValue
+     (WS? COMMA WS? graphicsValue? (WS? COMMA WS? graphicsValue?
+      (WS? COMMA WS? graphicsValue? (WS? COMMA WS? graphicsValue?)?)?)?)?
+   ;
+
+graphicsPoint
+   : (STEP WS?)? LPAREN WS? graphicsValue WS? COMMA WS? graphicsValue WS? RPAREN
+   ;
+
+graphicsValue
+   : valueStmt {!($valueStmt.ctx is VsAssignContext)}?
+   ;
+
+graphicsBox
+   : IDENTIFIER {string.Equals($IDENTIFIER.text, "B", StringComparison.OrdinalIgnoreCase)
+                 || string.Equals($IDENTIFIER.text, "BF", StringComparison.OrdinalIgnoreCase)}?
+   ;
+
+// A coordinate-system statement, not a call whose argument is the subtraction of two tuples (#990).
+scaleStmt
+    : (receiver=implicitCallStmt_InStmt DOT WS?)? SCALE
+      (WS? LPAREN WS? valueStmt WS? COMMA WS? valueStmt WS? RPAREN WS? MINUS WS?
+       LPAREN WS? valueStmt WS? COMMA WS? valueStmt WS? RPAREN
+       | {$receiver.ctx != null || (TokenStream.LA(1) != COLON && (TokenStream.LA(1) != WS || TokenStream.LA(2) != COLON))}?)
     ;
 
 savepictureStmt
@@ -762,15 +936,13 @@ explicitCallStmt
     | eCS_MemberProcedureCall
     ;
 
-// parantheses are required in case of args -> empty parantheses are removed
 eCS_ProcedureCall
-    : CALL WS ambiguousIdentifier typeHint? (WS? LPAREN WS? argsCall WS? RPAREN)?
+    : CALL WS ambiguousIdentifier typeHint? (WS? LPAREN WS? (argsCall WS?)? RPAREN)?
     ;
 
-// parantheses are required in case of args -> empty parantheses are removed
 eCS_MemberProcedureCall
     : CALL WS implicitCallStmt_InStmt? DOT WS? ambiguousIdentifier typeHint? (
-        WS? LPAREN WS? argsCall WS? RPAREN
+        WS? LPAREN WS? (argsCall WS?)? RPAREN
     )?
     ;
 
@@ -782,27 +954,30 @@ implicitCallStmt_InBlock
 // parantheses are forbidden in case of args variables cannot be called in blocks certainIdentifier
 // instead of ambiguousIdentifier for preventing ambiguity with statement keywords
 iCS_B_ProcedureCall
-    : certainIdentifier (WS argsCall)?
+    : {OrdinaryLineCallAhead()}? certainIdentifier (WS argsCall)?
     ;
 
 // Without WS, only a parenthesised argument is admitted; keep the parentheses as an expression (#1064).
 iCS_B_MemberProcedureCall
-    : implicitCallStmt_InStmt? DOT ambiguousIdentifier typeHint? ((WS | {TokenStream.LA(1) == LPAREN}?) argsCall)? dictionaryCallStmt?
-    // Print's output list may be separators alone, `Debug.Print ,`, where any other call's arguments may not: `Foo ,` is
-    // VB6's "Syntax error" (measured, #1409).
-    | implicitCallStmt_InStmt? DOT PRINT WS? (COMMA | SEMICOLON) (WS? (COMMA | SEMICOLON))*
+    : implicitCallStmt_InStmt? DOT
+        (PRINT (WS? outputList)?
+        | {TokenStream.LA(1) != PRINT && OrdinaryLineCallAhead()}? ambiguousIdentifier typeHint? ((WS | {TokenStream.LA(1) == LPAREN}?) argsCall)? dictionaryCallStmt?)
     ;
 
-// iCS_S_MembersCall first, so that member calls are not resolved as separate iCS_S_VariableOrProcedureCalls
+// Prefer bare names in SLL, without splitting calls or member chains (#3248).
 implicitCallStmt_InStmt
-    : iCS_S_MembersCall
+    : {MemberPrintReceiverAhead($ctx) || OutputBareNameAhead(true)}? iCS_S_VariableOrProcedureCall
+    | {StandaloneCallAhead()}? iCS_S_ProcedureOrArrayCall
+    | iCS_S_MembersCall
     | iCS_S_VariableOrProcedureCall
     | iCS_S_ProcedureOrArrayCall
     | iCS_S_DictionaryCall
     ;
 
 iCS_S_VariableOrProcedureCall
-    : ambiguousIdentifier typeHint? dictionaryCallStmt?
+    : {OutputBareNameAhead()}? ambiguousIdentifier
+        // A bang before a key stays dictionary access, rather than a Single suffix and another item.
+        ({TokenStream.LA(1) != EXCLAMATIONMARK || !Atn.NextTokens(Atn.ruleToStartState[RULE_ambiguousIdentifier]).Contains(TokenStream.LA(2))}? typeHint)? dictionaryCallStmt?
     ;
 
 iCS_S_ProcedureOrArrayCall
@@ -869,6 +1044,7 @@ subscript_
 ambiguousIdentifier
     : (IDENTIFIER | ambiguousKeyword)+
     | L_SQUARE_BRACKET (IDENTIFIER | ambiguousKeyword)+ R_SQUARE_BRACKET
+    | L_SQUARE_BRACKET {TokenStream.LT(1).Text.Equals("_NewEnum", StringComparison.OrdinalIgnoreCase)}? DESIGNER_KEY R_SQUARE_BRACKET
     ;
 
 asTypeClause
@@ -892,6 +1068,7 @@ baseType
 certainIdentifier
     : IDENTIFIER (ambiguousKeyword | IDENTIFIER)*
     | ambiguousKeyword (ambiguousKeyword | IDENTIFIER)+
+    | LINE
     | PTRSAFE
     ;
 
@@ -937,7 +1114,8 @@ labelName
     | BEEP
     | ERROR
     | KILL
-    | LOAD
+    | LINE
+   | LOAD
     | MID
     | NAME
     | RESET
@@ -982,6 +1160,7 @@ typeHint
     | EXCLAMATIONMARK
     | HASH
     | PERCENT
+    | POW
     ;
 
 visibility
@@ -1027,6 +1206,8 @@ ambiguousKeyword
     | DEFDEC
     | DEFINT
     | DEFLNG
+    | DEFLNGLNG
+    | DEFLNGPTR
     | DEFOBJ
     | DEFSNG
     | DEFSTR
@@ -1063,7 +1244,8 @@ ambiguousKeyword
     | IS
     | INTEGER
     | KILL
-    | LOAD
+    | LINE
+   | LOAD
     | LOCK
     | LONG
     | LOOP

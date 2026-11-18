@@ -32,8 +32,8 @@ public class ProgramWindowTests : WindowTestFixture
         {
             Content = kind switch
             {
-                "message" => new HexIDE.Runtime.Dialogs.MessageBox(),
-                "input" => new HexIDE.Runtime.Dialogs.InputBox(),
+                "message" => new HexIDE.Dialogs.MessageBox(),
+                "input" => new HexIDE.Dialogs.InputBox(),
                 _ => new CheckBox()
             }
         };
@@ -52,7 +52,7 @@ public class ProgramWindowTests : WindowTestFixture
     {
         var form = new FormWindow();
         form.Show();
-        var library = new StandaloneStandardLib(form);
+        var library = new StandaloneStandardLib(form, HexIDE.IDE.Distribution.DisplayName);
         Task pending = message
             ? library.MsgBox("Question", "Program", HexIDE.IDE.MessageBoxButtons.Ok, HexIDE.IDE.MessageBoxIcon.None)
             : library.InputBox("Question", "Program", "");

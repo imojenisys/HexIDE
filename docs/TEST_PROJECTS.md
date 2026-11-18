@@ -6,7 +6,7 @@ This document catalogues the real-world VB6 projects used to verify round-trip s
 
 ## How to use this corpus
 
-Round-trip fidelity is verified by the `HexIDE.Runtime.Tests` xUnit harness (see `RoundTripTests.cs`). For each project, the harness asserts:
+Round-trip fidelity is verified by the `HexIDE.Runtime.Tests` xUnit harness (see `SerializationCorpusTests.cs`; inline regression cases are in `SerializationRoundTripTests.cs`). For each project, the harness asserts:
 
 1. **Deserialise succeeds** — no exception, no error-sink entries for known-format files
 2. **Re-serialise is parseable** — output of `Serialize()` can be fed back into `Deserialize()` without error
@@ -26,7 +26,7 @@ does.
 To run the corpus tests locally:
 
 ```
-cd IDE && dotnet test HexIDE.Runtime.Tests/ -- --filter-class "*SerializationCorpusTests"
+cd IDE && dotnet test --project HexIDE.Runtime.Tests/HexIDE.Runtime.Tests.csproj -- --filter-class "*SerializationCorpusTests"
 ```
 
 There is no test category or trait to filter on — `[Trait]` is not used anywhere in `IDE/`, so filter by
@@ -45,7 +45,7 @@ test, naming what it tried; only an unset one on a machine without VB6 skips. CI
 still reads the repository corpora, including VB6-authored designer and member-attribute files.
 
 The run writes a per-file report to `hexide-roundtrip-report.txt` beside the test assembly
-(`AppContext.BaseDirectory`, normally `IDE/HexIDE.Runtime.Tests/bin/Debug/net10.0/`), listing
+(`AppContext.BaseDirectory`, normally `IDE/HexIDE.Runtime.Tests/bin/Debug/net11.0/`), listing
 every `DIFF`, `BLOB-LOSS` and `BLOB-DIFF` with the first few differing lines. That is the full report — the
 JSON report and the `--roundtrip` / `--corpus` / `--report` flags described here previously do not exist;
 `HexIDE.Standalone` implements exactly one non-GUI mode, `--check <project.vbp>`, which loads a project and
@@ -54,7 +54,7 @@ prints per-module results.
 The `.vbp` lane writes `hexide-vbp-report.txt` in that same assembly directory. The whole-file grammar
 lanes likewise write `hexide-whole-file-grammar-interpreter.txt` beside the runtime test assembly and
 `hexide-whole-file-grammar-lsp.txt` beside the LSP test assembly (normally
-`LspServer/HexIDE.VbLspServer.Tests/bin/Debug/net10.0/`). Each checkout and each separate
+`LspServer/HexIDE.VbLspServer.Tests/bin/Debug/net11.0/`). Each checkout and each separate
 `--artifacts-path` output keeps its own reports; look beside the assembly in the selected output directory
 when overriding the build output.
 
@@ -80,7 +80,8 @@ byte for byte after normalising only the original project's reference paths, det
 files too. Same-drive reference paths become relative; other drives and unresolved paths stay as read
 ([measured in #2274](vb6-fidelity-oracle/a-references-path-and-the-line-order-a-save-writes.md)).
 The harness uses the file's path, as HexIDE does today; it does not resolve registered libraries or
-substitute library identities. `Retained=` is untouched (#2459). Every other byte must match.
+substitute library identities. An ActiveX EXE with no `Retained=` line is expected to gain `Retained=0` between
+`Unattended=0` and `ThreadPerObject=0`, as VB6's save adds it (#2459). Every other byte must match.
 File paths compare case-insensitively on Windows and macOS, ordinally on Linux. A reported save refusal is allowed, but never
 excuses changed bytes. The original corpus is untouched. Members outside the copied project's own
 directory are refused before saving; symbolic links are rejected. This conservative safety restriction
@@ -104,7 +105,9 @@ Three evidence-writing regression cases cover changed, added and deleted files o
 After comparing the saved bytes, each scratch project starts through `VBLoader.RunMadeProgram`, the
 entry point used by `HexIDE.Standalone.App`, in an isolated Avalonia headless worker process. The
 `ProjectSmokeRunner.StartupSeconds` constant bounds startup at **3 seconds**, including synchronous
-loops; worker initialization has a separate 60-second watchdog. Regression fixtures allow 30 seconds for
+loops; worker preparation has a separate 60-second watchdog starting when the worker writes its entry
+marker. The test host has up to 300 seconds to enter the worker, so its own startup does not spend the
+project's preparation budget (#2934). Both waits are bounded. Regression fixtures allow 30 seconds for
 cold JIT work when asserting completion/refusal/fault results; the infinite-loop fixture uses the corpus
 limit. MsgBox chooses its first offered button;
 InputBox accepts its default text. These are scripted smoke inputs, not VB6 fidelity expectations.
@@ -133,15 +136,15 @@ The corpus should cover the following axes. Track gaps in the table below.
 
 | Axis | Target | Current coverage |
 |---|---|---|
-| Project types | EXE, OleDll, OleExe, Control (.ocx) | EXE only |
-| Module types | Form, Module, Class, UserControl, PropertyPage | Form, Module |
-| References | Projects with many `Reference=` / `Object=` lines | Partial (PD) |
+| Project types | EXE, OleDll, OleExe, Control (.ocx) | EXE, and one Control (`corpus/designer/PagProbe.vbp`) |
+| Module types | Form, Module, Class, UserControl, PropertyPage | All five (`.ctl` and `.pag` in `corpus/designer/`) |
+| References | Projects with many `Reference=` / `Object=` lines | One `Object=` each (`corpus/inbox-controls/`) |
 | Project groups | `.vbg` with 2–3 member projects | None |
 | VB6 service pack versions | SP3, SP4, SP5, SP6 | Unknown |
-| OCX-heavy projects | Multiple third-party OCX dependencies | Krool only |
-| Large projects | 20+ forms, 50+ modules | PD only |
-| Small/trivial projects | Single form, no references | None |
-| Pure code projects | `.bas` / `.cls` only, no forms | None |
+| OCX-heavy projects | Multiple third-party OCX dependencies | None |
+| Large projects | 20+ forms, 50+ modules | None |
+| Small/trivial projects | Single form, no references | The probe projects under `corpus/` |
+| Pure code projects | `.bas` / `.cls` only, no forms | `corpus/member-attributes/` |
 
 ---
 
@@ -208,8 +211,8 @@ The following project types are needed but not yet sourced. If you add a project
 
 | Failure mode | Affected projects | Status |
 |---|---|---|
-| Unknown `.vbp` keys silently dropped | All — pass-through buckets not yet implemented | 🔴 Blocking |
-| `.frx` offset corruption on rewrite | Any project with blob-backed properties | 🔴 Blocking |
+| Unknown `.vbp` keys silently dropped | All | 🟢 Fixed: kept verbatim (`ProjectDeserializer`, `UnknownPreSectionLines`) |
+| `.frx` offset corruption on rewrite | Any project with blob-backed properties | 🟢 Fixed: companion files are preserved, never regenerated ([README](../README.md#real-projects)) |
 | Non-EXE project type serialisation | OleDll, OleExe, Control | 🟡 Partially fixed in Phase 22 |
-| `Object=` (OCX) round-trip | Any project with third-party controls | 🔲 Not yet tested |
+| `Object=` (OCX) round-trip | Any project with third-party controls | 🟡 In-box OCX forms covered (`corpus/inbox-controls/`, `InBoxCorpusStateTests`); third-party OCXs not yet tested |
 | `Reference=` MISSING state | Any project with unresolved references | 🔲 Not yet tested |

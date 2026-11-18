@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using HexIDE.Lsp;
 using Microsoft.Extensions.Logging.Abstractions;
 using StreamJsonRpc;
@@ -12,6 +14,12 @@ public static class Program
 {
     public static async Task Main(string[] args)
     {
+        if (args[0] == "recording-server")
+        {
+            await RecordingServerAsync(args[1], args.Length > 2 && args[2] == "unanswered",
+                args.Length > 2 && args[2] == "documents");
+            return;
+        }
         if (args[0] == "dispose-server")
         {
             Stream input = Console.OpenStandardInput();
@@ -56,11 +64,13 @@ public static class Program
         {
             // NamedPipeShutdownTests: a server still bringing up. It says it is running, waits for the test to start
             // teardown, and exits that many milliseconds later, leaving a marker only if nothing killed it first.
+            // NamedPipeProcessNoticeTests also gives it an exit code to report.
             await File.WriteAllTextAsync(args[1], "ready");
             while (!File.Exists(args[2])) await Task.Delay(20);
             await Task.Delay(int.Parse(args[4]));
             await File.WriteAllTextAsync(args[3] + ".tmp", "done");
             File.Move(args[3] + ".tmp", args[3]);
+            Environment.ExitCode = args.Length > 5 ? int.Parse(args[5]) : 0;
             return;
         }
         if (args[0] == "clean-server")
@@ -124,6 +134,67 @@ public static class Program
         Console.WriteLine("ready");
         await Task.Delay(TimeSpan.FromMinutes(1));
         GC.KeepAlive(transport);
+    }
+
+    // "documents" advertises full text sync and answers each didOpen and didChange with one diagnostic, so a live check
+    // can see a restarted server given the open documents and the editor showing its diagnostics again (#4646).
+    private static async Task RecordingServerAsync(string file, bool unanswered, bool documents = false)
+    {
+        var input = Console.OpenStandardInput();
+        var output = Console.OpenStandardOutput();
+        while (true)
+        {
+            var header = new StringBuilder();
+            var one = new byte[1];
+            while (!header.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
+            {
+                if (await input.ReadAsync(one) == 0) return;
+                header.Append((char)one[0]);
+            }
+            var length = int.Parse(header.ToString().Split("\r\n")[0].Split(':')[1]);
+            var body = new byte[length];
+            await input.ReadExactlyAsync(body);
+            using var message = JsonDocument.Parse(body);
+            var root = message.RootElement;
+            if (!root.TryGetProperty("method", out var methodElement)) continue;
+            var method = methodElement.GetString();
+            await File.AppendAllTextAsync(file, method + Environment.NewLine);
+            if (method == "exit") return;
+            if (documents && method is "textDocument/didOpen" or "textDocument/didChange")
+            {
+                var uri = root.GetProperty("params").GetProperty("textDocument").GetProperty("uri").GetString();
+                var note = JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    method = "textDocument/publishDiagnostics",
+                    @params = new
+                    {
+                        uri,
+                        diagnostics = new[]
+                        {
+                            new
+                            {
+                                range = new { start = new { line = 0, character = 0 }, end = new { line = 0, character = 1 } },
+                                severity = 2, source = "stand-in", message = $"Stand-in diagnostic (#4646), process {Environment.ProcessId}"
+                            }
+                        }
+                    }
+                });
+                var bytes = Encoding.UTF8.GetBytes(note);
+                await output.WriteAsync(Encoding.ASCII.GetBytes($"Content-Length: {bytes.Length}\r\n\r\n"));
+                await output.WriteAsync(bytes);
+                await output.FlushAsync();
+            }
+            if (!root.TryGetProperty("id", out var id) || (method == "shutdown" && unanswered)) continue;
+            // Delay the reply so a fire-and-forget exit reliably loses the graceful handshake.
+            if (method == "shutdown") await Task.Delay(150);
+            var result = method != "initialize" ? "null"
+                : documents ? "{\"capabilities\":{\"textDocumentSync\":1}}" : "{\"capabilities\":{}}";
+            var reply = Encoding.UTF8.GetBytes($"{{\"jsonrpc\":\"2.0\",\"id\":{id.GetRawText()},\"result\":{result}}}");
+            await output.WriteAsync(Encoding.ASCII.GetBytes($"Content-Length: {reply.Length}\r\n\r\n"));
+            await output.WriteAsync(reply);
+            await output.FlushAsync();
+        }
     }
 
     private static ProcessStartInfo StartInfo(params string[] args)

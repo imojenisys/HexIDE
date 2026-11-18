@@ -1,69 +1,8 @@
 using System;
 using System.Collections.Generic;
+using HexIDE.Language;
 
 namespace HexIDE.Runtime.Serialization;
-
-/// <summary>
-/// A span of a code window's buffer that only the IDE may change: <c>[Start, End)</c>, whole lines, with
-/// <see cref="End"/> just past the last line's terminator.
-/// </summary>
-/// <param name="Start">The offset of the region's first character, which is always the start of a line.</param>
-/// <param name="End">The offset just past the region's last line, terminator included.</param>
-/// <param name="OpenEnded">
-/// True when the region's last line is the last line of the buffer and has no terminator. Text inserted at
-/// <see cref="End"/> would then join that line rather than start a new one, so it counts as inside.
-/// </param>
-/// <param name="Anchor">
-/// For a member's attribute run, where the line it describes ends: the start of that line's terminator.
-/// Null for the header, which describes nothing above it. See <see cref="Changes"/>.
-/// </param>
-public readonly record struct TextRegion(int Start, int End, bool OpenEnded = false, int? Anchor = null)
-{
-    /// <summary>
-    /// True when <paramref name="length"/> characters at <paramref name="offset"/> lie in this region, or an
-    /// insertion there would land in it.
-    /// </summary>
-    /// <remarks>
-    /// An insertion (<paramref name="length"/> 0) at the region's first character counts as inside, because
-    /// it pushes the region away from the line above it: for the header that is text above the top of the
-    /// file, and for a member's attribute run it separates the run from the declaration it describes. An
-    /// insertion at <see cref="End"/> is the start of the next line and does not count, unless the region is
-    /// <see cref="OpenEnded"/>.
-    /// <para>
-    /// This is membership: whether a line or a span is <em>in</em> the region. Whether an <em>edit</em> may
-    /// be made is <see cref="Changes"/>, which is stricter.
-    /// </para>
-    /// </remarks>
-    public bool Touches(int offset, int length) =>
-        length > 0
-            ? offset < End && offset + length > Start
-            : offset >= Start && (offset < End || (OpenEnded && offset == End));
-
-    /// <summary>Where an edit starts to change this region: <see cref="Anchor"/>, or <see cref="Start"/>.</summary>
-    public int EditStart => Anchor ?? Start;
-
-    /// <summary>
-    /// True when replacing <paramref name="length"/> characters at <paramref name="offset"/> would change
-    /// this region: <see cref="Touches"/>, and also any replacement that removes the line break between a
-    /// member's attribute run and the line it describes.
-    /// </summary>
-    /// <remarks>
-    /// That line break is outside the run, because the run is whole lines and the break ends the line above.
-    /// But removing it joins the first attribute line onto the declaration, and the run is then no run at all:
-    /// the line no longer starts with <c>Attribute</c>, and the file no longer compiles. Typing is refused it by
-    /// the code window's section provider (#273 task 3.7), which starts a member's protected span at the same
-    /// <see cref="EditStart"/>. Every other writer asks this (task 3.11, found by review: a Replace of
-    /// <c>Currency\r\n</c> with <c>Currency</c> made exactly that join).
-    /// <para>
-    /// An insertion is unchanged: text typed at the end of a declaration lands before its line break and
-    /// leaves the run where it is.
-    /// </para>
-    /// </remarks>
-    public bool Changes(int offset, int length) =>
-        length > 0
-            ? offset < End && offset + length > EditStart
-            : Touches(offset, 0);
-}
 
 /// <summary>
 /// A run of <c>Attribute</c> lines below a file's header, and the line above it that it may describe
@@ -357,6 +296,27 @@ public static class ReadOnlyRegions
     /// </remarks>
     public static IReadOnlyList<DeclaredName> NamesDeclaredOn(string text, int start, int end) =>
         ReadDeclarations(text, start, end, out _);
+
+    /// <summary>Whether a logical line opens or closes a procedure body.</summary>
+    internal static (bool Opens, bool Closes) ProcedureBoundary(string text, int start, int end)
+    {
+        ReadDeclarations(text, start, end, out var opens);
+        var tokens = TokensOf(text, start, end);
+        var closes = false;
+        for (var i = 0; i + 1 < tokens.Count; i++)
+            if ((i == 0 || tokens[i - 1].Kind == TokenKind.Colon)
+                && IsWord(text, tokens, i, tokens.Count, "End")
+                && IsWord(text, tokens, i + 1, tokens.Count, "Sub", "Function", "Property"))
+                closes = true;
+        return (opens, closes);
+    }
+
+    /// <summary>The first comment's offset on a declaration, or <paramref name="end"/> when it has none.</summary>
+    public static int CommentStartOn(string text, int start, int end)
+    {
+        TokensOf(text, start, end, out var commentStart);
+        return commentStart;
+    }
 
     /// <summary>The names <paramref name="line"/> declares; see <see cref="NamesDeclaredOn(string, int, int)"/>.</summary>
     public static IReadOnlyList<DeclaredName> NamesDeclaredOn(string line) => NamesDeclaredOn(line, 0, line.Length);
@@ -836,7 +796,11 @@ public static class ReadOnlyRegions
     /// <see cref="TokenKind.Colon"/>.
     /// </summary>
     private static List<Token> TokensOf(string text, int start, int end)
+        => TokensOf(text, start, end, out _);
+
+    private static List<Token> TokensOf(string text, int start, int end, out int commentStart)
     {
+        commentStart = end;
         var tokens = new List<Token>();
         var i = start;
         while (i < end)
@@ -855,7 +819,10 @@ public static class ReadOnlyRegions
                 continue;
             }
             if (c == '\'')
+            {
+                commentStart = i;
                 break;
+            }
             if (c == '"')
             {
                 // A string, "" inside it being a quote: a ' or : or , in one is none of those.
@@ -893,7 +860,10 @@ public static class ReadOnlyRegions
                 // accepts, so on such code no verdict turns on it (equivalent under mutation).
                 if ((tokens.Count == 0 || tokens[^1].Kind == TokenKind.Colon)
                     && text.AsSpan(i, j - i).Equals("Rem", StringComparison.OrdinalIgnoreCase))
+                {
+                    commentStart = i;
                     break;
+                }
                 tokens.Add(new Token(TokenKind.Word, i, j - i));
                 i = j;
                 continue;
@@ -1062,11 +1032,43 @@ public static class ReadOnlyRegions
     /// one however it goes on, <c>Attribute = 5</c> included; such a line names nothing, and describes nothing.
     /// <c>AttributeCount = 3</c> starts with another word.
     /// </remarks>
-    private static bool IsAttributeLine(string text, Line line)
+    private static bool IsAttributeLine(string text, Line line) =>
+        IsAttributeLine(text.AsSpan(line.Start, line.ContentEnd - line.Start));
+
+    /// <summary>
+    /// True when <paramref name="line"/>, one physical line, starts an attribute line: its first word is
+    /// <c>Attribute</c>, in any case and at any indent. See <see cref="IsAttributeLine(string, Line)"/>.
+    /// </summary>
+    public static bool IsAttributeLine(ReadOnlySpan<char> line)
     {
-        var content = text.AsSpan(line.Start, line.ContentEnd - line.Start).TrimStart();
+        var content = line.TrimStart();
         return content.StartsWith("Attribute", StringComparison.OrdinalIgnoreCase)
                && (content.Length == "Attribute".Length || !IsNameCharacter(content["Attribute".Length]));
+    }
+
+    /// <summary>
+    /// The attribute lines of the run of <paramref name="text"/> from <paramref name="start"/>, the start of its first
+    /// line, to <paramref name="end"/>, the end of its last line's text, each a logical line read as
+    /// <see cref="MemberRuns"/> reads it. For a run already found, such as a <see cref="MemberRun"/>'s region.
+    /// </summary>
+    internal static List<AttributeLine> AttributeLinesIn(string text, int start, int end)
+    {
+        var attributes = new List<AttributeLine>();
+        var pos = start;
+        while (pos < end)
+        {
+            var first = pos;
+            var (lineEnd, next) = SourceLines.LineAt(text, pos);
+            // As LogicalLinesOf joins them: a continued line takes the next, when there is one.
+            while (lineEnd < end && next < text.Length && EndsWithContinuation(text.AsSpan(pos, lineEnd - pos)))
+            {
+                pos = next;
+                (lineEnd, next) = SourceLines.LineAt(text, pos);
+            }
+            attributes.Add(ReadAttributeLine(text, first, lineEnd));
+            pos = next;
+        }
+        return attributes;
     }
 
     /// <summary>

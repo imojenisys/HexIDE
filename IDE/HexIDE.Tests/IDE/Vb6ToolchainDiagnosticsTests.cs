@@ -70,11 +70,51 @@ public class Vb6ToolchainDiagnosticsTests
     /// </summary>
     private sealed class StubbedBuild(
         ILspClient lsp, IWindowManager windows, ILocalizationService localization,
-        Vb6ToolchainService.Vb6BuildOutcome? outcome)
-        : Vb6ToolchainService(lsp, Substitute.For<IEventBus>(), windows, localization)
+        Vb6ToolchainService.Vb6BuildOutcome? outcome, CodeTrust? trust = null)
+        : Vb6ToolchainService(lsp, Substitute.For<IEventBus>(), windows, localization, trust ?? new CodeTrust(windows, localization, _ => false), Substitute.For<HexIDE.Sidecar.IUserSidecarService>())
     {
-        internal override Task<Vb6BuildOutcome?> RunVb6Async(string projectPath) =>
-            Task.FromResult(outcome);
+        /// <summary>How many times vb6.exe would have been started.</summary>
+        public int Builds { get; private set; }
+
+        internal override Task<Vb6BuildOutcome?> RunVb6Async(string projectPath)
+        {
+            Builds++;
+            return Task.FromResult(outcome);
+        }
+    }
+
+    // --- Run with VB6 runs the program it makes, so code from outside this computer is asked about first (#1121) ---
+
+    private StubbedBuild BuildAsking(MessageBoxResult answer)
+    {
+        _windows.MessageBox(Arg.Any<string>(), Arg.Any<string?>(), MessageBoxButtons.YesNo, Arg.Any<MessageBoxIcon>(),
+            Arg.Any<Avalonia.Controls.Window?>(), Arg.Any<bool>(), MessageBoxLayout.SecondButtonDefault | MessageBoxLayout.SecurityPrompt).Returns(answer);
+        var strings = Localization();
+        var trust = new CodeTrust(_windows, strings, path => string.Equals(path, Form1Path, StringComparison.OrdinalIgnoreCase));
+        return (StubbedBuild)WithVb6ExePath(() => new StubbedBuild(
+            _lsp, _windows, strings, new Vb6ToolchainService.Vb6BuildOutcome(0, ""), trust));
+    }
+
+    [Fact]
+    public async Task Run_with_VB6_asks_before_making_downloaded_code_and_a_No_makes_nothing()
+    {
+        var build = BuildAsking(MessageBoxResult.No);
+
+        await build.RunWithVb6Async(ProjectWithTwoForms());
+
+        build.Builds.Should().Be(0);
+        await _windows.Received(1).MessageBox(Arg.Any<string>(), "Str.CodeTrust.Caption", MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning, Arg.Any<Avalonia.Controls.Window?>(), false, MessageBoxLayout.SecondButtonDefault | MessageBoxLayout.SecurityPrompt);
+    }
+
+    [Fact]
+    public async Task Run_with_VB6_makes_downloaded_code_once_the_developer_says_Yes()
+    {
+        var build = BuildAsking(MessageBoxResult.Yes);
+
+        await build.RunWithVb6Async(ProjectWithTwoForms());
+
+        build.Builds.Should().Be(1);
     }
 
     private Vb6ToolchainService Build(int exitCode, string output = "") =>
@@ -218,6 +258,19 @@ public class Vb6ToolchainDiagnosticsTests
         await Build(exitCode: 0).MakeWithVb6Async(project);
 
         seen.GetAll().Should().BeEmpty("the error the previous build reported has been fixed");
+    }
+
+    [Fact]
+    public async Task ABuildThatTimesOutReportsThatItWasStopped()
+    {
+        (await BuildThatTimesOut().MakeWithVb6Async(ProjectWithTwoForms())).Should().BeFalse();
+
+        await _windows.Received(1).MessageBox(
+            "Str.Vb6Toolchain.CompilationTimedOut",
+            "Str.Vb6Toolchain.BuildFailedTitle", MessageBoxButtons.Ok, MessageBoxIcon.Error);
+        await _windows.DidNotReceive().MessageBox(
+            "Str.Vb6Toolchain.CompilationFailedNoOutput",
+            Arg.Any<string?>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>());
     }
 
     [Fact]

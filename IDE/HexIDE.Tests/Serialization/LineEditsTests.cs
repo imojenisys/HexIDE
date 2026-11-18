@@ -1,3 +1,4 @@
+using HexIDE.Language;
 using HexIDE.Runtime.Serialization;
 
 namespace HexIDE.Tests.Serialization;
@@ -35,7 +36,7 @@ public class LineEditsTests
         var after = before.Replace(described, "");
 
         var reduction = LineEdits.ReduceFormatting(before, after, RegionsOf(before),
-            ReadOnlyRegions.MemberRuns(before, 0));
+            new Vb6ReadOnlyRegionReader().HangingRegions(before, 0));
 
         LineEdits.Apply(before, reduction.Changes).Should().Be("Option Explicit\r\nEnd Sub\r\n");
         reduction.DroppedLines.Should().Be(0);
@@ -51,7 +52,7 @@ public class LineEditsTests
         var after = before.Replace(declaration, replacement);
         var regions = RegionsOf(before);
 
-        var reduction = LineEdits.ReduceFormatting(before, after, regions, ReadOnlyRegions.MemberRuns(before, 0));
+        var reduction = LineEdits.ReduceFormatting(before, after, regions, new Vb6ReadOnlyRegionReader().HangingRegions(before, 0));
 
         LineEdits.Apply(before, reduction.Changes).Should()
             .Be(applies ? after : before);

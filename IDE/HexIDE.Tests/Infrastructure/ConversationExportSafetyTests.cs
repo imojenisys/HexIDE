@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.IO;
 using HexIDE.Conversations;
 using HexIDE.Desktop.Server;

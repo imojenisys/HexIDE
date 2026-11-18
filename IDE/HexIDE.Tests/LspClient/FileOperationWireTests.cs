@@ -55,7 +55,7 @@ public class FileOperationWireTests : IAsyncDisposable
         transport.IsAlive.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
             .Returns(ci => Task.FromResult<IJsonRpcMessageHandler?>(
-                new HeaderDelimitedMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
+                new LspMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
         _client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6");
         if (start) await _client.StartAsync();
         return _client;
@@ -75,13 +75,12 @@ public class FileOperationWireTests : IAsyncDisposable
                 AbsolutePath = directory // Replacing a directory fails on both Windows and Linux.
             };
             project.AddModule(module);
-            var service = new ProjectService(
-                () => throw new InvalidOperationException("No dialog expected"),
+            var service = new ProjectService(                () => throw new InvalidOperationException("No dialog expected"),
                 Substitute.For<IWindowManager>(), Substitute.For<IEventBus>(),
                 Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
                 Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(),
                 new FileBaselineStore(), Substitute.For<HexIDE.Localization.ILocalizationService>(),
-                Substitute.For<IHeaderRefresher>(), lspClient: () => client);
+                Substitute.For<IHeaderRefresher>(), new ComponentRegistry(), lspClient: () => client);
 
             var save = () => service.SaveModule(module, false);
             (await save.Should().ThrowAsync<Exception>()).Which.Should()
@@ -151,17 +150,22 @@ public class FileOperationWireTests : IAsyncDisposable
     }
 
     [Theory]
-    [InlineData("Create", true)]
-    [InlineData("Rename", true)]
-    [InlineData("Delete", true)]
-    [InlineData("Create", false)]
-    [InlineData("Rename", false)]
-    [InlineData("Delete", false)]
-    public async Task RegistryFileOperationsHaveOneWorkspaceWriter(string operation, bool generatesArtifact)
+    [InlineData("Create", true, false)]
+    [InlineData("Create", true, true)]
+    [InlineData("Rename", true, false)]
+    [InlineData("Rename", true, true)]
+    [InlineData("Delete", true, false)]
+    [InlineData("Delete", true, true)]
+    [InlineData("Create", false, false)]
+    [InlineData("Rename", false, false)]
+    [InlineData("Delete", false, false)]
+    public async Task RegistryFileOperationsHaveOneWorkspaceWriter(string operation, bool declaresArtifact, bool importsProject)
     {
         var client = await ConnectAsync("{\"did" + operation + "\":{\"filters\":[{\"pattern\":{\"glob\":\"**/*.bas\"}}]}}", start: false);
         var registration = new LanguageServerRegistration("probe", "Probe", [".bas"], "vb6", () => client,
-            WorkspaceArtifact: generatesArtifact ? new("probe.rdproj", "rdcore") : null);
+            WorkspaceArtifact: declaresArtifact ? new("probe.rdproj", "rdcore") : null,
+            ProjectImport: importsProject ? new("probe.import", JsonSerializer.SerializeToElement(new[] { "{projectPath}" })) : null);
+        var generatesArtifact = declaresArtifact && !importsProject;
         await using var registry = new LspClientRegistry([registration], Substitute.For<ILogger<LspClientRegistry>>());
         var ct = TestContext.Current.CancellationToken;
         await registry.OpenDocumentAsync("file:///project/Old.bas", "", ct);

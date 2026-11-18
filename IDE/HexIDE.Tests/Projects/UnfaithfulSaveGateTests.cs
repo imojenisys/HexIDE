@@ -8,6 +8,7 @@ using HexIDE.IDE;
 using HexIDE.Projects;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Sidecar;
+using HexIDE.Tests.Infrastructure;
 
 namespace HexIDE.Tests.Projects;
 
@@ -26,6 +27,35 @@ namespace HexIDE.Tests.Projects;
 /// </summary>
 public class UnfaithfulSaveGateTests : IDisposable
 {
+    // #4459: a Module= declaration must not let the module writer reorder designer text.
+    [Theory]
+    [InlineData("VB.Form", false)]
+    [InlineData("VB.UserControl", false)]
+    [InlineData("VB.Form", true)]
+    public async Task Designer_text_listed_as_a_vbp_module_is_never_written(string root, bool ocx)
+    {
+        var text = "VERSION 5.00\r\n" + (ocx ? "Object = \"X\"; \"X.OCX\"\r\n" : "")
+            + $"Begin {root} Form1\r\n   Caption = \"Form1\"\r\nEnd\r\nAttribute VB_Name = \"Form1\"\r\nOption Explicit\r\n";
+        var path = Path.Join(dir, "Form1.frm");
+        File.WriteAllText(path, text);
+        var vbp = Path.Join(dir, "Test.vbp");
+        File.WriteAllText(vbp, "Type=Exe\r\nModule=Listed; Form1.frm\r\nName=\"Test\"\r\n");
+        var svc = MakeService();
+        await svc.OpenProject(vbp);
+        loaded.Single().Modules.Single().Name.Should().Be("Form1");
+        var before = File.ReadAllBytes(path);
+
+        await svc.SaveAllProjects(saveAs: false);
+
+        File.ReadAllBytes(path).Should().Equal(before);
+        var module = loaded.Single().Modules.Single();
+        module.OriginalHeader.Should().BeEmpty();
+        module.Code.Should().Be(text);
+        warningsShown.Should().Be(1);
+        (await svc.SaveModule(module, saveAs: true)).Should().BeFalse();
+        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>(), Arg.Any<string?>());
+    }
+
     private readonly string dir = Path.Join(Path.GetTempPath(), "hexide-gate-" + Guid.NewGuid().ToString("N"));
 
     public UnfaithfulSaveGateTests() => Directory.CreateDirectory(dir);
@@ -66,8 +96,7 @@ public class UnfaithfulSaveGateTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
@@ -76,7 +105,7 @@ public class UnfaithfulSaveGateTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             localization,
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     private const string FlatForm =
@@ -153,6 +182,66 @@ public class UnfaithfulSaveGateTests : IDisposable
 
         warningsShown.Should().Be(0);
         (await File.ReadAllTextAsync(Path.Join(dir, "Form1.frm"), TestContext.Current.CancellationToken)).Should().Contain("Begin VB.TextBox Text1");
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    public async Task A_form_holding_a_slider_saves_code_edits(string lineEnding)
+    {
+        var svc = MakeService();
+        var text = "VERSION 5.00\r\nBegin VB.Form Form1 \r\n"
+            + "   Begin MSComctlLib.Slider Slider1 \r\n"
+            + "      Height          =   675\r\n      Width           =   4500\r\n"
+            + "      _ExtentX        =   7938\r\n      _ExtentY        =   1191\r\n"
+            + "      _Version        =   393216\r\n      Value           =   6\r\n"
+            + "   End\r\nEnd\r\nAttribute VB_Name = \"Form1\"\r\n";
+        text = text.ReplaceLineEndings(lineEnding);
+        await svc.OpenProject(Stage(text));
+        var form = loaded.Single().Forms.Single();
+        form.UpdateCode(form.Code + "' edited code\r\n");
+
+        await svc.SaveProject(loaded.Single(), saveAs: false);
+
+        warningsShown.Should().Be(0);
+        (await File.ReadAllTextAsync(Path.Join(dir, "Form1.frm"),
+            TestContext.Current.CancellationToken)).Should().Contain("' edited code");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_slider_corpus_saves_byte_for_byte_with_only_the_code_edit(bool editCode)
+    {
+        var original = File.ReadAllBytes(Path.Join(RepoTree.Root(), "corpus", "inbox-controls", "saved", "slider", "Form1.frm"));
+        var text = System.Text.Encoding.Latin1.GetString(original);
+        var svc = MakeService();
+        await svc.OpenProject(Stage(text));
+        var form = loaded.Single().Forms.Single();
+        var events = Substitute.For<IEventBus>();
+        events.Subscribe<HexIDE.Events.CreateOrNavigateToSubEvent>(Arg.Any<Action<HexIDE.Events.CreateOrNavigateToSubEvent>>())
+            .Returns(Substitute.For<IDisposable>());
+        using (var editor = new CodeEditorViewModel(
+            Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), svc,
+            events, Substitute.For<HexIDE.Lsp.ILspClient>(), Substitute.For<ISettingsService>(), Substitute.For<IStatusBarService>(),
+            Substitute.For<HexIDE.Bookmarks.IBookmarkService>(), Substitute.For<HexIDE.Debugging.IBreakpointService>(),
+            Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(), Substitute.For<HexIDE.Debugging.IRunScope>(),
+            Substitute.For<HexIDE.Localization.ILocalizationService>()).Initialize(form))
+        {
+            editor.IsReadOnly.Should().BeFalse("the corpus must open without the read-only banner");
+            editor.ReadOnlyReason.Should().BeNull();
+        }
+        // Close the untouched buffer before editing the model; otherwise disposal restores its old code
+        // and #3071 retains that unsaved buffer as a project-owned language-server session.
+        const string edit = "' edited code\r\n";
+        if (editCode) form.UpdateCode(form.Code + edit);
+
+        (await svc.SaveForm(form, saveAs: false)).Should().BeTrue();
+
+        warningsShown.Should().Be(0);
+        File.ReadAllBytes(Path.Join(dir, "Form1.frm")).Should().Equal(editCode
+            ? original.Concat(System.Text.Encoding.Latin1.GetBytes(edit)).ToArray()
+            : original);
     }
 
     [Fact]
@@ -278,7 +367,7 @@ public class UnfaithfulSaveGateTests : IDisposable
         var written = await svc.SaveForm(loaded.Single().Forms.Single(), saveAs: true);
 
         written.Should().BeFalse();
-        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>());
+        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>(), Arg.Any<string?>());
     }
 
     [Fact]
@@ -364,7 +453,7 @@ public class UnfaithfulSaveGateTests : IDisposable
         var written = await svc.SaveModule(loaded.Single().Modules.Single(), saveAs: true);
 
         written.Should().BeFalse();
-        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>());
+        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>(), Arg.Any<string?>());
     }
 
     [Fact]
@@ -424,7 +513,7 @@ public class UnfaithfulSaveGateTests : IDisposable
         var ctlPath = Path.Join(dir, "UserControl1.ctl");
         var elsewhere = Path.Join(dir, "elsewhere");
         Directory.CreateDirectory(elsewhere);
-        lastWindowManager!.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>()).Returns(async _ =>
+        lastWindowManager!.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>(), Arg.Any<string?>()).Returns(async _ =>
         {
             File.WriteAllText(ctlPath, NestedContainerUserControl);
             await svc.ReloadModuleFromDisk(control);
@@ -446,7 +535,7 @@ public class UnfaithfulSaveGateTests : IDisposable
         await svc.OpenProject(Stage(FlatForm));
         var form = loaded.Single().Forms.Single();
         var copy = Path.Join(dir, "Copy.frm");
-        lastWindowManager!.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>()).Returns(async _ =>
+        lastWindowManager!.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>(), Arg.Any<string?>()).Returns(async _ =>
         {
             File.WriteAllText(Path.Join(dir, "Form1.frm"), NestedContainerForm);
             await svc.ReloadFormFromDisk(form);
@@ -474,7 +563,7 @@ public class UnfaithfulSaveGateTests : IDisposable
         var make = async () => await svc.MakeProject(loaded.Single());
 
         (await make.Should().ThrowAsync<OperationCanceledException>()).Which.Should().NotBeOfType<SourceEncodingRefusal>();
-        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>());
+        await lastWindowManager!.DidNotReceive().SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>(), Arg.Any<string?>());
         warningsShown.Should().Be(1);
         requestedKeys.Should().Contain("Str.Dialog.UnfaithfulSave.Body.Many", "both are named in the one warning");
     }

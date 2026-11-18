@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using HexIDE.Addins;
 using HexIDE.Bookmarks;
 using HexIDE.Events;

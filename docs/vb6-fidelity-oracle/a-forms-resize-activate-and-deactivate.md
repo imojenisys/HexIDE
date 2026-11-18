@@ -86,6 +86,70 @@ What these show:
 - **What looked like an exception, and was not.** In run 2, `Unload Form2` after the switch raised no Activate for
   Form1, where run 1's did. Windows activated Notepad, which lay under Form2, so no form of the program was activated.
 
+### The active form hidden by `Visible`, and the last visible form hidden and shown (2026-11-14, #3936)
+
+**The question.** Run 2 hid Form2 with `Visible = False` only while it was inactive. What does `Visible = False` do to the
+*active* form? And what is raised when the program's only visible form is hidden and shown again?
+
+**The probe.** VB6 SP6, built native and p-code with `/make` in session 0, and run in the guest's interactive console
+through the console agent. Native code and p-code logged the same lines. There were two forms:
+- Form1, with Text1, Text2 and the 600 ms Timer;
+- Form2, with Text3 and Text4.
+
+Each form logs Activate, Deactivate, its own GotFocus and LostFocus, Resize, and its TextBoxes' GotFocus and LostFocus.
+The tick after each step reads `Screen.ActiveForm`, `Screen.ActiveControl`, and each form's `ActiveControl`. The driver
+gave the probe the foreground as it started.
+
+| Step | Log | The read on the next tick |
+|---|---|---|
+| `Text2.SetFocus`, `Form2.Show`, `Form2.Text4.SetFocus`, a step a tick | as run 1's, with Form2's Text3 gotfocus at the Show | Screen Form2, Text4; Form1's ActiveControl Text2, Form2's Text4 |
+| `Form2.Visible = False`, Form2 active, Form1 shown | the step's after, then `Form2 Text4 lostfocus`, `Form2 deactivate`, `Form1 activate`, `Form1 Text2 gotfocus` | Screen Form1, Text2 |
+| `Form2.Visible = True` | the step's after, then `Form1 Text2 lostfocus`, `Form1 deactivate`, `Form2 activate`, **`Form2 Text4 gotfocus`** | Screen Form2, Text4 |
+| `Form2.Hide`, Form2 active | the step's after, then the same four lines as `Visible = False` | Screen Form1, Text2 |
+| `Me.Hide`, Form1 the only visible form and active | the step's after, then **nothing** | **Screen Form1, Text2**; Form1 not visible |
+| `Me.Show` | the step's after, then **nothing**: no Activate, no GotFocus, no Resize | Screen Form1, Text2 |
+| `Me.Visible = False`, then on a later tick `Me.Visible = True` | as `Me.Hide` and `Me.Show`: nothing | Screen Form1, Text2, after each |
+
+**Readings:**
+- **`Visible = False` on the active form is `Hide`.** Its control loses the focus, the form is deactivated, and the form
+  activated next gets its own control back. `Visible = True` is `Show`, and a form shown again gets its own control back:
+  Text4, not Text3, its first.
+- **Hiding the program's last visible form raises nothing, and nor does showing it again.** There's no LostFocus or
+  Deactivate at the hide, and no Activate or GotFocus at the show. `Screen.ActiveForm` and `Screen.ActiveControl` read the
+  form and its control throughout, hidden or shown.
+- **This fits the rule above:** VB6 raises the pair only when the form it last activated changes, and here it never did.
+
+**Not measured:** `Unload` of the last visible form, and a third form waiting behind the one hidden.
+
+### `Visible` while another form is modal, against `Show` and `Hide` (2026-11-16, #3936)
+
+**The question.** #822 measured `Show` and `Hide` raising 401 and 402 while a form is modal. Does setting a form's
+`Visible` raise them too? And does a modal form's own `Visible = False` end its modal loop, as `Hide` does?
+
+**The probe.**
+- **Build:** VB6 SP6, `/make`, native code and p-code, which logged the same lines.
+- **The setup:** a Sub Main project ran `Form1.Show`, `Load Form2`, then `Form3.Show vbModal`.
+- **The test:** Form3's first `Activate` ran each statement under `On Error Resume Next`, logging `Err.Number` and the
+  forms' `Visible`. One build set `Visible` and the other called the methods.
+- **The modal loop:** a 2-second Timer on Form3, enabled just before its own statement, would have shown a modal loop
+  still running. It never fired.
+
+| Statement, run from modal Form3 | vb6.exe |
+|---|---|
+| `Form2.Visible = True`, Form2 loaded and hidden | **401**, and Form2 stays hidden |
+| `Form2.Show` | 401, and Form2 stays hidden |
+| `Form1.Visible = False`, Form1 shown | **no error, and Form1 is hidden** |
+| `Form1.Hide` | **402, and Form1 is hidden anyway** |
+| `Me.Visible = False` | no error. **The modal loop ends**: `Show vbModal` returns, and Form3 stays loaded, hidden |
+| `Me.Hide` | the same: no error, and the loop ends |
+
+**Readings:**
+- **`Visible = True` on another form raises `Show`'s 401** while a form is modal.
+- **`Visible = False` doesn't raise `Hide`'s 402.** Both hide the form, so only `Hide` reports the error.
+- **`Hide`'s 402 comes after the form is hidden.** The obvious reading, that the error leaves the form as it was, is
+  wrong.
+- **A modal form's own `Visible = False` ends its modal loop,** as `Hide` does, and leaves the form loaded.
+
 ### In HexIDE (#994)
 
 **Resize.** A form's context raises it when its window first becomes visible since the form loaded, and after that
@@ -107,6 +171,15 @@ doesn't activate a disabled one. Posting matters on the desktop only: Win32 acti
 with the posting removed the pair ran there, before the statement after the Show. Headless, the activation comes after
 the handler either way, so no headless test can tell.
 
+**GotFocus and LostFocus around them (#3932).** A switch raises the old form's control's LostFocus before its
+Deactivate, and the new form's control's GotFocus after its Activate, all four posted with the pair, as measured above.
+A control's GotFocus that the window system reports before the activation waits for it. Focus moving between the
+controls of one form raises the two events where it moves, and so does hiding or disabling the focused control. Hiding
+the active form activates the form active before it, without waiting for the window system (#3920). Live on Windows,
+a three-form program logged the measured order after the statement for `Show`, a form shown again, and `Hide` with
+one form left and with two; a `SetFocus` to another form is pinned headless (`FormSwitchOrderTests`). Hiding the last
+visible form and showing it again raised nothing, as measured.
+
 **Live, on the desktop at 150% scaling.** A two-form program logged, in order:
 - `f1 initialize`, `f1 load`, `f1 resize 5400x4200 ws0`, `f1 activate`;
 - Show2: `f2 initialize`, `f2 load`, `f2 resize 3000x1500 ws0`, the line after the Show, `f1 deactivate`, `f2 activate`;
@@ -118,8 +191,9 @@ the handler either way, so no headless test can tell.
 **A form's `Move`** stopped the program, refused as not implemented. It runs since #1569, which measured it: [A form's
 Move](a-forms-move.md#a-forms-move-2026-10-26-1569).
 
-**Recorded here and left to their own issues:** GotFocus and LostFocus around Activate and Deactivate (#1101), and
-Paint (#991).
+**Since #3936,** `Visible = False` and `Unload` of the active form hand activation on as `Hide` does, with no
+Deactivate for a form that unloads, and the last visible form hidden and shown again keeps its control, as measured
+above. **Left to its own issue:** Paint (#991).
 
 **Not measured:** a form whose `.frm` starts it maximized or minimized. HexIDE raises the show's Resize at the size
 the form was designed at, and another when the window takes its maximized size.

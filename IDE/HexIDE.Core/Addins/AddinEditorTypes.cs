@@ -15,21 +15,17 @@ public enum AddinDiagnosticSeverity { Error = 1, Warning = 2, Information = 3, H
 /// An empty range edit deleting a declaration's text also removes its Attribute run.
 /// <c>TrySetContent</c> refuses a replacement that changes, adds or drops them, other than by moving or renaming them with their member or deleting them with its declaration,
 /// and names the member (hexide-io/HexIDE#273 task 4.5b). Before hexide-io/HexIDE#273 this was the code alone,
-/// starting at the form's <c>Attribute</c> lines or after the class's header. A form created in this session and
-/// not yet saved or changed in the designer has no header yet, so for it this is still the code alone.
+/// starting at the form's <c>Attribute</c> lines or after the class's header. New forms hold their header from
+/// creation, before their first save (#885).
 /// </param>
 /// <param name="Project">
-/// The project holding this document, by name. Trailing and optional so an add-in built against an earlier
-/// version keeps compiling, on the rule this file already records for a diagnostic's Code and Source: the
-/// IDE builds these records and add-ins read them, so nothing outside the IDE constructs one positionally.
+/// The project holding this document, by name. Its existing positional signature is part of the SDK contract.
 /// </param>
 public record AddinDocument(string FileName, string FilePath, string Content, AddinDocumentKind Kind,
     string? Project = null);
 
 /// <param name="Project">
-/// The project holding this document, by name. Trailing and optional so an add-in built against an earlier
-/// version keeps compiling, on the rule this file already records for a diagnostic's Code and Source: the
-/// IDE builds these records and add-ins read them, so nothing outside the IDE constructs one positionally.
+/// The project holding this document, by name. Its existing positional signature is part of the SDK contract.
 /// </param>
 /// <remarks>
 /// Positions are 1-based, and lines count from the top of the file with its header included (a form's designer
@@ -52,9 +48,7 @@ public record AddinTextEdit(
     string NewText);
 
 /// <param name="Project">
-/// The project holding this document, by name. Trailing and optional so an add-in built against an earlier
-/// version keeps compiling, on the rule this file already records for a diagnostic's Code and Source: the
-/// IDE builds these records and add-ins read them, so nothing outside the IDE constructs one positionally.
+/// The project holding this document, by name. Its existing positional signature is part of the SDK contract.
 /// </param>
 public record AddinFileInfo(string FileName, string FilePath, AddinDocumentKind Kind, string? Project = null);
 
@@ -72,8 +66,8 @@ public record AddinFileInfo(string FileName, string FilePath, AddinDocumentKind 
 /// header was put in front of it. False for every other call.
 /// </param>
 /// <remarks>
-/// Trailing fields may be added, optional, on the rule the records above follow: the IDE builds this and add-ins
-/// read it, so nothing outside the IDE constructs one positionally.
+/// Extend SDK records with init-only properties: positional additions replace the constructor and
+/// <c>Deconstruct</c>, breaking compiled add-ins (#4566, #4567).
 /// </remarks>
 public record AddinEditResult(bool Succeeded, string? Reason = null, bool HeaderKept = false)
 {
@@ -99,7 +93,7 @@ public record AddinEditResult(bool Succeeded, string? Reason = null, bool Header
 /// <remarks>
 /// An empty list with no reason is a document the IDE holds no diagnostics for. That is the distinction this
 /// record exists to make: the list alone cannot tell a clean file from a name that found nothing.
-/// Trailing fields may be added, optional, on the rule the records above follow.
+/// Extend this record with init-only properties to preserve its constructor and <c>Deconstruct</c>.
 /// </remarks>
 public record AddinDiagnosticsResult(IReadOnlyList<AddinDiagnostic> Diagnostics, string? Reason = null)
 {
@@ -107,13 +101,16 @@ public record AddinDiagnosticsResult(IReadOnlyList<AddinDiagnostic> Diagnostics,
     public bool Refused => Reason is not null;
 }
 
-public record AddinProjectInfo(string ProjectName, string ProjectPath, IReadOnlyList<AddinFileInfo> Files);
+/// <param name="StartupObject">
+/// What the project starts at, as the .vbp's <c>Startup</c> says it: <c>"Sub Main"</c>, a form's name, or null for
+/// neither. Its existing positional signature is part of the SDK contract.
+/// </param>
+public record AddinProjectInfo(string ProjectName, string ProjectPath, IReadOnlyList<AddinFileInfo> Files,
+    string? StartupObject = null);
 
 /// <remarks>
-/// <b><c>Code</c> and <c>Source</c> are trailing and optional deliberately.</b> This type is built by the
-/// IDE and read by add-ins, so adding to the end leaves every existing add-in compiling and running
-/// unchanged, while an add-in that wants the rule that fired — or which of several servers reported it —
-/// can now ask (hexide-io/HexIDE#426).
+/// <c>Code</c> identifies the rule that fired, and <c>Source</c> the server that reported it (#426).
+/// Preserve the existing positional signature; extend this record with init-only properties.
 /// <para>
 /// <c>Line</c> and <c>Column</c> are 1-based, and the line counts from the top of the file with its header
 /// included, as the code window numbers it.
@@ -127,3 +124,8 @@ public record AddinDiagnostic(
     string? Code = null,
     string? Source = null,
     string? Project = null);
+
+/// <summary>A document's whole file, or why it could not be read. Built by the IDE, read by add-ins.</summary>
+/// <param name="Document">The document read, or null when refused.</param>
+/// <param name="Reason">Why it could not be read, in English as <see cref="AddinEditResult.Reason"/> is.</param>
+public record AddinDocumentResult(AddinDocument? Document, string? Reason = null);

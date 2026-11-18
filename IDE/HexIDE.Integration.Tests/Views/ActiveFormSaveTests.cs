@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -30,9 +31,10 @@ namespace HexIDE.Integration.Tests.Views;
 
 public class ActiveFormSaveTests
 {
-    private sealed class Shell : IDisposable
+    private sealed class Shell : IAsyncDisposable
     {
-        public readonly DISetup Composition = new();
+        private readonly RealComposition owned = new();
+        public DISetup Composition => owned.Composition;
         public readonly MainView Main;
         public readonly TextBox Tool = new();
         public readonly StackPanel Content = new();
@@ -50,10 +52,11 @@ public class ActiveFormSaveTests
             Tool.Focus();
         }
 
-        public void Dispose()
+        public async ValueTask DisposeAsync()
         {
             Composition.DocumentDockService.CloseAll();
             Window.Close();
+            await owned.DisposeAsync();
         }
     }
 
@@ -62,7 +65,7 @@ public class ActiveFormSaveTests
     [InlineData(true)]
     public async Task Tool_focus_saves_the_active_designer(bool saveAs)
     {
-        using var shell = new Shell();
+        await using var shell = new Shell();
         await WaitFor(() => shell.Tool.IsFocused, value => value, "tool focus");
         var projects = Substitute.For<IProjectService>();
         var form = new FormDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), FormComponentClass.Instance, "Form1");
@@ -88,7 +91,7 @@ public class ActiveFormSaveTests
     [AvaloniaFact]
     public async Task Switching_active_form_requeries_commands_without_moving_keyboard_focus()
     {
-        using var shell = new Shell();
+        await using var shell = new Shell();
         await WaitFor(() => shell.Tool.IsFocused, value => value, "tool focus");
         Dispatcher.UIThread.RunJobs();
         var queries = 0;
@@ -116,14 +119,14 @@ public class ActiveFormSaveTests
     [InlineData(true)]
     public async Task Form_code_save_waits_for_formatting_before_saving(bool saveAs)
     {
-        using var shell = new Shell();
+        await using var shell = new Shell();
         await WaitFor(() => shell.Tool.IsFocused, value => value, "tool focus");
         var projects = Substitute.For<IProjectService>();
         var lsp = Substitute.For<ILspClient>();
         lsp.IsRunning.Returns(true);
         lsp.RequestDocumentSymbolsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Array.Empty<DocumentSymbol>());
         var formatting = new TaskCompletionSource<TextEdit[]>();
-        lsp.RequestFormattingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(formatting.Task);
+        lsp.RequestFormattingAsync(Arg.Any<string>(), Arg.Any<FormattingOptions>(), Arg.Any<CancellationToken>()).Returns(formatting.Task);
         var settings = Substitute.For<ISettingsService>();
         settings.TabWidth.Returns(4);
         settings.FormatOnSave.Returns(true);
@@ -163,14 +166,14 @@ public class ActiveFormSaveTests
     [AvaloniaFact]
     public async Task Save_key_in_a_carried_file_reaches_its_own_binding()
     {
-        using var shell = new Shell();
+        await using var shell = new Shell();
         await WaitFor(() => shell.Tool.IsFocused, value => value, "tool focus");
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".txt");
         try
         {
             File.WriteAllText(path, "before");
             var vm = new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(),
-                Substitute.For<ILocalizationService>()).Initialize(
+                Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>()).Initialize(
                 new RelatedDocumentDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "notes.txt", path));
             shell.Composition.DocumentDockService.OpenDocument(vm);
             var view = new RelatedDocumentEditorView { DataContext = vm };
@@ -186,6 +189,114 @@ public class ActiveFormSaveTests
             PressSave(editor.TextArea);
 
             await WaitFor(() => ReadSavedText(path), value => value == "after", "saved file content");
+        }
+        finally { File.Delete(path); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Project_file_save_reaches_the_tab_and_keeps_its_dock_position(bool toolFocus)
+    {
+        await using var shell = new Shell();
+        var directory = Path.Join(Path.GetTempPath(), "hexide-project-tab-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Join(directory, "Example.vbp");
+        try
+        {
+            File.WriteAllText(path, "Type=Exe\r\nName=\"Example\"\r\n");
+            await shell.Composition.ProjectService.OpenProject(path);
+            var project = shell.Composition.ProjectManager.LoadedProjects.Single();
+            shell.Composition.EditorService.EditProjectFile(new ProjectFileSource(project));
+            var tab = shell.Composition.DocumentDockService.OpenDocuments.OfType<ProjectFileDocumentViewModel>().Single();
+            var owner = tab.Owner;
+            var dock = (Dock.Model.Controls.IDocumentDock)owner!;
+            var position = dock.VisibleDockables!.IndexOf(tab);
+            var view = new ProjectFileDocumentView { DataContext = tab };
+            shell.Content.Children.Add(view);
+            Dispatcher.UIThread.RunJobs();
+            var editor = view.FindControl<TextEditor>("Editor")!;
+            editor.IsReadOnly.Should().BeFalse();
+            tab.Document.Insert(tab.Document.TextLength, "Title=\"X\"\r\n");
+            var text = tab.Document.Text;
+            if (toolFocus) shell.Tool.Focus();
+            else editor.TextArea.Focus();
+            await WaitFor(() => toolFocus ? shell.Tool.IsFocused : editor.TextArea.IsFocused, value => value, "save target focus");
+            if (toolFocus)
+            {
+                await WaitFor(() => ApplicationCommands.SaveCommand.CanExecute(null, shell.Main), value => value, "project-file Save enabled");
+                ApplicationCommands.SaveCommand.Execute(null, shell.Main);
+            }
+            else PressSave(editor.TextArea);
+            await WaitFor(() => tab.IsModified, value => !value, "project-file save");
+            File.ReadAllBytes(path).Should().Equal(Vb6TextFile.EncodeDocument(path, text, project.TextEncoding));
+            tab.Owner.Should().BeSameAs(owner);
+            dock.VisibleDockables!.IndexOf(tab).Should().Be(position);
+            shell.Composition.DocumentDockService.OpenDocuments.Should().Contain(tab);
+            tab.Source.Owner.Should().BeSameAs(shell.Composition.ProjectManager.LoadedProjects.Single());
+        }
+        finally { Directory.Delete(directory, true); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closing_a_modified_project_file_uses_its_close_question(bool discard)
+    {
+        await using var shell = new Shell();
+        var path = Path.Join(Path.GetTempPath(), Guid.NewGuid() + ".vbp");
+        try
+        {
+            File.WriteAllText(path, "Type=Exe\r\nName=\"P\"\r\n");
+            var projects = Substitute.For<IProjectService>();
+            var vm = new ProjectFileDocumentViewModel(new ProjectFileSource(new ProjectDefinition(VBProjectType.EXE, "P")
+                { AbsolutePath = path }), shell.Composition.EventBus, projects);
+            projects.ConfirmProjectFileClose(vm).Returns(_ =>
+            {
+                if (discard) vm.Refresh();
+                return Task.FromResult(discard);
+            });
+            shell.Composition.DocumentDockService.OpenDocument(vm);
+            vm.Document.Insert(vm.Document.TextLength, "Title=\"X\"\r\n");
+            shell.Composition.DocumentDockService.CloseDocument(vm);
+            await WaitFor(() => projects.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IProjectService.ConfirmProjectFileClose)),
+                value => value == 1, "project-file close question");
+            shell.Composition.DocumentDockService.OpenDocuments.Contains(vm).Should().Be(!discard);
+            if (!discard)
+            {
+                vm.IsModified.Should().BeTrue();
+                vm.Refresh();
+            }
+            File.ReadAllText(path).Should().NotContain("Title=");
+        }
+        finally { File.Delete(path); }
+    }
+
+    [AvaloniaFact]
+    public async Task A_clean_project_file_tab_stays_open_while_applying()
+    {
+        await using var shell = new Shell();
+        var path = Path.Join(Path.GetTempPath(), Guid.NewGuid() + ".vbp");
+        try
+        {
+            File.WriteAllText(path, "Type=Exe\r\nName=\"P\"\r\n");
+            var projects = Substitute.For<IProjectService>();
+            var vm = new ProjectFileDocumentViewModel(new ProjectFileSource(new ProjectDefinition(VBProjectType.EXE, "P")
+                { AbsolutePath = path }), shell.Composition.EventBus, projects);
+            shell.Composition.DocumentDockService.OpenDocument(vm);
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var applying = vm.DuringApply(() => completion.Task);
+            try
+            {
+                shell.Composition.DocumentDockService.CloseDocument(vm);
+                shell.Composition.DocumentDockService.OpenDocuments.Should().Contain(vm);
+                await projects.DidNotReceive().ConfirmProjectFileClose(vm);
+            }
+            finally
+            {
+                completion.TrySetResult(true);
+                await applying;
+            }
         }
         finally { File.Delete(path); }
     }

@@ -99,6 +99,33 @@ public sealed class WorkspaceArtifactProjectTests
         sut.Dispose();
     }
 
+    [Fact]
+    public void A_project_whose_type_writes_its_file_is_rendered_for_a_server_whoever_opened_it()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "hexide-projection-" + Guid.NewGuid().ToString("N"), "Probe.vbp");
+        var project = new ProjectDefinition(VBProjectType.EXE, "Probe") { AbsolutePath = path, ContributedBy = "rdcore" };
+        var manager = Substitute.For<IProjectManager>();
+        manager.LoadedProjects.Returns(new[] { project });
+        var sut = new ProjectLspWorkspace(() => manager);
+
+        sut.Projects[0].ProjectText.Should().NotBeNull();
+        sut.Dispose();
+    }
+
+    [Fact]
+    public void A_project_whose_type_does_not_write_its_file_is_never_rendered_for_a_server()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "hexide-projection-" + Guid.NewGuid().ToString("N"), ".rdproj");
+        var project = new ProjectDefinition(VBProjectType.EXE, "Ledger") { AbsolutePath = path, Offers = ProjectOffers.Nothing };
+        var manager = Substitute.For<IProjectManager>();
+        manager.LoadedProjects.Returns(new[] { project });
+        var sut = new ProjectLspWorkspace(() => manager);
+
+        sut.Projects[0].Project.DefinitionPath.Should().Be(path);
+        sut.Projects[0].ProjectText.Should().BeNull("its file is its add-in's, in its add-in's format");
+        sut.Dispose();
+    }
+
     [AvaloniaFact]
     public async Task ProjectTextTracksUnsavedSettingsAndMembershipWithoutWritingTheProject()
     {
@@ -126,14 +153,14 @@ public sealed class WorkspaceArtifactProjectTests
     [Fact(Skip = "Type libraries are read only on Windows.", SkipUnless = nameof(OnWindows))]
     public void TheTypeLibraryNamesOleAutomationStdole()
     {
-        HexIDE.Runtime.TypeLibrary.TypeLibReader.ReadName("{00020430-0000-0000-C000-000000000046}", "2.0", null)
+        HexIDE.TypeLibrary.TypeLibReader.ReadName("{00020430-0000-0000-C000-000000000046}", "2.0", null)
             .Should().Be("stdole");
     }
 
     [Fact(Skip = "Type libraries are read only on Windows.", SkipUnless = nameof(OnWindows))]
     public void ALocalTypeLibraryIsNamedFromItsFile()
     {
-        HexIDE.Runtime.TypeLibrary.TypeLibReader.ReadName("", "0.0", Path.Combine(Environment.SystemDirectory, "stdole2.tlb"))
+        HexIDE.TypeLibrary.TypeLibReader.ReadName("", "0.0", Path.Combine(Environment.SystemDirectory, "stdole2.tlb"))
             .Should().Be("stdole");
     }
 

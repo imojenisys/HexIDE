@@ -50,12 +50,26 @@ public static class PipeNameLimit
     private const int WindowsPipeNameMax = 256 - 9;
 
     /// <summary>The longest pipe name that can work on this host.</summary>
-    public static int Max { get; } = OperatingSystem.IsWindows()
-        ? WindowsPipeNameMax
-        : Math.Max(1, UnixSocketPathMax - (Path.GetTempPath().Length + UnixPipePrefix.Length));
+    public static int Max { get; } = OperatingSystem.IsWindows() ? WindowsPipeNameMax : UnixMaxFor(Path.GetTempPath());
+
+    /// <summary>The longest pipe name that can work on a Unix host whose temp directory is <paramref name="tempPath"/>.</summary>
+    internal static int UnixMaxFor(string tempPath) =>
+        Math.Max(1, UnixSocketPathMax - (tempPath.Length + UnixPipePrefix.Length));
 
     /// <summary>True when <paramref name="pipeName"/> cannot be used on this host.</summary>
-    public static bool IsTooLong(string? pipeName) => pipeName is not null && pipeName.Length > Max;
+    /// <remarks>
+    /// On Unix an absolute name is not prefixed: .NET uses a rooted name as the socket path itself, so only
+    /// <c>sun_path</c>'s own limit applies to it. Counting it against <see cref="Max"/>, which assumes the temp
+    /// directory and <c>CoreFxPipe_</c> in front, refused a 68-character absolute path on macOS that the
+    /// platform accepts (#381).
+    /// </remarks>
+    public static bool IsTooLong(string? pipeName) => pipeName is not null
+        && pipeName.Length > (!OperatingSystem.IsWindows() && Path.IsPathRooted(pipeName) ? UnixSocketPathMax : Max);
+
+    internal static object[] RefusalArguments(string pipeName) => OperatingSystem.IsWindows()
+        ? ["pipeName", pipeName.Length, Max]
+        : ["pipeName", pipeName.Length, Max, $"{Path.GetTempPath()}{UnixPipePrefix}<pipeName>",
+            Path.GetTempPath().Length + UnixPipePrefix.Length, UnixSocketPathMax];
 
     /// <summary>
     /// Why a name was refused, in terms of the thing the reader controls. It names the budget, where the

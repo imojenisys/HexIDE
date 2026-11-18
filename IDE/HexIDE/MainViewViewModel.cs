@@ -12,6 +12,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using HexIDE.Controls;
 using HexIDE.Events;
 using HexIDE.Forms.ViewModels;
@@ -23,7 +24,6 @@ using HexIDE.Projects;
 using HexIDE.Runtime;
 using HexIDE.Runtime.Debugging;
 using HexIDE.Runtime.Components;
-using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Addins;
 using HexIDE.Tools;
@@ -54,6 +54,9 @@ public partial class MainViewViewModel : ObservableObject
     private readonly IDocumentDockService documentDockService;
     public DelegateCommand ReopenClosedDocumentCommand { get; }
     public ObservableCollection<RecentProjectItemViewModel> ClosedDocumentMenuItems { get; } = new();
+
+    /// <summary>The Run menu's F5 Runs and Start Once With, for the launches add-ins contribute; null when none can be.</summary>
+    public RunWithMenuViewModel? RunWith { get; }
     private readonly DockFactory dockFactory;
     private readonly IProjectRunnerService projectRunnerService;
     private readonly IEventBus eventBus;
@@ -85,6 +88,8 @@ public partial class MainViewViewModel : ObservableObject
     public ImmediateToolViewModel Immediate { get; }
     public FormLayoutToolViewModel FormLayout { get; }
     public LocalsToolViewModel Locals { get; }
+    public OutlineToolViewModel Outline => dockFactory.Outline;
+    public ICommand OpenOutlineCommand { get; private set; } = null!;
     public WatchesToolViewModel Watches { get; }
     public CallStackToolViewModel CallStack { get; }
     public RecentEditsToolViewModel RecentEdits { get; }
@@ -96,6 +101,7 @@ public partial class MainViewViewModel : ObservableObject
 
     /// <summary>What actually went over the wire to a language server.</summary>
     public HexIDE.Tools.ProtocolInspector.ProtocolInspectorToolViewModel ProtocolInspector { get; }
+    public HexIDE.Tools.Diagnostics.DiagnosticsToolViewModel Diagnostics { get; }
     public IFocusedProjectUtil FocusedProjectUtil { get; }
 
     public IStatusBarService StatusBar { get; }
@@ -107,9 +113,17 @@ public partial class MainViewViewModel : ObservableObject
         private set => SetProperty(ref _layout, value);
     }
 
+    public DelegateCommand ToggleBreakpointCommand { get; }
+    public DelegateCommand RunToCursorCommand { get; }
+    public DelegateCommand SetNextStatementCommand { get; }
+    public DelegateCommand ShowNextStatementCommand { get; }
+    public DelegateCommand OpenCallStackCommand { get; }
+    public DelegateCommand EditWatchCommand { get; }
     public DelegateCommand SaveFormCommand { get; }
     public DelegateCommand RemoveDocumentCommand { get; }
     public DelegateCommand SaveFormAsCommand { get; }
+    public DelegateCommand SaveProjectCommand { get; }
+    public DelegateCommand SaveProjectAsCommand { get; }
 
     public DelegateCommand StartDefaultProjectCommand { get; }
     public DelegateCommand StartExternalDebugCommand { get; }
@@ -141,8 +155,24 @@ public partial class MainViewViewModel : ObservableObject
 
     public DelegateCommand AddFileCommand { get; }
 
+    /// <summary>File → Recover Unsaved Work: lists the work crash recovery is still holding (hexide-io/HexIDE#499).</summary>
+    public DelegateCommand RecoverUnsavedWorkCommand { get; }
+
+    private readonly HexIDE.Recovery.IRecoveryOffers? recoveryOffers;
+
     public ObservableCollection<RecentProjectItemViewModel> RecentProjects { get; } = new();
     public bool HasRecentProjects => RecentProjects.Count > 0;
+
+    private bool IsInBreakMode => ExternalDebugger?.IsActive == true
+        ? ExternalDebugger.State == HexIDE.Dap.DapSessionState.Stopped
+        : debugController.State == DebugState.Paused;
+
+    // The runner's IsRunning counts an external session as running until its cleanup ends, which can be seconds
+    // after End when an adapter doesn't answer disconnect (#2965), so while one is active its state decides.
+    private bool IsProgramRunning => ExternalDebugger?.IsActive == true
+        ? ExternalDebugger.State is HexIDE.Dap.DapSessionState.Starting or HexIDE.Dap.DapSessionState.Running
+            or HexIDE.Dap.DapSessionState.Stopped
+        : projectRunnerService.IsRunning;
 
     private void UpdateRunState()
     {
@@ -150,8 +180,11 @@ public partial class MainViewViewModel : ObservableObject
         BreakProjectCommand.RaiseCanExecutedChanged();
         OnPropertyChanged(nameof(Title));
         OnPropertyChanged(nameof(WindowTitle));
-        if (projectRunnerService.IsRunning && debugController.State != DebugState.Paused)
-            StatusBar.SetMessage(localization.GetString("Str.StatusBar.Running"));
+        if (IsProgramRunning && !IsInBreakMode)
+            StatusBar.SetImmediateMessage(localization.GetString("Str.StatusBar.Running"));
+        else if (IsInBreakMode && debugController.CurrentStop is { ConditionError: { } error } stop)
+            StatusBar.SetImmediateMessage(string.Format(localization.GetString("Str.Debug.Conditions.EvaluationFailed"),
+                stop.ConditionExpression, stop.Module, stop.Line, error));
         else
             StatusBar.ClearMessage();
     }
@@ -164,18 +197,29 @@ public partial class MainViewViewModel : ObservableObject
                       ?? FocusedProjectUtil.FocusedOrStartupProject?.Name;
             return prefix == null
                 ? localization.GetString("Str.MainWindow.NoProjectTitle")
-                : $"{prefix} - HexIDE " + localization.GetString(debugController.State == DebugState.Paused
+                : $"{prefix} - {Distribution.DisplayName} " + localization.GetString(IsInBreakMode
                     ? "Str.MainWindow.BreakTag"
-                    : projectRunnerService.IsRunning ? "Str.MainWindow.RunTag" : "Str.MainWindow.DesignTag");
+                    : IsProgramRunning ? "Str.MainWindow.RunTag" : "Str.MainWindow.DesignTag");
         }
     }
 
-    /// <summary>The OS window title: <see cref="Title"/> plus a loud developer-mode suffix when the
-    /// session is in developer mode. Bound by the window chrome; recomputed when <see cref="Title"/>
-    /// changes (dev mode is session-fixed). Kept separate from <see cref="Title"/> so the VB6 Caption
-    /// proxy (Get/SetPropertyValue) is unaffected.</summary>
-    public string WindowTitle =>
-        developerModeService.IsEnabled ? $"{Title}  *** DEVELOPER MODE ***" : Title;
+    /// <summary>The OS window title adds session notices to <see cref="Title"/>. Kept separate
+    /// so the VB6 Caption proxy (Get/SetPropertyValue) is unaffected.</summary>
+    public string WindowTitle
+    {
+        get
+        {
+            var title = Static.IsRecoveryMode
+                ? $"{Title} — {localization.GetString("Str.MainWindow.RecoveryNotice")}"
+                : Title;
+            if (!developerModeService.IsEnabled)
+                return title;
+            var notice = localization.GetString(settingsService.LoadUnsignedAddins
+                ? "Str.MainWindow.UnsignedAddinsNotice"
+                : "Str.MainWindow.DeveloperModeNotice");
+            return $"{notice} — {title}";
+        }
+    }
 
     public string SaveProjectMenuHeader =>
         projectManager.CurrentGroup != null
@@ -194,6 +238,24 @@ public partial class MainViewViewModel : ObservableObject
     public string RemoveFormMenuHeader => FormatHeader("Str.Menu.Project.RemoveFormFormat", "Str.Menu.Project.RemoveFormFallback", RemovableDocument?.Name);
     public string ProjectPropertiesMenuHeader => FormatHeader("Str.Menu.Project.PropertiesFormat", "Str.Menu.Project.PropertiesFallback", FocusedProjectUtil.FocusedOrStartupProject?.Name);
 
+    public bool HasBrandHome => Distribution.Current.HomeUrl is not null;
+    public bool HasBrandSupport => Distribution.Current.SupportUrl is not null;
+    public string BrandHomeMenuHeader => string.Format(localization.GetString("Str.Menu.Help.BrandHome"), Distribution.DisplayName);
+    public string BrandSupportMenuHeader => string.Format(localization.GetString("Str.Menu.Help.BrandSupport"), Distribution.DisplayName);
+    public DelegateCommand OpenLogFolderCommand { get; }
+
+    private static async Task OpenLogFolderAsync(IWindowManager windows, ILocalizationService strings,
+        ILogFolderOpener opener)
+    {
+        var directory = new DirectoryInfo(Distribution.LogsDirectory);
+        if (!await opener.OpenAsync(directory))
+            await windows.MessageBox(string.Format(strings.GetString("Str.Help.LogFolder.OpenFailed"), directory.FullName),
+                icon: MessageBoxIcon.Information);
+    }
+
+    public DelegateCommand OpenBrandHomeCommand { get; }
+    public DelegateCommand OpenBrandSupportCommand { get; }
+
     private DocumentIdentity? RemovableDocument
     {
         get
@@ -210,6 +272,8 @@ public partial class MainViewViewModel : ObservableObject
         OnPropertyChanged(nameof(RemoveFormMenuHeader));
         RemoveDocumentCommand.RaiseCanExecutedChanged();
     }
+
+    internal CodeEditorViewModel? ActiveCodeDocument => documentDockService.ActiveDocument as CodeEditorViewModel;
 
     private async Task RemoveActiveDocument()
     {
@@ -229,6 +293,7 @@ public partial class MainViewViewModel : ObservableObject
         nameof(SaveProjectMenuHeader), nameof(SaveFormMenuHeader), nameof(SaveFormAsMenuHeader),
         nameof(RemoveProjectMenuHeader), nameof(MakeProjectMenuHeader), nameof(MakeWithVb6MenuHeader),
         nameof(RemoveFormMenuHeader), nameof(ProjectPropertiesMenuHeader),
+        nameof(BrandHomeMenuHeader), nameof(BrandSupportMenuHeader),
     ];
 
     private void RaiseDynamicMenuHeaders()
@@ -239,7 +304,8 @@ public partial class MainViewViewModel : ObservableObject
 
     public ISettingsService Settings => settingsService;
 
-    public IPersonalityService Personality { get; }
+    public IProfileService Profile { get; }
+    public AddinProjectTemplateService ProjectTemplates { get; }
 
     internal AddinMenuService AddinMenuService { get; }
 
@@ -247,9 +313,23 @@ public partial class MainViewViewModel : ObservableObject
 
     private readonly AddinToolWindowService _addinToolWindowService;
 
+    internal event Action? PauseFocusRequested;
+    internal event Action<IDockable, bool>? KeyboardFocusRequested;
+
     public class DockFactory : Factory
     {
+        internal event Action<IDockable, bool>? KeyboardFocusRequested;
+
+        internal void FocusDockable(IDock dock, IDockable dockable, bool reactivating = false)
+        {
+            base.SetFocusedDockable(dock, dockable);
+            KeyboardFocusRequested?.Invoke(dockable, reactivating);
+        }
+
+        internal const double MinimumDocumentHeight = 120;
+
         private readonly IWindowStateService windowStateService;
+        private readonly ILocalizationService localization;
         private readonly Dictionary<string, IDockable> toolsByKey;
         private readonly Dictionary<string, ToolLayoutState> deferredTools = new();
         private readonly Dictionary<string, int> savedOrders = new();
@@ -259,10 +339,16 @@ public partial class MainViewViewModel : ObservableObject
         private readonly Dictionary<string, List<DockSlot>> closedSlots = new();
         private readonly Dictionary<IDockable, double> restoredProportions = new();
         private IRootDock? liveLayout;
+        private readonly Dictionary<IDockWindow, FloatingLayoutState> restoredWindows = new();
         private readonly Dictionary<string, IToolDock> pendingToolDocks = new();
         private readonly Dictionary<IToolDock, DockLayoutNode> pendingToolGroups = new();
         private double leftProportion = LayoutManifest.DefaultLeftProportion;
         private double rightProportion = LayoutManifest.DefaultRightProportion;
+
+        public IReadOnlyList<ToolLayoutState> SkippedTools => deferredTools.Values
+            .Where(t => !toolsByKey.ContainsKey(t.Key)).ToArray();
+
+        public IRootDock ApplyLayout(LayoutManifest manifest) => BuildLayout(manifest, DocumentDock);
 
         // Every tool's "home" region/order — the single source of truth for defaults and for
         // restoring a closed-then-reopened tool to its slot.
@@ -272,6 +358,23 @@ public partial class MainViewViewModel : ObservableObject
         public ProportionalDock? RightDock;
         public ProportionalDock? MiddleDock;
         public DocumentDock? DocumentDock { get; private set; }
+
+        internal IRootDock? DocumentLayout => liveLayout;
+
+        internal IEnumerable<IDocumentDock> DocumentAreas => Walk(liveLayout).OfType<IDocumentDock>();
+
+        private static IEnumerable<IDockable> Walk(IDockable? node)
+        {
+            if (node is null) yield break;
+            yield return node;
+            if (node is IDock { VisibleDockables: { } children })
+                foreach (var child in children)
+                    foreach (var descendant in Walk(child))
+                        yield return descendant;
+        }
+
+
+        public OutlineToolViewModel Outline { get; }
 
         public DockFactory(ToolBoxToolViewModel toolBox,
             ProjectToolViewModel project,
@@ -287,7 +390,9 @@ public partial class MainViewViewModel : ObservableObject
             LanguageServersToolViewModel languageServers,
             HexIDE.Tools.ProtocolInspector.ProtocolInspectorToolViewModel protocolInspector,
             IWindowStateService windowStateService,
-            DockFactoryReference documentDockFactory)
+            DockFactoryReference documentDockFactory,
+            OutlineToolViewModel outline,
+            ILocalizationService localization)
         {
             ArgumentNullException.ThrowIfNull(toolBox);
             ArgumentNullException.ThrowIfNull(project);
@@ -304,8 +409,20 @@ public partial class MainViewViewModel : ObservableObject
             ArgumentNullException.ThrowIfNull(protocolInspector);
             ArgumentNullException.ThrowIfNull(windowStateService);
             ArgumentNullException.ThrowIfNull(documentDockFactory);
+            ArgumentNullException.ThrowIfNull(outline);
+            ArgumentNullException.ThrowIfNull(localization);
 
+            Outline = outline;
             this.windowStateService = windowStateService;
+            this.localization = localization;
+            // One subscription for every document dock in the layout, not one per dock: a dock that collapses or is
+            // removed would otherwise stay subscribed to this singleton for the rest of the session (#3771).
+            localization.LanguageChanged += () =>
+            {
+                if (liveLayout is null) return;
+                var empty = localization.GetString("Str.Dock.NoDocumentsOpen");
+                Find<IDocumentDock>(liveLayout, d => { d.EmptyContent = empty; return false; });
+            };
             toolsByKey = new Dictionary<string, IDockable>
             {
                 ["toolbox"]           = toolBox,
@@ -314,21 +431,348 @@ public partial class MainViewViewModel : ObservableObject
                 ["formLayout"]        = formLayout,
                 ["immediate"]         = immediate,
                 ["locals"]            = locals,
+                ["outline"]           = outline,
                 ["watches"]           = watches,
                 ["callStack"]         = callStack,
                 ["colorPalette"]      = colorPalette,
                 ["objectBrowser"]     = objectBrowser,
                 ["translationEditor"] = translationEditor,
                 ["languageServers"]   = languageServers,
+                ["protocolInspector"] = protocolInspector,
             };
+            foreach (var (key, tool) in toolsByKey)
+                HexIDE.Automation.ToolAutomation.Register(tool, key);
+            DefaultHostWindowLocator = () => new ToolHostWindow(this);
             documentDockFactory.Value = this;
         }
 
-        public override IToolDock CreateToolDock()
+        public static bool IsToolHostWindow(Window window) => window is ToolHostWindow;
+
+        internal static IEnumerable<(string Key, string? Title)> FloatingTools(Window window)
         {
-            var toolDock = base.CreateToolDock();
-            toolDock.CanFloat = false;
-            return toolDock;
+            if (window is not ToolHostWindow { Window.Layout: { } layout }) yield break;
+            foreach (var tool in Descendants(layout))
+                if (HexIDE.Automation.ToolAutomation.KeyOf(tool) is { } key)
+                    yield return (key, tool.Title);
+
+            static IEnumerable<IDockable> Descendants(IDockable node)
+            {
+                yield return node;
+                if (node is IDock { VisibleDockables: { } children })
+                    foreach (var child in children)
+                        foreach (var item in Descendants(child)) yield return item;
+            }
+        }
+
+        public override IDocumentDock CreateDocumentDock()
+        {
+            var dock = base.CreateDocumentDock();
+            dock.EmptyContent = localization.GetString("Str.Dock.NoDocumentsOpen");
+            return dock;
+        }
+
+        private sealed class ToolHostWindow : Dock.Avalonia.Controls.HostWindow, IHostWindow
+        {
+            private readonly DockFactory factory;
+            private readonly List<INotifyPropertyChanged> titleSources = new();
+            private FloatingLayoutState? normalBounds;
+            private bool discardingLayout;
+
+            internal void DiscardLayout()
+            {
+                discardingLayout = true;
+                Close();
+            }
+
+            internal FloatingLayoutState Capture(IReadOnlyList<string> tools, string? active)
+            {
+                if (WindowState == WindowState.Normal || normalBounds == null) RememberNormalBounds();
+                var bounds = normalBounds ?? new FloatingLayoutState([], null,
+                    Position.X / RenderScaling, Position.Y / RenderScaling, Width, Height, WindowState.Normal);
+                return bounds with { Tools = tools, ActiveTool = active, State = WindowState };
+            }
+
+            private void RememberNormalBounds()
+            {
+                if (WindowState != WindowState.Normal || !IsVisible) return;
+                normalBounds = new FloatingLayoutState([], null, Position.X / RenderScaling,
+                    Position.Y / RenderScaling, Width, Height, WindowState.Normal);
+            }
+
+            public ToolHostWindow(DockFactory factory)
+            {
+                this.factory = factory;
+                BrandAssets.ApplyWindowIcon(this);
+                PositionChanged += (_, _) => Dispatcher.UIThread.Post(RememberNormalBounds);
+                SizeChanged += (_, _) => Dispatcher.UIThread.Post(RememberNormalBounds);
+                AddHandler(PointerPressedEvent, OnTitlePressed, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+                // The pane's close box runs its tool command; Dock's extra host-close handler
+                // would return the tool first and clear the command parameter (#3770, Dock#1109).
+                LayoutUpdated += (_, _) => UpdateChrome();
+                PropertyChanged += (_, e) =>
+                {
+                    if (e.Property == IsActiveProperty) UpdateChrome();
+                };
+            }
+
+            private void UpdateChrome()
+            {
+                foreach (var chrome in this.GetVisualDescendants().OfType<Dock.Avalonia.Controls.ToolChromeControl>())
+                {
+                    DetachGrip(chrome);
+                    chrome.Classes.Set("floatingHostActive", IsActive);
+                }
+            }
+
+            private void OnTitlePressed(object? sender, Avalonia.Input.PointerPressedEventArgs e)
+            {
+                if (e.ClickCount != 2 || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+                for (var visual = e.Source as Visual; visual != null && visual != this; visual = visual.GetVisualParent())
+                {
+                    if (visual is Button) return;
+                    if (visual is Control { Name: "PART_Grip" })
+                    {
+                        e.Handled = true;
+                        Dispatcher.UIThread.Post(Close);
+                        return;
+                    }
+                }
+            }
+
+            private void UpdateTitle(object? sender = null, PropertyChangedEventArgs? e = null)
+            {
+                if (e != null && e.PropertyName is not (nameof(IDock.ActiveDockable) or nameof(IDockable.Title))) return;
+                foreach (var source in titleSources) source.PropertyChanged -= UpdateTitle;
+                titleSources.Clear();
+                IDockable? active = Window?.Layout;
+                while (active != null)
+                {
+                    if (active is INotifyPropertyChanged source)
+                    {
+                        titleSources.Add(source);
+                        source.PropertyChanged += UpdateTitle;
+                    }
+                    if (active is not IDock dock || dock.ActiveDockable == null) break;
+                    active = dock.ActiveDockable;
+                }
+                if (Window is { } model && active != null)
+                    model.Title = Title = active.Title;
+            }
+
+            protected override void OnClosing(WindowClosingEventArgs e)
+            {
+                // Avalonia asks owned windows first, before the main window can veto exit.
+                // Leave their layout intact for both a cancelled exit and the confirmed save.
+                if (discardingLayout || e.CloseReason == WindowCloseReason.OwnerWindowClosing) return;
+                base.OnClosing(e);
+            }
+
+            protected override void OnClosed(EventArgs e)
+            {
+                foreach (var source in titleSources) source.PropertyChanged -= UpdateTitle;
+                titleSources.Clear();
+                base.OnClosed(e);
+            }
+
+            void IHostWindow.Present(bool isDialog)
+            {
+                var restored = Window is { } model && factory.restoredWindows.ContainsKey(model);
+                try { PresentCore(isDialog); }
+                catch (Exception ex) when (restored && Window != null)
+                {
+                    Log.Warning(ex, "Failed to present a restored tool window; returning its tools home");
+                    factory.ReturnRestoredWindow(Window);
+                }
+            }
+
+            private void PresentCore(bool isDialog)
+            {
+                if (IsVisible) return;
+                // Use the workspace's native window as the owner.
+                var owner = factory.DockControls.OfType<Dock.Avalonia.Controls.DockControl>()
+                    .Where(c => ReferenceEquals(c.Layout, factory.liveLayout))
+                    .Select(TopLevel.GetTopLevel).OfType<Window>().FirstOrDefault();
+                // InitLayout presents saved windows before the workspace has joined a native window.
+                // MainView retries on attachment and on a layout switch, once an owner is available.
+                if (owner == null && Window is { } pending && factory.restoredWindows.ContainsKey(pending)) return;
+                factory.OnWindowOpened(Window);
+                UpdateTitle();
+                Width = Math.Max(320, double.IsFinite(Width) ? Width : 320);
+                Height = Math.Max(200, double.IsFinite(Height) ? Height : 200);
+                if (owner != null)
+                {
+                    if (owner.Screens.ScreenFromWindow(owner) is { } screen)
+                    {
+                        var area = screen.WorkingArea;
+                        var scaling = screen.Scaling;
+                        Width = Math.Min(Width, area.Width / scaling);
+                        Height = Math.Min(Height, area.Height / scaling);
+                        Position = new PixelPoint(
+                            Math.Clamp(Position.X, area.X, area.Right - (int)Math.Ceiling(Width * scaling)),
+                            Math.Clamp(Position.Y, area.Y, area.Bottom - (int)Math.Ceiling(Height * scaling)));
+                    }
+                    if (isDialog) _ = ShowDialog(owner);
+                    else Show(owner);
+                }
+                else Show();
+                if (Window is { } model && factory.restoredWindows.Remove(model, out var saved))
+                {
+                    Width = saved.Width;
+                    Height = saved.Height;
+                    Position = new PixelPoint((int)Math.Round(saved.X * RenderScaling), (int)Math.Round(saved.Y * RenderScaling));
+                    ClampToScreen(owner ?? this);
+                    RememberNormalBounds();
+                    UpdateLayout();
+                    WindowState = saved.State;
+                }
+                if (owner != null && WindowState == WindowState.Normal) ClampToScreen(owner);
+                RememberNormalBounds();
+                if (Window is { } current)
+                {
+                    current.X = Position.X;
+                    current.Y = Position.Y;
+                    current.Width = Width;
+                    current.Height = Height;
+                }
+            }
+
+            internal void ClampToScreen(Window owner, Size? measuredFrame = null)
+            {
+                var screen = Screens.ScreenFromPoint(Position) ?? owner.Screens.ScreenFromWindow(owner);
+                if (screen == null) return;
+                var area = screen.WorkingArea;
+                var frame = measuredFrame ?? FrameSize ?? ClientSize;
+                var borderWidth = Math.Max(0, frame.Width - ClientSize.Width);
+                var borderHeight = Math.Max(0, frame.Height - ClientSize.Height);
+                Width = Math.Min(Width, Math.Max(0, area.Width / RenderScaling - borderWidth));
+                Height = Math.Min(Height, Math.Max(0, area.Height / RenderScaling - borderHeight));
+                var width = (int)Math.Ceiling((Width + borderWidth) * RenderScaling);
+                var height = (int)Math.Ceiling((Height + borderHeight) * RenderScaling);
+                Position = new PixelPoint(Math.Clamp(Position.X, area.X, Math.Max(area.X, area.Right - width)),
+                    Math.Clamp(Position.Y, area.Y, Math.Max(area.Y, area.Bottom - height)));
+            }
+        }
+
+        internal void PresentRestoredWindows()
+        {
+            foreach (var window in restoredWindows.Keys.ToArray())
+            {
+                try
+                {
+                    window.Present(false);
+                    if (window.Host is Window { IsVisible: true }) continue;
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex, "Failed to present a restored tool window; returning its tools home");
+                }
+                ReturnRestoredWindow(window);
+            }
+        }
+
+        private void ReturnRestoredWindow(IDockWindow window)
+        {
+            ReturnWindowTools(window);
+            restoredWindows.Remove(window);
+            window.Exit();
+            RemoveWindow(window);
+        }
+
+        private void RememberToolSlots(IDockable dockable, bool restoring = false)
+        {
+            if (liveLayout == null) return;
+            // Restore removes tools from an unrendered tree; its collapsed sizes are not home sizes.
+            if (!restoring) CaptureManifest(liveLayout);
+            double HomeProportion(IDockable sibling)
+            {
+                if (!restoring) return sibling.Proportion;
+                if (sibling is IToolDock dock && dock.VisibleDockables?.Select(KeyOf).OfType<string>().FirstOrDefault() is { } key)
+                {
+                    var proportion = lastPlacements.GetValueOrDefault(key)?.Proportion;
+                    return proportion is > 0 ? proportion.Value : Home.GetValueOrDefault(key)?.Proportion ?? 0.3;
+                }
+                if (sibling is IToolDock)
+                    foreach (var slot in closedSlots.Values.SelectMany(p => p))
+                        foreach (var saved in slot.Siblings)
+                            if (ReferenceEquals(saved.Dock, sibling)) return saved.Proportion;
+                return restoredProportions.GetValueOrDefault(sibling, sibling.Proportion);
+            }
+            foreach (var (key, tool) in toolsByKey)
+                if ((ReferenceEquals(tool, dockable) || FindContainer(dockable, tool) != null)
+                    && FindContainer(liveLayout, tool) != null)
+                {
+                    var path = new List<DockSlot>();
+                    IDockable child = tool;
+                    while (FindContainer(liveLayout, child) is { } parent && parent is not IRootDock)
+                    {
+                        path.Add(new DockSlot(parent, child, parent.VisibleDockables!.IndexOf(child),
+                            parent.VisibleDockables.Where(d => d is not IProportionalDockSplitter)
+                                .Select(d => (d, HomeProportion(d))).ToArray()));
+                        child = parent;
+                    }
+                    closedSlots[key] = path;
+                }
+        }
+
+        public override void SplitToWindow(IDock dock, IDockable dockable, double x, double y,
+            double width, double height, DockWindowOptions? options)
+        {
+            RememberToolSlots(dockable);
+            var pane = dockable is IToolDock ? dockable : dock;
+            pane.GetVisibleBounds(out _, out _, out var paneWidth, out var paneHeight);
+            if (double.IsFinite(paneWidth)) width = Math.Max(width, paneWidth);
+            if (double.IsFinite(paneHeight)) height = Math.Max(height, paneHeight);
+            base.SplitToWindow(dock, dockable, x, y, width, height, options);
+        }
+
+        public override void FloatAllDockables(IDockable dockable, DockWindowOptions? options)
+        {
+            if (dockable.Owner is IToolDock dock) RememberToolSlots(dock);
+            base.FloatAllDockables(dockable, options);
+        }
+
+        public override IDockWindow? CreateWindowFrom(IDockable dockable)
+        {
+            var window = base.CreateWindowFrom(dockable);
+            if (window != null)
+                window.Title = dockable is IDock dock ? dock.ActiveDockable?.Title ?? dockable.Title : dockable.Title;
+            return window;
+        }
+
+        public override void PinDockable(IDockable dockable)
+        {
+            // Dock's pin command handles auto-hide; floating tools return through the saved home slots.
+            if (FindRoot(dockable, _ => true)?.Window?.Host is ToolHostWindow host)
+            {
+                host.Close();
+                return;
+            }
+            base.PinDockable(dockable);
+        }
+
+        public override bool OnWindowClosing(IDockWindow? window)
+        {
+            if (!base.OnWindowClosing(window)) return false;
+            ReturnWindowTools(window);
+            return true;
+        }
+
+        private void ReturnWindowTools(IDockWindow? window)
+        {
+            if (liveLayout != null && window?.Layout is { } floating)
+            {
+                // Closing a floating tool window returns its tools to the workspace.
+                // Insert earlier tabs first: a later index clamps to zero in an empty home dock.
+                var tools = toolsByKey.Values.OfType<Tool>()
+                    .Where(t => FindContainer(floating, t) != null)
+                    .OrderBy(t => KeyOf(t) is { } key && closedSlots.TryGetValue(key, out var path) && path.Count > 0
+                        ? path[0].Index : int.MaxValue).ToArray();
+                foreach (var tool in tools) RemoveDockable(tool, false);
+                // A floated dock can itself be a saved slot: detach it before reusing it, so host
+                // teardown cannot close tools that have already returned to the workspace.
+                foreach (var child in floating.VisibleDockables?.ToArray() ?? []) RemoveDockable(child, false);
+                foreach (var tool in tools) PlaceTool(liveLayout, tool, rightFallback: true);
+            }
         }
 
         public override IRootDock CreateLayout() =>
@@ -339,26 +783,20 @@ public partial class MainViewViewModel : ObservableObject
         /// view's pointer handler instead.</summary>
         public event Action? LayoutChanged;
 
+        private async Task CloseProjectFile(ProjectFileDocumentViewModel file)
+        {
+            if (await file.ConfirmCloseAsync()) CloseDockable(file);
+        }
+
         public override void CloseDockable(IDockable dockable)
         {
-            if (liveLayout != null)
+            if (dockable is ProjectFileDocumentViewModel file && (file.IsModified || file.Applying))
             {
-                CaptureManifest(liveLayout);
-                foreach (var (key, tool) in toolsByKey)
-                    if (ReferenceEquals(tool, dockable) || FindContainer(dockable, tool) != null)
-                    {
-                        var path = new List<DockSlot>();
-                        IDockable child = tool;
-                        while (FindContainer(liveLayout, child) is { } parent && parent is not IRootDock)
-                        {
-                            path.Add(new DockSlot(parent, child, parent.VisibleDockables!.IndexOf(child),
-                                parent.VisibleDockables.Where(d => d is not IProportionalDockSplitter)
-                                    .Select(d => (d, d.Proportion)).ToArray()));
-                            child = parent;
-                        }
-                        closedSlots[key] = path;
-                    }
+                CloseProjectFile(file).ListenErrors();
+                return;
             }
+            if (dockable == null) return; // Dock's close command can lose its parameter during teardown.
+            RememberToolSlots(dockable);
             base.CloseDockable(dockable);
             LayoutChanged?.Invoke();
         }
@@ -382,7 +820,17 @@ public partial class MainViewViewModel : ObservableObject
 
         private IRootDock BuildLayout(LayoutManifest m, IDocumentDock? reuseDocument)
         {
+            // Retire native hosts before reusing the tools in the incoming layout.
+            foreach (var window in liveLayout?.Windows?.ToArray() ?? [])
+            {
+                if (window.Host is ToolHostWindow host) host.DiscardLayout();
+                else window.Exit();
+                RemoveWindow(window);
+            }
+            foreach (var tool in toolsByKey.Values.OfType<AddinToolWindowViewModel>().ToArray())
+                m = MigrateAddinKey(m, tool);
             closedSlots.Clear();
+            restoredWindows.Clear();
             restoredProportions.Clear();
             pendingToolDocks.Clear();
             pendingToolGroups.Clear();
@@ -414,7 +862,7 @@ public partial class MainViewViewModel : ObservableObject
             // LEFT — single ToolDock holding the left tool(s) (the toolbox).
             IToolDock? leftDock = null;
             var leftTools = OpenIn(DockRegion.Left)
-                .Select(s => toolsByKey[s.Key]).OfType<Tool>().Cast<IDockable>().ToArray();
+                .Select(s => toolsByKey.GetValueOrDefault(s.Key)).OfType<Tool>().Cast<IDockable>().ToArray();
             if (leftTools.Length > 0)
             {
                 leftDock = CreateToolDock();
@@ -427,12 +875,12 @@ public partial class MainViewViewModel : ObservableObject
             // RIGHT — vertical stack of single-tool ToolDocks.
             RightDock = null;
             var rightStates = OpenIn(DockRegion.Right);
-            if (rightStates.Any(s => toolsByKey[s.Key] is Tool))
+            if (rightStates.Any(s => toolsByKey.GetValueOrDefault(s.Key) is Tool))
             {
                 var children = new List<IDockable>();
                 foreach (var s in rightStates)
                 {
-                    if (toolsByKey[s.Key] is not Tool t) continue;
+                    if (toolsByKey.GetValueOrDefault(s.Key) is not Tool t) continue;
                     if (children.Count > 0) children.Add(new ProportionalDockSplitter());
                     children.Add(MakeToolDock(t, Alignment.Top, s.Proportion));
                 }
@@ -458,35 +906,36 @@ public partial class MainViewViewModel : ObservableObject
             {
                 dd = live;
                 dd.VisibleDockables ??= CreateList<IDockable>();
-                foreach (var managed in dd.VisibleDockables.OfType<Document>().Where(d => KeyOf(d) != null).ToList())
+                foreach (var managed in dd.VisibleDockables.Where(d => KeyOf(d) != null || d is AddinToolWindowViewModel).ToList())
                     dd.VisibleDockables.Remove(managed);
             }
             else
             {
-                dd = new DocumentDock
-                {
-                    CanClose = false,
-                    CanFloat = false,
-                    CanCreateDocument = false,
-                    IsCollapsable = false,
-                    VisibleDockables = CreateList<IDockable>(),
-                };
+                dd = (DocumentDock)CreateDocumentDock();
+                dd.CanClose = false;
+                dd.CanFloat = false;
+                dd.CanCreateDocument = false;
+                dd.IsCollapsable = false;
+                dd.VisibleDockables = CreateList<IDockable>();
             }
+            dd.MinHeight = Math.Max(MinimumDocumentHeight, double.IsFinite(dd.MinHeight) ? dd.MinHeight : 0);
             DocumentDock = dd;
 
             var documentTools = OpenIn(DockRegion.Document)
-                .Select(s => toolsByKey[s.Key]).OfType<Document>().Cast<IDockable>().ToArray();
+                .Select(s => toolsByKey.GetValueOrDefault(s.Key)).OfType<IDockable>().ToArray();
             foreach (var d in documentTools)
                 if (!dd.VisibleDockables!.Contains(d))
                     dd.VisibleDockables!.Add(d);
             if (documentTools.Length > 0)
                 dd.ActiveDockable = documentTools[0];
+            else if (dd.ActiveDockable is null || !dd.VisibleDockables!.Contains(dd.ActiveDockable))
+                dd.ActiveDockable = dd.VisibleDockables!.FirstOrDefault();
 
             // MIDDLE — document on top, bottom tools stacked below.
             var middleChildren = new List<IDockable> { DocumentDock };
             foreach (var s in OpenIn(DockRegion.Bottom))
             {
-                if (toolsByKey[s.Key] is not Tool t) continue;
+                if (toolsByKey.GetValueOrDefault(s.Key) is not Tool t) continue;
                 middleChildren.Add(new ProportionalDockSplitter());
                 middleChildren.Add(MakeToolDock(t, Alignment.Bottom, s.Proportion ?? 0.3));
             }
@@ -550,6 +999,46 @@ public partial class MainViewViewModel : ObservableObject
                 foreach (var key in closed)
                     if (lastPlacements.TryGetValue(key, out var placement))
                         lastPlacements[key] = placement with { Open = false };
+            }
+            if (m.Floating.Count > 0)
+            {
+                InitLayout(rootDock);
+                var used = new HashSet<string>();
+                foreach (var saved in m.Floating)
+                {
+                    var tools = saved.Tools.Where(k => toolsByKey.TryGetValue(k, out var tool)
+                            && tool is Tool && used.Add(k))
+                        .Select(k => toolsByKey[k]).ToArray();
+                    if (tools.Length == 0) continue;
+                    // Older manifests have only individual home placements. Preserve a saved
+                    // floating tab group there too, rather than returning it as separate panes.
+                    if (m.Topology == null && tools[0].Owner is IToolDock home)
+                    {
+                        foreach (var tool in tools.Skip(1))
+                            if (tool.Owner is IToolDock source && !ReferenceEquals(source, home)
+                                && lastPlacements.GetValueOrDefault(KeyOf(tool)!)?.Region
+                                    == lastPlacements.GetValueOrDefault(KeyOf(tools[0])!)?.Region)
+                                MoveDockable(source, home, tool, home.VisibleDockables!.LastOrDefault());
+                    }
+                    foreach (var tool in tools) RememberToolSlots(tool, restoring: true);
+                    foreach (var tool in tools) RemoveDockable(tool, false);
+                    var group = CreateToolDock();
+                    group.VisibleDockables = CreateList(tools);
+                    group.ActiveDockable = tools.FirstOrDefault(t => KeyOf(t) == saved.ActiveTool) ?? tools[0];
+                    var window = CreateWindowFrom(group);
+                    if (window == null)
+                    {
+                        foreach (var tool in tools) RemoveDockable(tool, false);
+                        foreach (var tool in tools.OfType<Tool>()) PlaceTool(rootDock, tool, rightFallback: true);
+                        continue;
+                    }
+                    window.X = saved.X;
+                    window.Y = saved.Y;
+                    window.Width = saved.Width;
+                    window.Height = saved.Height;
+                    restoredWindows[window] = saved;
+                    AddWindow(rootDock, window);
+                }
             }
             return rootDock;
         }
@@ -703,13 +1192,30 @@ public partial class MainViewViewModel : ObservableObject
                 is { Proportion: > 0 } rd)
                 right = rd.Proportion;
 
+            var floating = new List<FloatingLayoutState>();
+            foreach (var window in layout.Windows ?? [])
+            {
+                if (window.Layout == null) continue;
+                IEnumerable<IDockable> Leaves(IDockable node) => node is IDock dock
+                    ? (dock.VisibleDockables ?? []).SelectMany(Leaves) : [node];
+                var keys = Leaves(window.Layout).Select(KeyOf).OfType<string>().ToArray();
+                if (keys.Length == 0) continue;
+                IDockable active = window.Layout;
+                while (active is IDock { ActiveDockable: { } child }) active = child;
+                var host = window.Host as Window;
+                var scaling = host?.RenderScaling ?? 1;
+                floating.Add(restoredWindows.TryGetValue(window, out var pending) ? pending : host is ToolHostWindow toolHost ? toolHost.Capture(keys, KeyOf(active)) : new FloatingLayoutState(keys, KeyOf(active),
+                    (host?.Position.X ?? window.X) / scaling, (host?.Position.Y ?? window.Y) / scaling,
+                    host?.Width ?? window.Width, host?.Height ?? window.Height, host?.WindowState ?? WindowState.Normal));
+            }
+            var floatingKeys = floating.SelectMany(w => w.Tools).ToHashSet();
             var states = new List<ToolLayoutState>(LayoutManifest.Default.Tools.Count);
             foreach (var def in LayoutManifest.Default.Tools)
             {
                 var located = Locate(layout, toolsByKey[def.Key]);
                 states.Add(located is { } loc
                     ? new ToolLayoutState(def.Key, true, loc.Region, loc.Order, loc.Proportion)
-                    : lastPlacements.GetValueOrDefault(def.Key, def) with { Open = false });
+                    : lastPlacements.GetValueOrDefault(def.Key, def) with { Open = floatingKeys.Contains(def.Key) });
             }
 
             foreach (var key in deferredTools.Keys.Concat(toolsByKey.Keys.Where(k => k.StartsWith("addin:", StringComparison.Ordinal))).Distinct())
@@ -719,7 +1225,7 @@ public partial class MainViewViewModel : ObservableObject
                 var located = toolsByKey.TryGetValue(key, out var tool) ? Locate(layout, tool) : null;
                 states.Add(located is { } loc
                     ? new ToolLayoutState(key, true, loc.Region, loc.Order, loc.Proportion)
-                    : toolsByKey.ContainsKey(key) ? saved with { Open = false } : saved);
+                    : toolsByKey.ContainsKey(key) ? saved with { Open = floatingKeys.Contains(key) } : saved);
             }
 
             leftProportion = left;
@@ -729,6 +1235,7 @@ public partial class MainViewViewModel : ObservableObject
             return new LayoutManifest(LayoutManifest.CurrentVersion, left, right, states)
             {
                 Topology = layout.DefaultDockable is { } tree ? CaptureTopology(tree) : null,
+                Floating = floating,
             };
         }
 
@@ -741,18 +1248,22 @@ public partial class MainViewViewModel : ObservableObject
             if (container is null)
                 return null; // not in the live tree → closed
 
-            // Documents (Object Browser / Translation Editor) only round-trip in the document region.
-            if (tool is Document)
-                return container is IDocumentDock && KeyOf(tool) is { } dk
-                    ? (DockRegion.Document, Home[dk].Order, (double?)null)
-                    : null;
+            // Ignore editor/designer tabs when ordering the manifest-managed document tools.
+            if (container is IDocumentDock && (tool is Document || tool is AddinToolWindowViewModel))
+            {
+                var order = container.VisibleDockables!
+                    .Where(d => KeyOf(d) != null || d is AddinToolWindowViewModel)
+                    .TakeWhile(d => !ReferenceEquals(d, tool)).Count();
+                return (DockRegion.Document, order, null);
+            }
+            if (tool is Document) return null;
 
             if (container is IToolDock td && FindContainer(layout, td) is { } parent)
             {
                 double? prop = double.IsNaN(td.Proportion) ? null : td.Proportion;
 
                 if (ReferenceEquals(parent, layout.DefaultDockable) && td.Alignment == Alignment.Left)
-                    return (DockRegion.Left, td.VisibleDockables!.IndexOf(tool), prop);
+                    return (DockRegion.Left, td.VisibleDockables?.IndexOf(tool) ?? 0, prop);
 
                 var ctx = parent.Context as string;
                 if (ctx == nameof(RightDock))
@@ -810,10 +1321,51 @@ public partial class MainViewViewModel : ObservableObject
 
         // ---- runtime open: place a tool into its home region, restoring its slot ----
 
+        internal static LayoutManifest MigrateAddinKey(LayoutManifest manifest, AddinToolWindowViewModel tool)
+        {
+            var oldKey = "addin:" + tool.WindowId;
+            var key = "addin:" + tool.Id;
+            if (oldKey == key || !manifest.Tools.Any(t => t.Key == oldKey)) return manifest;
+            string Rename(string value) => value == oldKey ? key : value;
+            DockLayoutNode Node(DockLayoutNode node) => node with
+            {
+                Tools = node.Tools.Select(Rename).Distinct().ToArray(),
+                ActiveTool = node.ActiveTool is { } active ? Rename(active) : null,
+                Children = node.Children.Select(Node).ToArray(),
+            };
+            var hasCurrent = manifest.Tools.Any(t => t.Key == key);
+            return manifest with
+            {
+                Tools = manifest.Tools.Where(t => t.Key != oldKey || !hasCurrent)
+                    .Select(t => t with { Key = Rename(t.Key) }).ToArray(),
+                Topology = manifest.Topology is { } topology ? Node(topology) : null,
+            };
+        }
+
         public void RegisterAddinTool(IRootDock layout, AddinToolWindowViewModel tool)
         {
             var key = "addin:" + tool.Id;
             toolsByKey[key] = tool;
+            HexIDE.Automation.ToolAutomation.Register(tool, key);
+            var oldKey = "addin:" + tool.WindowId;
+            if (oldKey != key && deferredTools.Remove(oldKey, out var legacy))
+            {
+                deferredTools.TryAdd(key, legacy with { Key = key });
+                if (lastPlacements.Remove(oldKey, out var placement))
+                    lastPlacements.TryAdd(key, placement with { Key = key });
+                if (savedOrders.Remove(oldKey, out var order)) savedOrders.TryAdd(key, order);
+                if (closedSlots.Remove(oldKey, out var slots)) closedSlots.TryAdd(key, slots);
+                if (pendingToolDocks.Remove(oldKey, out var pending))
+                {
+                    pendingToolDocks.TryAdd(key, pending);
+                    var group = pendingToolGroups[pending];
+                    pendingToolGroups[pending] = group with
+                    {
+                        Tools = group.Tools.Select(k => k == oldKey ? key : k).ToArray(),
+                        ActiveTool = group.ActiveTool == oldKey ? key : group.ActiveTool,
+                    };
+                }
+            }
             tool.KeepSavedWidth = deferredTools.GetValueOrDefault(key)?.Proportion is not null;
             if (!deferredTools.TryGetValue(key, out var saved) || saved.Open)
                 PlaceTool(layout, tool, rightFallback: true);
@@ -822,7 +1374,10 @@ public partial class MainViewViewModel : ObservableObject
         public void PlaceTool(IRootDock layout, Tool tool, bool rightFallback)
         {
             if (tool is AddinToolWindowViewModel)
+            {
                 toolsByKey["addin:" + tool.Id] = tool;
+                HexIDE.Automation.ToolAutomation.Register(tool, "addin:" + tool.Id);
+            }
             var key = KeyOf(tool);
             if (key != null && closedSlots.Remove(key, out var path) && path.Count > 0)
             {
@@ -851,8 +1406,17 @@ public partial class MainViewViewModel : ObservableObject
                         ApplyProportion(sibling, siblingProportion);
                     slot.Parent.ActiveDockable = slot.Child;
                 }
+                // Empty home docks will collapse again; reserve only panes that now hold tools.
+                foreach (var parent in path.Select(s => s.Parent).Distinct())
+                    if (parent.Context as string == nameof(MiddleDock)
+                        && parent.VisibleDockables?.OfType<IDocumentDock>().FirstOrDefault() is { } documents)
+                    {
+                        var shares = parent.VisibleDockables.OfType<IToolDock>()
+                            .Where(d => d.VisibleDockables?.Count > 0).Sum(d => d.Proportion);
+                        if (double.IsFinite(shares) && shares < 1) ApplyProportion(documents, 1 - shares);
+                    }
                 InitDockable(path[^1].Parent, path[^1].Parent.Owner);
-                SetFocusedDockable((IDock)tool.Owner!, tool);
+                FocusDockable((IDock)tool.Owner!, tool);
                 RefreshLayout(layout);
                 LayoutChanged?.Invoke();
                 return;
@@ -889,6 +1453,19 @@ public partial class MainViewViewModel : ObservableObject
 
             switch (region)
             {
+                case DockRegion.Document:
+                {
+                    if (DocumentDock is not { } documents) return;
+                    documents.VisibleDockables ??= CreateList<IDockable>();
+                    var next = documents.VisibleDockables.FirstOrDefault(d =>
+                        KeyOf(d) is { } k && savedOrders.GetValueOrDefault(k, int.MaxValue) > order);
+                    var index = next != null ? documents.VisibleDockables.IndexOf(next) : documents.VisibleDockables.Count;
+                    documents.VisibleDockables.Insert(index, tool);
+                    documents.ActiveDockable = tool;
+                    InitDockable(tool, documents);
+                    SetFocusedDockable(documents, tool);
+                    break;
+                }
                 case DockRegion.Left:
                 {
                     var left = GetOrCreateLeftDock(layout);
@@ -897,7 +1474,7 @@ public partial class MainViewViewModel : ObservableObject
                     left.ActiveDockable = tool;
                     // Initialize after adding the tool so Dock does not retain IsEmpty = true.
                     InitDockable(left, layout.DefaultDockable);
-                    SetFocusedDockable(left, tool);
+                    FocusDockable(left, tool);
                     break;
                 }
                 case DockRegion.Right:
@@ -906,7 +1483,7 @@ public partial class MainViewViewModel : ObservableObject
                     var td = MakeToolDock(tool, Alignment.Top, proportion ?? FairProportion(rd));
                     InsertToolDock(rd, td, order, documentFirst: false);
                     InitDockable(td, rd);
-                    SetFocusedDockable(td, tool);
+                    FocusDockable(td, tool);
                     break;
                 }
                 case DockRegion.Bottom:
@@ -917,7 +1494,7 @@ public partial class MainViewViewModel : ObservableObject
                     var td = MakeToolDock(tool, Alignment.Bottom, proportion ?? FairProportion(mid) ?? 0.3);
                     InsertToolDock(mid, td, order, documentFirst: true);
                     InitDockable(td, mid);
-                    SetFocusedDockable(td, tool);
+                    FocusDockable(td, tool);
                     break;
                 }
             }
@@ -1060,6 +1637,17 @@ public partial class MainViewViewModel : ObservableObject
     private readonly HexIDE.Debugging.IBreakpointService breakpointService;
     private readonly HexIDE.Runtime.Debugging.IDebugController debugController;
 
+    private void ShowResultsTool(ResultsToolViewModel tool)
+    {
+        if (FindDock<IDockable>(d => ReferenceEquals(d, tool)) is null)
+        {
+            OpenImmediateTool();
+            dockFactory.AddDockable((IToolDock)Immediate.Owner!, tool);
+        }
+        ((IDock)tool.Owner!).ActiveDockable = tool;
+        dockFactory.FocusDockable((IDock)tool.Owner!, tool);
+    }
+
     public MainViewViewModel(IWindowManager windowManager,
         ToolBoxToolViewModel toolBox,
         PropertiesToolViewModel properties,
@@ -1074,6 +1662,7 @@ public partial class MainViewViewModel : ObservableObject
         TranslationEditorViewModel translationEditor,
         LanguageServersToolViewModel languageServers,
         HexIDE.Tools.ProtocolInspector.ProtocolInspectorToolViewModel protocolInspector,
+        HexIDE.Tools.Diagnostics.DiagnosticsToolViewModel diagnostics,
         IProjectManager projectManager,
         IFocusedProjectUtil focusedProjectUtil,
         IProjectService projectService,
@@ -1094,7 +1683,7 @@ public partial class MainViewViewModel : ObservableObject
         AddinOptionsService addinOptionsService,
         IDeveloperModeService developerModeService,
         IStatusBarService statusBarService,
-        IPersonalityService personalityService,
+        IProfileService profileService,
         AddinMenuService addinMenuService,
         AddinCommandService addinCommandService,
         AddinToolWindowService addinToolWindowService,
@@ -1102,14 +1691,55 @@ public partial class MainViewViewModel : ObservableObject
         HexIDE.Debugging.IBreakpointService breakpointService,
         HexIDE.Runtime.Debugging.IDebugController debugController,
         RecentEditsToolViewModel recentEdits,
-        HexIDE.Debugging.ExternalDebugService? externalDebugger = null)
+        FindReferencesToolViewModel? findReferences,
+        CallHierarchyToolViewModel? callHierarchy,
+        // Not optional, like the two above: each optional parameter here doubles Pure.DI's search for the graph, and one
+        // more took it past its 16,384-iteration limit (DIE031).
+        TypeHierarchyToolViewModel? typeHierarchy,
+        HexIDE.Debugging.ExternalDebugService? externalDebugger,
+        HexIDE.Recovery.IRecoveryOffers? recoveryOffers,
+        RunWithMenuViewModel? runWith,
+        ILogFolderOpener? logFolderOpener,
+        AddinProjectTemplateService projectTemplates)
     {
+        ProjectTemplates = projectTemplates;
+        logFolderOpener ??= new PlatformLogFolderOpener();
+        OpenLogFolderCommand = new DelegateCommand(() => OpenLogFolderAsync(windowManager, localization, logFolderOpener).ListenErrors());
+        RunWith = runWith;
+        if (findReferences is not null)
+        {
+            eventBus.Subscribe<NavigationLocationsEvent>(e => findReferences.ShowLocations(e.Locations));
+            findReferences.LayoutResized += ScheduleLayoutSave;
+            eventBus.Subscribe<ShowReferenceLocationsEvent>(e => findReferences.ShowLocations(e.Locations));
+            eventBus.Subscribe<FindReferencesEvent>(e => findReferences.SearchAsync(e.Uri, e.Position).ListenErrors());
+            findReferences.ShowRequested += () => ShowResultsTool(findReferences);
+        }
+        if (callHierarchy is not null)
+        {
+            eventBus.Subscribe<CallHierarchyEvent>(e => callHierarchy.SearchAsync(e.Uri, e.Position).ListenErrors());
+            callHierarchy.LayoutResized += ScheduleLayoutSave;
+            callHierarchy.ShowRequested += () => ShowResultsTool(callHierarchy);
+        }
+        if (typeHierarchy is not null)
+        {
+            eventBus.Subscribe<TypeHierarchyEvent>(e => typeHierarchy.SearchAsync(e.Uri, e.Position).ListenErrors());
+            typeHierarchy.LayoutResized += ScheduleLayoutSave;
+            typeHierarchy.ShowRequested += () => ShowResultsTool(typeHierarchy);
+        }
+        this.recoveryOffers = recoveryOffers;
+        RecoverUnsavedWorkCommand = new DelegateCommand(
+            () => (recoveryOffers?.ShowPendingAsync() ?? Task.CompletedTask).ListenErrors(),
+            () => recoveryOffers is not null);
         RecentEdits = recentEdits;
-        Personality = personalityService;
+        Profile = profileService;
         AddinMenuService = addinMenuService;
         AddinCommandService = addinCommandService;
         _addinToolWindowService = addinToolWindowService;
-        addinToolWindowService.ToolRegistered   += tool => dockFactory.RegisterAddinTool(Layout, tool);
+        addinToolWindowService.ToolRegistered   += tool =>
+        {
+            RegisterAddinTool(tool);
+            ReportSkippedPanelWindows();
+        };
         addinToolWindowService.ShowRequested    += tool => OpenOrActivateTool(tool, true);
         addinToolWindowService.ToolUnregistered += tool =>
         {
@@ -1119,6 +1749,7 @@ public partial class MainViewViewModel : ObservableObject
         this.projectService = projectService;
         this.documentDockService = documentDockService;
         this.dockFactory = dockFactory;
+        dockFactory.KeyboardFocusRequested += (dockable, reactivating) => KeyboardFocusRequested?.Invoke(dockable, reactivating);
         this.projectRunnerService = projectRunnerService;
         this.eventBus = eventBus;
         this.vb6Toolchain = vb6Toolchain;
@@ -1141,7 +1772,11 @@ public partial class MainViewViewModel : ObservableObject
             () => externalDebugger is not null && !projectRunnerService.IsRunning);
         // When the interpreter breaks, bring the offending form/module's code editor forward. The editor view then
         // paints the amber current-statement bar and scrolls to it (it reads the controller's CurrentStop on open).
-        debugController.Stopped += info => RevealBreak(info.Module);
+        debugController.Stopped += info =>
+        {
+            if (info.Reason == StopReason.Pause) PauseFocusRequested?.Invoke();
+            if (info.HasStatement) RevealBreak(info.Module);
+        };
         StatusBar = statusBarService;
         debugController.Stopped += _ => Dispatcher.UIThread.Post(UpdateRunState);
         debugController.Continued += () => Dispatcher.UIThread.Post(UpdateRunState);
@@ -1150,6 +1785,9 @@ public partial class MainViewViewModel : ObservableObject
         Immediate = immediate;
         FormLayout = formLayout;
         Locals = locals;
+        OpenBrandHomeCommand = new DelegateCommand(() => OpenBrandLink(Distribution.Current.HomeUrl), () => HasBrandHome);
+        OpenBrandSupportCommand = new DelegateCommand(() => OpenBrandLink(Distribution.Current.SupportUrl), () => HasBrandSupport);
+        OpenOutlineCommand = new DelegateCommand(() => OpenOrActivateTool(Outline, true));
         Watches = watches;
         CallStack = callStack;
         callStack.FrameShown += () =>
@@ -1163,13 +1801,18 @@ public partial class MainViewViewModel : ObservableObject
         LanguageServers = languageServers;
         OpenLanguageServersCommand = new DelegateCommand(OpenLanguageServers);
         ProtocolInspector = protocolInspector;
+        Diagnostics = diagnostics;
+        OpenDiagnosticsCommand = new DelegateCommand(OpenDiagnostics);
         OpenProtocolInspectorCommand = new DelegateCommand(OpenProtocolInspector);
         FocusedProjectUtil = focusedProjectUtil;
 
         this.windowStateService = windowStateService;
+        NamedLayouts = new NamedLayoutService(windowStateService);
 
         Layout = dockFactory.CreateLayout();
         dockFactory.InitLayout(Layout);
+        foreach (var tool in addinToolWindowService.Tools)
+            RegisterAddinTool(tool);
         documentDockService.TrackTabs();
         ReopenClosedDocumentCommand = new DelegateCommand(
             () => documentDockService.ReopenClosedDocument(editorService),
@@ -1191,14 +1834,9 @@ public partial class MainViewViewModel : ObservableObject
         _layoutSaveTimer.Tick += (_, _) => LoggedTimerCallback.Run("dock-layout save", FlushLayoutSaveDebounced);
         _lastSavedLayoutJson = LayoutManifestJson.Serialize(dockFactory.CaptureManifest(Layout));
         dockFactory.LayoutChanged += ScheduleLayoutSave;
+        ReportSkippedPanelWindows();
 
-        VBWindowContext.RunTimeError += (form, e) =>
-        {
-            // Recorded BEFORE the dialog, and deliberately not tied to its lifetime: stop_project and
-            // shutdown_ide both close open dialogs, so anything that only exists while the modal is up is
-            // gone by the time a caller looks. (docs/mcp-server-gaps.md)
-            ReportRuntimeError(RunErrorText.For(e), HexIDE.Runtime.Interpreter.ErrorLocation.Of(e));
-        };
+        projectRunnerService.ErrorMet += ReportRuntimeError;
 
         // A startup form that cannot be built is reported the way a runtime error is, so the person sees it and
         // get_last_runtime_error returns it. It used to reach only the log, while F5 appeared to do nothing (#590).
@@ -1208,10 +1846,13 @@ public partial class MainViewViewModel : ObservableObject
         // error Sub Main did not handle. Those reached only the log or an unrecorded message box (#754).
         projectRunnerService.RunFailed += ReportEndedRun;
 
-        void ReportRuntimeError(string message, HexIDE.Runtime.Interpreter.ErrorLocation? where)
+        // Recorded BEFORE the dialog, and deliberately not tied to its lifetime: stop_project and
+        // shutdown_ide both close open dialogs, so anything that only exists while the modal is up is
+        // gone by the time a caller looks. (docs/mcp-server-gaps.md)
+        void ReportRuntimeError(RunFailure failure)
         {
-            RuntimeErrors.Record(message, where);
-            EndIfAsked(new RuntimeErrorViewModel(message)).ListenErrors();
+            RuntimeErrors.Record(failure.Text, failure.Location);
+            EndIfAsked(new RuntimeErrorViewModel(failure.Text)).ListenErrors();
         }
 
         // Nothing of a run that failed to start, or that something ended, is still running when it is reported.
@@ -1237,28 +1878,19 @@ public partial class MainViewViewModel : ObservableObject
         // and Continue runs the statement again. Recorded before the dialog, as every run-time error is. A dialog closed
         // without an answer, as stop_project and shutdown_ide close it, takes Debug, which loses nothing: what VB6 does
         // then is not measured.
-        debugController.HaltHost = async error =>
+        projectRunnerService.HaltHost = async failure =>
         {
-            var message = RunErrorText.For(error);
-            RuntimeErrors.Record(message, HexIDE.Runtime.Interpreter.ErrorLocation.Of(error));
-            if (!await windowManager.ShowDialog(new RuntimeErrorViewModel(message, canDebug: true)))
+            RuntimeErrors.Record(failure.Text, failure.Location);
+            if (!await windowManager.ShowDialog(new RuntimeErrorViewModel(failure.Text, canDebug: true)))
                 return true;
             if (projectRunnerService.CanEndProject)
                 projectRunnerService.EndProject();
             return false;
         };
 
-        // A compile error met while a form runs, such as a call to a Sub that does not exist, reached from a click.
-        // Reported as a run-time error is: recorded, so get_last_runtime_error sees it, and shown in the dialog
-        // whose End ends the run. It was a message box nothing recorded (#759). One route for every error a run
-        // meets, rather than VB6's separate compile-error box with OK and Help, because #754 already sends Sub
-        // Main's compile errors through this dialog and two routes would answer the same error differently.
-        // The run carries on, with the handler abandoned, as it does after a run-time error.
-        VBWindowContext.CompileError += (_, e) => ReportRuntimeError(e.Message, HexIDE.Runtime.Interpreter.ErrorLocation.Of(e));
-
         // Route `Debug.Print` output from the running program into the Immediate pane (VB6's Immediate window), as it is
         // written, so a line a statement left open shows at once and the next Debug.Print continues it (#1380).
-        VBDebugConsole.Written += text =>
+        RunningProgram.Current.Written += text =>
         {
             Dispatcher.UIThread.Post(() =>
                 Immediate.Document.Insert(Immediate.Document.TextLength, text.Replace("\r\n", "\n")));
@@ -1276,11 +1908,14 @@ public partial class MainViewViewModel : ObservableObject
             int? revealedFrame = null;
             externalDebugger.Changed += () =>
             {
+                UpdateRunState();
                 if (externalDebugger.Stop is not { } stop || externalDebugger.SelectedFrame is not { } frame)
                 { revealed = null; revealedFrame = null; return; }
                 var frameId = frame.GetProperty("id").GetInt32();
-                if (stop == revealed && frameId == revealedFrame) return;
-                if (stop != revealed) { OpenLocalsTool(); OpenCallStackTool(); }
+                var sameLocation = revealed is not null && stop.SessionId == revealed.SessionId &&
+                    stop.NavigationGeneration == revealed.NavigationGeneration;
+                if (sameLocation && frameId == revealedFrame) return;
+                if (!sameLocation) { OpenLocalsTool(); OpenCallStackTool(); }
                 revealed = stop;
                 revealedFrame = frameId;
                 if (externalDebugger.SelectedLocation is { } location)
@@ -1291,8 +1926,17 @@ public partial class MainViewViewModel : ObservableObject
         RemoveDocumentCommand = new DelegateCommand(() => RemoveActiveDocument().ListenErrors(),
             () => RemovableDocument != null);
         ProjectExplorer.ObservePropertyChanged(x => x.SelectedItem).Subscribe(_ => UpdateRemoveDocumentMenu());
+        SaveProjectCommand = new DelegateCommand(SaveProject, () => projectManager.LoadedProjects.Count > 0);
+        projectManager.ProjectLoaded += _ => SaveProjectCommand.RaiseCanExecutedChanged();
+        projectManager.ProjectUnloaded += _ => SaveProjectCommand.RaiseCanExecutedChanged();
+        SaveProjectAsCommand = new DelegateCommand(SaveProjectAs,
+            () => projectManager.LoadedProjects.Any(project => project.Offers.MovesProjectFile));
+        projectManager.ProjectLoaded += _ => SaveProjectAsCommand.RaiseCanExecutedChanged();
+        projectManager.ProjectUnloaded += _ => SaveProjectAsCommand.RaiseCanExecutedChanged();
+
         SaveFormCommand = new DelegateCommand(() => SaveActiveForm(false),
-            () => FocusedProjectUtil.FocusedForm != null);
+            () => FocusedProjectUtil.FocusedForm != null
+                || documentDockService.ActiveDocument is ProjectFileDocumentViewModel { IsReadOnlyDocument: false });
         SaveFormAsCommand = new DelegateCommand(() => SaveActiveForm(true),
             () => FocusedProjectUtil.FocusedForm != null);
 
@@ -1303,7 +1947,7 @@ public partial class MainViewViewModel : ObservableObject
                 if (projectRunnerService.CanContinueProject)
                     projectRunnerService.ContinueProject();
                 else
-                    projectRunnerService.RunStartupProject();
+                    projectRunnerService.StartDefaultProject();
             },
             () => projectRunnerService.CanStartDefaultProject || projectRunnerService.CanContinueProject);
         StartDefaultProjectWithFullCompileCommand = new DelegateCommand(() => projectRunnerService.RunStartupProject(),
@@ -1314,14 +1958,23 @@ public partial class MainViewViewModel : ObservableObject
             () => projectRunnerService.CanEndProject);
         RestartProjectCommand = new DelegateCommand(projectRunnerService.RestartProject,
             () => projectRunnerService.CanRestartProject);
+        // What a project's type doesn't offer isn't offered here.
         ProjectReferencesCommand = new DelegateCommand(() => projectService.EditProjectReferences(FocusedProjectUtil.FocusedOrStartupProject!),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.SetsReferences: true });
         ProjectComponentsCommand = new DelegateCommand(() => projectService.EditProjectComponents(FocusedProjectUtil.FocusedOrStartupProject!),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
-        ProjectPropertiesCommand = new DelegateCommand(() => projectService.EditProjectProperties(FocusedProjectUtil.FocusedOrStartupProject!),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
-        MakeProjectCommand = new DelegateCommand(() => projectService.MakeProject(FocusedProjectUtil.FocusedOrStartupProject!).ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.SetsComponents: true });
+        ProjectPropertiesCommand = new DelegateCommand(() =>
+            {
+                if (FocusedProjectUtil.FocusedOrStartupProject is { } project)
+                    projectService.EditProjectProperties(project).ListenErrors();
+            },
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.SetsProperties: true });
+        MakeProjectCommand = new DelegateCommand(() =>
+            {
+                if (FocusedProjectUtil.FocusedOrStartupProject is { } project)
+                    projectService.MakeProject(project).ListenErrors();
+            },
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.Makes: true });
         RemoveProjectCommand = new DelegateCommand(() => projectService.UnloadProject(FocusedProjectUtil.FocusedOrStartupProject!).ListenErrors(),
             () => FocusedProjectUtil.FocusedOrStartupProject != null);
         // Offered only with a group open, as VB6 offers it (measured, #746). Two projects loaded are a group, even before
@@ -1330,31 +1983,70 @@ public partial class MainViewViewModel : ObservableObject
             () => projectManager.CurrentGroup != null || projectManager.LoadedProjects.Count > 1);
         projectManager.ProjectLoaded += _ => MakeProjectGroupCommand.RaiseCanExecutedChanged();
         projectManager.ProjectUnloaded += _ => MakeProjectGroupCommand.RaiseCanExecutedChanged();
+        // Both hand vb6.exe the project's file, so they ask what Make asks.
         RunWithVb6Command = new DelegateCommand(
             () => vb6Toolchain.RunWithVb6Async(FocusedProjectUtil.FocusedOrStartupProject!).ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null && vb6Toolchain.IsAvailable);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.Makes: true } && vb6Toolchain.IsAvailable);
         MakeWithVb6Command = new DelegateCommand(
             () => vb6Toolchain.MakeWithVb6Async(FocusedProjectUtil.FocusedOrStartupProject!).ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null && vb6Toolchain.IsAvailable);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.Makes: true } && vb6Toolchain.IsAvailable);
 
         AddFormCommand = new DelegateCommand(
             () => AddFormAsync().ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.ChangesMembership: true });
         AddModuleCommand = new DelegateCommand(
             () => AddModuleAsync(ModuleKind.StandardModule).ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.ChangesMembership: true });
         AddClassModuleCommand = new DelegateCommand(
             () => AddModuleAsync(ModuleKind.ClassModule).ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.ChangesMembership: true });
         AddUserControlCommand = new DelegateCommand(
             () => AddUserControlAsync().ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.ChangesMembership: true });
         AddPropertyPageCommand = new DelegateCommand(
             () => AddPropertyPageAsync().ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.ChangesMembership: true });
         AddFileCommand = new DelegateCommand(
             () => AddFileAsync().ListenErrors(),
-            () => FocusedProjectUtil.FocusedOrStartupProject != null);
+            () => FocusedProjectUtil.FocusedOrStartupProject is { Offers.ChangesMembership: true });
+
+        bool HasActiveCodeWindow() => documentDockService.ActiveDocument is CodeEditorViewModel;
+        ToggleBreakpointCommand = new DelegateCommand(ToggleBreakpoint, HasActiveCodeWindow);
+        RunToCursorCommand = new DelegateCommand(RunToCursor, () => HasActiveCodeWindow() && debugController.CurrentStop is not { HasStatement: false });
+        SetNextStatementCommand = new DelegateCommand(SetNextStatement, () => ExternalDebugger?.IsActive == true || (HasActiveCodeWindow() && debugController.CurrentStop is { HasStatement: true }));
+        ShowNextStatementCommand = new DelegateCommand(ShowNextStatement, () => ExternalDebugger?.IsActive == true || debugController.CurrentStop is { HasStatement: true });
+        OpenCallStackCommand = new DelegateCommand(OpenCallStackTool, () => ExternalDebugger?.IsActive == true || debugController.CurrentStop is not { HasStatement: false });
+        EditWatchCommand = new DelegateCommand(EditWatch, () => Watches.SelectedRow is not null);
+
+        // Routed commands listen to CommandManager, not to the delegate behind their binding.
+        foreach (var command in new[] { ToggleBreakpointCommand, RunToCursorCommand, SetNextStatementCommand,
+                     ShowNextStatementCommand, OpenCallStackCommand, EditWatchCommand, SaveProjectCommand, SaveProjectAsCommand })
+            command.CanExecuteChanged += (_, _) => Avalonia.Labs.Input.CommandManager.InvalidateRequerySuggested();
+
+        if (externalDebugger is not null)
+            externalDebugger.Changed += () =>
+            {
+                SetNextStatementCommand.RaiseCanExecutedChanged();
+                ShowNextStatementCommand.RaiseCanExecutedChanged();
+                OpenCallStackCommand.RaiseCanExecutedChanged();
+                RunToCursorCommand.RaiseCanExecutedChanged();
+            };
+        debugController.Stopped += _ =>
+        {
+            SetNextStatementCommand.RaiseCanExecutedChanged();
+            ShowNextStatementCommand.RaiseCanExecutedChanged();
+            OpenCallStackCommand.RaiseCanExecutedChanged();
+            RunToCursorCommand.RaiseCanExecutedChanged();
+        };
+        debugController.Continued += () =>
+        {
+            SetNextStatementCommand.RaiseCanExecutedChanged();
+            ShowNextStatementCommand.RaiseCanExecutedChanged();
+            OpenCallStackCommand.RaiseCanExecutedChanged();
+            RunToCursorCommand.RaiseCanExecutedChanged();
+        };
+        Watches.ObservePropertyChanged(x => x.SelectedRow)
+            .Subscribe(_ => EditWatchCommand.RaiseCanExecutedChanged());
 
         bool CanSearchActiveDocument() =>
             documentDockService.ActiveDocument is HexIDE.Forms.ViewModels.ISearchableDocument;
@@ -1366,6 +2058,7 @@ public partial class MainViewViewModel : ObservableObject
         FocusedProjectUtil.ObservePropertyChanged(x => x.FocusedOrStartupProject)
             .Subscribe(_ =>
             {
+                SaveProjectAsCommand.RaiseCanExecutedChanged();
                 ProjectReferencesCommand.RaiseCanExecutedChanged();
                 ProjectComponentsCommand.RaiseCanExecutedChanged();
                 ProjectPropertiesCommand.RaiseCanExecutedChanged();
@@ -1388,6 +2081,26 @@ public partial class MainViewViewModel : ObservableObject
             .Subscribe(_ =>
             {
                 MakeProjectGroupCommand.RaiseCanExecutedChanged();
+                OnPropertyChanged(nameof(Title));
+                OnPropertyChanged(nameof(WindowTitle));
+                RaiseDynamicMenuHeaders();
+            });
+
+        FocusedProjectUtil.ObservePropertyChanged(x => x.FocusedOrStartupProject)
+            .Select(project => project?.ObservePropertyChanged(x => x.Name) ?? Observable.Empty<string>())
+            .Switch()
+            .Subscribe(_ =>
+            {
+                OnPropertyChanged(nameof(Title));
+                OnPropertyChanged(nameof(WindowTitle));
+                RaiseDynamicMenuHeaders();
+            });
+
+        projectManager.ObservePropertyChanged(x => x.CurrentGroup)
+            .Select(group => group?.ObservePropertyChanged(x => x.Name) ?? Observable.Empty<string>())
+            .Switch()
+            .Subscribe(_ =>
+            {
                 OnPropertyChanged(nameof(Title));
                 OnPropertyChanged(nameof(WindowTitle));
                 RaiseDynamicMenuHeaders();
@@ -1425,7 +2138,11 @@ public partial class MainViewViewModel : ObservableObject
                     _activeDesigner.UndoStack.Changed += _activeDesignerUndoHandler;
                 }
                 UpdateUndoHeaders();
+                SaveFormCommand.RaiseCanExecutedChanged();
 
+                ToggleBreakpointCommand.RaiseCanExecutedChanged();
+                RunToCursorCommand.RaiseCanExecutedChanged();
+                SetNextStatementCommand.RaiseCanExecutedChanged();
                 UpdateRemoveDocumentMenu();
 
                 // Whether Find has anything to search is a property of the active document, so this is
@@ -1444,6 +2161,12 @@ public partial class MainViewViewModel : ObservableObject
                 SaveFormAsCommand.RaiseCanExecutedChanged();
                 CommandManager.InvalidateRequerySuggested();
             });
+
+        settingsService.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ISettingsService.LoadUnsignedAddins))
+                OnPropertyChanged(nameof(WindowTitle));
+        };
 
         // Re-localize every code-built header live when the language changes.
         localization.LanguageChanged += () =>
@@ -1476,12 +2199,20 @@ public partial class MainViewViewModel : ObservableObject
             : localization.GetString("Str.Menu.Edit.Redo");
     }
 
-    public void OnInitialized()
+    public void OnInitialized() => StartAsync().ListenErrors();
+
+    /// <summary>
+    /// Offers back the unsaved work of a run that ended without a clean exit (hexide-io/HexIDE#499), then opens what
+    /// the start asks for. A project named on the command line opens either way. The new-project prompt is not shown
+    /// when a project was just restored, since there is one to work in.
+    /// </summary>
+    private async Task StartAsync()
     {
+        var restored = recoveryOffers is not null && await recoveryOffers.OfferAtStartAsync();
         if (Static.StartupProjectHook is { } hook)
-            hook(projectService, projectManager).ListenErrors();
-        else if (settingsService.PromptForProjectOnStartup)
-            projectService.CreateNewProject().ListenErrors();
+            await hook(projectService, projectManager);
+        else if (settingsService.PromptForProjectOnStartup && !restored)
+            await projectService.CreateNewProject();
     }
 
     public void Exit()
@@ -1493,7 +2224,7 @@ public partial class MainViewViewModel : ObservableObject
 
     public void NYI()
     {
-        windowManager.MessageBox("This feature is not yet implemented", "NYI", MessageBoxButtons.Ok, MessageBoxIcon.Information);
+        windowManager.MessageBox(localization.GetString("Str.Shell.NotImplemented"), null, MessageBoxButtons.Ok, MessageBoxIcon.Information);
     }
 
     /// <summary>
@@ -1509,6 +2240,11 @@ public partial class MainViewViewModel : ObservableObject
 
     private void SaveActiveForm(bool saveAs)
     {
+        if (!saveAs && documentDockService.ActiveDocument is ProjectFileDocumentViewModel file)
+        {
+            file.SaveAsync().ListenErrors();
+            return;
+        }
         // Use the document's save path so form code keeps format-on-save.
         if (documentDockService.ActiveDocument is FormEditViewModel designer)
         {
@@ -1592,23 +2328,32 @@ public partial class MainViewViewModel : ObservableObject
 
     public void OpenAddInManager() => OpenOptionsAt("Str.Options.Node.AddIns");
 
-    private void OpenOptionsAt(string? initialNodeKey) => windowManager.ShowDialog(new OptionsViewModel(settingsService, themeService, keymapService, languageSwitch, addinRegistry, addinOptionsService, developerModeService, localization, eventBus, initialNodeKey));
+    private void OpenOptionsAt(string? initialNodeKey) => windowManager.ShowDialog(new OptionsViewModel(settingsService, themeService, keymapService, languageSwitch, addinRegistry, addinOptionsService, developerModeService, localization, eventBus, initialNodeKey, windowManager,
+        projectService.ConfirmAddinWithdrawal, LanguageServers.ChatToolsCandidates));
 
     public void About()
     {
+        const string upstreamNotice = "© 2026 The HexIDE Authors. Not affiliated with, endorsed by, or sponsored by Microsoft.";
+        var brand = Distribution.Current;
+        var languages = BrandText.LanguageChain(localization);
+        var credits = new List<string>();
+        foreach (var credit in brand.LocalizedCredits)
+            credits.Add(credit.Resolve(languages));
         windowManager.ShowAbout(new AboutDialogOptions()
         {
-            Copyright = "© 2026 The HexIDE Authors. Not affiliated with, endorsed by, or sponsored by Microsoft.",
-            Title = $"HexIDE {BuildInfo.Display}",
-            SubTitle = "A cross-platform, VB6-compatible IDE",
-            Icon = new Bitmap(AssetLoader.Open(new Uri("avares://HexIDE/Icons/AppIcon/hexide-logo-64.png")))
+            Copyright = brand.IsStock ? upstreamNotice : brand.Copyright ?? "",
+            // A branded About still says what it is built on, and carries HexIDE's own notice (#2042).
+            Provenance = brand.IsStock ? "" : string.Format(localization.GetString("Str.Dialog.About.Provenance"), BuildInfo.Display, upstreamNotice),
+            Title = brand.IsStock ? $"{brand.Name} {BuildInfo.Display}" : brand.Name,
+            SubTitle = brand.LocalizedTagline?.Resolve(languages) ?? localization.GetString("Str.Dialog.About.Tagline"),
+            AdditionalCredits = credits,
+            Icon = BrandAssets.Logo
         }).ListenErrors();
     }
 
     public async Task NewProject()
     {
-        await projectService.UnloadAllProjects();
-        await projectService.CreateNewProject();
+        await projectService.CreateNewProject(replaceExisting: true);
     }
 
     public async Task AddProject(IProjectTemplate? projectTemplate)
@@ -1717,7 +2462,11 @@ public partial class MainViewViewModel : ObservableObject
     {
         if (ExternalDebugger?.IsActive == true)
         {
-            windowManager.MessageBox(localization.GetString("Str.Debug.External.Unsupported"), icon: MessageBoxIcon.Information).ListenErrors();
+            if (!ExternalDebugger.SupportsSetNextStatement)
+                windowManager.MessageBox(localization.GetString("Str.Debug.External.Unsupported"), icon: MessageBoxIcon.Information).ListenErrors();
+            else if (documentDockService.ActiveDocument is HexIDE.Forms.ViewModels.CodeEditorViewModel externalCode)
+                ExternalDebugger.SetNextStatementAsync(externalCode.GetDocumentUriPublic(),
+                    externalCode.Document.GetLineByOffset(externalCode.CaretOffset).LineNumber).ListenErrors();
             return;
         }
         if (documentDockService.ActiveDocument is HexIDE.Forms.ViewModels.CodeEditorViewModel code)
@@ -1725,7 +2474,9 @@ public partial class MainViewViewModel : ObservableObject
             var line = code.Document.GetLineByOffset(code.CaretOffset).LineNumber;
             // The definition's own name, not a tail read off a URI: a module named Utilities saved as
             // util.bas answers to "Utilities", and the file stem would name nothing the controller knows.
-            if (!debugController.SetNextStatement(code.Identity.Name, line))
+            // The controller takes a bare name; another project in a group may have the same module.
+            if (projectRunnerService.RunningProject is not { } running || !code.Identity.IsIn(running)
+                || !debugController.SetNextStatement(code.Identity.Name, line))
                 windowManager.MessageBox(localization.GetString("Str.Debug.SetNextStatement.Refused"),
                     icon: MessageBoxIcon.Information).ListenErrors();
         }
@@ -1742,7 +2493,7 @@ public partial class MainViewViewModel : ObservableObject
                 editorService.NavigateTo(location.Uri, location.Line, 1);
             return;
         }
-        if (debugController.CurrentStop is { } stop)
+        if (debugController.CurrentStop is { HasStatement: true } stop)
             RevealBreak(stop.Module);
     }
 
@@ -1756,13 +2507,22 @@ public partial class MainViewViewModel : ObservableObject
             FileTypeFilter = [new Avalonia.Platform.Storage.FilePickerFileType("JSON") { Patterns = ["*.json"] }],
         });
         if (paths?.FirstOrDefault() is not { } file || projectRunnerService.IsRunning) return;
+        // A launch file names the program it starts, so a downloaded one is asked about as a downloaded project is (#1121).
+        if (!await projectRunnerService.MayRunFileAsync(file))
+            return;
         OpenImmediateTool();
         await ExternalDebugger.StartAsync(file);
     }
 
+    private static void OpenBrandLink(string? url)
+    {
+        if (url is not null)
+            TopLevel.GetTopLevel(Static.MainView)!.Launcher.LaunchUriAsync(new Uri(url)).ListenErrors();
+    }
+
     public Task OpenGithubRepo()
     {
-        TopLevel.GetTopLevel(Static.MainView)!.Launcher.LaunchUriAsync(new Uri("https://github.com/hexide-io/hexide")).ListenErrors();
+        TopLevel.GetTopLevel(Static.MainView)!.Launcher.LaunchUriAsync(new Uri(Distribution.Current.RepositoryUrl ?? DistributionIdentity.StockRepositoryUrl)).ListenErrors();
         return Task.CompletedTask;
     }
 
@@ -1816,11 +2576,12 @@ public partial class MainViewViewModel : ObservableObject
             AllowMultiple = true,
             FileTypeFilter =
             [
-                new FilePickerFileType("VB6 Files")
+                new FilePickerFileType(localization.GetString("Str.FilePicker.MemberFiles"))
                 {
-                    Patterns = ["*.bas", "*.cls", "*.frm", "*.ctl", "*.pag"],
+                    Patterns = ["*." + ProjectFormats.Of(p).FormExtension,
+                        .. Enum.GetValues<ModuleKind>().Select(kind => "*." + ProjectFormats.Of(p).MemberExtension(kind)).Distinct()],
                 },
-                new FilePickerFileType("All Files") { Patterns = ["*.*"] },
+                new FilePickerFileType(localization.GetString("Str.FilePicker.AllFiles")) { Patterns = ["*.*"] },
             ],
         });
 
@@ -1847,7 +2608,7 @@ public partial class MainViewViewModel : ObservableObject
         // tabs writing to one path.
         if (TryOpenAlreadyCarried(project, path)) return;
 
-        var kind = ProjectFileClassifier.Classify(path);
+        var kind = ProjectFileClassifier.Classify(path, ProjectFormats.Of(project));
 
         if (kind == ProjectFileKind.Form)
         {
@@ -1975,6 +2736,11 @@ public partial class MainViewViewModel : ObservableObject
                     return ret;
         }
 
+        if (dockable is IRootDock root && root.Windows != null)
+            foreach (var window in root.Windows)
+                if (window.Layout is { } floating && FindDock<T>(floating, predicate) is { } found)
+                    return found;
+
         return null;
     }
 
@@ -1983,7 +2749,7 @@ public partial class MainViewViewModel : ObservableObject
         var opened = FindDock<IDockable>(x => ReferenceEquals(x, tool));
         if (opened != null)
         {
-            dockFactory.SetFocusedDockable((IDock)opened.Owner!, opened);
+            dockFactory.FocusDockable((IDock)opened.Owner!, opened, reactivating: opened.Owner is IDocumentDock);
             return;
         }
 
@@ -2001,9 +2767,18 @@ public partial class MainViewViewModel : ObservableObject
         _layoutSaveTimer.Start();
     }
 
+    private bool CanSaveLayout()
+    {
+        if (dockFactory.DocumentDock is not { } document) return false;
+        document.GetVisibleBounds(out _, out _, out _, out var height);
+        return height >= Math.Max(DockFactory.MinimumDocumentHeight,
+            double.IsFinite(document.MinHeight) ? document.MinHeight : 0);
+    }
+
     private void FlushLayoutSaveDebounced()
     {
         _layoutSaveTimer.Stop();
+        if (!CanSaveLayout()) return;
         var json = LayoutManifestJson.Serialize(dockFactory.CaptureManifest(Layout));
         if (json == _lastSavedLayoutJson) return; // nothing actually changed since the last write
         _lastSavedLayoutJson = json;
@@ -2011,22 +2786,106 @@ public partial class MainViewViewModel : ObservableObject
     }
 
     /// <summary>Capture and persist the current dock layout synchronously (called on window close).
-    /// Unconditional, so the final state lands on disk even if a debounced write was still pending.</summary>
+    /// Keeps the last valid layout if the document area is below its minimum.</summary>
     public void SaveLayout()
     {
+        foreach (var project in projectManager.LoadedProjects)
+            editorService.SaveOpenDocuments(project);
         _layoutSaveTimer.Stop();
+        if (!CanSaveLayout()) return;
         var json = LayoutManifestJson.Serialize(dockFactory.CaptureManifest(Layout));
         _lastSavedLayoutJson = json;
         windowStateService.SaveLayoutManifestJson(json);
     }
 
+    private void RegisterAddinTool(AddinToolWindowViewModel tool)
+    {
+        dockFactory.RegisterAddinTool(Layout, tool);
+        try { NamedLayouts.Migrate(manifest => DockFactory.MigrateAddinKey(manifest, tool)); }
+        catch (Exception ex) { Log.Warning(ex, "Failed to migrate named panel layouts"); }
+    }
+
+    public NamedLayoutService NamedLayouts { get; }
+
+    public async Task SaveNamedLayoutAsync()
+    {
+        var name = await windowManager.InputBox(localization.GetString("Str.Layout.NamePrompt"),
+            localization.GetString("Str.Layout.Layouts").Replace("_", ""), "");
+        if (name is null) return;
+        await ChangeNamedLayouts(() => NamedLayouts.Save(name, dockFactory.CaptureManifest(Layout)));
+    }
+
+    public async Task RenameNamedLayoutAsync(string name)
+    {
+        var replacement = await windowManager.InputBox(localization.GetString("Str.Layout.NamePrompt"),
+            localization.GetString("Str.Layout.Layouts").Replace("_", ""), name);
+        if (replacement is null) return;
+        await ChangeNamedLayouts(() => NamedLayouts.Rename(name, replacement));
+    }
+
+    public Task DeleteNamedLayoutAsync(string name) => ChangeNamedLayouts(() =>
+    {
+        NamedLayouts.Delete(name);
+        return true;
+    });
+
+    private async Task ChangeNamedLayouts(Func<bool> change)
+    {
+        try
+        {
+            if (!change())
+                await windowManager.MessageBox(localization.GetString("Str.Layout.InvalidName"));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to save named panel layouts");
+            await windowManager.MessageBox(localization.GetString("Str.Layout.SaveFailed"));
+        }
+    }
+
+    public void SwitchNamedLayout(string name)
+    {
+        if (NamedLayouts.Get(name) is { } manifest) ApplyPanelLayout(manifest);
+    }
+
+    public void FullEditorLayout() => ApplyPanelLayout(LayoutManifest.FullEditor);
+
+    private string? _panelLayoutNotice;
+
+    private void ApplyPanelLayout(LayoutManifest manifest)
+    {
+        _layoutSaveTimer.Stop();
+        var fresh = dockFactory.ApplyLayout(manifest);
+        dockFactory.InitLayout(fresh);
+        Layout = fresh;
+        SaveLayout();
+        ReportSkippedPanelWindows();
+    }
+
+    private void ReportSkippedPanelWindows()
+    {
+        if (dockFactory.SkippedTools.Count > 0)
+        {
+            _panelLayoutNotice = string.Format(localization.GetString("Str.Layout.Skipped"),
+                string.Join(", ", dockFactory.SkippedTools.Select(t => t.Key)));
+            StatusBar.SetMessage(_panelLayoutNotice);
+        }
+        else if (_panelLayoutNotice is not null)
+        {
+            StatusBar.TryReplaceMessage(_panelLayoutNotice, null);
+            _panelLayoutNotice = null;
+        }
+    }
+
     /// <summary>Discard the saved layout and rebuild the default arrangement live, keeping open documents.</summary>
     public void ResetWindowLayout()
     {
+        _layoutSaveTimer.Stop();
         var fresh = dockFactory.ResetLayout(Layout);
         dockFactory.InitLayout(fresh);
         Layout = fresh;
         _lastSavedLayoutJson = LayoutManifestJson.Serialize(dockFactory.CaptureManifest(Layout));
+        ReportSkippedPanelWindows();
     }
 
     public void OpenImmediateTool() => OpenOrActivateTool(Immediate, false);
@@ -2036,27 +2895,31 @@ public partial class MainViewViewModel : ObservableObject
 
     public void OpenCallStackTool() => OpenOrActivateTool(CallStack, false);
     public void OpenColorPaletteTool() => OpenOrActivateTool(ColorPalette, false);
-    public void OpenObjectBrowserTool()
+    private void OpenOrActivateToolDocument(IDockable tool)
     {
-        var docDock = FindDock<DocumentDock>(_ => true);
-        if (docDock == null) return;
-
-        if (docDock.VisibleDockables?.Contains(ObjectBrowser) == true)
-        {
-            dockFactory.SetFocusedDockable(docDock, ObjectBrowser);
-            docDock.ActiveDockable = ObjectBrowser;
-            return;
-        }
+        if (documentDockService.TryActivateAny(tab => ReferenceEquals(tab, tool))) return;
+        var docDock = documentDockService.FocusedArea;
+        if (docDock is null) return;
 
         docDock.VisibleDockables ??= dockFactory.CreateList<IDockable>();
-        docDock.VisibleDockables.Add(ObjectBrowser);
-        dockFactory.InitDockable(ObjectBrowser, docDock);
-        dockFactory.SetFocusedDockable(docDock, ObjectBrowser);
-        docDock.ActiveDockable = ObjectBrowser;
+        docDock.VisibleDockables.Add(tool);
+        dockFactory.InitDockable(tool, docDock);
+        dockFactory.FocusDockable(docDock, tool);
+        docDock.ActiveDockable = tool;
         ScheduleLayoutSave();
     }
+
+    public void OpenObjectBrowserTool() => OpenOrActivateToolDocument(ObjectBrowser);
     /// <summary>Opens the language-server view, or brings it forward if it is already open.</summary>
     public ICommand OpenLanguageServersCommand { get; private set; } = null!;
+
+    public ICommand OpenDiagnosticsCommand { get; }
+
+    public void OpenDiagnostics()
+    {
+        Diagnostics.Refresh();
+        OpenOrActivateTool(Diagnostics, false);
+    }
 
     /// <summary>Opens the protocol inspector, or brings it forward if it is already open.</summary>
     /// <remarks>
@@ -2078,69 +2941,18 @@ public partial class MainViewViewModel : ObservableObject
     /// </remarks>
     public void OpenProtocolInspector(string? connectionId)
     {
-        var docDock = FindDock<DocumentDock>(_ => true);
-        if (docDock == null) return;
-
         if (connectionId is { Length: > 0 }) ProtocolInspector.ShowOnly(connectionId);
 
         // Re-read on every open rather than only on construction. The capture has been recording since
         // the session began, so a tab opened an hour in must not show what was there an hour ago.
         ProtocolInspector.Refresh();
 
-        if (docDock.VisibleDockables?.Contains(ProtocolInspector) == true)
-        {
-            dockFactory.SetFocusedDockable(docDock, ProtocolInspector);
-            docDock.ActiveDockable = ProtocolInspector;
-            return;
-        }
-
-        docDock.VisibleDockables ??= dockFactory.CreateList<IDockable>();
-        docDock.VisibleDockables.Add(ProtocolInspector);
-        dockFactory.InitDockable(ProtocolInspector, docDock);
-        dockFactory.SetFocusedDockable(docDock, ProtocolInspector);
-        docDock.ActiveDockable = ProtocolInspector;
-        ScheduleLayoutSave();
+        OpenOrActivateToolDocument(ProtocolInspector);
     }
 
-    public void OpenLanguageServers()
-    {
-        var docDock = FindDock<DocumentDock>(_ => true);
-        if (docDock == null) return;
+    public void OpenLanguageServers() => OpenOrActivateToolDocument(LanguageServers);
 
-        if (docDock.VisibleDockables?.Contains(LanguageServers) == true)
-        {
-            dockFactory.SetFocusedDockable(docDock, LanguageServers);
-            docDock.ActiveDockable = LanguageServers;
-            return;
-        }
-
-        docDock.VisibleDockables ??= dockFactory.CreateList<IDockable>();
-        docDock.VisibleDockables.Add(LanguageServers);
-        dockFactory.InitDockable(LanguageServers, docDock);
-        dockFactory.SetFocusedDockable(docDock, LanguageServers);
-        docDock.ActiveDockable = LanguageServers;
-        ScheduleLayoutSave();
-    }
-
-    public void OpenTranslationEditor()
-    {
-        var docDock = FindDock<DocumentDock>(_ => true);
-        if (docDock == null) return;
-
-        if (docDock.VisibleDockables?.Contains(TranslationEditor) == true)
-        {
-            dockFactory.SetFocusedDockable(docDock, TranslationEditor);
-            docDock.ActiveDockable = TranslationEditor;
-            return;
-        }
-
-        docDock.VisibleDockables ??= dockFactory.CreateList<IDockable>();
-        docDock.VisibleDockables.Add(TranslationEditor);
-        dockFactory.InitDockable(TranslationEditor, docDock);
-        dockFactory.SetFocusedDockable(docDock, TranslationEditor);
-        docDock.ActiveDockable = TranslationEditor;
-        ScheduleLayoutSave();
-    }
+    public void OpenTranslationEditor() => OpenOrActivateToolDocument(TranslationEditor);
     public void OpenProjectExplorerTool() => OpenOrActivateTool(ProjectExplorer, true);
     public void OpenPropertiesTool() => OpenOrActivateTool(Properties, true);
     public void OpenFormLayoutTool() => OpenOrActivateTool(FormLayout, true);

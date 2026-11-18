@@ -160,9 +160,10 @@ public class ConfiguredServerTests : IDisposable
     [InlineData("""{"id":"s","extensions":[".md"],"languageId":"markdown","transport":"stdio","command":"x"}""")]
     [InlineData("""{"id":"s","extensions":[".md"],"languageId":"markdown","transport":"websocket","endpoint":"ws://localhost:1/"}""")]
     [InlineData("""{"id":"s","extensions":[".md"],"languageId":"markdown","transport":"pipe","pipeName":"p"}""")]
+    [InlineData("""{"id":"s","extensions":[".md"],"languageId":"markdown","transport":"tcp","endpoint":"tcp://localhost:1"}""")]
     public void EveryTransportTheLoaderAcceptsCanActuallyBeBuilt(string entryJson)
     {
-        // The loader validates three transports; the factory must build all three. A transport the loader
+        // The loader and factory must support the same transport inventory. A transport the loader
         // accepts and the factory silently drops would be an entry that validates and never runs.
         var registrations = RegistrationsFrom($$"""{"version":1,"servers":[{{entryJson}}]}""");
 
@@ -394,7 +395,7 @@ public class ConfiguredServerTests : IDisposable
         var serving = pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken).ContinueWith(_ =>
         {
             var rpc = new JsonRpc(
-                new HeaderDelimitedMessageHandler(pipe, pipe, new SystemTextJsonFormatter()), recorder);
+                new LspMessageHandler(pipe, pipe, new SystemTextJsonFormatter()), recorder);
             rpc.StartListening();
             return rpc;
         }, TaskScheduler.Default);

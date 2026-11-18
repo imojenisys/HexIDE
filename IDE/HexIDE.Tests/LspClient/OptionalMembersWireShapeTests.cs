@@ -32,6 +32,7 @@ public class OptionalMembersWireShapeTests
     [InlineData("TextDocumentClientCapabilities", "documentSymbol")]
     [InlineData("TextDocumentClientCapabilities", "foldingRange")]
     [InlineData("TextDocumentClientCapabilities", "semanticTokens")]
+    [InlineData("TextDocumentClientCapabilities", "completion")]
     [InlineData("WorkspaceClientCapabilities", "executeCommand")]
     [InlineData("WorkspaceClientCapabilities", "workspaceFolders")]
     [InlineData("WorkspaceClientCapabilities", "diagnostics")]
@@ -53,6 +54,10 @@ public class OptionalMembersWireShapeTests
     [InlineData("ServerCapabilities", "executeCommandProvider")]
     [InlineData("CompletionItem", "detail")]
     [InlineData("CompletionItem", "insertText")]
+    [InlineData("CompletionItem", "sortText")]
+    [InlineData("CompletionItem", "filterText")]
+    [InlineData("CompletionItem", "preselect")]
+    [InlineData("CompletionItem", "documentation")]
     [InlineData("SymbolInformation", "containerName")]
     [InlineData("HoverClientCapabilities", "contentFormat")]
     [InlineData("HoverResult", "range")]
@@ -136,7 +141,7 @@ public class OptionalMembersWireShapeTests
     private static async Task<JsonDocument> FrameAsync(object parameters)
     {
         var (clientSide, serverSide) = FullDuplexStream.CreatePair();
-        using var rpc = new JsonRpc(new HeaderDelimitedMessageHandler(clientSide, clientSide,
+        using var rpc = new JsonRpc(new LspMessageHandler(clientSide, clientSide,
             new SystemTextJsonFormatter { JsonSerializerOptions = new JsonSerializerOptions(LspJsonContext.Default.Options) }));
         await using var peer = serverSide;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);

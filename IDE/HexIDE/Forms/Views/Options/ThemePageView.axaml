@@ -11,10 +11,30 @@
         <DockPanel>
             <AccessText x:Name="ThemeLabel" VerticalAlignment="Center" Margin="0,0,10,0" Text="{DynamicResource Str.Options.Theme.ThemeLabel}" />
             <ComboBox ItemsSource="{CompiledBinding AvailableThemes}"
-                      AutomationProperties.Name="{CompiledBinding #ThemeLabel.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}}"
+                      AutomationProperties.Name="{CompiledBinding #ThemeLabel.Text, Converter={x:Static converters:AccessKeyNameConverter.Instance}, ConverterParameter=TrimColon}"
                       SelectedItem="{CompiledBinding SelectedTheme}"
                       HorizontalAlignment="Left"
-                      Width="160" />
+                      MinWidth="160">
+                <ComboBox.Styles>
+                    <!-- Named by the text the row shows, not the pack id the item holds (#4176). -->
+                    <Style Selector="ComboBoxItem" x:DataType="x:String">
+                        <Setter Property="AutomationProperties.Name"
+                                Value="{CompiledBinding ., Converter={x:Static converters:ShownItemNameConverter.Instance}}" />
+                    </Style>
+                </ComboBox.Styles>
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="x:String">
+                        <Grid>
+                            <TextBlock Text="{CompiledBinding .}"
+                                       IsVisible="{CompiledBinding ., Converter={x:Static converters:ThemeNameVisibilityConverter.Instance}}" />
+                            <TextBlock Text="{DynamicResource Str.Theme.HighContrastLight}"
+                                       IsVisible="{CompiledBinding ., Converter={x:Static converters:ThemeNameVisibilityConverter.Instance}, ConverterParameter=HighContrastLight}" />
+                            <TextBlock Text="{DynamicResource Str.Theme.HighContrastDark}"
+                                       IsVisible="{CompiledBinding ., Converter={x:Static converters:ThemeNameVisibilityConverter.Instance}, ConverterParameter=HighContrastDark}" />
+                        </Grid>
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
         </DockPanel>
     </HeaderedContentControl>
 </UserControl>

@@ -6,15 +6,44 @@ Allow offline inspection of archive projects without modifying project content o
 ## Requirements
 
 ### Requirement: Open archive projects independently of VB6 models
-The IDE MUST route supported archive project paths to the archive reader from normal project opening and recent-project reopening. It MUST show the stored hierarchy and a persistent read-only indication without registering VB6 modules or attaching a language server.
+The IDE MUST route supported archive project paths to the archive reader from normal project opening and recent-project reopening. It MUST show the stored hierarchy and a persistent read-only indication without registering VB6 modules. twinBASIC text previews MAY attach language servers by extension under opaque archive-entry URIs.
 
 #### Scenario: Open an archive project
 - **WHEN** a user opens a supported archive project
 - **THEN** Project Explorer shows its ordered hierarchy separately from VB6 projects
 - **AND** the project path is available for recent-project reopening
 
+### Requirement: Name archive text to language servers
+An available text preview MUST use
+`archive-entry:/<percent-encoded segments>?container=<percent-encoded file URI>`.
+Entry segments MUST compare ordinally; the container MUST compare as a host file path, ignoring case on Windows.
+The entry's extension MUST determine server routing.
+
+#### Scenario: A source name contains a space and a hash
+- **WHEN** a text entry named `Module # 1.twin` opens with a server claiming `.twin`
+- **THEN** didOpen names `Module%20%23%201.twin` under the archive-entry scheme and carries its text
+
+### Requirement: Maintain read-only archive document sessions
+For twinBASIC entries, servers claiming the entry's extension MUST receive its text on open and a close when the tab closes.
+Read-only entries MUST NOT send changes. Published diagnostics MUST reach the matching tab, including
+when a server changes the container drive letter's case on Windows. Reload MUST recreate the session and markers.
+
+#### Scenario: Reload an open text entry
+- **WHEN** a validated replacement updates an open entry
+- **THEN** its old session closes and a new session opens with the replacement text
+- **AND** diagnostics reach the new buffer while edits remain refused
+
+### Requirement: Record archive document conversations
+Protocol recording and inspection MUST retain the archive-entry URI as sent.
+Pseudonymised exports MUST redact entry and container names, and their disclosure preview MUST name the entry without its container query.
+
+#### Scenario: Inspect and export an entry's open notification
+- **WHEN** the user inspects and exports the recorded didOpen
+- **THEN** inspection shows its wire URI and export replaces its entry and container names with pseudonyms
+- **AND** the disclosure preview shows the entry name
+
 ### Requirement: Inspect content without mutations
-Known text documents MUST support Find and copy. Editing and replacement MUST NOT change their buffers or source bytes. Unsupported text previews MUST show an explanatory status. Entry metadata and hidden entries MUST be available through explicit inspection controls.
+Known text documents MUST support Find and copy. Editing and replacement MUST NOT change their buffers or source bytes. Unsupported text previews MUST show an explanatory status. Entry metadata and hidden entries MUST be available through explicit inspection controls. The Project Explorer's Show hidden archive entries toggle MUST be visible only when a twinBASIC archive root or node is selected.
 
 #### Scenario: Find and replace in an archive tab
 - **WHEN** the user finds text and invokes replacement
@@ -41,7 +70,8 @@ Selecting an archive entry or activating an archive tab MUST NOT implicitly targ
 ### Requirement: Grey a source entry's inactive conditional branches as the archive's compiler compiles them
 A `.twin` entry's preview MUST grey the lines its `#If` directives leave out under the archive compiler's measured
 built-ins at 32-bit (#1691), in the theme's `InactiveCodeTextBrush`. Under that compiler a call to one of VB's
-functions in a directive MUST read 0. Other entries MUST NOT be greyed.
+functions in a directive MUST read 0. Other entries MUST NOT be greyed. Reopening a recently closed tab MUST retain
+the latest project build type supplied on open or reload and preserve its inactive lines.
 
 #### Scenario: A branch the compiler's 32-bit build leaves out
 - **WHEN** the user opens a `.twin` entry whose `#If Win64 Then` branch has an `#Else`
@@ -64,3 +94,69 @@ The IDE MUST report a refused archive open with the selected file name and the r
 - **THEN** an error message names the file and includes the reader's reason
 - **AND** the existing projects and documents remain open
 - **AND** the refused archive is not added to recent projects
+
+### Requirement: Browse Office documents through the container seam
+The IDE MUST use a shared read-only container abstraction for twinBASIC and Office documents, without
+adding a writable Office project type. Opening an Office document from the picker, recent list or path
+MUST preserve the loaded workspace and group. A missing VBA project MUST name the file; an unreadable
+project MUST show the reader's reason. Failed opens MUST NOT enter recent projects.
+
+#### Scenario: Open an Office document beside a project group
+- **WHEN** an Office document with a VBA project opens while a two-project group is loaded
+- **THEN** it appears separately and the group's name, order, startup project and saved state remain unchanged
+
+### Requirement: Present Office project structure
+An Office root MUST name its project and file, and offer nonempty folders in host objects, Forms,
+Modules, Class Modules and References order. Reference captions MUST fall back to Libid when unnamed.
+Locked projects MUST show their lock and no modules, with an explanation when opened.
+
+#### Scenario: Open a locked document
+- **WHEN** the reader reports a viewing lock
+- **THEN** the root is marked locked and no module source can be opened
+
+### Requirement: Present Office source honestly
+Source tabs MUST be read-only and state, as the root tooltip does, that Office can execute compiled
+p-code differing from the stored source. UserForms MUST open code with a designer-pending notice.
+
+#### Scenario: Open a UserForm module
+- **WHEN** the user opens a UserForm from the Forms folder
+- **THEN** its decoded code is shown read-only with the source/p-code and pending-designer notices
+
+### Requirement: Name Office modules for language servers
+Office source entries MUST use `archive-entry:` URIs whose last segment appends `.bas` for a standard
+module, `.cls` for a class or document module, or `.frm` for a UserForm. Browser and automation entry
+paths MUST remain unchanged, and automation's entry URI MUST equal the tab's wire URI.
+
+#### Scenario: Open a document module
+- **WHEN** the user opens `/Document/ThisWorkbook`
+- **THEN** its wire URI ends in `/Document/ThisWorkbook.cls?container=…` while its browser path stays unchanged
+
+### Requirement: Route Office modules as project members
+Office modules MUST be offered as project members to servers that establish VB6, routed by extension.
+Each server MUST receive its configured language identifier (`vb6` for the bundled server).
+
+#### Scenario: Open a class without an export header
+- **WHEN** an Office class module's stored source has no `VERSION 1.0 CLASS` header
+- **THEN** a VB6 server claiming `.cls` receives the module as a project member
+
+### Requirement: Keep Office language-server sessions read-only
+Office source tabs MUST receive the same read-only diagnostic sessions as archive previews.
+Sessions MUST send `didOpen` and `didClose`, with no `didChange`, and close on tab close, container close
+or reload. Locked projects MUST expose no source sessions.
+
+#### Scenario: Reload or close an Office source tab
+- **WHEN** an Office source tab or its container is closed, or the container is reloaded
+- **THEN** the old session sends `didClose`; a retained tab on reload opens a new session and clears old markers
+
+#### Scenario: Browse a locked Office project
+- **WHEN** an Office project is locked for viewing
+- **THEN** no module source or language-server session is exposed
+
+### Requirement: Respect Office browser capabilities
+Office entries MUST NOT receive inactive shading, Show Hidden or Synchronize Folder. Office node and tab
+focus MUST refuse implicit build and run targeting a loaded startup project. Opening a document MUST NOT
+execute its code or events.
+
+#### Scenario: Read Office source beside a loaded startup project
+- **WHEN** an Office source tab is active
+- **THEN** diagnostics are shown as markers and implicit build and run commands are unavailable

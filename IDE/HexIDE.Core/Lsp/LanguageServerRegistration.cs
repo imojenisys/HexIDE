@@ -76,7 +76,27 @@ public sealed record LanguageServerRegistration(
     /// was not written are shown (#2073).
     /// </summary>
     bool WorkspaceArtifactRefused = false,
-    ProjectImportSpec? ProjectImport = null)
+    ProjectImportSpec? ProjectImport = null,
+    /// <summary>
+    /// What runs before the server's process starts, every time it starts, and fails the start if it throws: an add-in's
+    /// gate (#457). Null for an entry of the configuration file, which has nothing to run.
+    /// </summary>
+    Func<CancellationToken, Task>? BeforeLaunch = null,
+    /// <summary>
+    /// Who contributed this server, for the Language Servers window: an add-in's title. Null for the configuration file
+    /// and the bundled server.
+    /// </summary>
+    string? Origin = null,
+    /// <summary>Restart when projects join or leave the workspace, rather than relying on folder notifications.</summary>
+    bool RestartOnProjectChange = false,
+    System.Text.Json.JsonElement? Settings = null,
+    /// <summary>
+    /// Whether AI Chat may use this server's tools and context, and how they are approved, as its entry says (#4257). Null
+    /// for a registration whose route can't offer tools at all, which no setting turns on: only
+    /// <c>LanguageServerRegistrationFactory</c>, the route of the configuration file's servers, the bundled one and a
+    /// consented add-in's, sets it. The person's own setting in Options wins over the entry's value, never over null.
+    /// </summary>
+    ServerChatToolsPolicy? ChatTools = null)
 {
     /// <summary>
     /// The priority the entries HexIDE contributes itself are given — deliberately below the value an

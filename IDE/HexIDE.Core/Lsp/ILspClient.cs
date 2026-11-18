@@ -4,6 +4,8 @@ namespace HexIDE.Lsp;
 
 public interface ILspClient : IAsyncDisposable
 {
+    /// <summary>The last launch was refused solely because no workspace directory was chosen yet.</summary>
+    bool WaitingForWorkspace => false;
     /// <summary>Reports successfully created disk files; the connection applies its server filters.</summary>
     Task DidCreateFilesAsync(string[] uris, CancellationToken cancellationToken = default) => Task.CompletedTask;
     /// <summary>Reports successfully renamed disk files, carrying both absolute URIs.</summary>
@@ -14,8 +16,23 @@ public interface ILspClient : IAsyncDisposable
     /// <summary>Rechecks the workspace root and reopens held documents if it moved.</summary>
     Task WorkspaceChangedAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
 
+    /// <summary>The server invalidated code lenses; sender identifies the issuing connection.</summary>
+    event EventHandler? CodeLensRefreshRequested;
+
+    /// <summary>The server invalidated inlay hints; sender identifies the issuing connection.</summary>
+    event EventHandler? InlayHintRefreshRequested;
+
+    /// <summary>The server invalidated semantic tokens; sender identifies the issuing connection.</summary>
+    event EventHandler? SemanticTokensRefreshRequested;
+
+    /// <summary>Whether this document is attached to the connection issuing a refresh.</summary>
+    bool HandlesRefresh(string uri, object? sender) => ReferenceEquals(this, sender);
+
     /// <summary>Fired when the server sends textDocument/publishDiagnostics.</summary>
     event EventHandler<PublishDiagnosticsParams>? DiagnosticsPublished;
+
+    /// <summary>The client has retired this URI for a rename; cached analysis for the old name is no longer current.</summary>
+    event EventHandler<string>? DocumentRetired;
 
     /// <summary>
     /// Fired when the server asks for the user's attention about <em>itself</em> — <c>window/showMessage</c>.
@@ -93,6 +110,9 @@ public interface ILspClient : IAsyncDisposable
     event EventHandler? StateChanged;
 
     bool IsRunning { get; }
+
+    bool SupportsSelectionRanges(string uri) =>
+        IsRunning && ServerCapabilities.Supports(AdvertisedCapabilities, "selectionRangeProvider");
 
     /// <summary>
     /// What the server called itself during <c>initialize</c>, or null if it said nothing or nothing is
@@ -199,6 +219,9 @@ public interface ILspClient : IAsyncDisposable
     /// </remarks>
     Task CloseDocumentForRenameAsync(string uri, CancellationToken cancellationToken = default);
 
+    /// <summary>Reports a completed disk write directly; type is LSP Created (1), Changed (2) or Deleted (3).</summary>
+    void NotifyWatchedFile(string path, int type) { }
+
     /// <summary>
     /// Tells the servers holding this document that it has been written to disk.
     ///
@@ -224,6 +247,9 @@ public interface ILspClient : IAsyncDisposable
     /// <summary>Sends textDocument/foldingRange and returns the list of fold ranges, or empty.</summary>
     Task<SemanticTokenResult?> RequestSemanticTokensAsync(string uri, CancellationToken cancellationToken = default);
 
+    /// <summary>Returns the server's enclosing range chains at the supplied positions.</summary>
+    Task<SelectionRange[]> RequestSelectionRangesAsync(string uri, Position[] positions, CancellationToken cancellationToken = default);
+
     Task<FoldingRange[]> RequestFoldingRangesAsync(string uri, CancellationToken cancellationToken = default);
 
     /// <summary>Sends textDocument/completion and returns completion items, or empty.</summary>
@@ -241,6 +267,9 @@ public interface ILspClient : IAsyncDisposable
     /// <summary>The completion triggers advertised for this document.</summary>
     IReadOnlyList<string> CompletionTriggerCharacters(string uri) => [];
 
+    /// <summary>The signature-help triggers advertised for this document.</summary>
+    IReadOnlyList<string> SignatureHelpTriggerCharacters(string uri) => [];
+
     /// <summary>Requests completion only from claimants advertising this trigger.</summary>
     Task<CompletionItem[]> RequestCompletionForTriggerAsync(string uri, Position position,
         string triggerCharacter, CancellationToken cancellationToken = default) =>
@@ -252,6 +281,49 @@ public interface ILspClient : IAsyncDisposable
     /// <summary>Sends textDocument/signatureHelp and returns signature information, or null.
     /// A typed trigger selects advertising servers in the registry; null means explicit invocation.</summary>
     Task<SignatureHelp?> RequestSignatureHelpAsync(string uri, Position position, CancellationToken cancellationToken = default, string? triggerCharacter = null);
+
+    /// <summary>Finds references, including the declaration, retaining per-server errors alongside locations.</summary>
+    async Task<ReferenceSearchResult> FindReferencesAsync(string uri, Position position, CancellationToken cancellationToken = default)
+        => new(await RequestReferencesAsync(uri, position, cancellationToken), []);
+
+    bool SupportsCallHierarchy(string uri) => IsRunning
+        && ServerCapabilities.Supports(AdvertisedCapabilities, "callHierarchyProvider");
+
+    Task<CallHierarchyItem[]> PrepareCallHierarchyAsync(string uri, Position position, CancellationToken ct = default)
+        => Task.FromResult<CallHierarchyItem[]>([]);
+    Task<CallHierarchyIncomingCall[]> RequestIncomingCallsAsync(CallHierarchyItem item, CancellationToken ct = default)
+        => Task.FromResult<CallHierarchyIncomingCall[]>([]);
+    Task<CallHierarchyOutgoingCall[]> RequestOutgoingCallsAsync(CallHierarchyItem item, CancellationToken ct = default)
+        => Task.FromResult<CallHierarchyOutgoingCall[]>([]);
+
+    async Task<CallHierarchyResult> FindCallHierarchyAsync(string uri, Position position, CancellationToken ct = default)
+        => new((await PrepareCallHierarchyAsync(uri, position, ct)).Select(item => new CallHierarchyRoot(this, item)).ToArray(), []);
+
+    bool SupportsTypeHierarchy(string uri) => IsRunning
+        && ServerCapabilities.Supports(AdvertisedCapabilities, "typeHierarchyProvider");
+
+    Task<TypeHierarchyItem[]> PrepareTypeHierarchyAsync(string uri, Position position, CancellationToken ct = default)
+        => Task.FromResult<TypeHierarchyItem[]>([]);
+    Task<TypeHierarchyItem[]> RequestSupertypesAsync(TypeHierarchyItem item, CancellationToken ct = default)
+        => Task.FromResult<TypeHierarchyItem[]>([]);
+    Task<TypeHierarchyItem[]> RequestSubtypesAsync(TypeHierarchyItem item, CancellationToken ct = default)
+        => Task.FromResult<TypeHierarchyItem[]>([]);
+
+    async Task<TypeHierarchyResult> FindTypeHierarchyAsync(string uri, Position position, CancellationToken ct = default)
+        => new((await PrepareTypeHierarchyAsync(uri, position, ct)).Select(item => new TypeHierarchyRoot(this, item)).ToArray(), []);
+
+    Task<Location[]> RequestReferencesAsync(string uri, Position position, CancellationToken cancellationToken = default);
+
+    /// <summary>Whether a running server for this document offers the capability.</summary>
+    bool SupportsCapability(string uri, string capability) =>
+        IsRunning && ServerCapabilities.Supports(AdvertisedCapabilities, capability);
+
+    Task<Location[]?> RequestImplementationAsync(string uri, Position position, CancellationToken cancellationToken = default)
+        => Task.FromResult<Location[]?>(null);
+
+    Task<Location[]?> RequestTypeDefinitionAsync(string uri, Position position, CancellationToken cancellationToken = default)
+        => Task.FromResult<Location[]?>(null);
+
     Task<Location[]?> RequestDefinitionAsync(string uri, Position position, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -267,23 +339,47 @@ public interface ILspClient : IAsyncDisposable
     Task<Location[]?> RequestDeclarationAsync(string uri, Position position, CancellationToken cancellationToken = default);
     Task<DocumentHighlight[]?> RequestDocumentHighlightAsync(string uri, Position position, CancellationToken cancellationToken = default);
 
+    /// <summary>Requests server fixes on demand, retaining their origin for resolution and execution.</summary>
+    Task<OfferedCodeAction[]> RequestCodeActionsAsync(string uri, HexIDE.Lsp.Messages.Range range, Diagnostic[] diagnostics,
+        CancellationToken cancellationToken = default) => Task.FromResult<OfferedCodeAction[]>([]);
+
+    /// <summary>Requests actions for a selection or caret, optionally restricted to kind hierarchies.</summary>
+    Task<OfferedCodeAction[]> RequestCodeActionsAsync(string uri, HexIDE.Lsp.Messages.Range range, Diagnostic[] diagnostics,
+        string[]? only, CancellationToken cancellationToken = default) => RequestCodeActionsAsync(uri, range, diagnostics, cancellationToken);
+
+    /// <summary>Asks supporting servers before prompting; null means preparation is unsupported.</summary>
+    Task<PrepareRenameResult?> RequestPrepareRenameAsync(string uri, Position position, CancellationToken cancellationToken = default)
+        => Task.FromResult<PrepareRenameResult?>(null);
+
     /// <summary>Sends textDocument/rename and returns edits, a refusal, or null for no change.</summary>
     Task<RenameResult?> RequestRenameAsync(string uri, Position position, string newName, CancellationToken cancellationToken = default);
 
+    /// <summary>Whether a running document claimant declares this on-type formatting trigger.</summary>
+    bool SupportsOnTypeFormatting(string uri, string trigger);
+    /// <summary>Requests edits from one claimant declaring the trigger, with a short cancellation budget; null means timeout or failure.</summary>
+    Task<TextEdit[]?> RequestOnTypeFormattingAsync(string uri, Position position, string trigger, FormattingOptions options, CancellationToken cancellationToken = default);
+
+    /// <summary>Whether an open document has a running claimant advertising range formatting.</summary>
+    bool SupportsRangeFormatting(string uri);
+    /// <summary>Sends textDocument/rangeFormatting to one advertising claimant.</summary>
+    Task<TextEdit[]> RequestRangeFormattingAsync(string uri, HexIDE.Lsp.Messages.Range range, FormattingOptions options, CancellationToken cancellationToken = default);
+
     /// <summary>Sends textDocument/formatting and returns text edits, or empty.</summary>
-    Task<TextEdit[]> RequestFormattingAsync(string uri, CancellationToken cancellationToken = default);
+    Task<TextEdit[]> RequestFormattingAsync(string uri, FormattingOptions options, CancellationToken cancellationToken = default);
+
+    /// <summary>Requests display labels in a document range from offering servers.</summary>
+    Task<InlayHint[]> RequestInlayHintsAsync(string uri, HexIDE.Lsp.Messages.Range range, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sends <c>textDocument/codeLens</c> and returns the lenses, or empty.
     /// </summary>
-    /// <remarks>
-    /// <b>Every lens that comes back is resolved.</b> The protocol lets a server return a lens with no
-    /// command and expect a <c>codeLens/resolve</c> round trip, and an unresolved lens is one the user can
-    /// see and cannot click — the worst of the three states. An implementation therefore resolves its own
-    /// before answering, which keeps the resolve on the connection that issued the lens without any caller
-    /// having to know that lenses have provenance.
-    /// </remarks>
     Task<CodeLens[]> RequestCodeLensesAsync(string uri, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves a previously fetched lens on its issuing connection, or returns null if unavailable.
+    /// Callers request resolution only while the lens is visible and cancel when it leaves the viewport.
+    /// </summary>
+    Task<CodeLens?> ResolveCodeLensAsync(CodeLens lens, CancellationToken cancellationToken = default);
 
     /// <summary>Notifies opted-in servers of workspace folder changes before project import.</summary>
     Task UpdateWorkspaceFoldersAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -306,6 +402,13 @@ public interface ILspClient : IAsyncDisposable
         string command,
         System.Text.Json.JsonElement[]? arguments = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Whether the connection that supplied this lens command has an add-in claim for it.</summary>
+    bool IsClaimedCodeLensCommand(Command command) => false;
+
+    /// <summary>Runs a lens command on the connection that supplied it.</summary>
+    Task ExecuteCodeLensCommandAsync(Command command, CancellationToken cancellationToken = default) =>
+        ExecuteCommandAsync(command.CommandName, command.Arguments, cancellationToken);
 
     /// <summary>Sends vb/builtinSymbols and returns all VBA built-in function signatures, or empty.</summary>
     Task<VbaBuiltinSymbol[]> RequestBuiltinSymbolsAsync(CancellationToken cancellationToken = default);

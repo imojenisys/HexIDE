@@ -326,6 +326,8 @@ public static class VbDiagnosticsProvider
         // ERRORCHAR token — unrecognised characters surface as lexer errors through the listener above.
         // The filled buffer is reused by the LL re-parse below (the lexer never runs twice).
         tokenStream.Fill();
+        if (diagnostics is not null)
+            VbSourceLimitWarnings.Add(source, tokenStream.GetTokens(), diagnostics, protectedRegions);
 
         var parser = new VisualBasic6Parser(tokenStream);
 
@@ -435,6 +437,22 @@ public static class VbDiagnosticsProvider
         public void SyntaxError(TextWriter output, IRecognizer recognizer, IToken offendingSymbol,
             int line, int charPositionInLine, string msg, RecognitionException e)
         {
+            // Adjacent output items let prediction stop before a trailing sign (#3248). An absent operand
+            // still belongs at the end of the line, as it did before output lists admitted adjacent items.
+            if (e is NoViableAltException && recognizer is VisualBasic6Parser parser
+                && offendingSymbol?.Type is VisualBasic6Parser.PLUS or VisualBasic6Parser.MINUS)
+            {
+                var next = offendingSymbol.TokenIndex + 1;
+                var tokens = parser.TokenStream;
+                if (next < tokens.Size && tokens.Get(next).Type == VisualBasic6Parser.WS) next++;
+                if (next < tokens.Size && tokens.Get(next) is { Type: VisualBasic6Parser.NEWLINE } end)
+                {
+                    offendingSymbol = end;
+                    line = end.Line;
+                    charPositionInLine = end.Column;
+                    msg = "mismatched input";
+                }
+            }
             if (protectedRegions?.IsProtected(line - 1) == true)
             {
                 LeftOutAny = true;

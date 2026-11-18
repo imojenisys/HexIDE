@@ -29,6 +29,74 @@ public class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void RevocationUrlDefaultsWhenUnsetButPreservesExplicitEmpty()
+    {
+        CreateSut().RevocationListUrl.Should().Be("https://hexide.io/revocations.json");
+        File.WriteAllText(SettingsPath, "{}");
+        CreateSut().RevocationListUrl.Should().Be("https://hexide.io/revocations.json");
+        File.WriteAllText(SettingsPath, "{\"RevocationListUrl\":null}");
+        CreateSut().RevocationListUrl.Should().Be("https://hexide.io/revocations.json");
+        var settings = CreateSut();
+        settings.RevocationListUrl = "";
+        settings.Save();
+        CreateSut().RevocationListUrl.Should().BeEmpty();
+        settings.RevocationListUrl = "https://example.invalid/custom";
+        settings.Save();
+        CreateSut().RevocationListUrl.Should().Be("https://example.invalid/custom");
+    }
+
+    [Fact]
+    public void SavingRetainsPreviousDiskBytesForRecovery()
+    {
+        var settings = CreateSut();
+        settings.TabWidth = 6;
+        settings.Save();
+        var original = File.ReadAllBytes(SettingsPath);
+        settings.TabWidth = 8;
+        settings.Save();
+        Directory.GetFiles(_tempDir, "settings.json.*.recovery")
+            .Select(File.ReadAllBytes).Should().Contain(bytes => bytes.SequenceEqual(original));
+        CreateSut().TabWidth.Should().Be(8);
+    }
+
+    [Fact]
+    public void InlayHintsToggleIsStagedPersistedAndRestored()
+    {
+        var settings = CreateSut();
+        settings.ShowInlayHints.Should().BeTrue();
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        page.ShowInlayHints.Should().BeTrue();
+        page.ShowInlayHints = false;
+        settings.ShowInlayHints.Should().BeTrue();
+        page.SaveToSettings();
+        settings.ShowInlayHints.Should().BeFalse();
+        CreateSut().ShowInlayHints.Should().BeFalse();
+        page.RestoreDefaults();
+        page.ShowInlayHints.Should().BeTrue();
+        page.SaveToSettings();
+        CreateSut().ShowInlayHints.Should().BeTrue();
+    }
+
+    [Fact]
+    public void CodeLensesToggleIsStagedPersistedAndRestored()
+    {
+        var setting = typeof(SettingsService).GetProperty("ShowCodeLenses");
+        var option = typeof(HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel).GetProperty("ShowCodeLenses");
+        setting.Should().NotBeNull();
+        option.Should().NotBeNull();
+        var settings = CreateSut();
+        setting!.GetValue(settings).Should().Be(true);
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        option!.SetValue(page, false);
+        setting.GetValue(settings).Should().Be(true);
+        page.SaveToSettings();
+        setting.GetValue(CreateSut()).Should().Be(false);
+        page.RestoreDefaults();
+        page.SaveToSettings();
+        setting.GetValue(CreateSut()).Should().Be(true);
+    }
+
+    [Fact]
     public void SavingPreservesFileAtOldStagingName()
     {
         var settings = CreateSut();
@@ -133,6 +201,20 @@ public class SettingsServiceTests : IDisposable
         json.RootElement.GetProperty("revocationListUrl").GetString().Should()
             .Be("https://example.invalid/revocations.json");
         json.RootElement.GetProperty("futureSetting").GetInt32().Should().Be(42);
+    }
+
+    [Fact]
+    public void ServerChatTools_RoundTrips_AndIsADetachedCopy()
+    {
+        var sut = CreateSut();
+        var chosen = new Dictionary<string, string> { ["rdcore"] = "ask", ["probe"] = "off" };
+        sut.ServerChatTools = chosen;
+        chosen["rdcore"] = "on";
+        sut.ServerChatTools["probe"] = "on";
+        sut.Save();
+
+        CreateSut().ServerChatTools.Should().BeEquivalentTo(new Dictionary<string, string> { ["rdcore"] = "ask", ["probe"] = "off" },
+            "the person's per-server choice for AI Chat tools persists, and only through the setter (#4257)");
     }
 
     [Fact]

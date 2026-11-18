@@ -10,7 +10,7 @@ public partial class ComponentToolViewModel : ObservableObject
 {
     private readonly ToolBoxToolViewModel parent;
 
-    public ComponentToolViewModel(ToolBoxToolViewModel parent, ComponentBaseClass baseClass, IImage icon)
+    public ComponentToolViewModel(ToolBoxToolViewModel parent, IDesignerComponentClass baseClass, IImage icon)
     {
         this.parent = parent;
         BaseClass = baseClass;
@@ -28,20 +28,26 @@ public partial class ComponentToolViewModel : ObservableObject
     public ComponentToolViewModel(ToolBoxToolViewModel parent, IComponentClass component, IImage icon)
     {
         this.parent = parent;
-        BaseClass = component as ComponentBaseClass;
+        BaseClass = component as IDesignerComponentClass;
         Icon = icon;
         Name = component.Name;
     }
 
-    public ComponentBaseClass? BaseClass { get; }
+    public IDesignerComponentClass? BaseClass { get; }
 
     /// <summary>The library an in-box control is placed from, which its type name and its form's header name (#1103).</summary>
     public RuntimeLibrary? Library { get; init; }
 
     /// <summary>The type name a control placed from this button takes: <c>ComctlLib.ProgressBar</c> from COMCTL32.OCX's.</summary>
-    public string? VBTypeName =>
-        Library is { } library && BaseClass is InBoxComponentClass inBox ? library.TypeName(inBox.ControlClassName) : BaseClass?.VBTypeName;
+    public string? VBTypeName => LibraryTypeName ?? BaseClass?.VBTypeName;
+
+    /// <summary>The library's own type name for the control, where this button places one from a library.</summary>
+    public string? LibraryTypeName { get; init; }
+
     public IImage Icon { get; }
+
+    /// <summary>The key of the icon the registry named for this button, where it named one.</summary>
+    public string? IconKey { get; init; }
     public string Name { get; }
 
     /// <summary>

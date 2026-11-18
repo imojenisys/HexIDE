@@ -41,6 +41,8 @@ public partial class ChatView : UserControl, IToolWindowMinimumWidth
         }
     }
 
+    private void OnStopClicked(object? sender, RoutedEventArgs e) => _vm?.Stop();
+
     private void OnNewChatClicked(object? sender, RoutedEventArgs e) =>
         _vm?.NewChat();
 
@@ -58,5 +60,15 @@ public partial class ChatView : UserControl, IToolWindowMinimumWidth
     private void OnRejectClicked(object? sender, RoutedEventArgs e)
     {
         if (sender is Control { DataContext: ChatMessageViewModel vm }) vm.Reject();
+    }
+
+    private void OnEgressSendClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: ChatMessageViewModel message }) _vm?.ConfirmEgressAsync(message).ConfigureAwait(false);
+    }
+
+    private void OnEgressCancelClicked(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { DataContext: ChatMessageViewModel message }) _vm?.DeclineEgress(message);
     }
 }

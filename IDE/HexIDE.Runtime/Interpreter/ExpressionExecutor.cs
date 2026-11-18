@@ -63,7 +63,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     // the static type itself: a Variant's goes with its type first, a typed value bare (Val("2") is 8 bytes of Double, and
     // Space(1) is 08 00 01 00 20).
     private static readonly HashSet<string> TypedIntrinsics = new(StringComparer.OrdinalIgnoreCase)
-        { "Sgn", "Asc", "AscW", "CInt", "CLng", "CByte", "CSng", "CStr", "UBound", "LBound", "Replace", "StrReverse", "Val", "CDate", "Timer" };
+        { "Sgn", "Asc", "AscW", "CInt", "CLng", "CLngLng", "CLngPtr", "CByte", "CSng", "CStr", "UBound", "LBound", "Replace", "StrReverse", "Val", "CDate", "Timer" };
 
     private static readonly HashSet<string> VariantIntrinsics = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -102,9 +102,48 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         return (left, right);
     }
 
-    public async Task<(Vb6Value, Vb6Value)> GetTwoValuesSameTypesOrNull(VB6Parser.ValueStmtContext[] context, bool inclusiveComparison = false)
+    public async Task<(Vb6Value, Vb6Value)> GetTwoValuesSameTypesOrNull(VB6Parser.ValueStmtContext[] context)
     {
-        var (leftValue, rightValue) = await GetTwoValues(context);
+        var leftRaw = await EvaluateValue(context[0]);
+        var leftValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(leftRaw, callerFrames: stmtFrames), context[0]);
+        var rightRaw = await EvaluateValue(context[1]);
+        var rightValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(rightRaw, callerFrames: stmtFrames), context[1]);
+        if (leftValue.IsOddByteString || rightValue.IsOddByteString)
+        {
+            if (!(leftRaw.IsOddByteString || leftRaw.Type == Vb6Value.ValueType.String)
+                || !(rightRaw.IsOddByteString || rightRaw.Type == Vb6Value.ValueType.String))
+                throw Vb6Value.OddBytesNotImplemented("Comparison");
+            return (leftValue, rightValue);
+        }
+        if (!leftValue.IsNull && !rightValue.IsNull
+            && (leftValue.Type == Vb6Value.ValueType.AutomationUnsignedLong || rightValue.Type == Vb6Value.ValueType.AutomationUnsignedLong))
+        {
+            if (context[0].Parent is VB6Parser.VsCompareContext comparison && comparison.EQ() != null)
+                throw new VBRunTimeException(context[0], VBStandardError.VariableUsesATypeNotSupportedInVisualBasic);
+            throw new NotImplementedException("Comparison of an unsigned Automation Long is unmeasured (#4513)");
+        }
+        if (leftValue.Type == Vb6Value.ValueType.LongLong || rightValue.Type == Vb6Value.ValueType.LongLong)
+        {
+            if (leftValue.IsNull || rightValue.IsNull)
+                return (leftValue, rightValue);
+            // Excel x64 comparison domains, #4302 / oracle PR #4383.
+            var partner = leftValue.Type == Vb6Value.ValueType.LongLong ? rightValue : leftValue;
+            if (partner.Type == Vb6Value.ValueType.Currency)
+                throw new NotImplementedException("LongLong comparison with Currency is unmeasured (#1548)");
+            if (partner.Type == Vb6Value.ValueType.Single || partner.Type == Vb6Value.ValueType.Double
+                || partner.Type == Vb6Value.ValueType.String || partner.Type == Vb6Value.ValueType.Date)
+            {
+                double Number(Vb6Value v) => v.Type == Vb6Value.ValueType.String ? VB6BuiltIns.ToNum(v) : AsDouble(v);
+                return (new Vb6Value(Number(leftValue)), new Vb6Value(Number(rightValue)));
+            }
+            if (partner.Type == Vb6Value.ValueType.Decimal || partner.Type == Vb6Value.ValueType.Byte
+                || partner.Type == Vb6Value.ValueType.Boolean || partner.Type == Vb6Value.ValueType.Integer
+                || partner.Type == Vb6Value.ValueType.Long || partner.Type == Vb6Value.ValueType.LongLong
+                || partner.Type == Vb6Value.ValueType.EmptyVariant)
+                return (VbNumeric.Narrow(leftValue, Vb6Value.ValueType.Decimal, context[0]),
+                    VbNumeric.Narrow(rightValue, Vb6Value.ValueType.Decimal, context[1]));
+            throw new NotImplementedException("This LongLong comparison domain is unmeasured (#1548)");
+        }
         if ((leftValue.Type == Vb6Value.ValueType.Error || rightValue.Type == Vb6Value.ValueType.Error)
             && leftValue.Type != rightValue.Type)
             throw new VBRunTimeException(context[0], VBStandardError.TypeMismatch);
@@ -130,6 +169,49 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (leftValue.Type == rightValue.Type)
             return (leftValue, rightValue);
 
+        // #211: docs/vb6-fidelity-oracle/a-string-compared-with-a-number.md. These are operator
+        // rules, deliberately separate from Select Case's conversion toward its selector.
+        var stringOnLeft = leftValue.Type == Vb6Value.ValueType.String;
+        if (stringOnLeft != (rightValue.Type == Vb6Value.ValueType.String))
+        {
+            var text = stringOnLeft ? leftValue : rightValue;
+            var number = stringOnLeft ? rightValue : leftValue;
+            if (NumericRank(number.Type) >= 0 || number.Type == Vb6Value.ValueType.Boolean || number.Type == Vb6Value.ValueType.Date)
+            {
+                // VB6 has no Decimal outside a Variant (#211).
+                var numberInVariant = number.HeldAsVariant || number.Type == Vb6Value.ValueType.Decimal;
+
+                if (text.HeldAsVariant && numberInVariant)
+                    return stringOnLeft ? (new Vb6Value(1), new Vb6Value(0)) : (new Vb6Value(0), new Vb6Value(1));
+                if (numberInVariant)
+                {
+                    // Option Compare Text follows the two-String path too; this rule's Text mode is unmeasured.
+                    number = VbNumeric.CoerceOnStore(number, Vb6Value.ValueType.String, context[0]);
+                    return stringOnLeft ? (text, number) : (number, text);
+                }
+
+                var target = number.Type == Vb6Value.ValueType.Currency || number.Type == Vb6Value.ValueType.Boolean || number.Type == Vb6Value.ValueType.Date
+                    ? number.Type : Vb6Value.ValueType.Double;
+                try
+                {
+                    text = VbNumeric.CoerceOnStore(text, target, context[0]);
+                }
+                catch (VBRunTimeException e) when (text.HeldAsVariant && e.Error.ErrNo == VBStandardError.TypeMismatch.ErrNo)
+                {
+                    // A nonnumeric Variant String sorts above the typed number, with no conversion error.
+                    return stringOnLeft ? (new Vb6Value(1), new Vb6Value(0)) : (new Vb6Value(0), new Vb6Value(1));
+                }
+                number = VbNumeric.CoerceOnStore(number, target, context[0]);
+                // Date ordering uses its serial; keep the existing handling of other Date pairs.
+                if (target == Vb6Value.ValueType.Date)
+                {
+                    text = new Vb6Value(AsDouble(text));
+                    number = new Vb6Value(AsDouble(number));
+                }
+                return stringOnLeft ? (text, number) : (number, text);
+            }
+        }
+
         // A Boolean beside a number takes the number's type, as that type's conversion takes it: True is -1, and for a Byte
         // 255, its bits. Measured: `True = -1`, `True < 0` and `CDbl(-1) >= True` are True, and `CByte(1) > True` is False.
         // A chained comparison reaches this, since `3 = 3 < 4` is (3 = 3) < 4 (#1074).
@@ -140,33 +222,27 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (leftValue.Type == rightValue.Type)
             return (leftValue, rightValue);
 
-        // Both numeric but different subtypes: promote both to the wider one on the VB6 widening ladder
-        // (Byte < Integer < Long < Single < Currency < Decimal < Double). The operator/comparison cascades
-        // then read the common type. NOTE: this is a stopgap that unblocks the new types — the VB6-correct
-        // per-operator RESULT type (e.g. Long+Long -> Long, not Double) is 2.3's VbNumeric job.
+        // #229: comparison domains are pair-specific; arithmetic has its own tables in VbNumeric.
         var lr = NumericRank(leftValue.Type);
         var rr = NumericRank(rightValue.Type);
         if (lr >= 0 && rr >= 0)
         {
             var target = lr >= rr ? leftValue.Type : rightValue.Type;
-            if (inclusiveComparison)
+            // The four exceptional pairs override the remaining domains.
+            var pair = (Math.Min(lr, rr), Math.Max(lr, rr));
+            target = pair switch
             {
-                // #229: inclusive comparisons use the measured pair domain, not the widening ladder.
-                var pair = (Math.Min(lr, rr), Math.Max(lr, rr));
-                target = pair switch
-                {
-                    (3, 6) => Vb6Value.ValueType.Single,
-                    (2, 3) => Vb6Value.ValueType.Double,
-                    (4, 6) => Vb6Value.ValueType.Currency,
-                    (5, 6) => Vb6Value.ValueType.Decimal,
-                    _ => target
-                };
-                // Out-of-range comparisons still order without raising a conversion overflow.
-                if ((target == Vb6Value.ValueType.Currency || target == Vb6Value.ValueType.Decimal) &&
-                    (Math.Abs(AsDouble(leftValue)) >= (target == Vb6Value.ValueType.Currency ? 922337203685477.5807 : (double)decimal.MaxValue) ||
-                     Math.Abs(AsDouble(rightValue)) >= (target == Vb6Value.ValueType.Currency ? 922337203685477.5807 : (double)decimal.MaxValue)))
-                    target = Vb6Value.ValueType.Double;
-            }
+                (3, 6) => Vb6Value.ValueType.Single,
+                (2, 3) => Vb6Value.ValueType.Double,
+                (4, 6) => Vb6Value.ValueType.Currency,
+                (5, 6) => Vb6Value.ValueType.Decimal,
+                _ => target
+            };
+            // Out-of-range comparisons still order without raising a conversion overflow.
+            if ((target == Vb6Value.ValueType.Currency || target == Vb6Value.ValueType.Decimal) &&
+                (Math.Abs(AsDouble(leftValue)) >= (target == Vb6Value.ValueType.Currency ? 922337203685477.5807 : (double)decimal.MaxValue) ||
+                 Math.Abs(AsDouble(rightValue)) >= (target == Vb6Value.ValueType.Currency ? 922337203685477.5807 : (double)decimal.MaxValue)))
+                target = Vb6Value.ValueType.Double;
             return (PromoteNumeric(leftValue, target), PromoteNumeric(rightValue, target));
         }
 
@@ -227,8 +303,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         byte b => b,
         int i => i,
         long l => l,
-        float f => (decimal)f,
-        double d => (decimal)d,
+        float f => VbNumeric.FloatingToDecimal(f, 7),
+        double d => VbNumeric.FloatingToDecimal(d),
         decimal m => m,
         _ => 0m
     };
@@ -242,7 +318,6 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new VBRunTimeException(context[0], VBStandardError.TypeMismatch);
         return (leftValue, rightValue);
     }
-
 
     public override Task<object?> Visit(IParseTree tree)
     {
@@ -277,7 +352,15 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// </summary>
     public async Task<Vb6Value> EvaluateScalar(IParseTree arg)
     {
-        return ObjectAsValue.Scalar(await EvaluateValue(arg), arg as Antlr4.Runtime.ParserRuleContext);
+        return ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(await EvaluateValue(arg), callerFrames: stmtFrames), arg as Antlr4.Runtime.ParserRuleContext);
+    }
+
+    internal async Task<List<int>> ResolveSubscripts(IReadOnlyList<Vb6Value> values)
+    {
+        var resolved = new List<Vb6Value>();
+        foreach (var value in values)
+            resolved.Add(await interpreter.ResolveDefaultMember(value, callerFrames: stmtFrames));
+        return Subscripts(resolved);
     }
 
     /// <summary>
@@ -299,21 +382,26 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
         VB6Parser.ArgCallContext? pending = null;
         var sawAnything = false;
+        var trailingComma = false;
         foreach (var child in context.children)
         {
             switch (child)
             {
                 case VB6Parser.ArgCallContext arg:
                     pending = arg;
+                    trailingComma = false;
                     sawAnything = true;
                     break;
                 case ITerminalNode t when t.Symbol.Type is VB6Parser.COMMA or VB6Parser.SEMICOLON:
+                    trailingComma = t.Symbol.Type == VB6Parser.COMMA;
                     slots.Add(pending);
                     pending = null;
                     sawAnything = true;
                     break;
             }
         }
+        if (trailingComma)
+            throw new VBCompileErrorException("Syntax error");
         // The final slot closes at the end of the list rather than at a separator.
         if (sawAnything) slots.Add(pending);
         return slots;
@@ -409,9 +497,19 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// </summary>
     public async Task<List<Vb6Value>> EvaluateIntrinsicArgs(string name, VB6Parser.ArgsCallContext? context)
     {
-        if (await NamedCallArgs(context) is { } args)
-            return await VB6BuiltIns.ArrangeIntrinsicArguments(name, args);
         var slots = ArgSlots(context);
+        if (await NamedCallArgs(context) is { } args)
+        {
+            var pointer = name.Equals("StrPtr", StringComparison.OrdinalIgnoreCase) || name.Equals("VarPtr", StringComparison.OrdinalIgnoreCase);
+            var arranged = await VB6BuiltIns.ArrangeIntrinsicArguments(name,
+                pointer ? args.Select(arg => arg with { Deferred = null }).ToArray() : args);
+            if (!pointer)
+                return arranged;
+            // Validate the name first, then retain the operand's storage identity (#4145).
+            if (slots.Count == 1 && slots[0]?.valueStmt() is VB6Parser.VsAssignContext assign)
+                return await EvaluatePointerArgs(name, assign.valueStmt());
+            return arranged;
+        }
         // Input(n, #f): the second argument may be a file number written with its #, `#f` being f's value (#1645).
         if (name.Equals("Input", StringComparison.OrdinalIgnoreCase) && slots.Count == 2 && slots[0] is { } count
             && slots[1]?.valueStmt() is { } file && file.GetText().StartsWith('#'))
@@ -421,6 +519,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             input.AddArgument(new Vb6Value(await FileNumber(file)), false);
             return input;
         }
+        if (name.Equals("StrPtr", StringComparison.OrdinalIgnoreCase) || name.Equals("VarPtr", StringComparison.OrdinalIgnoreCase))
+        {
+            if (slots.Count != 1 || slots[0]?.valueStmt() is not { } pointerOperand)
+                throw new NotImplementedException("Unmeasured pointer argument count (#2622)");
+            return await EvaluatePointerArgs(name, pointerOperand);
+        }
         var values = await EvaluateCallArgs(context);
         var result = new VB6BuiltIns.IntrinsicArgumentValues(values.Count);
         for (var i = 0; i < values.Count; i++)
@@ -429,18 +533,27 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             && values.Count == 1
             && slots[0]?.valueStmt() is { } operand)
         {
+            if (values[0].Value is VbUdt wideRecord)
+                wideRecord.RefuseUnmeasuredLongLongLayout();
+            if (name.Equals("Len", StringComparison.OrdinalIgnoreCase) && values[0].Value is VbUdt { HasFixedStringFields: true } record)
+                result.LenVariableSize = record.FixedRecordLength();
             // Len sizes a declared scalar, but a Variant still sizes its text (#780, measured). So does LenB, and a number that is
             // not a variable is the same compile error for it (#1510, measured).
             if (TryGetArgLocation(operand) is { } location)
             {
+                if (name.Equals("LenB", StringComparison.OrdinalIgnoreCase)
+                    && interpreter.ExecutionContext.State.FixedStringWidthOf(location) == 5)
+                    // #179 measures the Integer subtype only for String * 5. Other widths keep LenB's existing path.
+                    result.FixedStringByteLength = 10;
                 var type = interpreter.ExecutionContext.State.DeclaredTypeOf(location);
-                result.LenVariableSize = type == Vb6Value.ValueType.Byte ? 1
+                result.LenVariableSize ??= type == Vb6Value.ValueType.Byte ? 1
                     : type == Vb6Value.ValueType.Integer || type == Vb6Value.ValueType.Boolean ? 2
                     : type == Vb6Value.ValueType.Long || type == Vb6Value.ValueType.Single ? 4
-                    : type == Vb6Value.ValueType.Double || type == Vb6Value.ValueType.Currency || type == Vb6Value.ValueType.Date ? 8
+                    : type == Vb6Value.ValueType.LongLong || type == Vb6Value.ValueType.Double || type == Vb6Value.ValueType.Currency || type == Vb6Value.ValueType.Date ? 8
                     : null;
             }
             else if (operand is not VB6Parser.VsStructContext
+                && !values[0].IsOddByteString
                 && (Vb6Value.TryNumericToDouble(values[0], out _)
                     || values[0].Value is bool && name.Equals("LenB", StringComparison.OrdinalIgnoreCase))   // LenB(True), measured
                 && (operand is not VB6Parser.VsICSContext ics
@@ -514,6 +627,34 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         {
             throw lateBound;
         }
+    }
+
+    private async Task<List<Vb6Value>> EvaluatePointerArgs(string name, VB6Parser.ValueStmtContext pointerOperand)
+    {
+        var arg = await ResolveByRef(pointerOperand);
+        arg.Value.RefuseOddBytes(name);
+        var state = interpreter.ExecutionContext.State;
+        long identity;
+        if (name.Equals("StrPtr", StringComparison.OrdinalIgnoreCase))
+        {
+            if (arg.Value.Type == Vb6Value.ValueType.String)
+                identity = PointerIdentities.Of(arg.Value.StringBuffer);
+            else if (arg.Value.Type == Vb6Value.ValueType.Integer)
+                identity = PointerIdentities.Allocate();
+            else
+                throw new NotImplementedException("StrPtr conversion is unmeasured (#2622)");
+        }
+        else if (arg.Location is { } location)
+            identity = state.VariableIdentity(location);
+        else if (arg.Ref is { } target)
+            identity = PointerIdentities.Target(target);
+        else if (arg.Value.Type == Vb6Value.ValueType.Integer)
+            identity = PointerIdentities.Allocate();
+        else
+            throw new NotImplementedException("VarPtr temporary is unmeasured (#2622)");
+        var pointerArgs = new VB6BuiltIns.IntrinsicArgumentValues(1) { PointerIdentity = identity };
+        pointerArgs.AddArgument(arg.Value, false);
+        return pointerArgs;
     }
 
     // A call's arguments with a named one among them, each named argument left for the call to place and evaluate in
@@ -646,10 +787,10 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 return null;
             RefuseMismatchedVariableCharacter(arrayLocation, holder, hint);
         }
-        var index = Subscripts(await EvaluateCallArgs(call.argsCall(0)));
+        var index = await ResolveSubscripts(await EvaluateCallArgs(call.argsCall(0)));
         try
         {
-            return (ElementAsRead(holder, array, array.GetValue(index)), new ArrayElementRef(array, index, holder.HeldAsVariant));
+            return (ElementAsRead(holder, array, await ReadArrayElement(array, index)), new ArrayElementRef(array, index, holder.HeldAsVariant));
         }
         catch (IndexOutOfRangeException)
         {
@@ -667,7 +808,6 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         return identifier;
     }
 
-
     // EXPRESSION
     /// <summary>
     /// A literal carries a FIXED type, not a Variant subtype — measured: `Dim a As Integer` plus the literal
@@ -675,8 +815,19 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// literals as Variants would silently promote `i = i + 1` past a declared Integer's ceiling, which is
     /// the common shape rather than a rare one. (#122)
     /// </summary>
-    public override Task<object?> VisitVsLiteral(VB6Parser.VsLiteralContext literalContext) =>
-        Task.FromResult<object?>(LiteralValue(literalContext.literal()).AsFixedType());
+    public override Task<object?> VisitVsLiteral(VB6Parser.VsLiteralContext literalContext)
+    {
+        if (literalContext.GetText().EndsWith('^') && !interpreter.IsVba64)
+            throw new VBCompileErrorException("Syntax error");
+        try
+        {
+            return Task.FromResult<object?>(LiteralValue(literalContext.literal()).AsFixedType());
+        }
+        catch (Exception e) when (literalContext.GetText().EndsWith('^') && e is OverflowException or FormatException)
+        {
+            throw new NotImplementedException("This LongLong literal's range or form is unmeasured (#1548)");
+        }
+    }
 
     /// <summary>A literal's value, typed as VB6 types it. An <c>#If</c>'s expression reads its literals here too (#1112).</summary>
     internal static Vb6Value LiteralValue(VB6Parser.LiteralContext literal)
@@ -777,6 +928,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     {
         text = ExponentAsE(text);
         char suffix = text[^1];
+        if (suffix == '^')
+            return Vb6Value.NewLongLong(long.Parse(text[..^1], CultureInfo.InvariantCulture));
         if (suffix is '&' or '@' or '!' or '#' or '%')
         {
             var body = text[..^1];
@@ -831,6 +984,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         bool neg = text[0] == '-';
         if (neg || text[0] == '+') text = text[1..];
         char suffix = text[^1];
+        if (suffix == '^')
+            return Vb6Value.NewLongLong(unchecked((long)Convert.ToUInt64(text[2..^1], radix)));
         bool forceLong = suffix == '&', forceInt = suffix == '%';
         if (forceLong || forceInt) text = text[..^1];
         ulong u = Convert.ToUInt64(text[2..], radix);   // strip the "&H" / "&O" prefix
@@ -877,7 +1032,10 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             if (!bangFound && interpreter.UnclaimedLibraryObject(name) is { Value: VbForms } forms)
                 (bangFound, bangTarget) = (true, forms);
             if (!bangFound)
-                throw new NotImplementedException($"`{context.GetText()}` is supported only on a Collection and a form's Controls");
+            {
+                UnclaimedMemberReceiver(name);
+                throw new VBRunTimeException(context, VBStandardError.ObjectRequired);
+            }
             return await Bang(bangTarget, bang);
         }
         var identifier = await ExtractIdentifier(context);
@@ -890,6 +1048,14 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         // In a form's code, a member of the form heads the chain, `Controls.Count` (#1060), as it is read bare (#995).
         if (await BareFormMember(identifier) is { } formMember)
             return formMember;
+        // A Property Get by its name: a standard module's, or the class's or form's own, which is implicit Me (#977).
+        if (interpreter.TryResolveProcedure(identifier, currentModule, out _, out var getter)
+            && getter.Declaration is VB6Parser.PropertyGetStmtContext
+            && await interpreter.CallProcedure(identifier, [], currentModule, callerEnv: env, callerFrames: stmtFrames) is { } propertyResult)
+            return propertyResult;
+        if (interpreter.TryResolveProcedure(identifier, currentModule, out _, out var function) && function.IsFunction
+            && await interpreter.CallProcedure(identifier, [], currentModule, callerEnv: env, callerFrames: stmtFrames) is { } functionResult)
+            return functionResult;
         if (identifier.Equals("Clipboard", StringComparison.OrdinalIgnoreCase))
         {
             // A function named Clipboard can supply the member-chain's object too, not just a bare value.
@@ -905,8 +1071,21 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 return objectResult;
             return libraryObject;
         }
+        return UnclaimedMemberReceiver(identifier);
+    }
+
+    private Vb6Value UnclaimedMemberReceiver(string identifier)
+    {
         VbIntrinsicNames.RefuseMissingObject(identifier);
-        throw new VBVariableNotDefinedException(identifier);
+        if (currentModule.PrePass.RequireVariableDefinitions || interpreter.SuppressImplicitDeclaration)
+            throw new VBVariableNotDefinedException(identifier);
+        if (VbIntrinsicNames.IsIntrinsic(identifier))
+            throw new NotImplementedException(
+                identifier + " is a VB6 intrinsic that HexIDE does not implement yet");
+        // As on a bare read, report the implicit value without allocating: watches must not create it (#3778).
+        return currentModule.PrePass.DefaultTypeOf(identifier) is { } defaultType
+            ? (VbNumeric.IsDeclarableScalar(defaultType) ? new Vb6Value(defaultType).AsFixedType() : new Vb6Value(defaultType))
+            : Vb6Value.Variant;
     }
 
     /// <summary>
@@ -1162,6 +1341,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     // declared by: a mismatch, or one on a Variant Function, is VB6's compile error (measured, #740).
     private static void RefuseMismatchedCharacter(ProcedureInfo procedure, VB6Parser.TypeHintContext hint)
     {
+        if (hint.LONGLONGCHAR() != null && (procedure.ReturnsVariant || procedure.ReturnType != Vb6Value.ValueType.LongLong))
+            throw new NotImplementedException("A LongLong character on a name of another type is unmeasured (#1548)");
         if (procedure.ReturnsVariant || procedure.ReturnType != BaseTypeMapper.Map(hint))
             throw new VBCompileErrorException(TypeCharacterMismatch);
     }
@@ -1173,6 +1354,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     // docs/vb6-fidelity-oracle/a-name-read-with-a-type-character.md).
     private void RefuseMismatchedVariableCharacter(int location, Vb6Value value, VB6Parser.TypeHintContext hint)
     {
+        if (hint.LONGLONGCHAR() != null && CharacterTypeOf(location, value) != Vb6Value.ValueType.LongLong)
+            throw new NotImplementedException("A LongLong character on a name of another type is unmeasured (#1548)");
         if (CharacterTypeOf(location, value) != BaseTypeMapper.Map(hint))
             throw new VBCompileErrorException(TypeCharacterMismatch);
     }
@@ -1240,7 +1423,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         var later = new LaterGroups(this, groups, procOrArrayCall);
         var whole = await EvaluateCallOrElement(procOrArrayCall, groups[0], later.Evaluate) as Vb6Value?
             ?? throw new NotImplementedException($"indexing {procOrArrayCall.GetText()} is not implemented (#1476)");
-        return IndexAll(whole, await later.Values(), procOrArrayCall);
+        return await IndexAll(whole, await later.Values(), procOrArrayCall);
     }
 
     /// <summary>
@@ -1301,10 +1484,13 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         }
     }
 
-    private static Vb6Value IndexAll(Vb6Value value, IEnumerable<List<Vb6Value>> groups, Antlr4.Runtime.ParserRuleContext ctx)
+    internal ValueTask<Vb6Value> ReadArrayElement(VBArray array, IReadOnlyList<int> index) =>
+        interpreter.Loading((Array: array, Index: index), static s => s.Array.ReadValue(s.Index));
+
+    private async Task<Vb6Value> IndexAll(Vb6Value value, IEnumerable<List<Vb6Value>> groups, Antlr4.Runtime.ParserRuleContext ctx)
     {
         foreach (var group in groups)
-            value = IndexResult(value, group, ctx);
+            value = await IndexResult(value, group, ctx);
         return value;
     }
 
@@ -1318,19 +1504,21 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// </list>
     /// An object's own default member is #174's, and Nothing is unmeasured: both are refused.
     /// </summary>
-    internal static Vb6Value IndexResult(Vb6Value value, IReadOnlyList<Vb6Value> indices, Antlr4.Runtime.ParserRuleContext ctx)
+    internal async Task<Vb6Value> IndexResult(Vb6Value value, IReadOnlyList<Vb6Value> indices, Antlr4.Runtime.ParserRuleContext ctx)
     {
         if (value.Value is VBArray array)
         {
             try
             {
-                return ElementAsRead(value, array, array.GetValue(Subscripts(indices)));
+                return ElementAsRead(value, array, await ReadArrayElement(array, Subscripts(indices)));
             }
             catch (IndexOutOfRangeException)
             {
                 throw new VBRunTimeException(ctx, VBStandardError.SubscriptOutOfRange);
             }
         }
+        if (value.Value is IListViewCollection listItems)
+            return listItems.Item(indices);
         if (value.Value is Components.InBox.TabStripTabs tabs)
         {
             if (indices.Count != 1)
@@ -1347,7 +1535,11 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             return items.Default(indices);
         if (value.Value is ImageListImages images)
             return images.Item(indices[0]);
-        if (value.Type == Vb6Value.ValueType.Object || value.Value is VbObject)
+        if (value.Value is ImageComboItems)
+            return ImageComboItem(value, indices);
+        if (value.Value is VbObject)
+            return await interpreter.CallDefaultMember(value, [.. indices.Select(v => new CallArg(v, null))], ctx, stmtFrames);
+        if (value.Type == Vb6Value.ValueType.Object)
             throw new NotImplementedException(value.Value is null
                 ? $"indexing Nothing, as in {ctx.GetText()}, is not implemented: what VB6 raises is unmeasured (#1476)"
                 : $"indexing an object, as in {ctx.GetText()}, reads its default member, which is not implemented (#174)");
@@ -1356,12 +1548,26 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch);
     }
 
+    // Reuse the argument awaiter and keep control-specific result locals off recursive frames (#2827).
+    private static Vb6Value ImageComboItem(Vb6Value value, IReadOnlyList<Vb6Value> indices) =>
+        new(((ImageComboItems)value.Value!).Item(indices[0]));
+
+    private static Vb6Value ImageCollectionItem(Vb6Value value, IReadOnlyList<Vb6Value> indices) =>
+        value.Value is ImageListImages images ? images.Item(indices[0]) : ImageComboItem(value, indices);
+
+    private static Vb6Value MonthViewVisibleDay(Vb6Value value, IReadOnlyList<Vb6Value> indexes)
+    {
+        if (indexes.Count != 1) throw VBMonthView.Pending("VisibleDays argument count");
+        return ((VBMonthView)value.Value!).VisibleDay(indexes[0]);
+    }
+
     // A procedure with no parameters, given arguments, is called with none and its result indexed with them, where it
-    // returns a Variant or an object: `F(1)` is `F()(1)`, and an As Collection one's Item (measured, #1476). A typed return
-    // given arguments does not compile, which is #741's.
-    private static bool IndexesItsResult(ProcedureInfo procedure, VB6Parser.ArgsCallContext? args) =>
+    // returns a Variant or an object: `F(1)` is `F()(1)`, including a project class (#4606) or Collection (#1476).
+    // A typed scalar return given arguments does not compile (#741).
+    private bool IndexesItsResult(ProcedureInfo procedure, VB6Parser.ArgsCallContext? args) =>
         args is { } given && given.argCall().Length > 0 && procedure.Parameters.Count == 0
-        && (procedure.ReturnsVariant || procedure.ReturnsObject);
+        && (procedure.ReturnsVariant || procedure.ReturnsObject
+            || interpreter.ProjectClassFor(procedure.ReturnUdtTypeName ?? "") is not null);
 
     // The call or element of `name(first group)`, with no later index groups: EvaluateProcedureOrArrayCall's single group.
     internal async Task<object?> EvaluateCallOrElement(VB6Parser.ICS_S_ProcedureOrArrayCallContext procOrArrayCall,
@@ -1422,6 +1628,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             return tabs.Item(indices[0]);
         }
         // A Collection's default member, Item: `c(1)` and `c("key")` (#1471). `c(1)(2)` indexes the Item (#1476).
+        if (named && maybeGroup.Value is IListViewCollection heldItems)
+            return heldItems.Item(await EvaluateCallArgs(argsCtx));
         if (named && maybeGroup.Value is ToolbarItems toolbarItems)
             return toolbarItems.Item(await EvaluateCallArgs(argsCtx));
         if (named && maybeGroup.Value is Components.InBox.TreeNodes nodes)
@@ -1437,8 +1645,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         }
         if (named && maybeGroup.Value is StatusBarPanels panels)
             return new Vb6Value(panels.Item(await EvaluateCallArgs(argsCtx)));
-        if (named && maybeGroup.Value is ImageListImages images)
-            return images.Item((await EvaluateCallArgs(argsCtx))[0]);
+        if (named && !string.Equals(env.ReturnName, name, StringComparison.OrdinalIgnoreCase)
+            && (maybeGroup.Value is VbObject || maybeGroup.Value is null
+                && interpreter.ProjectClassFor(maybeGroup.DeclaredAs ?? "") is not null))
+            return await interpreter.CallDefaultMember(maybeGroup, await ResolveCallArgs(argsCtx, beforeLast), procOrArrayCall, stmtFrames);
+        if (named && maybeGroup.Value is ImageListImages or ImageComboItems)
+            return ImageCollectionItem(maybeGroup, await EvaluateCallArgs(argsCtx));
         // A form's Controls held in a variable, `o(1)` (#1060).
         if (named && maybeGroup.Value is FormControls heldControls)
         {
@@ -1486,7 +1698,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             var indices = await EvaluateCallArgs(argsCtx, beforeLast);
             try
             {
-                return ElementAsRead(variable, array, array.GetValue(Subscripts(indices)));
+                return ElementAsRead(variable, array, await ReadArrayElement(array, await ResolveSubscripts(indices)));
             }
             catch (IndexOutOfRangeException)
             {
@@ -1538,7 +1750,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 var index = await EvaluateCallArgs(argsCtx, beforeLast);
                 var whole = await interpreter.CallProcedure(name, [], currentModule, callerEnv: env, callerFrames: stmtFrames)
                     ?? throw new VBSubOrFunctionNotDefinedException(name);
-                return IndexResult(whole, index, procOrArrayCall);
+                return await IndexResult(whole, index, procOrArrayCall);
             }
             var callArgs = await ResolveCallArgs(argsCtx, beforeLast);
             if (await interpreter.CallProcedure(name, callArgs, currentModule, callerEnv: env, callerFrames: stmtFrames) is { } fnResult)
@@ -1584,13 +1796,13 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// Object (measured, #1435). Other fields and bindings remain refused.
     /// </para>
     /// </summary>
-    private Vb6Value FieldElement(Vb6Value receiver, VbObject obj, string name, Vb6Value field, List<Vb6Value> indexes,
+    private async Task<Vb6Value> FieldElement(Vb6Value receiver, VbObject obj, string name, Vb6Value field, List<Vb6Value> indexes,
         Antlr4.Runtime.ParserRuleContext ctx)
     {
         if (IsVariantArrayField(obj, name, field))
         {
             if (string.Equals(receiver.DeclaredAs, obj.ClassName, StringComparison.OrdinalIgnoreCase))
-                return IndexResult(field, indexes, ctx);
+                return await IndexResult(field, indexes, ctx);
             if (string.Equals(receiver.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase))
                 throw new VBRunTimeException(ctx, VBStandardError.ObjectNotACollection);
         }
@@ -1617,6 +1829,9 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static void RequireMemberReceiver(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
     {
+        if (value.Value is VbCollectionEnumerator)
+            throw new VBRunTimeException(context, VBStandardError.ObjectRequired);
+        value.RefuseOddBytes("Member access");
         // Measured non-object Variant receivers (#257); other kinds keep their existing dispatch.
         if (value.Type == Vb6Value.ValueType.EmptyVariant || value.Type == Vb6Value.ValueType.Null
             || value.HeldAsVariant && (value.Type.IsArray || value.Type == Vb6Value.ValueType.Integer
@@ -1651,9 +1866,23 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (variable.Value is BasicInterpreter.LibraryObject managed && MemberArgs(member) is null
             && managed.TryGetProperty(MemberName(member), out var property))
             return property;
+        if (variable.Value is VBListView listView)
+        {
+            var name = MemberName(member);
+            if (name.Equals("ListItems", StringComparison.OrdinalIgnoreCase) || name.Equals("ColumnHeaders", StringComparison.OrdinalIgnoreCase))
+                return MemberArgs(member) is { } itemArgs ? listView.CallMember(name, await EvaluateCallArgs(itemArgs))
+                    : name.Equals("ListItems", StringComparison.OrdinalIgnoreCase) ? new Vb6Value(listView.Items) : new Vb6Value(listView.Columns);
+            if (name.Equals("Refresh", StringComparison.OrdinalIgnoreCase))
+                throw new NotImplementedException("ListView.Refresh as a value is unmeasured (#1085)");
+            if (Components.InBox.ListViewComponentClass.Instance.Member(name) is { Kind: Components.InBox.MemberKind.Method })
+                return listView.CallMember(name, await EvaluateMemberArgs(listView, name, MemberArgs(member)));
+        }
         if (variable.Value is BuiltinControls.VBStatusBar statusBar && MemberName(member).Equals("Panels", StringComparison.OrdinalIgnoreCase))
             return MemberArgs(member) is { } panelArgs
                 ? new Vb6Value(statusBar.Panels.Item(await EvaluateCallArgs(panelArgs))) : new Vb6Value(statusBar.Panels);
+        if (variable.Value is VBMonthView && MemberName(member).Equals("VisibleDays", StringComparison.OrdinalIgnoreCase)
+            && MemberArgs(member) is not null)
+            return MonthViewVisibleDay(variable, await EvaluateCallArgs(MemberArgs(member)));
         if (variable.Value is VBImageList && MemberName(member).ToLowerInvariant() is "name" or "tag" or "parent" or "object")
         {
             // These four are the invisible control's extender, answered by the shared control bindings.
@@ -1683,7 +1912,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                     var index = await EvaluateCallArgs(MemberArgs(member), beforeLast);
                     var whole = await interpreter.RunProcedure(vobj.ClassDef, method, [], vobj.InstanceEnv, variable, stmtFrames)
                         ?? throw new VBSubOrFunctionNotDefinedException(memberName);
-                    return IndexResult(whole, index, ctx);
+                    return await IndexResult(whole, index, ctx);
                 }
                 var callArgs = await ResolveCallArgs(MemberArgs(member), beforeLast);
                 return await interpreter.RunProcedure(vobj.ClassDef, method, callArgs, vobj.InstanceEnv, variable, stmtFrames)
@@ -1697,17 +1926,18 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                     var index = await EvaluateCallArgs(MemberArgs(member), beforeLast);
                     var whole = await interpreter.RunProcedure(vobj.ClassDef, getter, [], vobj.InstanceEnv, variable, stmtFrames)
                         ?? throw new VBSubOrFunctionNotDefinedException(memberName);
-                    return IndexResult(whole, index, ctx);
+                    return await IndexResult(whole, index, ctx);
                 }
                 var getArgs = await ResolveCallArgs(MemberArgs(member), beforeLast);
                 return await interpreter.RunProcedure(vobj.ClassDef, getter, getArgs, vobj.InstanceEnv, variable, stmtFrames)
                     ?? throw new VBSubOrFunctionNotDefinedException(memberName);
             }
+            interpreter.NoteMemberAccess(vobj, memberName, currentModule.Name, ctx.Start.Line);
             if (!interpreter.TryReadNow(vobj.InstanceEnv, memberName, out var isField, out var fieldVal, out var isFieldNeed))
                 (isField, fieldVal) = await interpreter.ReadVariableAfter(vobj.InstanceEnv, memberName, isFieldNeed!);
             if (isField)
                 return MemberArgs(member) is { } fieldArgs
-                    ? FieldElement(variable, vobj, memberName, fieldVal, await EvaluateCallArgs(fieldArgs), ctx)
+                    ? await FieldElement(variable, vobj, memberName, fieldVal, await EvaluateCallArgs(fieldArgs), ctx)
                     : fieldVal;
             if (vobj.ClassDef.Kind == InterpreterModuleKind.Form
                 && string.Equals(variable.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase)
@@ -1733,6 +1963,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new VBMethodOrDataMemberNotFoundException(memberName, variable.Type);
         }
 
+        if (variable.Value is VBMSFlexGrid grid)
+        {
+            VBProps.RefuseIfRemoved(grid);
+            return FlexGridMembers.Read(grid, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
+        }
+
         if (variable.Value is VBTreeView capacityTree && MemberName(member).Equals("GetVisibleCount", StringComparison.OrdinalIgnoreCase))
         {
             if ((await EvaluateCallArgs(MemberArgs(member))).Count != 0) throw new NotImplementedException();
@@ -1747,6 +1983,9 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             && MemberArgs(member) is { } tabIndexes)
             return SSTabMembers.ReadIndexed(tab, MemberName(member), await EvaluateCallArgs(tabIndexes));
 
+        if (variable.Value is ItemsControl searchList && ListMembers.IsList(searchList) && ListMembers.IsExtension(searchList, MemberName(member)))
+            return ListMembers.CallExtension(searchList, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
+
         // A list's List(i) and a ListBox's Selected(i), the control members here that take an index (#821, #1395).
         if (variable.Value is Control listControl && ListMembers.IsList(listControl) && MemberArgs(member) is { } listIndexes)
         {
@@ -1758,6 +1997,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
         var memberIdentifier = member.GetText().TrimStart('.') ?? throw new VBRunTimeException(ctx, VBStandardError.ObjectRequired, "Null member name");
 
+        var throughObject = variable.HeldAsVariant || string.Equals(variable.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase);
+        if (variable.Value is VBCommonDialog dialog && dialog.TryGetProperty(memberIdentifier, out var dialogValue, throughObject))
+            return dialogValue;
+
+        CommonDialogMembers.Check(variable, memberIdentifier);
+
         // A CSharp property bag (e.g. Err.Number) resolves its own properties by name.
         if (variable.Value is ICSharpPropertyBag propertyBag && propertyBag.TryGetProperty(memberIdentifier, out var bagValue))
             return bagValue;
@@ -1767,8 +2012,20 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
         // Every member of a control Controls.Remove took out is 735, its Name included (measured, #1556).
         VBProps.RefuseIfRemoved(control);
+        if (control is VBPictureBox && RuntimeDrawing.IsMethod(MemberName(member)))
+        {
+            if (MemberName(member).Equals("Cls", StringComparison.OrdinalIgnoreCase))
+                throw RuntimeDrawing.Refused("Cls used as a value");
+            return RuntimeDrawing.Call(control, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
+        }
+        if (control is VBPictureBox && RuntimeScale.IsConversion(MemberName(member)))
+            return RuntimeScale.ConvertUnits(control, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
 
-        if (control is VBTimer && TimerMembers.TryGet(control, memberIdentifier, out var timerValue))
+        if (control is VBShape or VBLine && memberIdentifier.Equals("MousePointer", StringComparison.OrdinalIgnoreCase))
+            throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
+
+        if (control is VBTimer && TimerMembers.TryGet(control, memberIdentifier, out var timerValue,
+                throughObject: string.Equals(variable.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase)))
             return timerValue;
 
         AvaloniaInterop.UserControlMembers.Check(variable, memberIdentifier, reading: true);
@@ -1782,6 +2039,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             return richTextValue;
 
         // An in-box control's own members, and the extender's it lacks, by its member table (#1082).
+        if (AvaloniaInterop.SliderMembers.TryGet(control, memberIdentifier, out var sliderValue) is { } slider)
+            return slider ? sliderValue : throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
         if ((AvaloniaInterop.StatusBarMembers.TryGet(control, memberIdentifier, out var inBoxValue)
              ?? AvaloniaInterop.ProgressBarMembers.TryGet(control, memberIdentifier, out inBoxValue)) is { } inBox)
             return inBox ? inBoxValue : throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
@@ -1789,6 +2048,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (AvaloniaInterop.SSTabMembers.TryGet(control, memberIdentifier, out var tabValue))
             return tabValue;
 
+        if (RuntimeDrawing.TryGet(control, memberIdentifier, out var drawingMember))
+            return drawingMember;
         var props = VBProperties.PropertiesByName.GetValueOrDefault(memberIdentifier, []);
 
         foreach (var prop in props)
@@ -1796,6 +2057,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             if (AvaloniaInteroperability.TryGet(control, prop, out var value))
                 return value;
         }
+        if (RuntimeScale.TryGet(control, memberIdentifier, out var scaleMember))
+            return scaleMember;
         // FontName, which is no property of its own here but the name of the control's font (#1141).
         if (FontMembers.TryGet(control, memberIdentifier, out var fontMember))
             return fontMember;
@@ -1805,6 +2068,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         // A list's ListCount (#821), and a ListBox's SelCount and Text (#1395).
         if (ListMembers.TryGet(control, memberIdentifier, out var listMember))
             return listMember;
+        if (ContainerMembers.TryGet(control, memberIdentifier, out var containerMember))
+            return containerMember;
         // Any control's Name, and an array element's Index (#1431).
         if (IdentityMembers.TryGet(control, memberIdentifier, out var identityMember))
             return identityMember;
@@ -1838,7 +2103,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         return current;
     }
 
-    private async Task<object?> ResolveQualifiedMemberValue(
+    internal async Task<object?> ResolveQualifiedMemberValue(
         BasicInterpreter.QualifierTarget qualifier,
         VB6Parser.ICS_S_MemberCallContext[] members,
         Antlr4.Runtime.ParserRuleContext ctx)
@@ -1995,7 +2260,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         // A character on the member, `Module2.pS$`, is checked as it is on the bare name (measured, #742).
         var module = qualifier.Module!;
         var memberHint = member.iCS_S_VariableOrProcedureCall()?.typeHint() ?? member.iCS_S_ProcedureOrArrayCall()?.typeHint();
-        if (module.PrePass.Procedures.TryGetValue(memberName, out var proc)
+        if (BasicInterpreter.TryGetModuleProcedure(module, memberName, out var proc)
             && (!proc.IsPrivate || ReferenceEquals(module, currentModule)))
         {
             if (memberHint is not null)
@@ -2031,7 +2296,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             // reads and non-array calls are unmeasured here and retain their existing behaviour.
             if (argsCtx != null && v.Value is VBArray
                 && module.PrePass.PublicVariables.Contains(memberName))
-                v = IndexResult(v, await EvaluateCallArgs(argsCtx), ctx);
+                v = await IndexResult(v, await EvaluateCallArgs(argsCtx), ctx);
             return await ThenTheRest(v);
         }
 
@@ -2057,6 +2322,11 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         var current = root;
         foreach (var m in members)
         {
+            if (current.Value is not VbUdt && (current.Type == Vb6Value.ValueType.Object || current.Value is VbCollection))
+            {
+                current = await ResolveMemberIndexed(current, m, ctx);
+                continue;
+            }
             if (current.Value is not VbUdt bag)
                 throw new VBRunTimeException(ctx, VBStandardError.TypeMismatch, "Member access on a non-UDT value");
             var fieldName = MemberName(m);
@@ -2064,7 +2334,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 static s => s.Bag.TryGet(s.Name, out var value) ? value
                     : throw new VBRunTimeException(s.Context, VBStandardError.MethodOrDataMemberNotFound, s.Name));
             if (MemberArgs(m) is { } args)
-                current = IndexResult(current, await EvaluateCallArgs(args), ctx);
+                current = await IndexResult(current, await EvaluateCallArgs(args), ctx);
         }
         return current;
     }
@@ -2093,18 +2363,35 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             return await ResolveOneMember(current, member, ctx);
         var later = new LaterGroups(this, groups, ctx);
         var whole = await ResolveOneMember(current, member, ctx, later.Evaluate);
-        return IndexAll(whole, await later.Values(), ctx);
+        return await IndexAll(whole, await later.Values(), ctx);
     }
 
     public override async Task<object?> VisitVsAmp(VB6Parser.VsAmpContext context)
     {
-        var (leftValue, rightValue) = await GetTwoValues(context.valueStmt());
-        return Concatenate(leftValue, rightValue);
+        var leftRaw = await EvaluateValue(context.valueStmt(0));
+        var left = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(leftRaw, callerFrames: stmtFrames), context);
+        var rightRaw = await EvaluateValue(context.valueStmt(1));
+        if (left.IsOddByteString && !leftRaw.IsOddByteString)
+            throw Vb6Value.OddBytesNotImplemented("Concatenation (&)");
+        if (left.IsOddByteString || rightRaw.IsOddByteString)
+            return Concatenate(leftRaw, rightRaw);
+        var right = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(rightRaw, callerFrames: stmtFrames), context);
+        if (right.IsOddByteString) throw Vb6Value.OddBytesNotImplemented("Concatenation (&)");
+        return Concatenate(left, right);
     }
 
     /// <summary><c>&amp;</c> on two values, as <see cref="VisitVsAmp"/> and an <c>#If</c>'s expression apply it.</summary>
     internal static Vb6Value Concatenate(Vb6Value leftValue, Vb6Value rightValue)
     {
+        if (leftValue.IsOddByteString || rightValue.IsOddByteString)
+        {
+            static byte[] Bytes(Vb6Value v) => v.IsNull || v.Type == Vb6Value.ValueType.EmptyVariant ? []
+                : v.IsOddByteString || v.Type == Vb6Value.ValueType.String ? v.StringBytes()
+                : throw Vb6Value.OddBytesNotImplemented("Concatenation (&)");
+            var byteJoined = Vb6Value.FromStringBytes([.. Bytes(leftValue), .. Bytes(rightValue)]);
+            if (leftValue.IsNull || rightValue.IsNull) return byteJoined;
+            return leftValue.HasFixedType && rightValue.HasFixedType ? byteJoined.AsFixedType() : Typed(leftValue, rightValue, byteJoined);
+        }
         if (leftValue.IsNull && rightValue.IsNull)
             return Vb6Value.Null;
         // Null and Empty both concatenate as "" (Empty.Value is null, so the old code NPE'd on it).
@@ -2139,8 +2426,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// <summary><c>+</c> or <c>-</c> on two values, as <see cref="VisitVsAdd"/> and an <c>#If</c>'s expression apply them.</summary>
     internal static Vb6Value AddOrSubtract(Vb6Value leftValue, Vb6Value rightValue, bool subtract, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("AddOrSubtract");
+        rightValue.RefuseOddBytes("AddOrSubtract");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
+        if (!subtract && (leftValue.Type == Vb6Value.ValueType.AutomationUnsignedLong || rightValue.Type == Vb6Value.ValueType.AutomationUnsignedLong))
+            throw new VBRunTimeException(context, VBStandardError.VariableUsesATypeNotSupportedInVisualBasic);
         if (subtract)
             return Typed(leftValue, rightValue, VbNumeric.Sub(leftValue, rightValue, context));
         if (leftValue.Type == Vb6Value.ValueType.String && rightValue.Type == Vb6Value.ValueType.String)
@@ -2164,8 +2455,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// <summary><c>*</c> or <c>/</c> on two values, as <see cref="VisitVsMult"/> and an <c>#If</c>'s expression apply them.</summary>
     internal static Vb6Value MultiplyOrDivide(Vb6Value leftValue, Vb6Value rightValue, bool divide, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("MultiplyOrDivide");
+        rightValue.RefuseOddBytes("MultiplyOrDivide");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
+        if (!divide && (leftValue.Type == Vb6Value.ValueType.AutomationUnsignedLong || rightValue.Type == Vb6Value.ValueType.AutomationUnsignedLong))
+            throw new VBRunTimeException(context, VBStandardError.VariableUsesATypeNotSupportedInVisualBasic);
         return Typed(leftValue, rightValue, divide
             ? VbNumeric.RealDivide(leftValue, rightValue, context)
             : VbNumeric.Mul(leftValue, rightValue, context));
@@ -2179,6 +2474,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Modulo(Vb6Value leftValue, Vb6Value rightValue, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("Modulo");
+        rightValue.RefuseOddBytes("Modulo");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, VbNumeric.Modulo(leftValue, rightValue, context));
@@ -2192,6 +2489,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value IntegerDivide(Vb6Value leftValue, Vb6Value rightValue, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("IntegerDivide");
+        rightValue.RefuseOddBytes("IntegerDivide");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, VbNumeric.IntDivide(leftValue, rightValue, context));
@@ -2205,6 +2504,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Power(Vb6Value leftValue, Vb6Value rightValue, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("Power");
+        rightValue.RefuseOddBytes("Power");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, VbNumeric.Power(leftValue, rightValue, context));
@@ -2218,6 +2519,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         {
             // Null on either side is Null; anything else is taken as the text & would make of it (#1547).
             var (text, pattern) = await GetTwoValues(context.valueStmt());
+            text.RefuseOddBytes("Like");
+            pattern.RefuseOddBytes("Like");
             if (text.IsNull || pattern.IsNull)
                 return Vb6Value.Null;
             return new Vb6Value(VbLike.Matches(LikeOperand(text), LikeOperand(pattern),
@@ -2229,6 +2532,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             // and Nothing Is Nothing — NOT Vb6Value equality (which would run numeric coercion).
             var leftObject = await EvaluateValue(context.valueStmt(0));
             var rightObject = await EvaluateValue(context.valueStmt(1));
+            leftObject.RefuseOddBytes("Is");
+            rightObject.RefuseOddBytes("Is");
             if (leftObject.Type == Vb6Value.ValueType.Error || rightObject.Type == Vb6Value.ValueType.Error)
                 throw new VBRunTimeException(context, VBStandardError.ObjectRequired);
             return new Vb6Value(ReferenceEquals(leftObject.Value, rightObject.Value));
@@ -2239,6 +2544,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (context.EQ() != null || context.NEQ() != null)
         {
             var (left, right) = await GetTwoValuesSameTypesOrNull(context.valueStmt());
+            if (left.IsOddByteString || right.IsOddByteString)
+                return new Vb6Value(CompareOddBytes(left, right, compareText, context.EQ() != null ? "=" : "<>") == 0);
             if (left.Type == Vb6Value.ValueType.Null || right.Type == Vb6Value.ValueType.Null)
                 return Vb6Value.Null;
             var equal = StringCompare(left, right, compareText) is int same ? same == 0 : left.Equals(right);
@@ -2248,17 +2555,17 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             : context.GT() != null ? Order.Greater
             : context.LEQ() != null ? Order.LessOrEqual
             : Order.GreaterOrEqual;
-        var (leftValue, rightValue) = await GetTwoValuesSameTypesOrNull(context.valueStmt(),
-            context.LEQ() != null || context.GEQ() != null);
+        var (leftValue, rightValue) = await GetTwoValuesSameTypesOrNull(context.valueStmt());
+        if (leftValue.IsOddByteString || rightValue.IsOddByteString)
+            return new Vb6Value(CompareOddBytes(leftValue, rightValue, compareText, context.LT() != null ? "<"
+                : context.GT() != null ? ">" : context.LEQ() != null ? "<=" : ">=") < 0);
         // Two strings compare ordinally under Option Compare Binary (oracle-verified: "B" < "a", "10" < "9"), and as text
-        // under Option Compare Text. A string-vs-number pair is left to the numeric path below (numeric string coerces; a
-        // non-numeric string vs a number is Type Mismatch, both already faithful, and the same in either mode).
+        // under Option Compare Text. Mixed String/number operands were reconciled above (#211).
         if (StringCompare(leftValue, rightValue, compareText) is int sc)
             return (Vb6Value)Holds(order, sc, 0);
         if (leftValue.Type == Vb6Value.ValueType.Boolean && rightValue.Type == Vb6Value.ValueType.Boolean)
             return (Vb6Value)Holds(order, leftValue.Value is true ? -1 : 0, rightValue.Value is true ? -1 : 0);
-        if ((context.LEQ() != null || context.GEQ() != null) &&
-            leftValue.Value is decimal leftDecimal && rightValue.Value is decimal rightDecimal)
+        if (leftValue.Value is decimal leftDecimal && rightValue.Value is decimal rightDecimal)
             return (Vb6Value)Holds(order, leftDecimal, rightDecimal);
         if (leftValue.Type == Vb6Value.ValueType.Error && rightValue.Type == Vb6Value.ValueType.Error)
             return (Vb6Value)Holds(order, (ushort)leftValue.Value!, (ushort)rightValue.Value!);
@@ -2269,6 +2576,15 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (TryUnpack(leftValue, rightValue, out double leftDouble, out double rightDouble))
             return (Vb6Value)Holds(order, leftDouble, rightDouble);
         throw new VBRunTimeException(context, VBStandardError.TypeMismatch);
+    }
+
+    private static int CompareOddBytes(Vb6Value left, Vb6Value right, bool text, string operation)
+    {
+        if (text || operation is not ("=" or "<")
+            || !(left.IsOddByteString || left.Type == Vb6Value.ValueType.String)
+            || !(right.IsOddByteString || right.Type == Vb6Value.ValueType.String))
+            throw Vb6Value.OddBytesNotImplemented(operation + (text ? " (Option Compare Text)" : ""));
+        return left.StringBytes().AsSpan().SequenceCompareTo(right.StringBytes());
     }
 
     private enum Order { Less, Greater, LessOrEqual, GreaterOrEqual }
@@ -2285,8 +2601,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     // The comparison operators' order when BOTH operands are String: ordinal under Option Compare Binary (verified against
     // vb6.exe), and vb6.exe's text compare under Option Compare Text (VbTextCompare). Returns null when the pair is not two
-    // strings, so the caller falls through to the numeric path (a numeric string vs a number coerces; a non-numeric string
-    // vs a number is a Type Mismatch, both already faithful).
+    // strings, so the caller falls through to the numeric path.
     private static int? StringCompare(Vb6Value left, Vb6Value right, bool text)
         => left.Type == Vb6Value.ValueType.String && right.Type == Vb6Value.ValueType.String
             ? left.TryCompareTo(right, text)
@@ -2350,6 +2665,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Negation(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
     {
+        value.RefuseOddBytes("Negation");
         if (value.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         var negated = VbNumeric.Negate(value, context);
@@ -2358,11 +2674,12 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     public override async Task<object?> VisitVsNot(VB6Parser.VsNotContext context)
     {
-        return Not(await EvaluateScalar(context.valueStmt()), context);
+        return Not(ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(await EvaluateValue(context.valueStmt()), "Not", stmtFrames), context), context);
     }
 
     internal static Vb6Value Not(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
     {
+        value.RefuseOddBytes("Not");
         if (value.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         // Not keeps its operand's OWN width rather than promoting: Not CByte(5) is 250, an eight-bit
@@ -2415,11 +2732,14 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         return await Visit(context.valueStmt(0));
     }
 
-    public override async Task<object?> VisitVsNew(VB6Parser.VsNewContext context)
+    public override async Task<object?> VisitVsNew(VB6Parser.VsNewContext context) =>
+        await CreateNewObject((context.valueStmt() as VB6Parser.VsICSContext)?.implicitCallStmt_InStmt(), context);
+
+    internal async Task<Vb6Value> CreateNewObject(VB6Parser.ImplicitCallStmt_InStmtContext? call,
+        Antlr4.Runtime.ParserRuleContext context)
     {
         // `New ClassName` — the class name is a nested bare identifier; extract it SYNTACTICALLY (evaluating it
         // would try to resolve a variable and throw). `Dim o As New C1` makes its object where it is read (#435).
-        var call = (context.valueStmt() as VB6Parser.VsICSContext)?.implicitCallStmt_InStmt();
         if (call is not null && interpreter.LibraryClassFor(call.GetText()) is { } libraryClass)
             return interpreter.AdoptNewTemp(interpreter.NewLibraryObject(libraryClass), stmtFrames);
         if (call?.GetText().Equals("stdole.StdFont", StringComparison.OrdinalIgnoreCase) == true)
@@ -2431,6 +2751,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             ?? throw new VBCompileErrorException("Expected a class name after New");
         if (IsCollectionType(className) && !interpreter.Modules.TryGet(className, out _))
             return interpreter.AdoptNewTemp(new Vb6Value(interpreter.NewCollection()), stmtFrames);
+        if (className.Equals("PropertyBag", StringComparison.OrdinalIgnoreCase) && !interpreter.Modules.TryGet(className, out _))
+            return new Vb6Value(new VbPropertyBag());
         // VB6 compiles New ErrObject but refuses its creation at run time (#2627).
         if (className.Equals("ErrObject", StringComparison.OrdinalIgnoreCase) && !interpreter.Modules.TryGet(className, out _))
             throw new VBRunTimeException(context, new VBStandardError(-2147221164, "Class not registered"));
@@ -2466,29 +2788,33 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 ?? throw new VBCompileErrorException("Expected a type after TypeOf … Is");
         }
 
+        operand.RefuseOddBytes("TypeOf");
         // A live instance matches its own class (or the catch-all `Object`); Nothing / non-object → False.
         // (VB6 raises an error for TypeOf on a non-object — a documented simplification here.)
         // A Collection is a Collection, a VBA.Collection and an Object (measured, #1471).
         if (operand.Value is VbCollection)
             return new Vb6Value(IsCollectionType(targetName) || string.Equals(targetName, "Object", StringComparison.OrdinalIgnoreCase));
+        if (interpreter.ControlClassFor(targetName) is { } controlClass)
+            return new Vb6Value(controlClass.Equals(ControlObjectType.Of(operand.Value), StringComparison.OrdinalIgnoreCase));
         // A control is its class, with its library or without, a Control and an Object: a TextBox is TextBox, VB.TextBox,
         // Control and Object, and a CommonDialog MSComDlg.CommonDialog (measured, #1060). A control array and a form's
         // Controls are an Object, and Controls is not a Collection.
         if (operand.Value is Avalonia.Controls.Control control)
         {
-            if (interpreter.ControlClassFor(targetName) is { } controlClass)
-                return new Vb6Value(control is VBProgressBar progress
-                    && controlClass.Equals(progress.Library.TypeName("ProgressBar"), StringComparison.OrdinalIgnoreCase));
             var className = VB6BuiltIns.ControlTypeName(control);
             // An in-box control's library is the one it was read under: MSComctlLib's ProgressBar or ComctlLib's (#1082).
             var library = control switch
             {
-                VBCommonDialog => "MSComDlg",
+                VBCommonDialog => Components.InBox.CommonDialogComponentClass.Instance.Library.Name,
                 VBProgressBar bar => bar.Library.Name,
+                VBMSFlexGrid => "MSFlexGridLib",
+                VBListView => "MSComctlLib",
+                VBSlider => "MSComctlLib",
                 VBToolbar => "MSComctlLib",
+                VBMonthView => "MSComCtl2",
                 VBStatusBar => "MSComctlLib",
                 VBImageList => "MSComctlLib",
-                VBUpDown => "MSComCtl2",
+                VBUpDown or VBFlatScrollBar => "MSComCtl2",
                 _ => "VB",
             };
             return new Vb6Value(string.Equals(targetName, "Object", StringComparison.OrdinalIgnoreCase)
@@ -2522,7 +2848,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     }
 
     /// <summary>
-    /// Apply a bitwise operator under VB6's rules: each operand reduced to 32 bits on its own terms,
+    /// Apply a bitwise operator at VB6's widths or VBA7's LongLong width (#4302),
     /// the result reported at the width the ladder gives. False when either operand is not something
     /// VB6 accepts, which the caller turns into a type mismatch.
     ///
@@ -2533,13 +2859,22 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// </summary>
     private static bool TryBitwise(Vb6Value left, Vb6Value right, Func<long, long, long> op, out Vb6Value result)
     {
+        left.RefuseOddBytes("Bitwise operation");
+        right.RefuseOddBytes("Bitwise operation");
+        if (left.Type == Vb6Value.ValueType.LongLong || right.Type == Vb6Value.ValueType.LongLong)
+        {
+            if (left.Type == Vb6Value.ValueType.Date || right.Type == Vb6Value.ValueType.Date
+                || left.Type == Vb6Value.ValueType.EmptyVariant || right.Type == Vb6Value.ValueType.EmptyVariant)
+                throw new NotImplementedException("LongLong bitwise operations with Date or Empty are unmeasured (#1548)");
+            result = Vb6Value.NewLongLong(op(VbBitwise.LongLongBits(left), VbBitwise.LongLongBits(right)));
+            return true;
+        }
         result = default;
         if (!VbBitwise.TryUnpack(left, out var leftBits, out var leftWidth)) return false;
         if (!VbBitwise.TryUnpack(right, out var rightBits, out var rightWidth)) return false;
         result = VbBitwise.Pack(op(leftBits, rightBits), VbBitwise.Combine(leftWidth, rightWidth));
         return true;
     }
-
 
     public override async Task<object?> VisitBlockStmt(VB6Parser.BlockStmtContext context)
     {

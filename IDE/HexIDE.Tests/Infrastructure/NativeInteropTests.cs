@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -18,10 +19,15 @@ public class NativeInteropTests
 
     [Theory]
     [InlineData("HexIDE", "Controls/MDI/MDIWindow.axaml.cs", 2)]
+    [InlineData("HexIDE", "IDE/Profiles/ProfileFileReader.cs", 6)]
     [InlineData("HexIDE.Desktop", "ConsoleOutput.cs", 5)]
     [InlineData("HexIDE.Desktop", "Server/ToolFailures.cs", 1)]
     [InlineData("HexIDE.Desktop", "Server/X11WindowManager.cs", 6)]
-    [InlineData("HexIDE.Runtime", "TypeLibrary/TypeLibReader.cs", 2)]
+    [InlineData("HexIDE.Runtime", "Interpreter/WindowsDateLocale.cs", 3)]
+    [InlineData("HexIDE.Runtime", "Interpreter/WindowsLocaleCompare.cs", 2)]
+    [InlineData("HexIDE.Runtime", "Interpreter/WindowsLanguages.cs", 3)]
+    [InlineData("HexIDE", "TypeLibrary/TypeLibReader.cs", 2)]
+    [InlineData("HexIDE", "IDE/DownloadMark.cs", 1)]
     [InlineData("HexIDE.Runtime", "BuiltinControls/ToolbarCaptionMetrics.cs", 6)]
     [InlineData("HexIDE.Lsp", "Transports/LaunchedServerGuard.cs", 2)]
     [InlineData("HexIDE.LspGuard", "Program.cs", 4)]
@@ -47,6 +53,7 @@ public class NativeInteropTests
     [InlineData("HexIDE")]
     [InlineData("HexIDE.Desktop")]
     [InlineData("HexIDE.Runtime")]
+    [InlineData("HexIDE.Runtime.Tests")]
     [InlineData("HexIDE.Lsp")]
     [InlineData("HexIDE.LspGuard")]
     public void UnsafeCompilationIsForGeneratedCodeOnly(string project)
@@ -66,8 +73,8 @@ public class NativeInteropTests
     {
         var tree = CSharpSyntaxTree.ParseText(source, cancellationToken: TestContext.Current.CancellationToken);
         var root = tree.GetRoot(TestContext.Current.CancellationToken);
-        return root.DescendantTokens().Any(token => token.Kind() == SyntaxKind.UnsafeKeyword)
-            || root.DescendantTrivia().Where(trivia => trivia.Kind() == SyntaxKind.DisabledTextTrivia)
+        return root.DescendantTokens().Any(token => token.IsKind(SyntaxKind.UnsafeKeyword))
+            || root.DescendantTrivia().Where(trivia => trivia.IsKind(SyntaxKind.DisabledTextTrivia))
                 .Any(trivia => ContainsUnsafe(trivia.ToFullString()));
     }
 

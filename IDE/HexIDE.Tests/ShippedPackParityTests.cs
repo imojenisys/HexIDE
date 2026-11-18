@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using HexIDE.Localization;
 
 namespace HexIDE.Tests;
@@ -53,6 +54,135 @@ public class ShippedPackParityTests
 {
     /// <summary>The canonical pack every other one is measured against.</summary>
     private const string Canonical = "en";
+
+    [Theory]
+    [InlineData("Str.CodeEditor.Msg.RenameChangesReadOnlyText", "Str.CodeEditor.Msg.RenameTouchesReadOnly")]
+    [InlineData("Str.CodeEditor.Msg.NoMarkOnReadOnlyText", "Str.CodeEditor.Msg.NoMarkOnReadOnlyLine")]
+    [InlineData("Str.FindReplace.Msg.ReadOnlyTextOnly", "Str.FindReplace.Msg.ProtectedOnly")]
+    [InlineData("Str.FindReplace.Msg.ReplacementsSkippingReadOnlyText", "Str.FindReplace.Msg.ReplacementsWithSkipped")]
+    public void PeopleSeeTheIdesOwnWordsForReadOnlyText(string key, string retiredKey)
+    {
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(PacksDirectory(), "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+        canonical.Should().ContainKey(key);
+        foreach (var word in new[] { "Attribute", "header", "designer", "VB6" })
+            canonical[key].Should().NotContainEquivalentOf(word);
+        foreach (var file in Directory.EnumerateFiles(PacksDirectory(), "*.json"))
+        {
+            var pack = JsonSerializer.Deserialize(File.ReadAllText(file),
+                LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+            pack.Should().NotContainKey(retiredKey, file);
+            if (IsFullTranslation(Path.GetFileNameWithoutExtension(file)))
+            {
+                pack.Should().ContainKey(key, file);
+                Regex.Matches(pack[key], @"\{\d+\}").Select(m => m.Value).Should().BeEquivalentTo(
+                    Regex.Matches(canonical[key], @"\{\d+\}").Select(m => m.Value), file);
+            }
+        }
+    }
+
+    [Fact]
+    public void Upstream_statements_keep_HexIDEs_name_in_every_shipped_pack()
+    {
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(PacksDirectory(), "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+        var keys = BrandText.UpstreamKeys;
+        var localization = new LocalizationService();
+        foreach (var language in LanguageManifest.Packs)
+        foreach (var key in keys.Where(key => canonical[key].Contains("HexIDE", StringComparison.Ordinal)))
+        {
+            var text = localization.GetStringFrom(language.Id, key);
+            text.Should().Contain("HexIDE", $"{language.Id}: {key}");
+            var strings = new Dictionary<string, string> { [key] = text };
+            BrandText.Apply(strings, "Acme");
+            strings[key].Should().Be(text, $"{language.Id}: {key}");
+        }
+    }
+
+    [Fact]
+    public void NoPackHasKeysAbsentFromCanonicalEnglish()
+    {
+        var packs = PacksDirectory();
+        var canonical = KeysOf(Path.Combine(packs, $"{Canonical}.json"));
+        canonical.Should().NotBeEmpty("the canonical pack defines the keys that may ship");
+
+        var unexpected = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(packs, "*.json"))
+        {
+            unexpected.AddRange(KeysOf(file).Except(canonical).Order(StringComparer.Ordinal)
+                .Select(key => $"{Path.GetFileName(file)}: {key}"));
+        }
+
+        unexpected.Should().BeEmpty("all packs, including regional overrides, use only canonical English keys");
+    }
+
+    [Fact]
+    public void PackAmpersandsAreLiteralRatherThanAccessKeyMarkers()
+    {
+        string[] literalKeys =
+        [
+            "Str.PropDesc.UseMnemonic",
+            "Str.Tool.LanguageServers.Title",
+            "Str.Tool.ProtocolInspector.NoBody.Unarmed",
+        ];
+        var unexpected = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(PacksDirectory(), "*.json"))
+        {
+            var pack = JsonSerializer.Deserialize(File.ReadAllText(file),
+                LocalizationJsonContext.Default.LanguagePackRecord)!;
+            unexpected.AddRange(pack.Strings!
+                .Where(pair => pair.Value.Contains('&') && !literalKeys.Contains(pair.Key))
+                .Select(pair => $"{Path.GetFileName(file)}: {pair.Key}"));
+        }
+
+        unexpected.Should().BeEmpty("Avalonia access keys are underscores, never ampersands (#347)");
+    }
+
+    [Fact]
+    public void TheBrandRewriteNeverReachesAUrlOrAPathInAPack()
+    {
+        // BrandText takes the literal product name in a pack as the place a distribution's own name goes (#2042). A link
+        // or a folder spelled with that name would come out broken in every branded build, and nothing else would say so.
+        const string brand = "BRANDNAME";
+        var broken = new List<string>();
+        foreach (var file in Directory.EnumerateFiles(PacksDirectory(), "*.json"))
+        {
+            var strings = JsonSerializer.Deserialize(File.ReadAllText(file),
+                LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+            BrandText.Apply(strings, brand);
+            broken.AddRange(strings
+                .Where(pair => PutsNameInAUrlOrAPath(pair.Value, brand))
+                .Select(pair => $"{Path.GetFileName(file)}: {pair.Key}"));
+        }
+
+        broken.Should().BeEmpty("a URL or a path must not spell the product name where BrandText would rewrite it");
+    }
+
+    [Theory]
+    [InlineData("See https://github.com/hexide-io/BRANDNAME for more.", true)]
+    [InlineData(@"Look in logs\BRANDNAME\today.", true)]
+    [InlineData("Look in ~/.config/BRANDNAME.", true)]
+    [InlineData("About BRANDNAME...", false)]
+    [InlineData("BRANDNAME's safety", false)]
+    [InlineData("Either/or, in BRANDNAME", false)]
+    public void TheUrlOrPathGuardCatchesTheNameInsideOneOnly(string text, bool caught) =>
+        PutsNameInAUrlOrAPath(text, "BRANDNAME").Should().Be(caught);
+
+    private static bool PutsNameInAUrlOrAPath(string text, string brand) =>
+        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+            .Any(word => word.Contains(brand, StringComparison.Ordinal) && (word.Contains('/') || word.Contains('\\')));
+
+    [Fact]
+    public void EveryShippedPackNameMatchesItsEnglishManifestName()
+    {
+        foreach (var language in LanguageManifest.Packs)
+        {
+            var pack = JsonSerializer.Deserialize(
+                File.ReadAllText(Path.Combine(PacksDirectory(), $"{language.Id}.json")),
+                LocalizationJsonContext.Default.LanguagePackRecord)!;
+            pack.Name.Should().Be(language.DisplayName, $"pack {language.Id} uses its English name");
+        }
+    }
 
     [Fact]
     public void EveryShippedProgressFormatIncludesServerTaskAndPercentage()
@@ -140,6 +270,319 @@ public class ShippedPackParityTests
         undeclared.Should().BeEmpty(
             "a full translation on disk is either shipped, and belongs in LanguageManifest.Packs, or is "
             + "not, and should not be carried and kept current forever. Deciding is the point");
+    }
+
+    [Fact]
+    public void RomanianPack_IsCompleteAndPreservesPlaceholdersAndAccessKeys()
+    {
+        var canonical = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(PacksDirectory(), "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var romanian = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(PacksDirectory(), "ro.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        romanian.Name.Should().Be("Romanian");
+        romanian.Direction.Should().Be("ltr");
+        romanian.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, english) in canonical.Strings)
+        {
+            var translated = romanian.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            Regex.Matches(translated, @"\{\d+\}").Select(m => m.Value).Should()
+                .BeEquivalentTo(Regex.Matches(english, @"\{\d+\}").Select(m => m.Value), key);
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(english.Count(c => c == '_'), key);
+        }
+    }
+
+    [Fact]
+    public void Hungarian_PreservesCanonicalKeysPlaceholdersAndAccessKeys()
+    {
+        var canonical = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(PacksDirectory(), "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!.Strings!;
+        var pack = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(PacksDirectory(), "hu.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        pack.Name.Should().Be("Hungarian");
+        pack.Direction.Should().Be("ltr");
+        pack.Strings!.Keys.Should().BeEquivalentTo(canonical.Keys);
+        foreach (var (key, original) in canonical)
+        {
+            var translated = pack.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            System.Text.RegularExpressions.Regex.Matches(translated, @"\{[0-9]+[^}]*\}")
+                .Select(m => m.Value).Should().BeEquivalentTo(
+                    System.Text.RegularExpressions.Regex.Matches(original, @"\{[0-9]+[^}]*\}")
+                        .Select(m => m.Value), key);
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(original.Count(c => c == '_'), key);
+        }
+    }
+
+    [Fact]
+    public void BulgarianPackPreservesCanonicalPlaceholdersWithoutAccessKeyMarkers()
+    {
+        LanguageManifest.Packs.Should().Contain(p => p.Id == "bg" && p.Direction == "ltr");
+        LanguageManifest.Regions["bg"].Should().Contain(r => r.Id == "bg-BG");
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var bulgarian = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "bg.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        bulgarian.Name.Should().Be("Bulgarian");
+        bulgarian.Direction.Should().Be("ltr");
+        bulgarian.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, value) in canonical.Strings)
+        {
+            var translated = bulgarian.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            translated.Replace("VB6_EXE", "").Replace("VB_Name", "").Replace("HEXIDE_AI_API_KEY", "")
+                .Replace("HEXIDE_PLATFORM", "")
+                .Should().NotContain("_", key);
+            System.Text.RegularExpressions.Regex.Matches(translated, @"\{\d+[^}]*\}")
+                .Select(m => m.Value).Should().BeEquivalentTo(
+                    System.Text.RegularExpressions.Regex.Matches(value, @"\{\d+[^}]*\}")
+                        .Select(m => m.Value), key);
+        }
+    }
+
+    [Fact]
+    public void SlovakPack_PreservesCanonicalKeysPlaceholdersAndAccessKeys()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var slovak = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "sk.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        slovak.Name.Should().Be("Slovak");
+        slovak.Direction.Should().Be("ltr");
+        slovak.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, value) in canonical.Strings)
+        {
+            var translated = slovak.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            Regex.Matches(translated, @"\{[0-9]+[^}]*\}").Select(m => m.Value).Should()
+                .BeEquivalentTo(Regex.Matches(value, @"\{[0-9]+[^}]*\}").Select(m => m.Value), key);
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(value.Count(c => c == '_'), key);
+        }
+    }
+
+    [Fact]
+    public void Slovak_IsDeclaredWithSlovakiaAsAFilelessRegion()
+    {
+        LanguageManifest.Packs.Should().Contain(new LanguageInfo("sk", "Slovak", "ltr"));
+        LanguageManifest.Regions.Should().ContainKey("sk");
+        LanguageManifest.Regions["sk"].Should().Contain(new RegionInfo("sk-SK", "Slovakia"));
+        File.Exists(Path.Combine(PacksDirectory(), "sk-SK.json")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Lithuanian_PreservesCanonicalPlaceholdersAndAccessKeys()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var lithuanian = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "lt.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        lithuanian.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, original) in canonical.Strings)
+        {
+            var translated = lithuanian.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace($"Lithuanian key {key}");
+            System.Text.RegularExpressions.Regex.Matches(translated, @"\{\d+[^}]*\}")
+                .Select(m => m.Value).Should().BeEquivalentTo(
+                    System.Text.RegularExpressions.Regex.Matches(original, @"\{\d+[^}]*\}")
+                        .Select(m => m.Value), $"Lithuanian key {key}");
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(original.Count(c => c == '_'),
+                    $"Lithuanian key {key} keeps the Latin-script access-key convention");
+        }
+    }
+
+    [Fact]
+    public void Latvian_PreservesEveryPlaceholderAndAccessKey()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var latvian = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "lv.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        latvian.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, original) in canonical.Strings)
+        {
+            var translated = latvian.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            var placeholders = System.Text.RegularExpressions.Regex.Matches(original, @"\{\d+\}")
+                .Select(m => m.Value);
+            System.Text.RegularExpressions.Regex.Matches(translated, @"\{\d+\}")
+                .Select(m => m.Value).Should().BeEquivalentTo(placeholders, key);
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(original.Count(c => c == '_'), key);
+        }
+    }
+
+    [Fact]
+    public void EstonianPack_PreservesCanonicalKeysPlaceholdersAndAccessKeys()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var estonian = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "et.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        estonian.Name.Should().Be("Estonian");
+        estonian.Direction.Should().Be("ltr");
+        estonian.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, original) in canonical.Strings)
+        {
+            var translated = estonian.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            Regex.Matches(translated, @"\{\d+[^{}]*\}").Select(m => m.Value).Should()
+                .BeEquivalentTo(Regex.Matches(original, @"\{\d+[^{}]*\}").Select(m => m.Value), key);
+            if (original.Contains('_') && !NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Should().Contain("_", key);
+        }
+    }
+
+    [Fact]
+    public void Basque_PreservesPlaceholdersAndLatinAccessKeys()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var basque = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(packs, "eu.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        basque.Name.Should().Be("Basque");
+        basque.Direction.Should().Be("ltr");
+        basque.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, value) in canonical.Strings)
+        {
+            var translated = basque.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            System.Text.RegularExpressions.Regex.Matches(translated, @"\{\d+\}")
+                .Select(m => m.Value).Should().BeEquivalentTo(
+                    System.Text.RegularExpressions.Regex.Matches(value, @"\{\d+\}")
+                        .Select(m => m.Value), key);
+            if (value.Contains('_') && !NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(value.Count(c => c == '_'), key);
+        }
+    }
+
+    [Fact]
+    public void Catalan_PreservesCanonicalPlaceholdersAndAccessKeys()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var catalan = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "ca.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        catalan.Name.Should().Be("Catalan");
+        catalan.Direction.Should().Be("ltr");
+        foreach (var (key, value) in canonical.Strings!)
+        {
+            catalan.Strings.Should().ContainKey(key);
+            var translated = catalan.Strings![key];
+            translated.Should().NotBeNullOrWhiteSpace($"Catalan key {key}");
+            Regex.Matches(translated, @"\{\d+\}")
+                .Select(m => m.Value).Should().BeEquivalentTo(
+                    Regex.Matches(value, @"\{\d+\}")
+                        .Select(m => m.Value), $"Catalan key {key}");
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(value.Count(c => c == '_'),
+                    $"Catalan key {key} must preserve access keys");
+        }
+    }
+
+    [Fact]
+    public void Galician_UsesEnglishOnlyForSharedTermsAndFormats()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var galician = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "gl.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        galician.Name.Should().Be("Galician");
+        // Shared words, VB syntax, abbreviations and formats intentionally remain identical (#2774).
+        galician.Strings!.Where(pair => pair.Value == canonical.Strings![pair.Key])
+            .Select(pair => pair.Key).Should().BeEquivalentTo(new[]
+            {
+                "Str.Office.ProjectCaption", // Project and file placeholders only.
+                "Str.Options.Keymap.Break", // The keyboard key label.
+                "Str.Tool.FindReferences.Error",
+                "Str.Options.Addin.Status.Incompatible",
+                "Str.CodeEditor.ViewAs.Vb6", "Str.Tool.Locals.Ellipsis",
+                "Str.Dialog.AddProcedure.Type.Sub", "Str.Dialog.MenuEditor.Visible",
+                "Str.Dialog.MenuEditor.Shortcut.CtrlFormat", "Str.Dialog.MenuEditor.Shortcut.AltFormat",
+                "Str.Dialog.MenuEditor.Shortcut.FunctionFormat", "Str.Dialog.MenuEditor.Shortcut.InsertKey",
+                "Str.Tool.ProtocolInspector.DetailHeader", "Str.StatusBar.Insert",
+                "Str.StatusBar.Automation.Text", "Str.StatusBar.Automation.TextSession",
+                "Str.StatusBar.LanguageServerProgress", "Str.Options.Node.Editor",
+                "Str.Document.UserControlSuffix", "Str.Document.PropertyPageSuffix",
+                "Str.Dialog.Color.Rgb",
+                "Str.Tool.Outline.Kind.Interface", "Str.Tool.Outline.Kind.Variable",
+                "Str.Dock.DocumentTabStripItemLayoutModeMdi",
+                "Str.Tool.LanguageServers.Vm.Age.Seconds",
+                "Str.Tool.LanguageServers.Vm.Elapsed",
+            });
+    }
+
+    [Fact]
+    public void Galician_PreservesCanonicalPlaceholdersAndAccessKeys()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var galician = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "gl.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        galician.Strings!.Keys.Should().BeEquivalentTo(canonical.Strings!.Keys);
+        foreach (var (key, value) in canonical.Strings)
+        {
+            var translated = galician.Strings[key];
+            translated.Should().NotBeNullOrWhiteSpace(key);
+            System.Text.RegularExpressions.Regex.Matches(translated, @"\{\d+(?:[^{}]*)\}")
+                .Select(match => match.Value).Should().BeEquivalentTo(
+                    System.Text.RegularExpressions.Regex.Matches(value, @"\{\d+(?:[^{}]*)\}")
+                        .Select(match => match.Value), key);
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(character => character == '_').Should()
+                    .Be(value.Count(character => character == '_'), key);
+        }
+    }
+
+    [Fact]
+    public void SerbianLatin_PreservesEveryPlaceholderAndAccessKey()
+    {
+        var packs = PacksDirectory();
+        var canonical = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "en.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+        var serbian = JsonSerializer.Deserialize(File.ReadAllText(Path.Combine(packs, "sr-Latn.json")),
+            LocalizationJsonContext.Default.LanguagePackRecord)!;
+
+        foreach (var (key, value) in canonical.Strings!)
+        {
+            serbian.Strings.Should().ContainKey(key);
+            var translated = serbian.Strings![key];
+            Regex.Matches(translated, @"\{[0-9]+\}")
+                .Select(match => match.Value).Should().BeEquivalentTo(
+                    Regex.Matches(value, @"\{[0-9]+\}")
+                        .Select(match => match.Value), key);
+            if (!NavigationAccessKeyTests.CollisionPolicyKeys.Contains(key))
+                translated.Count(c => c == '_').Should().Be(value.Count(c => c == '_'), key);
+        }
     }
 
     /// <summary>

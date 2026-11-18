@@ -1,7 +1,7 @@
 namespace HexIDE.Runtime.ProjectElements;
 
 /// <summary>
-/// Why a form cannot be reproduced on save. A cause rather than a sentence, because the sentence has to be
+/// Why a form or module cannot be reproduced on save. A cause rather than a sentence, because the sentence has to be
 /// shown to the developer in their own language and this is decided in the runtime, which has no
 /// localisation service and should not gain one.
 ///
@@ -13,6 +13,15 @@ namespace HexIDE.Runtime.ProjectElements;
 public enum UnfaithfulSaveCause
 {
     None = 0,
+
+    /// <summary>A designer file was declared as a code module (#4459).</summary>
+    DesignerFileAsModule = 1 << 10,
+
+    /// <summary>A repeated property has an unreadable value (#4096).</summary>
+    UnreadableDuplicateProperty = 1 << 8,
+
+    /// <summary>A saved measurement cannot be set by VB6 (#4096).</summary>
+    RefusedMeasurement = 1 << 9,
 
     /// <summary>SSTab children or page references cannot be modelled for designer edits (#2301).</summary>
     SSTabPageMetadata = 1 << 2,
@@ -34,5 +43,19 @@ public enum UnfaithfulSaveCause
     UnreproducibleBinaryContent = 1 << 1,
 
     /// <summary>An invisible UserControl's size has no measured conversion to missing saved extents.</summary>
-    MissingUserControlExtents = 1 << 2,
+    MissingUserControlExtents = 1 << 6,
+
+    /// <summary>An add-in's project type read this form, and has nothing that writes what it read.</summary>
+    ReadByAddin = 1 << 4,
+    /// <summary>
+    /// The format that read this form can't write it back, in its own words: it said so as it read it, or it couldn't render
+    /// what it had just read. Its reason is shown as the format gave it.
+    /// </summary>
+    RefusedByFormat = 1 << 5,
+
+    /// <summary>
+    /// The designer text holds a NUL, which VB6 doesn't write there and which the writer uses to mark where a companion
+    /// citation goes, so a save couldn't place them (#4096).
+    /// </summary>
+    NulInDesignerText = 1 << 7,
 }

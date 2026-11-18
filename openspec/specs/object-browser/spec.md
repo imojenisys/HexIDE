@@ -9,16 +9,34 @@ out what exists. That makes it more central than the equivalent in a modern IDE,
 are answered by go-to-definition and completion — here it is often the only way to discover a member at all,
 which is why VB6 gave it a dedicated key.
 
-> **Known divergence.** If the browser was opened before a language server started, the VBA library fills
-> in only when VBA or All Libraries is selected again; it does not refresh on its own when the server starts
-> ([#1957](https://github.com/hexide-io/HexIDE/issues/1957)).
-
 ## Requirements
+
+### Requirement: Library selection survives removal and reopening
+When a selected library is removed, the browser SHALL select All Libraries and keep its class list,
+member list and navigation history consistent with that selection. During File > Open Project or Reload
+from Disk, it SHALL restore a returning library with the same name and kind (project or reference).
+Remembered selection SHALL expire when the reload finishes or the developer selects another library.
+This is HexIDE's selection policy (#4101), not a measured claim about VB6.
+
+#### Scenario: A selected reference is removed
+- **WHEN** the selected reference library is removed
+- **THEN** All Libraries is selected and its classes are shown
+- **AND** removed classes and members cannot be revisited through history
+
+#### Scenario: Reopening restores a library that still exists
+- **WHEN** a project is reopened with the selected project or reference library still present
+- **THEN** the library of the same name and kind is selected again
+
+#### Scenario: A removed reference returns later
+- **WHEN** reopening finishes without the selected reference and that reference is added later
+- **THEN** All Libraries remains selected
 
 ### Requirement: The browser SHALL show everything visible to the project
 The browser SHALL present the project's own forms, modules and classes, the runtime control library, the
 built-in language functions, and the types in any referenced library, and SHALL allow narrowing to one
-library at a time.
+library at a time. The library dropdown SHALL keep `<All Libraries>` first, followed by every library,
+including the focused project's own library, in case-insensitive alphabetical order. Reordering SHALL
+preserve the selected library. This order was measured in VB6 SP6 in [#4113](https://github.com/hexide-io/HexIDE/issues/4113).
 
 The value is in the union. A developer asking "what can I call here" does not care which of those four
 sources answers, and a browser covering only the project's own code would answer the easy question while
@@ -45,9 +63,91 @@ rather than its default instance-name prefix, for listing, search, member headin
 - **THEN** the browser SHALL update the project library and its sorted class list, respecting the current filter
 - **AND** removed classes SHALL no longer be reachable through navigation history
 
+The browser SHALL retry loading an unloaded VBA library showing a status row when a language server
+becomes ready, without requiring the developer to reselect a library.
+
+#### Scenario: A server starts after the browser opens
+- **GIVEN** the VBA library shows a status row because no capable server was running
+- **WHEN** a server offering built-in symbols becomes ready
+- **THEN** the VBA library loads those symbols automatically
+- **AND** they appear under VBA or All Libraries without changing the selected library
+
+### Requirement: Component libraries SHALL be browsable on every desktop platform
+The browser SHALL list in-box component libraries from project lines and form headers, once per project
+alongside matching references, using each library's own name and existing alphabetical ordering. It SHALL
+follow component, form and project removals. Loading SHALL use the type-library service, falling back to
+the library's declared class names (including its control catalogue), each once, and existing component or
+library-class member tables. Fallback properties SHALL use their code names and omit designer-only rows. Component lookup SHALL use
+the runtime's shared catalogue of modelled in-box controls, including those outside the toolbox.
+A class with no member list SHALL remain listed and show a localized message
+in its members pane explaining that its type library is required. Both paths SHALL label HexIDE-only
+members with the localized origin description. A library with neither type metadata nor declared classes
+SHALL show a localized, parenthesized type-metadata-unavailable placeholder in its class list.
+
+Third-party component libraries named on project lines or in form headers SHALL also be listed, once per
+project, and loaded by GUID and version through the same service. Each SHALL use its type library's
+metadata name, or its OCX file name without the extension and a metadata-unavailable entry when the
+metadata can't be read (#4037).
+
+#### Scenario: A third-party component with readable metadata
+- **WHEN** a project names a third-party library only as a component
+- **THEN** its type-library name, classes and members are available through the shared service
+- **AND** loading requires no file path
+
+#### Scenario: A third-party component without readable metadata
+- **WHEN** a component's library is unregistered or the platform cannot read its metadata
+- **THEN** it remains listed under its OCX file name without its extension, with a metadata-unavailable entry
+
+#### Scenario: A component-only library without a registered OCX
+- **GIVEN** the project names MSCOMCTL.OCX only on an `Object=` line
+- **WHEN** its type-library metadata is unavailable
+- **THEN** MSComctlLib is selectable, with ProgressBar and its Increment member
+- **AND** Increment is described as HexIDE's own extension
+- **AND** TreeView, TabStrip, Toolbar, Node and ListItem are listed as classes (#4029)
+- **AND** TreeView supplies its component properties and events
+- **AND** its Name property is listed as `Name`, with no parenthesized designer rows
+
+#### Scenario: A declared class has no member list
+- **WHEN** a library's type metadata is unavailable and a declared class has no existing member list
+- **THEN** selecting that class shows one localized line explaining that its type library is required
+- **AND** the browser invents no members
+
+#### Scenario: A reference library has no available classes
+- **WHEN** a reference library has neither type metadata nor declared classes
+- **THEN** its class list contains one localized type-metadata-unavailable placeholder (#4100)
+- **AND** the placeholder retains its parentheses
+
+#### Scenario: Type metadata is available
+- **WHEN** a component library's type metadata can be read
+- **THEN** the shared type-library service supplies its classes and members
+- **AND** HexIDE-only members are added with their localized origin description
+
+#### Scenario: Both reference kinds name a library
+- **WHEN** a project names the same in-box library on `Reference=` and `Object=` lines
+- **THEN** the browser lists it once for that project, using the reference entry
+- **AND** it follows the measured VB6 order: `<All Libraries>` first, then all libraries, including the project, alphabetically ignoring case ([#4113](https://github.com/hexide-io/HexIDE/issues/4113))
+
+#### Scenario: A form brings a component library
+- **WHEN** a form declaring an in-box library in its header is added
+- **THEN** that library is listed
+- **AND** deleting the form removes it if no remaining project reference or form names it
+
+### Requirement: Browser rows SHALL show themed kind icons
+The classes, members and workspace search results SHALL show cached images from the icon factory,
+using the keyed Fluent geometries and active theme ink. Forms, modules, class modules and enums SHALL
+have class-kind icons; methods, properties, events, constants and enum members SHALL have member-kind
+icons, with a generic icon for unknown kinds. The description and copied signature SHALL contain the
+member signature without an icon prefix.
+
+#### Scenario: Browsing or searching for a property
+- **WHEN** a property appears in the members list or workspace search results
+- **THEN** both lists use the same themed property image beside its name
+- **AND** selecting and copying its signature produces only the signature text
+
 ### Requirement: Selecting a type SHALL show its members, and selecting a member SHALL describe it
 Selecting a type SHALL list its members; selecting a member SHALL show its signature and what it belongs to,
-along with any description available for it.
+along with any description available for it. The owning-type label SHALL be localized, with the library
+and class names substituted into the selected language’s format.
 
 The two-step shape is the whole interaction: narrow to a type, scan its members, read one. The description
 is what makes the last step worth taking — a member name alone rarely answers the question, and the
@@ -72,6 +172,12 @@ a mistake somewhere else. The failure is silent and it points away from the real
 #### Scenario: A procedure added after the type was last viewed
 - **WHEN** a procedure is added to a type and that type is selected in the browser
 - **THEN** the new procedure appears in the member list
+
+#### Scenario: A project module has no server symbols
+- **WHEN** the selected project module's server returns no symbols, or no server is running
+- **THEN** the browser SHALL list declarations from that module's loaded text using the same VB-family collector as Add Watch (#4401)
+- **AND** collected declarations SHALL use the existing symbol-to-member mapping and whole-file navigation coordinates
+- **AND** a nonempty server answer SHALL remain authoritative
 
 ### Requirement: Double-clicking a member in the project SHALL open it at its definition
 Double-clicking a member belonging to the project SHALL open its containing document and position the caret
@@ -202,3 +308,17 @@ browsing a library cannot register it. This intentionally avoids VB6's unsafe re
 #### Scenario: A reference names a local file
 - **WHEN** a reference names an existing fully qualified local file accepted by the shared check
 - **THEN** the browser reads its types without registering the library
+
+### Requirement: Live localization of browser status text
+
+The browser SHALL refresh cached localized status entries, the VBA globals class name and HexIDE
+extension descriptions when the IDE language changes, on the UI thread, preserving the selected
+library and class. It SHALL clear or re-resolve the last search status without rerunning the search.
+
+#### Scenario: Switch language with a cached library selected
+- **GIVEN** a loaded reference library or VBA library with localized status text
+- **WHEN** the developer switches the IDE language
+- **THEN** every keyed status entry and extension description shows the new language immediately
+- **AND** the VBA globals name and members header use the new language
+- **AND** the selected library and class remain selected
+- **AND** the search status is cleared or translated without another search

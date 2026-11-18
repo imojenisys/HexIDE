@@ -10,6 +10,39 @@ namespace HexIDE.VbLspServer;
 
 internal static class LspRequestHandlers
 {
+    public static JsonDocument InlayHint(DocumentStore store, JsonElement p)
+    {
+        if (!TryUri(p, out var uri) || !store.InlayHints.TryGetValue(uri, out var hints)
+            || !p.TryGetProperty("range", out var range)) return LspJson.EmptyArray();
+        var start = range.GetProperty("start");
+        var end = range.GetProperty("end");
+        var startLine = start.GetProperty("line").GetInt32();
+        var startCharacter = start.GetProperty("character").GetInt32();
+        var endLine = end.GetProperty("line").GetInt32();
+        var endCharacter = end.GetProperty("character").GetInt32();
+        return LspJson.Doc(w =>
+        {
+            w.WriteStartArray();
+            foreach (var hint in hints)
+            {
+                var pos = hint.Position;
+                if (pos.Line < startLine || pos.Line > endLine
+                    || (pos.Line == startLine && pos.Character < startCharacter)
+                    || (pos.Line == endLine && pos.Character > endCharacter)) continue;
+                w.WriteStartObject();
+                w.WritePropertyName("position");
+                w.WriteStartObject();
+                w.WriteNumber("line", pos.Line);
+                w.WriteNumber("character", pos.Character);
+                w.WriteEndObject();
+                w.WriteString("label", hint.Label);
+                w.WriteBoolean("paddingLeft", true);
+                w.WriteEndObject();
+            }
+            w.WriteEndArray();
+        });
+    }
+
     // ── textDocument/hover → MarkupContent (plaintext) or null ──────────────────────────────────
     public static JsonDocument Hover(DocumentStore store, JsonElement p)
     {
@@ -98,7 +131,11 @@ internal static class LspRequestHandlers
     public static JsonDocument Completion(DocumentStore store, JsonElement p)
     {
         List<LspCompletionItem> items;
-        if (TryUri(p, out var uri) && store.DeclaredTypes.TryGetValue(uri, out var declaredTypes))
+        if (TryUriPos(p, out var uri, out var line, out var ch)
+            && store.Source.TryGetValue(uri, out var source)
+            && !HexIDE.Language.VbFreeText.ContainsPosition(source, line, ch)
+            && !IsCompletionAfterDot(source, line, ch)
+            && store.DeclaredTypes.TryGetValue(uri, out var declaredTypes))
         {
             items = new List<LspCompletionItem>(VbKeywords.All.Length + declaredTypes.Count);
             var labels = new HashSet<string>(declaredTypes.Keys, StringComparer.OrdinalIgnoreCase);
@@ -131,6 +168,22 @@ internal static class LspRequestHandlers
             w.WriteEndArray();
             w.WriteEndObject();
         });
+    }
+
+    private static bool IsCompletionAfterDot(string source, int line, int character)
+    {
+        var lineStart = 0;
+        for (var currentLine = 0; currentLine < line; currentLine++)
+        {
+            var (end, next) = VbTextHelpers.LineEnd(source, lineStart);
+            if (end == next) return false;
+            lineStart = next;
+        }
+        var lineEnd = VbTextHelpers.LineEnd(source, lineStart).End;
+        var wordStart = lineStart + Math.Clamp(character, 0, lineEnd - lineStart);
+        while (wordStart > lineStart && VbTextHelpers.IsIdentifierChar(source[wordStart - 1]))
+            wordStart--;
+        return wordStart > lineStart && source[wordStart - 1] == '.';
     }
 
     // ── textDocument/signatureHelp → SignatureHelp or null ──────────────────────────────────────

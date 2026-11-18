@@ -126,7 +126,7 @@ public class MouseEventTests
         }
     }
 
-    private static Running Start(string frm, string code, HexIDE.Runtime.Debugging.IDebugController? debugger = null)
+    private static Running Start(string frm, string code, HexIDE.Runtime.Debugging.IDebugGate? debugger = null)
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var form = new FormDeserializer().Deserialize(project, frm + code, new NullSink())!;
@@ -535,12 +535,25 @@ public class MouseEventTests
     }
 
     [AvaloniaTheory]
-    [InlineData(15L)]
-    [InlineData(-1L)]
-    public async Task Automation_click_double_runs_the_forms_DblClick_once_in_the_measured_order(long timeSliceMs)
+    [InlineData(15L, false)]
+    [InlineData(-1L, false)]
+    [InlineData(15L, true)]
+    [InlineData(-1L, true)]
+    public async Task Automation_click_double_runs_the_forms_DblClick_once_in_the_measured_order(long timeSliceMs, bool slow)
     {
         // Real-input oracle #2417: arrival, then a move after the first release, none after the second.
         using var run = Start(Form(Twips, Controls), Handlers("Form", dblClick: true), Debugger(timeSliceMs));
+        // #3167: handler time must not decide whether automation sends a double click.
+        if (slow)
+        {
+            var releases = 0;
+            run.Window.AddHandler(InputElement.PointerReleasedEvent, (_, _) =>
+            {
+                if (++releases == 1)
+                    Thread.Sleep(Application.Current!.PlatformSettings!.GetDoubleTapTime(PointerType.Mouse)
+                        + System.TimeSpan.FromMilliseconds(50));
+            }, Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+        }
         var outcome = await AutomationClick(run, "300,10 double");
         outcome.Success.Should().BeTrue(outcome.Error);
         outcome.Detail.Should().Contain("double-clicked").And.Contain("left button").And.Contain("(300, 10)");
@@ -1033,16 +1046,19 @@ public class MouseEventTests
     }
 
     [AvaloniaFact]
-    public void A_ScaleMode_HexIDE_cannot_convert_refuses_the_forms_event_as_the_runs_error()
+    public void A_centimetre_forms_event_uses_the_measured_runtime_conversion()
     {
-        // A centimetre form's X is unexplained (#990): refused when the event runs, reported as the run's error, never
-        // thrown out of the input handler.
-        using var run = Start(Form("   ScaleMode       =   7  'Centimeter\r\n", Controls), Handlers("Form", click: false));
+        // #990 final factor decision. Drive the real pointer route; compare with the program's ScaleX/ScaleY conversion.
+        var code = Handlers("Form", click: false).Replace("Debug.Print \"Form MouseDown ",
+            "Debug.Print CStr(Me.ScaleX(300, vbPixels, vbCentimeters)) & \" \" & CStr(Me.ScaleY(10, vbPixels, vbCentimeters))\r\n    Debug.Print \"Form MouseDown ");
+        using var run = Start(Form("   ScaleMode       =   7  'Centimeter\r\n", Controls), code);
+        run.Window.SetRenderScaling(1.5);
 
         run.Click(new Point(300, 10));
 
-        run.Errors.Should().NotBeEmpty();
-        run.Errors[0].Should().BeOfType<System.NotImplementedException>().Which.Message.Should().Contain("#990");
-        run.Printed.Should().BeEmpty();
+        run.Errors.Should().BeEmpty();
+        run.Printed.Should().HaveCount(4);
+        run.Printed.Skip(1).Should().Equal("Form MouseDown 1 0 " + run.Printed[0], "Form MouseUp 1 0 " + run.Printed[0],
+            "Form MouseMove 0 0 " + run.Printed[0]);
     }
 }

@@ -7,10 +7,12 @@ using Avalonia.Automation;
 using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
+using Avalonia.Controls.Primitives;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Styling;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -96,6 +98,105 @@ public class UiAutomationDriverTests
                 UiAutomationDriver.Find(tree, "Tools", 100).Matches.Should().Contain(n => n.Path == node.Path);
             else
                 UiAutomationDriver.Interact(tools, "expand", null).Detail.Should().Contain("'Tools'");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Runtime_menu_bar_is_listed_only_when_the_form_declares_menus(bool hasMenus, bool interactiveOnly)
+    {
+        var menu = hasMenus ? "Begin VB.Menu Menu1\nCaption = \"Menu\"\nEnd" : "";
+        var (root, _, _, _) = Views.ContainerRuntimeHarness.Spawn(
+            "VERSION 5.00\nBegin VB.Form Form1\n" + menu + "\nEnd");
+        var window = new HexIDE.Runtime.VBFormRuntime { Content = root, Width = 320, Height = 240 };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var nodes = Flatten(UiAutomationDriver.Dump(window, "Window", 20, interactiveOnly));
+            nodes.Any(n => n.ClassName == "Menu").Should().Be(hasMenus);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Offscreen_accounts_for_window_client_area()
+    {
+        var target = new Button { Name = "OutsideWindow", Width = 40, Height = 40 };
+        Canvas.SetLeft(target, 300);
+        var window = new Window
+        {
+            Content = new Canvas { Children = { target } }, Width = 200, Height = 150
+        };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            UiAutomationDriver.Inspect(target, "target").IsOffscreen.Should().BeTrue();
+            Flatten(UiAutomationDriver.Dump(window, "Window", 10, false))
+                .Single(n => n.Name == target.Name).IsOffscreen.Should().BeTrue();
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, 1)]
+    [InlineData(true, 1.5)]
+    public void Offscreen_accounts_for_scroll_viewports(bool nested, double scaling)
+    {
+        var target = new Button { Name = "ScrollTarget", Width = 80, Height = 40 };
+        var canvas = new Canvas { Width = 600, Height = 600, Children = { target } };
+        Canvas.SetTop(target, 240);
+        var inner = new ScrollViewer
+        {
+            Content = canvas, Width = 180, Height = 120,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto
+        };
+        Control content = inner;
+        if (nested)
+            content = new ScrollViewer { Content = new StackPanel { Children = { inner } }, Height = 80 };
+        var window = new Window { Content = content, Width = 400, Height = 400 };
+        window.SetRenderScaling(scaling);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            void Check(bool offscreen)
+            {
+                UiAutomationDriver.Inspect(target, "target").IsOffscreen.Should().Be(offscreen);
+                Flatten(UiAutomationDriver.Dump(window, "Window", 30, false))
+                    .Single(n => n.Name == target.Name).IsOffscreen.Should().Be(offscreen);
+            }
+
+            Check(true);
+            if (nested)
+            {
+                Canvas.SetTop(target, 330);
+                inner.Offset = new Vector(0, 240);
+                window.UpdateLayout();
+                Check(true); // In the inner viewport, but below the outer viewport.
+                Canvas.SetTop(target, 240);
+            }
+            inner.Offset = new Vector(0, 220);
+            window.UpdateLayout();
+            Check(false);
+            inner.Offset = new Vector(0, 270);
+            window.UpdateLayout();
+            Check(false); // The last ten pixels still intersect the viewport.
+            inner.Offset = new Vector(0, 300);
+            window.UpdateLayout();
+            Check(true);
+            Canvas.SetLeft(target, 240);
+            inner.Offset = new Vector(0, 220);
+            window.UpdateLayout();
+            Check(true);
+            inner.Offset = new Vector(220, 220);
+            window.UpdateLayout();
+            Check(false);
         }
         finally { window.Close(); }
     }
@@ -792,6 +893,131 @@ public class UiAutomationDriverTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTheory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    public void Dump_DataBoundText_PathSurvivesValueChange(int index)
+    {
+        var vm = new TextPathVm();
+        var view = new BoundTextPathView { DataContext = vm };
+        var text = ((StackPanel)view.Content!).Children[index];
+        var window = new Window { Content = view, Width = 300, Height = 240 };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            (BindingOperations.GetBindingExpressionBase(text, TextBlock.TextProperty)?.GetType().FullName).Should().Be(
+                index == 6 ? "Avalonia.Data.Core.MultiBindingExpression" : "Avalonia.Data.Core.BindingExpression");
+            var node = Flatten(UiAutomationDriver.Dump(window, "Window", 20, false))
+                .Single(n => n.Name == ((TextBlock)text).Text);
+            node.Path.Should().EndWith($"/Text[#{index}]");
+            node.Name.Should().Be(((TextBlock)text).Text);
+            vm.Tick();
+            Dispatcher.UIThread.RunJobs();
+            UiAutomationDriver.Resolve(window, node.Path).control.Should().BeSameAs(text);
+            ((TextBlock)text).Text.Should().Contain("32");
+            Flatten(UiAutomationDriver.Dump(window, "Window", 20, false))
+                .Single(n => n.Name == ((TextBlock)text).Text).Path.Should().Be(node.Path);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Dump_ResourceAndLiteralText_KeepLabelsBesideDataBinding()
+    {
+        var view = new BoundTextPathView { DataContext = new TextPathVm() };
+        var window = new Window { Content = view, Width = 300, Height = 240 };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var nodes = Flatten(UiAutomationDriver.Dump(window, "Window", 20, false)).ToList();
+            foreach (var text in view.GetVisualDescendants().OfType<TextBlock>()
+                         .Where(t => t.Text is "Literal" or "Transport" or "Static" or "Template"))
+                (BindingOperations.GetBindingExpressionBase(text, TextBlock.TextProperty)?.GetType().FullName).Should().Be(
+                    text.Text switch
+                    {
+                        "Transport" => "Avalonia.Markup.Xaml.MarkupExtensions.DynamicResourceExpression",
+                        "Template" => "Avalonia.Data.TemplateBindingExpression",
+                        _ => null,
+                    });
+            foreach (var label in new[] { "Literal", "Transport", "Static", "Template" })
+                nodes.Single(n => n.ControlType == "Text" && n.Name == label).Path.Should().EndWith($"/Text[{label}]");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Resolve_DataBoundText_CurrentLabelStillResolves()
+    {
+        var text = new TextBlock();
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(TextPathVm.Caption)) { Source = new TextPathVm() });
+        var window = new Window { Content = text, Width = 300, Height = 120 };
+        window.Show();
+        try
+        {
+            UiAutomationDriver.Resolve(window, "Window/Text[for 1 m 31 s]").control.Should().BeSameAs(text);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(null, null, "Text")]
+    [InlineData("TextName", null, "Text[TextName]")]
+    [InlineData("TextName", "TextId", "Text[TextId]")]
+    public void Dump_DataBoundText_PrefersIdentityThenBareType(string? name, string? id, string segment)
+    {
+        var text = new TextBlock { Name = name };
+        AutomationProperties.SetAutomationId(text, id);
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(TextPathVm.Caption)) { Source = new TextPathVm() });
+        var window = new Window { Content = text, Width = 300, Height = 120 };
+        window.Show();
+        try
+        {
+            Flatten(UiAutomationDriver.Dump(window, "Window", 20, false))
+                .Single(n => n.ControlType == "Text").Path.Should().Be($"Window/{segment}");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Resolve_DataBoundText_StaleLabelExplainsPositionalAddress()
+    {
+        var text = new TextBlock();
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(TextPathVm.Caption)) { Source = new TextPathVm() });
+        var window = new Window { Content = text, Width = 300, Height = 120 };
+        window.Show();
+        try
+        {
+            var (control, error) = UiAutomationDriver.Resolve(window, "Window/Text[for 1 m 30 s]");
+            control.Should().BeNull();
+            error.Should().Contain("no child matching").And.Contain(
+                "Data-bound text changes, so it is addressed by position; run dump_visual_tree again with interactiveOnly: false for its current path.");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Window/Button[Missing]")]
+    [InlineData("Window/#Missing")]
+    [InlineData("Window/Text[#2]")]
+    public void Resolve_DataBoundText_UnrelatedMissDoesNotSuggestTextChanged(string path)
+    {
+        var text = new TextBlock();
+        text.Bind(TextBlock.TextProperty, new Binding(nameof(TextPathVm.Caption)) { Source = new TextPathVm() });
+        var window = new Window { Content = text, Width = 300, Height = 120 };
+        window.Show();
+        try
+        {
+            var (control, error) = UiAutomationDriver.Resolve(window, path);
+            control.Should().BeNull();
+            error.Should().NotBeNull().And.NotContain("Data-bound text");
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public void Dump_NameCollidesWithSiblingAutomationId_PathsStillRoundTripDistinctly()
     {
@@ -834,6 +1060,125 @@ public class UiAutomationDriverTests
             var (resolved, error) = UiAutomationDriver.Resolve(window, "Window/#MyAnchor");
             error.Should().BeNull();
             resolved.Should().BeSameAs(tagged);
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Dump_ExplicitNameKeepsTypelessBorder_AndItsPathInspectsIt(bool interactiveOnly)
+    {
+        var border = new Border { Child = interactiveOnly ? new Button { Content = "Child" } : null };
+        AutomationProperties.SetName(border, "imlIcons");
+        var window = Show(new Border { Child = border });
+        try
+        {
+            var tree = UiAutomationDriver.Dump(window, "Window", 20, interactiveOnly);
+            var node = UiAutomationDriver.Find(tree, "imlIcons", 10).Matches.Should().ContainSingle().Which;
+            node.ControlType.Should().Be("None");
+            node.Providers.Should().BeEmpty();
+            var (resolved, error) = UiAutomationDriver.Resolve(window, node.Path);
+            error.Should().BeNull();
+            resolved.Should().BeSameAs(border);
+            UiAutomationDriver.Inspect(resolved!, node.Path).Name.Should().Be("imlIcons");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Dump_UnnamedTypelessBorder_StillFoldsAway()
+    {
+        var border = new Border { Child = new Button { Content = "Child" } };
+        var window = Show(border);
+        try
+        {
+            var nodes = Flatten(UiAutomationDriver.Dump(window, "Window", 20, false)).ToList();
+            nodes.Should().NotContain(n => n.ClassName == "Border");
+            nodes.Should().Contain(n => n.Path == "Window/Button[Child]");
+        }
+        finally { window.Close(); }
+    }
+
+    // Dock's theme sets every dock control's Name from a style setter bound to the dock's Title, which HexIDE
+    // leaves null. A theme's name is not the view's own, so it must not insert a segment into every dock path,
+    // whatever the title says (#4046).
+    [AvaloniaTheory]
+    [InlineData(null)]
+    [InlineData("Tools")]
+    public void Dump_NameFromAStyleSetter_StillFoldsAway(string? title)
+    {
+        var border = new Border { Classes = { "dock" }, Child = new Button { Content = "Child" } };
+        var window = Show(border);
+        try
+        {
+            window.Styles.Add(new Style(x => x.OfType<Border>().Class("dock"))
+            {
+                Setters = { new Setter(AutomationProperties.NameProperty, title) },
+            });
+            Dispatcher.UIThread.RunJobs();
+            border.IsSet(AutomationProperties.NameProperty).Should().BeTrue();
+            var nodes = Flatten(UiAutomationDriver.Dump(window, "Window", 20, false)).ToList();
+            nodes.Should().NotContain(n => n.ClassName == "Border");
+            nodes.Should().Contain(n => n.Path == "Window/Button[Child]");
+        }
+        finally { window.Close(); }
+    }
+
+    // Markup inside a DataTemplate sets its values at Template priority, so a name given there is the view's own.
+    [AvaloniaFact]
+    public void Dump_NameSetAtTemplatePriority_KeepsTypelessBorder()
+    {
+        var border = new Border { Child = new Button { Content = "Child" } };
+        border.SetValue(AutomationProperties.NameProperty, "Foreground", BindingPriority.Template);
+        var window = Show(border);
+        try
+        {
+            var node = UiAutomationDriver.Find(UiAutomationDriver.Dump(window, "Window", 20, false), "Foreground", 10)
+                .Matches.Should().ContainSingle().Which;
+            node.ControlType.Should().Be("None");
+            node.Path.Should().Be("Window/None[Foreground]");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Dump_EmptyOwnName_StillFoldsAway()
+    {
+        var border = new Border { Child = new Button { Content = "Child" } };
+        AutomationProperties.SetName(border, "");
+        var window = Show(border);
+        try
+        {
+            var nodes = Flatten(UiAutomationDriver.Dump(window, "Window", 20, false)).ToList();
+            nodes.Should().NotContain(n => n.ClassName == "Border");
+            nodes.Should().Contain(n => n.Path == "Window/Button[Child]");
+        }
+        finally { window.Close(); }
+    }
+
+    private sealed class ContentNamedWrapper : ContentControl
+    {
+        protected override AutomationPeer OnCreateAutomationPeer() => new ContentNamedPeer(this);
+
+        private sealed class ContentNamedPeer(ContentNamedWrapper owner) : ControlAutomationPeer(owner)
+        {
+            protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.None;
+            protected override string GetNameCore() => owner.Content?.ToString() ?? "";
+        }
+    }
+
+    [AvaloniaFact]
+    public void Dump_NameDerivedOnlyFromContent_StillFoldsAway()
+    {
+        var wrapper = new ContentNamedWrapper { Content = "Derived label" };
+        var window = Show(wrapper);
+        try
+        {
+            wrapper.IsSet(AutomationProperties.NameProperty).Should().BeFalse();
+            ControlAutomationPeer.CreatePeerForElement(wrapper)!.GetName().Should().Be("Derived label");
+            Flatten(UiAutomationDriver.Dump(window, "Window", 20, false))
+                .Should().NotContain(n => n.ClassName == nameof(ContentNamedWrapper));
         }
         finally { window.Close(); }
     }
@@ -1182,6 +1527,30 @@ public class UiAutomationDriverTests
     }
 
     [AvaloniaFact]
+    public void Inspect_TreeNode_ReportsExpandCollapseState()
+    {
+        var (window, tree, environment, _) = BuildCollapsibleTreeWindow();
+        try
+        {
+            var node = ContainerOf(tree, environment);
+            var closed = UiAutomationDriver.Inspect(node, "node");
+            closed.Providers.Should().Contain("expandCollapse");
+            closed.ExpandCollapseState.Should().Be("Collapsed");
+
+            UiAutomationDriver.Interact(node, "expand", null).Success.Should().BeTrue();
+            UiAutomationDriver.Inspect(node, "node").ExpandCollapseState.Should().Be("Expanded");
+
+            UiAutomationDriver.Interact(node, "collapse", null).Success.Should().BeTrue();
+            UiAutomationDriver.Inspect(node, "node").ExpandCollapseState.Should().Be("Collapsed");
+            node.IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            UiAutomationDriver.Inspect(ContainerOf(tree, environment.Children[1]), "leaf")
+                .ExpandCollapseState.Should().Be("LeafNode");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
     public void DescribeProviders_TreeNode_AdvertisesExpandCollapse_OnlyWhereItHasChildren()
     {
         var (window, tree, environment, _) = BuildCollapsibleTreeWindow();
@@ -1196,6 +1565,44 @@ public class UiAutomationDriverTests
             var leaf = ContainerOf(tree, environment.Children[1]);
             UiAutomationDriver.DescribeProviders(ControlAutomationPeer.CreatePeerForElement(leaf), leaf)
                 .Should().NotContain("expandCollapse", "a leaf has nothing to expand, and would refuse");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Interact_Expand_LeafNode_RefusesClearly()
+    {
+        var (window, tree, environment, _) = BuildCollapsibleTreeWindow();
+        try
+        {
+            ContainerOf(tree, environment).IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            var leaf = ContainerOf(tree, environment.Children[1]);
+
+            var result = UiAutomationDriver.Interact(leaf, "expand", null);
+
+            result.Success.Should().BeFalse();
+            result.Error.Should().Contain("nothing to show");
+            UiAutomationDriver.Inspect(leaf, "leaf").ExpandCollapseState.Should().Be("LeafNode");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public void Interact_Collapse_LeafNode_RefusesClearly()
+    {
+        var (window, tree, environment, _) = BuildCollapsibleTreeWindow();
+        try
+        {
+            ContainerOf(tree, environment).IsExpanded = true;
+            Dispatcher.UIThread.RunJobs();
+            var leaf = ContainerOf(tree, environment.Children[1]);
+
+            // Avalonia 12.1.5's native leaf provider throws on Collapse; the reply must say why, not relay the throw.
+            var result = UiAutomationDriver.Interact(leaf, "collapse", null);
+
+            result.Success.Should().BeFalse();
+            result.Error.Should().Contain("nothing to collapse").And.NotContain("threw");
         }
         finally { window.Close(); }
     }
@@ -1527,6 +1934,89 @@ public class UiAutomationDriverTests
         finally { window.Close(); }
     }
 
+    private sealed record ComboLanguage(string Id, string DisplayName);
+
+    [AvaloniaTheory]
+    [InlineData("set_value")]
+    [InlineData("select")]
+    public void TemplatedCombo_SelectsShownText(string action)
+    {
+        var german = new ComboLanguage("de", "German");
+        var combo = new ComboBox
+        {
+            ItemsSource = new[] { new ComboLanguage("en", "English"), german },
+            ItemTemplate = new FuncDataTemplate<ComboLanguage>((item, _) => new StackPanel
+            {
+                Children = { new TextBlock { Text = item!.DisplayName }, new TextBlock { Text = item.Id, IsVisible = false } },
+            }),
+            SelectedIndex = 0,
+        };
+        var window = Show(combo);
+        try
+        {
+            if (action == "select")
+                UiAutomationDriver.Interact(combo, "expand", null).Success.Should().BeTrue();
+            var outcome = UiAutomationDriver.Interact(combo, action, "german");
+            outcome.Success.Should().BeTrue(outcome.Error);
+            combo.SelectedItem.Should().BeSameAs(german);
+            outcome.Detail.Should().Contain("'German'");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("miss")]
+    [InlineData("path")]
+    [InlineData("fallback")]
+    public void TemplatedCombo_NamesShownTextAndKeepsRecordFallback(string surface)
+    {
+        var german = new ComboLanguage("de", "German");
+        var combo = new ComboBox
+        {
+            ItemsSource = new[] { new ComboLanguage("en", "English"), german },
+            ItemTemplate = new FuncDataTemplate<ComboLanguage>((item, _) => new StackPanel
+            {
+                Children = { new TextBlock { Text = item!.DisplayName }, new TextBlock { Text = item.Id, IsVisible = false } },
+            }),
+            SelectedIndex = 0,
+        };
+        var window = Show(combo);
+        try
+        {
+            if (surface == "miss")
+            {
+                var outcome = UiAutomationDriver.Interact(combo, "set_value", "missing");
+                outcome.Success.Should().BeFalse();
+                outcome.Error.Should().Contain("'English', 'German'").And.NotContain("ComboLanguage {");
+                combo.SelectedIndex.Should().Be(0);
+            }
+            else if (surface == "fallback")
+            {
+                UiAutomationDriver.Interact(combo, "expand", null).Success.Should().BeTrue();
+                var outcome = UiAutomationDriver.Interact(combo, "select", german.ToString());
+                outcome.Success.Should().BeTrue(outcome.Error);
+                combo.SelectedItem.Should().BeSameAs(german);
+                outcome.Detail.Should().Contain("'German'");
+            }
+            else
+            {
+                UiAutomationDriver.Interact(combo, "expand", null).Success.Should().BeTrue();
+                var dump = UiAutomationDriver.Dump(window, "Window", 20, false);
+                var nodes = UiAutomationDriver.Find(dump, "German", 20).Matches
+                    .Where(n => n.ControlType == "ComboBoxItem" && n.Name == "German").ToList();
+                nodes.Should().NotBeEmpty();
+                foreach (var node in nodes)
+                {
+                    node.Path.Should().Contain("ComboBoxItem[German]");
+                    var resolved = UiAutomationDriver.Resolve(window, node.Path);
+                    resolved.error.Should().BeNull();
+                    resolved.control.Should().BeSameAs(combo.ContainerFromIndex(1));
+                }
+            }
+        }
+        finally { window.Close(); }
+    }
+
     [AvaloniaFact]
     public void ReadOnlyValue_ComboMatch_SelectsAndReports()
     {
@@ -1725,6 +2215,55 @@ public class UiAutomationDriverTests
             combo.SelectedItem.Should().Be("B");
             combo.IsDropDownOpen.Should().BeFalse();
             outcome.Detail.Should().EndWith("and closed the dropdown, as a click does");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("B", true)]
+    [InlineData("Missing", false)]
+    public void Interact_Select_OnAClosedDropDown_OpensAndRestoresIt(string value, bool found)
+    {
+        var combo = new ComboBox { ItemsSource = new[] { "A", "B" }, SelectedIndex = 0 };
+        var window = Show(combo);
+        try
+        {
+            var outcome = UiAutomationDriver.Interact(combo, "select", value);
+
+            outcome.Success.Should().Be(found);
+            combo.IsDropDownOpen.Should().BeFalse();
+            combo.SelectedIndex.Should().Be(found ? 1 : 0);
+            if (found)
+                outcome.Detail.Should().Be("opened the list, selected 'B' and closed the dropdown, as a click does");
+            else
+                outcome.Error.Should().Contain("no selectable item matching 'Missing'")
+                    .And.Contain("available items: 'A', 'B'");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Interact_Select_RefusesAnUnavailableComboBeforeOpening(bool disabled)
+    {
+        var combo = new ComboBox
+        {
+            ItemsSource = new[] { "A", "B" }, IsEnabled = !disabled, IsVisible = disabled
+        };
+        var window = Show(combo);
+        try
+        {
+            var opened = false;
+            combo.DropDownOpened += (_, _) => opened = true;
+
+            var outcome = UiAutomationDriver.Interact(combo, "select", "B");
+
+            outcome.Success.Should().BeFalse();
+            outcome.Error.Should().Contain(disabled ? "disabled" : "not showing");
+            opened.Should().BeFalse();
+            combo.IsDropDownOpen.Should().BeFalse();
+            combo.SelectedIndex.Should().Be(-1);
         }
         finally { window.Close(); }
     }
@@ -1994,6 +2533,34 @@ public class UiAutomationDriverTests
             UiAutomationDriver.TypeText(box, "hello").Success.Should().BeTrue();
             UiAutomationDriver.TypeText(box, " world").Success.Should().BeTrue();
             box.Text.Should().Be("hello world");
+        }
+        finally { window.Close(); }
+    }
+
+    // #2737: a live, focused box drew the previous text after a write, though it held the new one. The write is now
+    // committed as TextBox's own text input commits a key, so its presenter holds the text and the caret at once. The
+    // stale drawing itself showed only in a real window; this pins the order's other effects.
+    [AvaloniaFact]
+    public void TypeText_IntoTextBox_OverASelection_IsOneChange_WithThePresenterInStep()
+    {
+        var box = new TextBox { Text = "find this" };
+        var window = Show(box);
+        try
+        {
+            box.Focus();
+            box.SelectionStart = 5;
+            box.SelectionEnd = 9;
+            var changes = 0;
+            // TextChanging is raised as the text changes; TextChanged is posted for after it is drawn.
+            box.TextChanging += (_, _) => changes++;
+
+            UiAutomationDriver.TypeText(box, "that").Success.Should().BeTrue();
+
+            box.Text.Should().Be("find that");
+            changes.Should().Be(1, "what is bound to the box sees one change");
+            (box.CaretIndex, box.SelectionStart, box.SelectionEnd).Should().Be((9, 9, 9));
+            var presenter = box.GetVisualDescendants().OfType<Avalonia.Controls.Presenters.TextPresenter>().Single();
+            (presenter.Text, presenter.CaretIndex).Should().Be(("find that", 9));
         }
         finally { window.Close(); }
     }
@@ -2651,7 +3218,7 @@ public class UiAutomationDriverTests
         var value = Member(UiAutomationDriver.ReflectDataContextMembers(vm), "Text").Value;
 
         value!.Length.Should().BeLessThan(9000);
-        value.Should().EndWith("chars]").And.Contain("truncated");
+        value.Should().EndWith("[last 8800 of 9000 chars cut]");
     }
 
     // ── DataGrid rows ────────────────────────────────────────────────────────

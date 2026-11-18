@@ -365,4 +365,179 @@ P-code does not do it, and HexIDE follows p-code.
 **Not changed: On Error GoTo, then `Resume Next` in the handler.** HexIDE resumes after the whole statement at the
 procedure's top level. That is the tree-walk limit for nested-granular `Resume`, recorded in `interpreter-gaps.md`.
 
+### `For Each` collections that vb6.exe refuses to compile (2026-11-06, #3213)
 
+**The question.** #969 made HexIDE run some `For Each` collections under Resume Next by applying the declared-array
+rule above, as "HexIDE, after #839" says, without a new measurement. Those were a parenthesised call, and an element of
+a typed array. Do these forms compile in vb6.exe at all? Asked before a report to RDCore, which refuses them.
+
+**Our own guess, in #969: parentheses unwrap, and an element of a typed array is not an array, so `Next` empties the
+loop variable. It was wrong on all three of those rows.** vb6.exe compiles none of them, and it refuses a literal too.
+
+**The probe.** Each program ran `On Error Resume Next`, then `x = "pre"`, then the loop. Its body counts passes and
+collects `x`, and a line after it logs the passes, the trail, `x` and `Err.Number`. The module declared
+`Dim Items(1) As Long`. `BoomV()` is a Variant Function that raises 11, and `BoomArr()` is a Function `As Long()` that
+raises 11. The `42` program has no handler. Each was built with `/make` as native code and
+as p-code, and the two agreed. Three of the refusals, `(BoomV())`, the typed element and `42`, and the `BoomV()` control
+were also run in the IDE with `/run`, which agreed.
+
+| `For Each x In ...` | vb6.exe |
+|---|---|
+| `(BoomV())` | **Compile error: Syntax error**, on the `For Each` line |
+| `((BoomArr()))` | **Compile error: Syntax error** |
+| `42` | **Compile error: Syntax error**, not run-time 13 |
+| `Items(Boom())`, with `Items(1) As Long` | **Compile error: "For Each may only iterate over a collection object or an array"** |
+| the same, with `x As Long` too | the same message |
+| control: `BoomV()` | builds; `1: [pre]:\|92`, as in the table above |
+| control: `BoomArr()` | builds; `1: [pre]:pre\|92` |
+| control: `Items(Boom())`, with untyped `Items(1)` | builds; `1: [pre]:\|92` |
+| control: `Items(5)`, with untyped `Items(1)` | builds; `1: [pre]:\|92` |
+
+In the IDE, each of those refusals came at Run, as a "Compile error" box.
+
+**Round two: more forms, and the ones #969 extended the rule to.** The program, the logged line and both builds were the
+same. Native code and p-code agreed on every case. Where the collection needed somewhere to live, it was a second
+module, `Module2`, or a class, `Source`.
+
+The forms of the collection:
+
+| `For Each x In ...` | vb6.exe |
+|---|---|
+| `arr`, an untyped `Dim arr(1)` | builds; `2: [] []:\|0` |
+| `(arr)` | **Syntax error** |
+| `BoomV() + 0` | **Syntax error** |
+| `BoomV() & ""` | **Syntax error** |
+| `-BoomV()` | **Syntax error** |
+| `"abc"` | **Syntax error** |
+| `Nothing` | **Syntax error** |
+| `New Collection` | **Syntax error** |
+| `Array(1, 2)` | builds; `2: [1] [2]:\|0` |
+| `Split("a b")` | builds; `2: [a] [b]:\|0` |
+| `MakeArr(2)`, a Function returning `Array(k, k + 1)` | builds; `2: [2] [3]:\|0` |
+| `c!k`, where Collection `c` holds `Array(5, 6)` under the key `k` | builds; `2: [5] [6]:\|0` |
+| `.Item("k")`, inside `With c` | builds; `2: [5] [6]:\|0` |
+| `Module2.Items()`, returning `Array(7, 8)` | builds; `2: [7] [8]:\|0` |
+| `o.Items`, where the class has `Public Items As New Collection` holding `a` and `b` | builds; `2: [a] [b]:\|0` |
+| `Me`, in a method of a class with no enumerator | builds; `1: [pre]:\|92` |
+| `Me.Items`, in the same class with its Collection | builds; `2: [a] [b]:\|0` |
+
+The collection's declared type:
+
+| `For Each x In ...` | vb6.exe |
+|---|---|
+| `s`, declared `As String` | **"For Each may only iterate over a collection object or an array"** |
+| `k`, declared `As Long` | the same |
+| `Boom()`, a `Function ... As Long` | the same |
+| `o.Items()`, with `o` declared `As Source`, early-bound, and `Function Items() As Long` | the same |
+| `o.Items()`, with `o` untyped, late-bound, and the same Function | builds; `1: [pre]:\|92` |
+| `v`, untyped and Empty | builds; `1: [pre]:\|92` |
+| `ob`, declared `As Object` and Nothing | builds; `1: [pre]:\|92` |
+| `al`, declared `Dim al(1) As Long` | builds; `2: [0] [0]:\|0` |
+
+#969's forms, each a collection that raises 11 under Resume Next:
+
+| `For Each x In ...` | vb6.exe |
+|---|---|
+| `Module2.Items()`, a Variant Function | `1: [pre]:\|92` |
+| `Module2.Items()`, a Function `As Long()` | `1: [pre]:pre\|92` |
+| `o.Items()`, late-bound, a Variant Function | `1: [pre]:\|92` |
+| `o.Items()`, late-bound, a Function `As Long()` | **`1: [pre]:\|92`**, so the element is emptied, unlike the module's Function |
+| `o.Items`, late-bound, a Variant `Property Get` | `1: [pre]:\|92` |
+| `o.Items`, late-bound, a `Property Get ... As Long()` | **`1: [pre]:\|92`** |
+| `o.Items()`, early-bound, a Function `As Long()` | `1: [pre]:pre\|92` |
+| `o.Items(Boom())`, a class field `Public Items(1)` or `Public Items() As Long` | **the class doesn't compile**: "Constants, fixed-length strings, arrays, user-defined types and Declare statements not allowed as Public members of object modules" |
+
+**Round three: the literal keywords.** HexIDE's grammars read some literal keywords as names, so these were measured
+on their own. The program and both builds were the same, and native code and p-code agreed.
+
+| `For Each x In ...` | vb6.exe |
+|---|---|
+| `True` | **Syntax error** |
+| `False` | **Syntax error** |
+| `Null` | **Syntax error** |
+| `Empty` | **Syntax error** |
+| control: `vbNullString`, a named String constant | "For Each may only iterate over a collection object or an array" |
+
+`vbNullString` is a name, so it passes the syntax rule and is then refused on its type.
+
+**The rule, from all three rounds.** It holds for every case measured:
+- **What can stand as the collection, syntactically, is a reference.** That is a name; `Me`; a member access, such as
+  `o.Items` or `Module2.Items`; a call or an index, with or without arguments, such as `BoomV()`, `Items(5)` or
+  `Array(1, 2)`; a `!` access; or a `With` member access. The combinations measured are a member call, a module-qualified
+  call and a `With` member call.
+- **Anything else is a Syntax error.** That covers a parenthesised expression, a literal (a number, a string,
+  `Nothing`, `True`, `False`, `Null` or `Empty`), a `New` expression, and any expression with a unary or binary
+  operator.
+- **The declared type is checked when the module compiles.** Where the collection's type is known then, it must be an
+  array, an object or a Variant. Otherwise the error is "For Each may only iterate over a collection object or an
+  array". A late-bound member has no type to know, so it compiles.
+- **Where the collection raises, whether `Next` keeps the element follows that same compile-time type.** A late-bound
+  member counts as a Variant, so the element is emptied, even when the class declares `As Long()`. Early-bound, it is
+  kept.
+
+**Not measured:**
+- deeper chains such as `a.b.c`;
+- a call on a call, such as `F()(0)`;
+- `Me` in a class that has an enumerator.
+
+**In HexIDE,** at the time of measuring:
+- **First round:** the interpreter ran `(BoomV())`, `((BoomArr()))` and the typed element, and raised run-time 13 for
+  `42`. The bundled server reported nothing for any of them.
+- **Round two, from HexIDE's tests:** `ResumeNextIntoABlockTests` pins two things this round contradicts.
+  - It expects a late-bound class `Function` or `Property Get ... As Long()` to keep the element. VB6 empties it.
+  - It runs field elements of classes with `Public Items(1)` and `Public Items() As Long`. VB6 doesn't compile those
+    classes at all.
+
+All of this, and the tests, is #3213.
+
+### What `For Each` leaves in its variable (2026-11-09)
+
+**The probe.** RDCore's #607 made `For Each` empty its variable when the loop runs out. A run of HexIDE's parity corpus then
+showed six programs moving away from HexIDE's expected output, so the forms were measured directly. One Standard EXE per
+row, built with `vb6.exe /make`, as native code (`CompilationType=0`) and as p-code (`CompilationType=-1`), on the Win10
+guest: `VB6.EXE` 6.00.9782 and `MSVBVM60.DLL` 6.00.9848. Not run in the IDE. Native code and p-code agreed on every row
+except the one-line loops in the last table.
+
+**The collection raises 11, under `On Error Resume Next`.** `x` starts as `"pre"`. Every row prints `1: [pre]:...|92`: the
+body runs once with `x` as it was, then `Next` raises 92. The table says what `x` holds afterwards.
+
+| `For Each x In ...` | Declared | `x` afterwards |
+|---|---|---|
+| `o.Items()`, `Dim o`, late-bound, a Function | `As Long()`, `As String()`, `As Variant`, `As Collection`, `As Object`, or untyped | Empty |
+| `o.Items`, `Dim o`, late-bound, a `Property Get` | `As Long()`, or untyped | Empty |
+| `o.Items()`, `Dim o As Source`, early-bound, a Function | `As Long()` | `"pre"` |
+| `o.Items`, `Dim o As Source`, early-bound, a `Property Get` | `As Long()`, `As String()` | `"pre"` |
+| `o.Items()`, `Dim o As Source`, early-bound, a Function | `As Collection`, or untyped | Empty |
+| `Boom()`, a Function in the same module | `As Long()` | `"pre"` |
+| `Boom()`, a Function in the same module | untyped | Empty |
+| `Module2.Items()`, a Function | `As Long()` | `"pre"` |
+| `Module2.Items()`, a Function | untyped | Empty |
+
+So **an array type the compiler can see keeps the variable**, and everything else empties it. Late binding hides the
+array type, as round two of #3213 found for `As Long()`; this adds `As String()`, `As Collection` and `As Object`.
+
+**Nothing raises.** `v` starts as `"unchanged"` and `Err.Number` is 0 afterwards.
+
+| Loop | Written | `v` afterwards |
+|---|---|---|
+| over a Collection of two items | on one line, or on two | Empty |
+| over `Dim a(1) As Long` | on one line, or on two | Empty |
+| over a Variant holding `Array(1, 2)` | on one line, or on two | Empty |
+| over an empty Collection, so the body never runs | on one line, or on two | Empty |
+| over a Collection of two items, with `Exit For` in the body | on three lines | String, `"a"` |
+| over `Dim a(1) As Long`, `a(0) = 7`, with `Exit For` in the body | on three lines | Long, 7 |
+
+So the variable is Empty whenever the loop runs out, **even when it ran no times**, and `Exit For` leaves the element it
+was on.
+
+**Over Nothing.** The six rows of #1486's table in [the Collection page](collection.md) were rebuilt on SP6, through
+`w As Collection` and `w As Object`, and gave the same answers. The one-line empty loop is still the one place the two
+builds differ:
+
+| Loop, `w` is Nothing, under `On Error Resume Next` | Native | P-code |
+|---|---|---|
+| `For Each v In w: Next` | 92, `v` Empty | 424, `v` String |
+| `For Each v In w: Next: L "after"` | `after` runs; 92, `v` Empty | `after` runs; 424, `v` String |
+
+**In RDCore.** `950a394d` printed what vb6.exe printed on all 39 programs, compiled and interpreted, apart from those four
+(the two rows above, through each declaration), where it gives native code's answer.

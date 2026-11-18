@@ -31,21 +31,33 @@ under **MIT**. A few hard rules:
 
 ## Getting set up
 
-Requires the **.NET 10 SDK** (no Java needed — the ANTLR tool is bundled). From the repo root:
+Requires the **.NET 11 SDK** (no Java needed — the ANTLR tool is bundled). From the repo root:
 
 ```sh
-cd IDE && dotnet build HexIDE.Desktop/HexIDE.Desktop.csproj   # build the IDE
-cd IDE && dotnet run  --project HexIDE.Desktop/               # run it
+cd IDE
+dotnet build HexIDE.Desktop/HexIDE.Desktop.csproj   # build the IDE
+dotnet run  --project HexIDE.Desktop/               # run it
 ```
 
-Tests:
+On Windows, you can also open `HexIDE.slnx` in Visual Studio and build the solution.
+
+Tests, also from the repo root:
 
 ```sh
-cd IDE       && dotnet test HexIDE.Runtime.Tests/        # VB6 interpreter
-cd IDE       && dotnet test HexIDE.Tests/                # IDE view-models
-cd IDE       && dotnet test HexIDE.Integration.Tests/    # headless Avalonia UI
-cd LspServer && dotnet test HexIDE.VbLspServer.Tests/    # LSP server
+cd IDE
+dotnet test --project HexIDE.Runtime.Tests/HexIDE.Runtime.Tests.csproj  # VB6 interpreter
+dotnet test --project HexIDE.Tests/HexIDE.Tests.csproj  # IDE view-models
+dotnet test --project HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj  # headless Avalonia UI
+dotnet test --project HexIDE.Runtime.Integration.Tests/HexIDE.Runtime.Integration.Tests.csproj  # headless Avalonia, the runtime as a made program runs it
+dotnet test --project HexIDE.TwinBasic.Tests/HexIDE.TwinBasic.Tests.csproj  # twinBASIC container reader
+cd ../LspServer && dotnet test --project HexIDE.VbLspServer.Tests/HexIDE.VbLspServer.Tests.csproj # LSP server
 ```
+
+Test assemblies that reference the IDE or runtime redirect `UserDataPath` in a module initializer to a
+fresh temporary profile for each test process, with best-effort deletion at process exit. Settings,
+layout, recent projects and language-server configuration must never come from or overwrite the
+contributor's own IDE profile (#3805). Seed any profile state a test needs explicitly; tests of redirect
+rules use private `UserDataRoot` instances rather than moving the process-wide root.
 
 > **First-party add-ins:** the Desktop build only signs/bundles the bundled add-ins when a first-party
 > signing key is present; a normal clone has none, so the build simply skips that step and prints a note.
@@ -129,8 +141,10 @@ but nobody will block your PR for omitting it.
 
 If you do use the tooling: `npm install -g @fission-ai/openspec`, then `openspec validate --specs --strict`.
 Note that it reports anonymous usage stats by default — `openspec config set telemetry.enabled false` turns
-that off. That setting is per-machine, so it does not travel with this repo; HexIDE itself makes no network
-calls of any kind.
+that off. That setting is per-machine, so it does not travel with this repo. HexIDE itself sends no telemetry and
+fetches the signed add-in revocation list from `https://hexide.io/revocations.json` at startup only when
+an enabled package is not key-pinned first-party. `RevocationListUrl` overrides that address; an empty value
+disables fetching. The AI Chat add-in and a remote language server connect only to the address you give them.
 
 ## Making a change
 
@@ -250,7 +264,7 @@ VB6 files always use backslash paths, and on Linux `System.IO.Path` treats a bac
 character. Run the same suites under WSL, from the root of your working copy:
 
 ```sh
-wsl -e bash -lc 'sudo apt-get update && sudo apt-get install -y dotnet-sdk-10.0 rsync'
+wsl -e bash -lc 'sudo apt-get update && sudo apt-get install -y dotnet-sdk-11.0 rsync'
 wsl -e bash scripts/test-linux.sh IDE/HexIDE.Runtime.Tests/
 ```
 
@@ -267,11 +281,35 @@ larger organisations. Run this from PowerShell; in Git Bash, MSYS rewrites `/rep
 
 ```powershell
 podman run --rm -v "C:\path\to\HexIDE:/repo" -v hexide-nuget:/root/.nuget -w /repo/IDE `
-  mcr.microsoft.com/dotnet/sdk:10.0-resolute `
-  dotnet test HexIDE.Tests/ --artifacts-path /repo/artifacts/container
+  mcr.microsoft.com/dotnet/sdk:11.0-resolute `
+  dotnet test --project HexIDE.Tests/HexIDE.Tests.csproj --artifacts-path /repo/artifacts/container
 ```
 
 The container has no Node, so the three JSON-server tests skip there.
+
+### Changing the add-in API
+
+`HexIDE.Core` guards the public API declared under `Addins/` and every Core type its signatures reach,
+with PublicApiAnalyzers. Today that includes the project model (`ProjectElements`), the component model
+(`Components`), the region types (`Language`), the project and form file interfaces, the serializer
+interfaces, the language-server entry and the LSP records the SDK reaches. A change to any of them is an
+add-in API change.
+
+The project, component and serializer types are add-in contract, marked provisional. They are covered
+because the SDK reaches them today, not because they have been settled as contract. Whether they stay in
+it or become provider-fed is decided under [#3411](https://github.com/hexide-io/HexIDE/issues/3411). If that narrows the SDK, the guard
+makes it a visible, reviewed break.
+
+Put additions in `PublicAPI.Unshipped.txt`; `PublicAPI.Shipped.txt` records the API already shipped. A
+change or removal breaks compiled add-ins, RDCore's included, and needs the maintainer's decision. On SDK
+records, add init-only properties, never new positional parameters: those replace the constructor and
+`Deconstruct` (#4566). The Debug-only host-code-page probe's entry is in
+`PublicAPI.Debug/PublicAPI.Shipped.txt`.
+
+`AddinPublicApiTests` walks the public signatures transitively. It fails when a signature reaches a new
+Core type without both an API type entry and an RS0016 `error` section for its declaring source file in
+`.editorconfig`, or reaches a type from another non-BCL assembly. Types unrelated to the SDK remain
+outside the guard; the SDK-reachable LSP messages live in `Lsp/Messages/AddinMessages.cs` (#4609).
 
 ### Add-ins without the signing key
 
@@ -282,9 +320,15 @@ cannot rebuild the signed packages. That does not stop you working on an add-in.
 1. Start the IDE with `--developer-mode`. This only works in a Debug build.
 2. Tick **Options → Developer → Load unsigned add-in packages**, then restart.
 
+AI Chat loads unsigned this way under its own id, `com.hexide.aichat`.
+
 The add-in then loads and is marked as unsigned. This is the setting for testing your own changes. It is
-not a way to ship an add-in. A **third-party** add-in is signed with its author's own key, and
-[TRUST.md](TRUST.md) explains how users check who published one.
+not a way to ship an add-in. To ship a **third-party** add-in, send the maintainer your public key,
+publisher id and display name. The maintainer issues `publisher.json` and `publisher.sig` offline,
+along with the public intermediate chain files. You then use `pack --trust` with those records and
+your own private key (currently named `firstparty.key` by the packer). Never send your private key.
+[TRUST.md](TRUST.md#for-third-party-publishers) describes the request, accepted inputs and how users
+check who published an add-in.
 
 ### Driving the IDE from an AI coding agent
 

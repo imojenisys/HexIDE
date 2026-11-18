@@ -38,8 +38,9 @@ public partial class WatchRowViewModel
         get
         {
             var context = externalContext ?? Watch.Context;
-            return context == WatchExpression.AllProceduresContext
-                ? _localization.GetString("Str.Dialog.AddWatch.AllContext") : context;
+            // VB6 leaves an (All Modules) watch's Context blank (measured, #4452).
+            return context == WatchExpression.AllProceduresContext ? _localization.GetString("Str.Dialog.AddWatch.AllContext")
+                : externalContext is null && context == WatchExpression.AllModulesContext ? string.Empty : context;
         }
     }
     public void RefreshContext() => PropertyChanged?.Invoke(this, new(nameof(Context)));
@@ -83,8 +84,8 @@ public partial class WatchRowViewModel
     private string OutOfContext => _localization.GetString("Str.Tool.Watches.OutOfContext");
 
     /// <summary>Apply a fresh evaluation (from <see cref="IDebugController.EvaluateWatchAsync"/>), or null to blank
-    /// the value columns (resumed / not in Break mode).</summary>
-    public void Update(DebugEvalResult? result)
+    /// the value columns (resumed / not in Break mode). Inactive interpreter contexts have type Empty.</summary>
+    public void Update(DebugEvalResult? result, bool inactive = false)
     {
         showingOutOfContext = result is null;
         if (remoteRoot is not null) remoteRoot.PropertyChanged -= RemoteChanged;
@@ -92,7 +93,7 @@ public partial class WatchRowViewModel
         if (result is null)
         {
             Value = OutOfContext;
-            TypeName = string.Empty;
+            TypeName = inactive ? "Empty" : string.Empty;
             _children = Array.Empty<LocalsVariableNode>();
             PropertyChanged?.Invoke(this, new(nameof(Children)));
             return;

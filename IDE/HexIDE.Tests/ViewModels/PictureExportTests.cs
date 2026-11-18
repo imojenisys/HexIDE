@@ -25,6 +25,20 @@ public class PictureExportTests
             windows, Substitute.For<ILocalizationService>()), property, bytes);
 
     [Theory]
+    [InlineData("FFD8FF", "jpg")]
+    [InlineData("474946383761", "gif")]
+    [InlineData("474946383961", "gif")]
+    public async Task JpegAndGifExportUseTheirContentExtension(string signature, string extension)
+    {
+        var windows = Substitute.For<IWindowManager>();
+        windows.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>()).Returns((string?)null);
+        var row = Row(windows, VBProperties.PictureProperty, Record(Convert.FromHexString(signature)));
+        await row.ExportPictureCommand.ExecuteAsync(null);
+        await windows.Received(1).SaveFilePickerAsync(Arg.Is<FilePickerSaveOptions>(options =>
+            options.DefaultExtension == extension && options.SuggestedFileName == "Picture." + extension));
+    }
+
+    [Theory]
     [InlineData("Picture")]
     [InlineData("Icon")]
     [InlineData("MouseIcon")]
@@ -52,6 +66,35 @@ public class PictureExportTests
             File.ReadAllBytes(path).Should().Equal(payload);
             bytes.Should().Equal(before);
             row.Value.Should().BeSameAs(bytes);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Theory]
+    [InlineData(MessageBoxResult.Yes)]
+    [InlineData(MessageBoxResult.No)]
+    [InlineData(MessageBoxResult.Cancel)]
+    public async Task ExistingDestinationRequiresExplicitConsent(MessageBoxResult answer)
+    {
+        var windows = Substitute.For<IWindowManager>();
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString("Str.Tool.Properties.ReplacePicture").Returns("{0} already exists. Do you want to replace it?");
+        localization.GetString("Str.Tool.Properties.ExportPictureTitle").Returns("Export Picture");
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".ico");
+        windows.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>()).Returns(path);
+        windows.MessageBox(Arg.Any<string>(), Arg.Any<string>(), MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning).Returns(answer);
+        try
+        {
+            File.WriteAllBytes(path, [99]);
+            var parent = new PropertiesToolViewModel(Substitute.For<IDocumentDockService>(),
+                Substitute.For<IEventBus>(), windows, localization);
+            await parent.ExportPictureAsync(VBProperties.PictureProperty, Record([42]));
+            File.ReadAllBytes(path).Should().Equal(answer == MessageBoxResult.Yes ? new byte[] { 42 } : [99]);
+            await windows.Received(1).MessageBox($"{path} already exists. Do you want to replace it?",
+                "Export Picture", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            localization.Received(1).GetString("Str.Tool.Properties.ReplacePicture");
+            localization.Received(1).GetString("Str.Tool.Properties.ExportPictureTitle");
         }
         finally { File.Delete(path); }
     }

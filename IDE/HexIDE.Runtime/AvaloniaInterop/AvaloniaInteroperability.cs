@@ -18,6 +18,20 @@ public static class AvaloniaInteroperability
 {
     private static List<IAvaloniaBinding> bindings = new();
 
+    // A PictureBox's or Image's Picture reads as one object until the picture is assigned again: `Picture1.Picture Is
+    // Picture1.Picture` and the Image's are True (measured, native and p-code, #4297's probe). An SSTab tab given the
+    // control copies it into an object of its own, which is why `TabPicture(0) Is Picture1.Picture` is False.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Control,
+        System.Runtime.CompilerServices.StrongBox<(byte[]? Bytes, PanelPicture? Picture)>> controlPictures = new();
+
+    private static PanelPicture PictureOf(Control control, byte[]? bytes)
+    {
+        var held = controlPictures.GetOrCreateValue(control);
+        if (held.Value.Picture is null || !ReferenceEquals(held.Value.Bytes, bytes))
+            held.Value = (bytes, SSTabMembers.ControlPicture(bytes));
+        return held.Value.Picture!;
+    }
+
     private static Dictionary<PropertyClass, List<IAvaloniaBinding>> bindingsByProperty = new();
 
     // VB6 coerces any numeric to a numeric property (e.g. `Command1.Left = 100` assigns an Integer to the Double
@@ -103,6 +117,7 @@ public static class AvaloniaInteroperability
         Register<Control, double>(VBProperties.LeftProperty, w => Canvas.GetLeft(w).OrZero(), Canvas.SetLeft);
         Register<Control, double>(VBProperties.TopProperty, w => Canvas.GetTop(w).OrZero(), Canvas.SetTop);
         Register<Control, double>(VBProperties.WidthProperty, Layoutable.WidthProperty);
+        Register<VBPictureBox, bool>(VBProperties.AutoSizeProperty, box => box.AutoSize, (box, value) => box.AutoSize = value);
         Register<Control, VBCursorType>(VBProperties.MousePointerProperty, AttachedProperties.GetMousePointer, (control, value) =>
         {
             control.Cursor = value.ToCursor();
@@ -130,6 +145,8 @@ public static class AvaloniaInteroperability
         RegisterToolTipText<VBLabel>();
         RegisterToolTipText<VBImage>();
         RegisterToolTipText<VBStatusBar>();
+        RegisterToolTipText<VBAnimation>();
+        RegisterToolTipText<VBFlatScrollBar>();
         // TabIndex and TabStop, on the controls VB6 gives them (measured, #1974). A TabIndex set renumbers the form.
         RegisterTabOrder<VBCommandButton>(tabStop: true);
         RegisterTabOrder<VBTextBox>(tabStop: true);
@@ -142,7 +159,9 @@ public static class AvaloniaInteroperability
         RegisterTabOrder<VBFrame>(tabStop: false);
         RegisterTabOrder<VBLabel>(tabStop: false);
         RegisterTabOrder<VBProgressBar>(tabStop: false);
+        RegisterTabOrder<VBSlider>(tabStop: true);
         RegisterTabOrder<VBUpDown>(tabStop: true);
+        RegisterTabOrder<VBAnimation>(tabStop: true);
         RegisterTabOrder<VBDTPicker>(tabStop: true);
         RegisterTabOrder<VBStatusBar>(tabStop: false);
         RegisterTabOrder<VBSSTab>(tabStop: true);
@@ -158,7 +177,9 @@ public static class AvaloniaInteroperability
         // A Label's BackStyle can be set by a program, as VB6 measured (#795): opaque, then a BackColor paints. Bound,
         // because without it the assignment was a trappable 461 that On Error Resume Next swallowed, and the
         // transparent-Label rule then dropped the BackColor that followed, a wrong value with no error.
+        Register<VBLabel, VBBorder>(VBProperties.BorderStyleProperty, VBLabel.BorderStyleProperty);
         Register<VBLabel, BackStyles>(VBProperties.BackStyleProperty, VBLabel.BackStyleProperty);
+        Register<VBLabel, VBTextAlignment>(VBProperties.AlignmentProperty, VBLabel.AlignmentProperty);
         Register<VBLabel, VBAppearance>(VBProperties.AppearanceProperty, VBLabel.AppearanceProperty);
         Register<VBCheckBox, VBCheckValue>(VBProperties.CheckValueProperty, VBCheckBox.ValueProperty);
 
@@ -166,6 +187,9 @@ public static class AvaloniaInteroperability
         // raises error 461, which is the whole interface of an option button unreachable from VB6 code.
         Register<VBOptionButton, VBAppearance>(VBProperties.AppearanceProperty, VBOptionButton.AppearanceProperty);
         Register<VBOptionButton, bool>(VBProperties.OptionValueProperty, VBOptionButton.ValueProperty);
+
+        Register<VBCommandButton, bool>(VBProperties.DefaultProperty, button => button.Default, (button, value) => button.Default = value);
+        Register<VBCommandButton, bool>(VBProperties.CancelProperty, button => button.Cancel, (button, value) => button.Cancel = value);
 
         Register<VBCommandButton, bool>(VBProperties.CommandValueProperty, _ => false, (button, value) =>
         {
@@ -274,6 +298,22 @@ public static class AvaloniaInteroperability
         RefuseUnmeasuredColour(control, property);
         if (control is VBTimer && ControlPositions.IsPosition(property))
             throw IdentityMembers.ReadOnlyAtRunTime(property.Name);
+        if (control is VBPictureBox { PictureData.Length: > 0 } pictureBox
+            && !pictureBox.AutoSize && ReferenceEquals(property, VBProperties.AutoSizeProperty)
+            && ConvertForAssignment(property, value) is true)
+            throw UnmeasuredAssignment(property, value);
+        if (control is VBImage image && ReferenceEquals(property, VBProperties.PictureProperty) && value.Value is PanelPicture imagePicture)
+        {
+            image.Picture = imagePicture.FileBytes;
+            return true;
+        }
+        if (control is VBPictureBox box && ReferenceEquals(property, VBProperties.PictureProperty))
+        {
+            if (value.Value is not PanelPicture picture)
+                throw UnmeasuredAssignment(property, value);
+            box.PictureData = picture.FileBytes;
+            return true;
+        }
         if (ReferenceEquals(property, VBProperties.FontProperty) && ControlFont.AppliesTo(control))
         {
             if (value.Type != Vb6Value.ValueType.String)
@@ -326,10 +366,19 @@ public static class AvaloniaInteroperability
                 // first, so one VB6 refuses is still refused.
                 if (control is VBLabel { BackStyle: BackStyles.Transparent } && ReferenceEquals(property, VBProperties.BackColorProperty))
                     return true;
+                // #4448: colours notify only on a changed value, after the new ambient is readable.
+                var ambient = ReferenceEquals(property, VBProperties.BackColorProperty) ? "BackColor"
+                    : ReferenceEquals(property, VBProperties.ForeColorProperty) ? "ForeColor" : null;
+                var ambientChanged = ambient is not null && !Equals(prop.GetUntyped(control), converted);
                 // A VB size assignment raises Resize inside the setter; native window notifications settle together (#2389).
                 using (control is VBFormRuntime runtime && (ReferenceEquals(property, VBProperties.WidthProperty)
                     || ReferenceEquals(property, VBProperties.HeightProperty)) ? runtime.ResizeOnce() : null)
+                {
                     prop.SetUntyped(control, converted);
+                    ControlPositions.EnforceOtherDimension(control, property);
+                }
+                if (ambientChanged)
+                    FormAmbients.Changed(control, ambient!);
                 // VB6 resets BackColor with a Label's Appearance (measured, #796).
                 if (control is VBLabel label && ReferenceEquals(property, VBProperties.AppearanceProperty))
                     label.BackColor = VBColor.FromSystemColor(label.Appearance == VBAppearance._3D
@@ -347,6 +396,9 @@ public static class AvaloniaInteroperability
         if (position < Math.Min(bar.VbMin, bar.VbMax) || position > Math.Max(bar.VbMin, bar.VbMax))
             throw new VBRunTimeException(VBStandardError.InvalidPropertyValue);
     }
+
+    internal static NotImplementedException UnmeasuredAssignment(PropertyClass property, Vb6Value value) =>
+        new($"Assigning {value.Type} to the {property.Name} property is not implemented");
 
     /// <summary>
     /// What an assignment to <paramref name="property"/> stores: the right-hand side converted to the property's
@@ -383,8 +435,7 @@ public static class AvaloniaInteroperability
         // of answering wrong, for a Boolean property too: there it used to give a trappable 13, which On Error
         // Resume Next would step over. What VB6 does with each of these was not measured for this change.
         if (!IsScalar(value))
-            throw new NotImplementedException(
-                $"Assigning {value.Type} to the {property.Name} property is not implemented");
+            throw UnmeasuredAssignment(property, value);
 
         // Tag keeps what it is given, for now. It is a String in VB6 (`Label1.Tag = 5` reads back "5", measured),
         // but storing it as one here broke two idioms that work today: `If Command1.Tag = 1` needs the String-to-
@@ -461,7 +512,7 @@ public static class AvaloniaInteroperability
     /// &amp;HFFFF) and 0x02 (palette-relative RGB, any), VB6 accepts and keeps as given; HexIDE has no colour that
     /// can hold one, so they are refused as not implemented rather than stored as the RGB of their low bytes (#786).
     /// </summary>
-    private static long OleColor(Vb6Value value)
+    internal static long OleColor(Vb6Value value)
     {
         var ole = System.Convert.ToInt64(Coerce(value, Vb6Value.ValueType.Long));
         var bits = (uint)ole;
@@ -518,6 +569,11 @@ public static class AvaloniaInteroperability
             value = new Vb6Value(ControlFont.Get(c));
             return true;
         }
+        if (ReferenceEquals(property, VBProperties.PictureProperty) && c is VBPictureBox or VBImage)
+        {
+            value = new Vb6Value(PictureOf(c, c is VBPictureBox box ? box.PictureData : ((VBImage)c).Picture));
+            return true;
+        }
         // Only the read is measured for Shape (#2070); keep its unmeasured assignment behaviour unchanged.
         if (c is VBShape shape && ReferenceEquals(property, VBProperties.BackColorProperty))
         {
@@ -536,7 +592,7 @@ public static class AvaloniaInteroperability
         }
         // A form a modal form holds reads Enabled False (measured, #822). The hold is apart from its own Enabled, which is
         // what it reads once the modal form has gone.
-        if (c is IFormView { HeldBy: not null } && ReferenceEquals(property, VBProperties.EnabledProperty))
+        if (FormRoot.View(c) is { HeldBy: not null } && ReferenceEquals(property, VBProperties.EnabledProperty))
         {
             value = new Vb6Value(false);
             return true;

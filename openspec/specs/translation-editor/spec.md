@@ -50,6 +50,10 @@ a translator who is stronger in a third language than in English can work from t
 ### Requirement: A reference value that is only an English fallback SHALL be marked
 Where the reference language is not English and a key has no value of its own in that language's chain, the
 reference value SHALL be visibly marked as a fallback rather than presented as a translation.
+The From cell SHALL use italic text for a fallback in both selection states, with the validation-error
+colour only while unselected. Selected From cells SHALL inherit the row selection foreground, including
+fallbacks, so their text meets a contrast ratio of at least 4.5:1 against the selected row background.
+The From tooltip SHALL explain the italic fallback cue.
 
 Without the marking the column silently lies: the translator sees English text under a column labelled with
 another language and reasonably concludes that is what that language says. Marking it turns a trap into
@@ -82,3 +86,14 @@ guesses confirmed on the next launch.
 #### Scenario: Editing a menu label
 - **WHEN** the translator changes a value that appears in a menu
 - **THEN** the menu shows the new text without a restart
+
+### Requirement: Persisted override edits and resets SHALL be recoverable
+Before replacing a translation override file, the service SHALL retain its previous disk bytes in a
+unique, exclusively created and flushed recovery sibling. Clearing the last override or resetting the
+language SHALL move the file to a unique recovery sibling instead of deleting its contents. Recovery
+files SHALL not be loaded as languages or automatically pruned. See the
+[file-safety audit](../../../docs/file-safety-audit.md#carried-files-and-profile-recovery) (#2504).
+
+#### Scenario: Replacing an override and clearing it
+- **WHEN** an existing override is edited or cleared
+- **THEN** the previous disk version remains available for copying back after the IDE closes

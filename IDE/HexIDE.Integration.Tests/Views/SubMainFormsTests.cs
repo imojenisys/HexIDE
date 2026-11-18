@@ -98,7 +98,7 @@ public class SubMainFormsTests
 
         var localization = Substitute.For<ILocalizationService>();
         localization.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>() + ": {0}");
-        var runner = new ProjectRunnerService(
+        var runner = TestRunners.WithInterpreter(
             Substitute.For<IEventBus>(), Substitute.For<IWindowManager>(), Substitute.For<IProjectManager>(),
             localization, new DebugController(), Substitute.For<IBreakpointService>(), new WatchService(), new RunScope());
 
@@ -145,6 +145,27 @@ public class SubMainFormsTests
     {
         for (var i = 0; i < 20; i++)
             Dispatcher.UIThread.RunJobs();
+    }
+
+    // #4598's measured New-from-module and Show rows (VB6 SP6, native and p-code).
+    [AvaloniaFact]
+    public void Main_can_show_a_New_form_created_in_a_standard_module_procedure()
+    {
+        using var run = Start("""
+            Sub Main()
+                MakeWindow
+            End Sub
+            Sub MakeWindow()
+                Dim f As Form1
+                Set f = New Form1
+                f.Show
+            End Sub
+            """);
+
+        run.Failed.Should().BeEmpty();
+        run.Printed.Should().Equal("f1 initialize", "f1 load");
+        run.Opened["Form1"].IsVisible.Should().BeTrue();
+        run.Runner.IsRunning.Should().BeTrue();
     }
 
     [AvaloniaFact]

@@ -10,10 +10,13 @@ public partial class BasicInterpreter
     // Keep the original CallArgs: RunProcedure's binder shares caller storage for ByRef parameters.
     internal async Task<Vb6Value> CallByName(IReadOnlyList<CallArg> callArgs, Stack<List<Vb6Value>>? callerFrames)
     {
+        if (NamedArguments.Any(callArgs))
+            await VB6BuiltIns.ArrangeIntrinsicArguments("CallByName", callArgs); // Measured compile error, #4145.
         foreach (var arg in callArgs)
         {
-            if (arg.Name is not null || arg.Omitted)
-                throw new NotImplementedException("CallByName named/omitted arguments are not implemented (#2519)");
+            arg.Value.RefuseOddBytes("CallByName");
+            if (arg.Omitted)
+                throw new NotImplementedException("CallByName omitted arguments are not implemented (#2519)");
         }
         if (callArgs.Count < 3)
             throw new NotImplementedException("CallByName with fewer than three arguments is not implemented (#2519)");
@@ -58,6 +61,7 @@ public partial class BasicInterpreter
             }
             else if (obj.ClassDef.PrePass.PublicVariables.Contains(name))
             {
+                NoteMemberAccess(obj, name);
                 var (_, field) = await ReadVariable(obj.InstanceEnv, name);
                 if (kind is 2 or 3 && memberArgs.Count == 0 && VbNumeric.IsDeclarableScalar(field.Type))
                     return field;
@@ -91,21 +95,25 @@ public partial class BasicInterpreter
             if (kind == 2 && (name.Equals("Count", StringComparison.OrdinalIgnoreCase)
                 || name.Equals("Item", StringComparison.OrdinalIgnoreCase)))
                 throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
-            if (kind == 1 && (name.Equals("Add", StringComparison.OrdinalIgnoreCase)
-                || name.Equals("Item", StringComparison.OrdinalIgnoreCase)))
+            if (kind == 4 && name.Equals("Item", StringComparison.OrdinalIgnoreCase))
+                throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
+            if (kind == 1)
             {
+                var add = name.Equals("Add", StringComparison.OrdinalIgnoreCase);
+                var item = name.Equals("Item", StringComparison.OrdinalIgnoreCase);
+                var count = name.Equals("Count", StringComparison.OrdinalIgnoreCase);
+                var remove = name.Equals("Remove", StringComparison.OrdinalIgnoreCase);
+                if (!add && !item && !count && !remove)
+                    throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
                 var values = new List<Vb6Value>();
                 for (var i = 3; i < callArgs.Count; i++) values.Add(callArgs[i].Value);
+                // CallByName's own arity error is 450, not late-bound Count's 451 (#4688).
+                if ((count && values.Count != 0) || (item && values.Count == 0))
+                    throw new VBRunTimeException(VBStandardError.WrongNumberOfArgumentsOrInvalidPropertyAssignment);
                 // Only the measured argument shapes in this slice; don't inherit Collection's direct-call arity errors.
-                if ((name.Equals("Add", StringComparison.OrdinalIgnoreCase) && values.Count == 2)
-                    || (name.Equals("Item", StringComparison.OrdinalIgnoreCase) && values.Count == 1))
-                {
-                    var result = await collection.CallAsync(name, values) ?? new Vb6Value(Vb6Value.ValueType.EmptyVariant);
-                    if (result.Type == Vb6Value.ValueType.Object || result.Type == Vb6Value.ValueType.CSharpProxyObject
-                        || result.Type == Vb6Value.ValueType.Control)
-                        throw new NotImplementedException("CallByName object results are not implemented (#2519)");
-                    return result;
-                }
+                if ((add && values.Count is >= 1 and <= 3)
+                    || ((item || remove) && values.Count == 1) || (count && values.Count == 0))
+                    return await collection.CallAsync(name, values) ?? new Vb6Value(Vb6Value.ValueType.EmptyVariant);
             }
         }
         if (receiver.Value is VbErr err && name.Equals("Number", StringComparison.OrdinalIgnoreCase)

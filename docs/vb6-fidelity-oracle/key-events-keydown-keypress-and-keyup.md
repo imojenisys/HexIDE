@@ -170,10 +170,142 @@ took the key itself.
 **Unmeasured:**
 - a form with controls but none focusable;
 - a ComboBox of Style 1, Simple, and arrows in a combo's edit part with the list closed and Text typed;
-- the scroll bars and the PictureBox;
+- the scroll bars and the PictureBox, since measured (2026-11-18, below);
 - a UserControl's own key events;
 - holding a key down for auto-repeat;
 - the key events of a modal form shown from a key handler.
+
+### An open list with one dialog button (2026-11-17, #4418)
+
+**The question.** An open dropdown list keeps Enter and Esc from the Default and Cancel buttons. With both buttons on
+the form it raised KeyDown and KeyPress and no KeyUp; with neither, the KeyUp as well (above). On a form with only one
+of the two, which decides the KeyUp: that key's own holder, or any dialog button at all?
+
+**The probe:**
+- **The form:** Combo1 (Style 2, holding `apple`, `banana` and `cherry`, ListIndex 0), Command1 and Command2, in that
+  tab order, with KeyPreview False.
+- **The modes:** A, Command1 Default and Command2 Cancel; E, Default only; C, Cancel only; D, neither. Each was set at
+  design time.
+- **The input:** the program drove itself, on the guest's console. A Timer at 600 ms set the focus to Combo1, then
+  sent `SendKeys "%{DOWN}"`, `"{ENTER}"`, `"%{DOWN}"` and `"{ESC}"`, one per tick. Before and after each of Enter and
+  Esc it read the list's state with `SendMessage(Combo1.hWnd, CB_GETDROPPEDSTATE, 0, 0)`.
+- **The builds:** native and p-code logged the same, line for line, in every mode.
+
+| Mode | Enter, list open | Esc, list open |
+|---|---|---|
+| A: Default and Cancel | KeyDown 13, KeyPress 13, **no KeyUp** | KeyDown 27, KeyPress 27, **no KeyUp** |
+| E: Default only | KeyDown 13, KeyPress 13, **no KeyUp** | KeyDown 27, KeyPress 27, **KeyUp 27** |
+| C: Cancel only | KeyDown 13, KeyPress 13, **KeyUp 13** | KeyDown 27, KeyPress 27, **no KeyUp** |
+| D: neither | KeyDown 13, KeyPress 13, KeyUp 13 | KeyDown 27, KeyPress 27, KeyUp 27 |
+
+- **In every mode the list closed** after Enter and after Esc, ListIndex stayed 0, and **no button's Click was
+  raised.** The earlier probe recorded the list closing only for Enter with both buttons.
+- **The KeyUp goes missing exactly when the form has a holder for that key.** In E, Esc raised its KeyUp although the
+  form had a Default button; in C, Enter raised its KeyUp although it had a Cancel button. So the key's own holder
+  decides, not the presence of either button.
+- Rows A and D repeat the earlier probe's, so the two probes agree where they overlap.
+
+**Unmeasured:** a Style 0 combo with one button, a holder that is disabled or hidden, and KeyPreview True with one
+button.
+
+### The PictureBox and the scroll bars (2026-11-18, #2325)
+
+**The question.** The sections above left the scroll bars and the PictureBox unmeasured. Do they raise KeyDown,
+KeyPress and KeyUp? Where does a bar's Change fall among them? What do KeyPreview, a Default or Cancel button and a
+handler's `KeyCode = 0` do?
+
+**The probe:**
+- **The form:** Picture1, a PictureBox (TabIndex 0), HScroll1 (1), VScroll1 (2) and Text1 (3). Each bar ran Min 0 to
+  Max 100 with Value 50, SmallChange 1 and LargeChange 10. The form and every control logged each KeyDown, KeyPress and
+  KeyUp, each control its GotFocus, and each bar its Change and Scroll.
+- **The modes:**
+  - A: KeyPreview False, with no Default or Cancel button.
+  - B: KeyPreview True.
+  - C: each bar's own KeyDown set `KeyCode = 0`, in one run for Right and Down, and in another for every KeyCode from
+    33 to 40.
+  - D: as A, with Command1 Default and Command2 Cancel after Text1.
+  - E: as A, with Picture1's `TabStop = False`.
+  - F: KeyPreview True, with `Form_KeyDown` setting `KeyCode = 0` for every key but Alt and F4.
+  - R: as E, with both bars reversed: Min 100, Max 0, Value 50.
+- **The input:** real keys on the guest's console, through Hyper-V's synthetic keyboard, into the running program. The
+  sections above used SendKeys and SendInput. Each run ended with Alt+F4.
+- **The builds:** p-code for every mode. Native code for A, and for C with every key zeroed, each logging the same
+  lines as its p-code build.
+
+**The PictureBox and both bars raise KeyDown, KeyPress and KeyUp,** with KeyPress only for a key that has a character:
+
+| Key, on the focused control (mode A) | Logged |
+|---|---|
+| `a`, on each of the three | KeyDown 65, KeyPress 97, KeyUp 65 |
+| Space, on each | KeyDown 32, KeyPress 32, KeyUp 32, and no Change on a bar |
+| Enter, on each | KeyDown 13, KeyPress 13, KeyUp 13 |
+| Esc, on each | KeyDown 27, KeyPress 27, KeyUp 27 |
+| Right, on Picture1 | KeyDown 39, KeyUp 39, and the focus stayed |
+| Tab, on each | nothing on the control, and the focus moved on |
+
+**A bar's keys move it,** with the Change between the key's KeyDown and its KeyUp. No key raised Scroll.
+
+| Key | From | To |
+|---|---|---|
+| Left, Up | 50 | 49: down by SmallChange |
+| Right, Down | 50 | 51: up by SmallChange |
+| PageUp | 100 | 90: down by LargeChange |
+| PageDown | 51 | 61: up by LargeChange |
+| Home | 49 | 0 |
+| End | 0 | 100 |
+
+Every row held on both bars. A horizontal bar takes Up and Down, and a vertical one Left and Right.
+
+**A reversed bar (mode R), from 50:**
+
+| Key | Value |
+|---|---|
+| Left, Up | 51 |
+| Right, Down | 50 |
+| Home | **0** |
+| End | **100** |
+| PageUp, at 100 | no Change |
+| PageDown, from 100 | 90 |
+
+- **The arrows and the page keys move toward Min or toward Max,** as on an ordinary bar: Left, Up and PageUp toward
+  Min, the others toward Max.
+- **Home and End don't.** Home set 0 and End 100 on the reversed bar as on the ordinary one: Max for Home and Min for
+  End here. Both bars fit Home going to the lower of Min and Max, and End to the higher. Only ends of 0 and 100 were
+  tried, so a rule that goes to 0 itself is not ruled out.
+- **A key at the end of the range raised no Change:** PageUp at Min raised its KeyDown and KeyUp alone.
+
+**`KeyCode = 0` in a bar's own KeyDown stops the move** (mode C). Left, Right, Up, Down, Home, End, PageUp and
+PageDown, on both bars: KeyDown, then KeyUp, with no Change. On a TextBox it is the other way: `KeyCode = 0` in the
+control's own KeyDown does not stop the key (above).
+
+**KeyPreview (mode B): the form first,** as with the TextBox. For Right on HScroll1: Form KeyDown, HScroll1 KeyDown,
+HScroll1 Change, Form KeyUp, HScroll1 KeyUp. For `a`, Form KeyPress came before the control's.
+
+**`KeyCode = 0` in the form's KeyDown under KeyPreview (mode F)** stops the move too, and the control's KeyDown is not
+raised. Right, PageDown and Home on HScroll1, and Down and End on VScroll1: Form KeyDown, Form KeyUp, the bar's KeyUp,
+with no Change. For `a` and Space, KeyPress was still raised on the form, then on the bar.
+
+**A Default and a Cancel button (mode D) take Enter and Esc first.** From Picture1, HScroll1 or VScroll1, Enter raised
+Command1's Click and Esc Command2's, and the focused control raised no key event. Space still reached the control.
+
+**`TabStop = False` on the PictureBox (mode E):** the focus started on HScroll1, and Tab from Text1 went to HScroll1,
+past Picture1. A click on Picture1 gave it the focus, with GotFocus, and its key events then came as in mode A.
+
+**Alt+F4, which the TextBox probe below did not run:** the focused control raised KeyDown 18 with Shift 4, then
+KeyDown 115 with Shift 4, then the form unloaded, with no KeyUp for either. Under KeyPreview, the form's KeyDown came
+first for each.
+
+**A trap of this input path: Home's KeyUp read 255,** 14 times, on every control, Text1 included. The SendInput table
+below gives Home 36 on the TextBox, and Home's KeyDown here read 36. So the 255 comes from the synthetic keyboard, not
+from VB6. Don't read a KeyUp from Hyper-V's console keyboard without a SendInput row to check it against.
+
+**Unmeasured:**
+- holding a key down for auto-repeat;
+- a bar's KeyCode changed to another key rather than to 0;
+- a control inside the PictureBox;
+- a bar with ends other than 0 and 100;
+- Shift or Ctrl with a bar's moving keys;
+- KeyPreview with the Default and Cancel buttons.
 
 ### The whole keyboard on a TextBox (2026-10-27)
 

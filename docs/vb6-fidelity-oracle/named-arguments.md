@@ -275,3 +275,162 @@ So the rows are:
 |---|---|---|
 | `FileName, Size, ColorDepth, X, Y` | 0 | LoadPicture |
 | `Picture, FileName` | 2 | SavePicture |
+
+### The intrinsics #1465 left unmeasured, and the type library's names (2026-11-16, #4145)
+
+vb6.exe SP6, `/make`. Each named call ran beside its positional twin, native and p-code agreeing. A compile error needs a build of its own, so those were built one at a time. The names come from the VBA type library inside `msvbvm60.dll`, read with `LoadTypeLibEx`, since that, not the documentation, is what the compiler matches.
+
+They come from the VBA type library inside `msvbvm60.dll`, read with `LoadTypeLibEx`. **Where they differ from the documentation, the type library wins.** The financial functions' last flag is `Due`, not `Type`, and the arrays are `ValueArray`. A documented name is "Named argument not found".
+
+| Function | Names, `[optional]` | Named call |
+|---|---|---|
+| `AscB` | `String` | accepted |
+| `ChrB` | `CharCode` | accepted |
+| `CurDir` | `[Drive]` | accepted |
+| `LeftB`, `RightB` | `String`, `Length` | accepted |
+| `MidB` | `String`, `Start`, `[Length]` | accepted, in any order |
+| `Dir` | `[PathName]`, `[Attributes]` | accepted |
+| `FileAttr` | `FileNumber`, `[ReturnType]` | accepted |
+| `FileDateTime`, `FileLen`, `GetAttr` | `PathName` | accepted |
+| `FormatCurrency`, `FormatNumber`, `FormatPercent` | `Expression`, `[NumDigitsAfterDecimal]`, `[IncludeLeadingDigit]`, `[UseParensForNegativeNumbers]`, `[GroupDigits]` | accepted |
+| `FormatDateTime` | `Expression`, `[NamedFormat]` | accepted |
+| `Partition` | `Number`, `Start`, `Stop`, `Interval` | accepted |
+| `SLN` | `Cost`, `Salvage`, `Life` | accepted |
+| `SYD` | `Cost`, `Salvage`, `Life`, `Period` | accepted |
+| `FV` | `Rate`, `NPer`, `Pmt`, `[PV]`, `[Due]` | accepted |
+| `PV` | `Rate`, `NPer`, `Pmt`, `[FV]`, `[Due]` | accepted |
+| `Pmt` | `Rate`, `NPer`, `PV`, `[FV]`, `[Due]` | accepted |
+| `IPmt`, `PPmt` | `Rate`, `Per`, `NPer`, `PV`, `[FV]`, `[Due]` | accepted |
+| `NPer` | `Rate`, `Pmt`, `PV`, `[FV]`, `[Due]` | accepted |
+| `Rate` | `NPer`, `Pmt`, `PV`, `[FV]`, `[Due]`, `[Guess]` | accepted |
+| `IRR` | `ValueArray`, `[Guess]` | accepted |
+| `MIRR` | `ValueArray`, `FinanceRate`, `ReinvestRate` | accepted |
+| `NPV` | `Rate`, `ValueArray` | accepted |
+| `StrPtr`, `VarPtr`, `ObjPtr` | `Ptr` | accepted |
+| `InStrB` | `[Start]`, `[String1]`, `[String2]`, `[Compare]` | **compile error "Syntax error"**, with or without `Start` |
+| `CallByName` | `Object`, `ProcName`, `CallType`, then a ParamArray | **compile error "Argument in ParamArray may not be named"**, even with `Args` not named |
+| `IMEStatus` | none | **compile error "Wrong number of arguments or invalid property assignment"** |
+
+- **Every accepted named call gave its positional twin's value.** `FV(Pmt:=-100, NPer:=12, Rate:=0.01)`, out of order with its optionals omitted, equals `FV(0.01, 12, -100)`.
+- **A wrong name is a compile error, "Named argument not found."** That's `LeftB(Foo:=…)`, `ChrB(Code:=…)`, `CurDir(Path:=…)`, `Dir(Path:=…)`, `GetAttr(Path:=…)`, `StrPtr(x:=…)`, `FV(…, Type:=1)` and `NPV(…, Values:=…)`.
+- **An omitted required argument is a compile error, "Argument not optional."** That's `LeftB(Length:=2)`, `MidB(String:=…, Length:=2)`, `FV(Rate:=…, NPer:=…)`, `MIRR` without `ReinvestRate`, `Partition` without `Interval`, and `SLN` without `Life`.
+- **`LeftB`, `RightB`, `MidB`, `ChrB` and `CurDir`** have no parameters in the type library. They're the compiler's own, and these names are what it accepted.
+
+### DDB's names (2026-11-17, #2524)
+
+vb6.exe SP6, `/make`, every call built native and as p-code, which logged the same lines. `DDB` wasn't registered in HexIDE when #4145 measured the others, so its names were measured with #2524's review. Each named call ran beside its positional twin; a compile error needed a build of its own.
+
+| Expression | Result |
+|---|---|
+| `DDB(2400, 300, 10, 1)` | `480`, Double |
+| `DDB(Cost:=2400, Salvage:=300, Life:=10, Period:=1)` | `480`, Double |
+| `DDB(cost:=2400, salvage:=300, life:=10, period:=1)` | `480`, Double |
+| `DDB(2400, 300, 10, 2, 1.5)` | `306`, Double |
+| `DDB(Cost:=2400, Salvage:=300, Life:=10, Period:=2, Factor:=1.5)` | `306`, Double |
+| `DDB(Factor:=1.5, Period:=2, Life:=10, Salvage:=300, Cost:=2400)` | `306`, Double |
+| `DDB(2400, 300, Life:=10, Period:=2, Factor:=1.5)` | `306`, Double |
+| `DDB(Cost:=2400, Salvage:=300, Life:=10)` | **compile error "Argument not optional"** |
+| `DDB(Cost:=2400, Salvage:=300, Life:=10, Per:=1)` | **compile error "Named argument not found"** |
+| `DDB(Cost:=2400, Salvage:=300, Life:=10, Period:=1, Type:=0)` | **compile error "Named argument not found"** |
+
+- **`DDB` takes `Cost`, `Salvage`, `Life`, `Period` and `[Factor]`,** in any order, after positional arguments, and without regard to case, as `SLN` and `SYD` do. Each named call gave its positional twin's value.
+- **Not measured:** a positional call with too few or too many arguments.
+
+### Named arguments to a control's, a form's and a Collection's methods (2026-11-18, #1474, SP6)
+
+**The rig:**
+- **Build and run:** vb6.exe 6.00.9782 with MSVBVM60 6.00.9848, `/make` native and p-code in session 0 of the oracle guest. Native code and p-code gave identical output in every row.
+- **The program:** a startup form with a ListBox `List1`, a ComboBox `Combo1`, a TextBox `Text1` and a PictureBox `Picture1`. Its `Form_Load` ran each statement under `On Error Resume Next` and logged the error or `ok`.
+- **The evaluation-order tracer:** `F(tag, v)` is a module function that logs `eval tag` and returns `v`.
+- **Compile errors:** a statement expected not to compile ran in a project of its own, so its error doesn't stop the others. The message is the one in `/make`'s error log.
+
+**Early-bound, on the control's or the form's own name:**
+
+| Statement | VB6 |
+|---|---|
+| `List1.AddItem Item:="a"` | ok; the list is `[a]` |
+| `List1.AddItem Item:="b", Index:=0` | ok; `[b][a]` |
+| `List1.AddItem Index:=F("index", 1), Item:=F("item", "c")` | ok; `[b][c][a]`. **Evaluated `item`, then `index`**: parameter order, not the order written |
+| `List1.AddItem "d", Index:=0` | ok; `[d][b][c][a]` |
+| `List1.RemoveItem Index:=0` | ok |
+| `Combo1.AddItem Item:="x", Index:=0` | ok |
+| `Me.Move Left:=F("left", 600), Top:=F("top", 700)` | ok; evaluated `left`, `top`; the form is at 600, 700 |
+| `Me.Move Height:=…, Width:=…, Top:=…, Left:=…`, each through `F` | ok; **evaluated `left`, `top`, `width`, `height`**; the form is at 900, 800, 5000 × 4000 |
+| `Text1.Move Left:=120, Top:=2900, Width:=1000, Height:=300` | ok |
+| `Text1.Move 200, Top:=400` | ok; at 200, 400 |
+| `Me.Move 300, Top:=500` | ok |
+| `Text1.Move 220, 2600, 1100, Height:=360` | ok |
+| `List1.ZOrder Position:=1` | ok |
+| `x = Me.TextWidth(Str:="abc")` | 270, as `TextWidth("abc")` |
+| `x = Picture1.ScaleX(Width:=1440, FromScale:=vbTwips, ToScale:=vbPixels)`, and the same reordered | 96 |
+
+**An optional parameter left out before a supplied one, on `Move` and `ScaleX`:** **448** "Named argument not found", **at run time**, and nothing moves.
+
+| Statement | VB6 |
+|---|---|
+| `Text1.Move 200, Height:=400` | **448** |
+| `Text1.Move 200, Width:=1500` | **448** |
+| `Text1.Move 210, 2500, Height:=350` | **448** |
+| `Text1.Move Left:=240, Height:=380`, all named | **448** |
+| `Text1.Move 230, , , 370`, **all positional** | **448** |
+| `Me.Move 300, Width:=5200` and `Me.Move 310, Height:=4100` | **448** |
+| `Picture1.ScaleX(1440, ToScale:=vbPixels)` | **448** |
+| `Picture1.ScaleX(1440, , vbPixels)`, all positional | **448** |
+| `Picture1.ScaleX(Width:=1440, ToScale:=vbPixels)` | **448** |
+
+- **What the rows support:**
+  - On these two methods, VB6 accepts only a prefix of the parameters. Leaving out the trailing ones is fine.
+  - A gap before a supplied argument raises 448, whether the gap is a missing name or an empty positional slot.
+- **What they don't:** the rule isn't measured on any other method, and it can't be VB6's rule for every method. `PopupMenu mnu, , x, y`, with its Flags left out, is a common idiom. Don't extend it past `Move` and `ScaleX` without measuring.
+
+**Late-bound, through `Dim o As Object`:**
+
+| Statement | VB6 |
+|---|---|
+| `Set o = List1: o.AddItem Item:="late"` | **448** "Named argument not found", and nothing is added |
+| `o.AddItem Index:=0, Item:="late0"`, `o.AddItem Itemx:="bad"`, `o.AddItem Index:=0` | **448** each |
+| `o.AddItem Item:="a", Item:="b"`, a repeated name | compiles; **448** at run time |
+| `o.AddItem "p", Index:=0` | **448** |
+| `Set o = Text1: o.Move Left:=300, Top:=2600` | **448** |
+| `Set o = Me: o.Move Left:=1000, Top:=1100` | **448** |
+| `Set o = c` (a Collection)`: o.Add Item:="lv", Key:="lk"` | ok |
+| `o.Add Itemx:=1`, on the Collection | **448** |
+| `x = o.Item(Index:="lk")`, on the Collection | ok |
+
+- **A late-bound control or form takes no named argument at all,** not even a correct one. A late-bound Collection takes its own names.
+
+**Collection, early-bound** (`Dim c As New Collection`):
+
+| Statement | VB6 |
+|---|---|
+| `c.Add Item:="v1", Key:="k1"` | ok |
+| `c.Add Key:="k0", Item:="v0", Before:=1` | ok; `c(1)` is v0 |
+| `c.Add F("item", "v2"), After:=F("after", 1)` | ok; evaluated `item`, `after`; `c(2)` is v2 |
+| `x = c.Item(Index:=2)` | v2 |
+| `c.Remove Index:="k0"` | ok |
+
+**Compile errors,** each in a project of its own:
+
+| Statement | `/make` |
+|---|---|
+| `List1.AddItem Itemx:="x"` | "Named argument not found" |
+| `List1.AddItem Item:="a", Item:="b"` | "Named argument already specified" |
+| `Me.Move Top:=100`, the required Left left out | "Argument not optional" |
+| `c.Add Itemx:=1`, on a Collection declared `As New Collection` | "Named argument not found" |
+| `List1.AddItem Index:=0, "x"`, positional after named | "Syntax error" |
+| `x = Me.TextWidth(Text:="abc")` | "Named argument not found": its parameter is `Str` |
+
+**The parameter names these rows confirm:**
+- `AddItem(Item, Index)`;
+- `RemoveItem(Index)`;
+- `Move(Left, Top, Width, Height)`;
+- `ZOrder(Position)`;
+- `TextWidth(Str)`;
+- `ScaleX(Width, FromScale, ToScale)`;
+- the Collection's `Add(Item, Key, Before, After)`, `Item(Index)` and `Remove(Index)`.
+
+**Not measured:**
+- the other built-in methods' names;
+- whether a gap before a supplied argument raises 448 on any method but `Move` and `ScaleX`;
+- `Show`, `PopupMenu` and `PaintPicture`;
+- an Automation object's methods.

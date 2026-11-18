@@ -58,10 +58,19 @@ public sealed class LanguageServerMessageReporter : IDisposable
         // whitespace keeps a multi-line message from pushing the status bar around, and the length cap
         // stops a runaway one from filling it — neither is sanitisation, because nothing here interprets
         // the string; it is only ever displayed.
-        var text = Flatten(p.Message);
+        var text = p.LocalizationKey is { } key ? _localization.GetString(key) : p.Message;
+        if (p.ServerDisplayName is { } name) text = string.Format(text, name, p.CommandTitle);
+        text = Flatten(text);
         if (text.Length == 0) return;
 
-        _statusBar.SetTemporaryMessage(Prefixed(p.Type, text), DwellFor(p.Type));
+        if (p.CommandTitle is not null)
+        {
+            _statusBar.SetTemporaryMessage(text, DwellFor(p.Type));
+            return;
+        }
+        var formatKey = p.IsEditRefusal ? "Str.Lsp.EditNotApplied"
+            : p.Type == LspMessageType.Error ? "Str.Lsp.ServerError" : "Str.Lsp.ServerMessage";
+        _statusBar.SetTemporaryMessage(string.Format(_localization.GetString(formatKey), text), DwellFor(p.Type));
     }
 
     private void OnProgress(object? sender, ProgressParams p)
@@ -72,11 +81,9 @@ public sealed class LanguageServerMessageReporter : IDisposable
             if (p.Value.Kind == "end")
             {
                 if (!_progress.Remove(key)) return;
-                // Do not erase a later status message from another IDE operation.
-                if (_statusBar.Message != _displayedProgress) return;
                 if (_progress.Count == 0)
                 {
-                    _statusBar.ClearMessage();
+                    if (_displayedProgress is { } ended) _statusBar.TryReplaceMessage(ended, null);
                     _displayedProgress = null;
                     return;
                 }
@@ -101,18 +108,18 @@ public sealed class LanguageServerMessageReporter : IDisposable
                 .Where(part => !string.IsNullOrWhiteSpace(part))));
             var name = Flatten(progress.ServerDisplayName ?? _localization.GetString("Str.StatusBar.LanguageServer"));
             var percentageText = value.Percentage is { } percentage ? $" ({percentage}%)" : "";
+            var previousText = _displayedProgress;
             _displayedProgress = text.Length == 0 ? name + percentageText
                 : string.Format(_localization.GetString("Str.StatusBar.LanguageServerProgress"), name, text, percentageText);
-            _statusBar.SetMessage(_displayedProgress);
+            // End may remove hidden progress, but must not erase a newer IDE operation's text.
+            if (p.Value.Kind == "end")
+            {
+                if (previousText is not null) _statusBar.TryReplaceMessage(previousText, _displayedProgress);
+            }
+            else
+                _statusBar.SetMessage(_displayedProgress);
         }
     }
-
-    private static string Prefixed(LspMessageType type, string text) => type switch
-    {
-        LspMessageType.Error => "Language server error: " + text,
-        LspMessageType.Warning => "Language server: " + text,
-        _ => "Language server: " + text,
-    };
 
     private const int MaxLength = 200;
 

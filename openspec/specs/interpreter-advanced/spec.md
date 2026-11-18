@@ -8,30 +8,76 @@ These constructs are what separates a program from a script. A large share of re
 collection of objects with properties and events, so an engine without them can run examples but not
 anything a developer recognises as their own code.
 
-This capability carries the scope statement for the whole interpreter, because this is where the pressure to
-keep going is strongest. Everything below the object model looks like a missing feature; almost none of it
-is. The rules that govern *what does not get built* are requirements here in the same way the behaviour is,
-and they are expected to hold after the project is public and taking contributions — which is precisely when
-they will be tested. Behavioural fidelity within the implemented surface, and the rule that uncertain
+This capability carries the scope statement for the whole interpreter. The interpreter is an engine that runs
+VB6 programs, a peer behind the same seams as any other engine rather than a fallback, and a construct VB6 runs
+that it refuses is a gap to fill. What it does not build is a language engine's work: binding and static
+analysis. That limit is a requirement here in the same way the behaviour is, and it is expected to hold after
+the project is public and taking contributions, which is precisely when it will be tested. Behavioural fidelity within the implemented surface, and the rule that uncertain
 semantics are verified against the original product rather than guessed, are specified in `interpreter-core`
 and apply here unchanged.
 
 ## Requirements
-### Requirement: The interpreter SHALL remain an approximation by design
-The interpreter SHALL be maintained as an out-of-the-box demonstrator rather than developed toward parity
-with a production VB6 runtime, and changes that increase completeness at the cost of that character SHALL be
-declined on principle rather than on quality.
 
-The reason to write this down is that every individual step toward completeness looks reasonable. Exhaustive
-quirk coverage, deterministic reference counting, a bytecode virtual machine, static checking — each is
-defensible alone, and together they are a second-rate reimplementation of something another engine already
-does properly behind the replaceable backend seam. The triage question is therefore whether a change keeps
-this a simple demonstrator, not whether it makes it more correct; a change can be entirely correct and still
-be out of scope.
+### Requirement: Arrays declared As New create each element lazily
+The interpreter SHALL keep each element of a class or Collection array declared `As New` as Nothing until an
+expression reads it, and then make it. Set to Nothing SHALL release an element without making one, and Erase of
+a fixed array SHALL release every made element. For Each SHALL see untouched elements as
+Nothing and make none. A non-Static local array SHALL release its elements on return. The measured rules are in
+the [As New oracle](../../../docs/vb6-fidelity-oracle/as-new.md).
 
-#### Scenario: A contribution that improves fidelity but grows the engine
-- **WHEN** a change would move the engine toward being a production runtime
-- **THEN** it is declined on scope, independently of its quality
+#### Scenario: Each use makes only the element it reads
+- **WHEN** `Dim a(3) As New Class1` is declared and `a(1).X = 5` executes
+- **THEN** only a(1) has been made
+- **AND** `a(2) Is Nothing` makes a(2) and reads False
+- **AND** after `Set a(1) = Nothing`, its next use makes a fresh instance with X back at zero
+
+#### Scenario: Enumeration observes storage without creating objects
+- **WHEN** For Each with a Variant variable enumerates an As New array containing untouched elements
+- **THEN** it visits every element and sees each untouched element as Nothing
+- **AND** it makes no instances
+
+### Requirement: Chained named-member writes preserve their owner's semantics
+The interpreter SHALL resolve module-qualified UDT field writes against the module-owned record,
+including an indexed record, and SHALL resolve a chained `Set` prefix before storing the final reference.
+A field write through a UDT-returning property or function SHALL modify only the returned copy,
+evaluate the member once and never invoke a corresponding `Property Let`.
+
+#### Scenario: Qualified record store
+- **WHEN** `Module1.p.In1.Z = 42` executes against the module's nested UDT variable
+- **THEN** `p.In1.Z` reads 42
+
+#### Scenario: Chained object reference store
+- **WHEN** `Set Module1.o.H.Child = l` executes through class-instance fields
+- **THEN** `o.H.Child Is l` is True
+
+#### Scenario: Store into a returned record
+- **WHEN** `b.U.Z = 5` executes with `b.U` returning a copy of a record whose Z is 3
+- **THEN** the backing record's Z stays 3, the getter runs once and its Let accessor never runs
+
+Measurements: [#173](https://github.com/hexide-io/HexIDE/issues/173), vb6.exe SP6 native and p-code,
+2026-11-14. Class-typed UDT fields also support these chained stores (#3924, measured B3/B4).
+
+### Requirement: The interpreter SHALL run VB6 programs within the syntax-tree limit
+The interpreter SHALL aim to run every valid VB6 program as VB6 runs it, and SHALL do so by executing the
+concrete syntax tree: it SHALL NOT build a bound syntax tree or perform static semantic analysis. Within that
+limit it MAY approximate when and how an error surfaces, and it SHALL NOT approximate a result.
+
+Coverage is the goal, so a change that makes the engine run more of VB6 is in scope, provided the behaviour it
+implements was measured on vb6.exe rather than guessed. The limit is binding: relating one symbol to another
+without executing either, which is a language engine's work behind the replaceable backend seam. Collecting
+symbols ahead of execution stays inside the limit, and relating them does not. The cost of the limit is
+diagnostics, not constructs. An error VB6 finds before the program runs may surface here as the statement
+executes, with VB6's error number, and an error on a path the program never takes may not surface at all.
+What is never acceptable is a value VB6 would not produce: a construct the engine cannot run faithfully is
+refused, not approximated.
+
+#### Scenario: A change that runs more of VB6
+- **WHEN** a change makes the engine run a construct VB6 runs, with the construct's behaviour measured on vb6.exe
+- **THEN** it is in scope, whatever it adds to the engine's coverage
+
+#### Scenario: An approximation that would change a value
+- **WHEN** the only way to run a construct would produce a value VB6 does not
+- **THEN** the engine refuses the construct instead
 
 #### Scenario: A capability that belongs to a real engine
 - **WHEN** a capability requires whole-program analysis, a compilation stage, or an execution model this
@@ -50,19 +96,24 @@ surface is not advertised as compatible, and no part of it appears as planned wo
 
 #### Scenario: A construct from another implementation's extended surface
 - **WHEN** a program uses a language construct that no Microsoft-era release shipped
-- **THEN** the engine stops with an error identifying it as belonging to another implementation
-- **AND** it names that implementation as the place to run the program
+- **THEN** the engine stops before any statement runs with one compile error identifying the construct as outside VB6, VBA and VBScript
+- **AND** the error names no other implementation and does not describe the construct as planned work
+
+#### Scenario: Compound assignment is outside the classic dialects
+- **WHEN** a program uses `+=`, `-=`, `*=`, `/=`, `\=`, `^=` or `&=`
+- **THEN** the engine SHALL refuse it at load with the construct as typed and its line
+- **AND** the message reads `<construct> isn't part of VB6, VBA or VBScript, so this interpreter doesn't run it.`
 
 #### Scenario: Describing what the interpreter supports
 - **WHEN** the interpreter's language support is described
 - **THEN** it claims only the classic dialect family, and lists no extended-surface feature as planned
 
 ### Requirement: Unimplemented constructs SHALL be documented as boundaries
-Each construct the engine does not implement SHALL be recorded as a documented boundary stating where the
-demonstrator ends, rather than as outstanding work.
+Each construct the engine does not implement SHALL be recorded with what stops it: binding, which is a
+permanent boundary; the tree-walk execution model; or a missing input, such as a type library. A construct
+stopped only because its behaviour is unmeasured SHALL be recorded as a gap to fill, not as a boundary.
 
-The distinction is not presentational. A backlog implies the list should shrink and that its length is a
-measure of failure; a boundary map is a deliverable that tells a developer exactly when to reach for a real
+The permanent part of that record is a deliverable: it tells a developer exactly when to reach for a real
 engine, which is more useful than a partial implementation that fails somewhere they cannot predict. It also
 makes the deferrals coherent — someone can read the whole edge at once instead of discovering it one crash
 at a time.
@@ -124,9 +175,27 @@ code.
 - **AND** ReDim, ReDim Preserve and Erase of its containing array raise error 10 during the call
 
 #### Scenario: Array fields in a record
-- **WHEN** a Type contains a fixed array with literal bounds or a dynamic array field
+- **WHEN** a Type contains a fixed array with literal or resolved constant-expression bounds, or a dynamic array field
 - **THEN** indexed reads and writes use the subscripts, and whole-array field assignments use the array-variable store rules
-- **AND** nonliteral or inverted Type-field bounds and array fields As New remain explicitly refused
+- **AND** inverted Type-field bounds and array fields As New remain explicitly refused
+
+#### Scenario: Constant bounds in a Type field
+- **WHEN** a standard module's or class's declaration walk reaches a Type with nonliteral field bounds
+- **THEN** the engine SHALL check and evaluate them there, in source order, using the declaration environment
+- **AND** preceding Consts, Enum members and expressions of them size the fields as measured in [#4595](https://github.com/hexide-io/HexIDE/issues/4595)
+- **AND** a later Const or a variable raises "Constant expression required"
+- **AND** allocation of an unresolved Type first runs its standard module's declarations if they have neither run nor started
+- **AND** otherwise unresolved allocation refuses explicitly with #4595 rather than using placeholder values
+
+#### Scenario: Object array fields in a record
+- **WHEN** a Type declares a fixed or dynamic array of a project class, Object or Collection
+- **THEN** its allocated elements start as Nothing, and Set stores through the array's declared-class check
+- **AND** an unrelated class raises error 13 without replacing the element
+- **AND** record copies own independent arrays sharing counted object references
+- **AND** Erase resets fixed fields retaining bounds, frees dynamic fields, and releases held objects
+- **AND** a local record releases its objects at scope exit, and shared objects terminate only when their last reference is released
+
+These behaviours are measured native and p-code in [#4596](https://github.com/hexide-io/HexIDE/issues/4596), rows 1–14.
 
 #### Scenario: For Each over a UDT array
 - **WHEN** execution reaches For Each over an array of a user-defined type

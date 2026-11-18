@@ -284,6 +284,12 @@ public partial class TranslationEditorViewModel : Document
         lines.Add(string.Format(
             _localization.GetString("Str.TranslationEditor.Tooltip.Override"), overrideValue));
 
+        var row = new TranslationRowViewModel(key);
+        if (row.ProtectedReasonKey is { } reason)
+            lines.Add(_localization.GetString(reason));
+        else if (row.IsProtectedFromProfiles)
+            lines.Add(_localization.GetString("Str.TranslationEditor.ProtectedFromProfiles"));
+
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -297,9 +303,26 @@ public partial class TranslationEditorViewModel : Document
             CommitTo(row);
     }
 
+    internal void ExplainProtected(TranslationRowViewModel row)
+    {
+        if (row.ProtectedReasonKey is { } reason)
+            StatusMessage = _localization.GetString(reason);
+    }
+
     private void CommitTo(TranslationRowViewModel row)
     {
         var toId = ToId;
+
+        // The grid will not open this cell for editing; this is for anything that sets the value another way.
+        if (row.IsProtected)
+        {
+            _suppressCommit = true;
+            try { row.ToValue = _localization.GetStringFrom(toId, row.Key); }
+            finally { _suppressCommit = false; }
+            StatusMessage = _localization.GetString(row.ProtectedReasonKey!);
+            return;
+        }
+
         var newValue = row.ToValue;
 
         if (string.IsNullOrWhiteSpace(newValue))

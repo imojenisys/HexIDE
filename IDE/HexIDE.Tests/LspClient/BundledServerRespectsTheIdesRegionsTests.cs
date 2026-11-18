@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
-using HexIDE.Forms.ViewModels;
+using HexIDE.Conversations;
+using HexIDE.Language;
 using HexIDE.Lsp;
 using HexIDE.Lsp.Messages;
 using HexIDE.Runtime.Serialization;
-using Microsoft.Extensions.Logging;
 
 // NB: namespace deliberately avoids a `Lsp` segment — see VBLspClientTests.
 namespace HexIDE.Tests.LspClient;
@@ -37,6 +37,10 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<PublishDiagnosticsParams>> _published = new();
     private VBLspClient? _client;
+    private readonly ConversationLog capture = new();
+    private readonly WireDiagnosis diagnosis = new(TestContext.Current.CancellationToken);
+    private StdioProcessLspTransport? transport;
+    private const string ConnectionId = "bundled-regions";
     private int _documents;
 
     public async ValueTask DisposeAsync()
@@ -46,6 +50,7 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
             try { await _client.StopAsync(); } catch { /* teardown is best effort */ }
             try { await _client.DisposeAsync(); } catch { /* ditto */ }
         }
+        await capture.DisposeAsync();
         GC.SuppressFinalize(this);
     }
 
@@ -68,7 +73,7 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
             }
 
             var uri = await OpenAsync(client, text);
-            var edits = await client.RequestFormattingAsync(uri, TestContext.Current.CancellationToken);
+            var edits = await client.RequestFormattingAsync(uri, new FormattingOptions(4, true), TestContext.Current.CancellationToken);
 
             var lines = Lines(text);
             var expected = Enumerable.Range(0, lines.Length)
@@ -214,8 +219,12 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
                     var length = lineStarts[edit.Range.End.Line] + edit.Range.End.Character - offset;
                     return new TextChange(offset, length, edit.NewText);
                 }).ToList();
-                if (CodeEditorViewModel.RefusedRenameEdit(text, 0, answer) is { } refused)
-                    failures.Add($"{name}: renaming {word} edits read-only line {LineOf(lineStarts, refused.Offset)}");
+                foreach (var edit in answer)
+                {
+                    if (ReadOnlyRegions.Changes(regions, edit.Offset, edit.Length)
+                        && !new Vb6ReadOnlyRegionRules().RenameMayWrite(text, 0, answer, edit))
+                        failures.Add($"{name}: renaming {word} edits read-only line {LineOf(lineStarts, edit.Offset)}");
+                }
                 ownQualifiers += answer.Count(c => ReadOnlyRegions.Touches(regions, c.Offset, c.Length));
 
                 var highlight = await client.RequestDocumentHighlightAsync(uri, at, TestContext.Current.CancellationToken);
@@ -282,12 +291,13 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
 
     private async Task<VBLspClient> ConnectAsync()
     {
-        var loggerFactory = LoggerFactory.Create(_ => { });
-        var transport = new StdioProcessLspTransport(
+        capture.Arm(ConnectionId, true);
+        transport = new StdioProcessLspTransport(
             new LspServerInfo(BundledServer.Find()!, "", Path.GetTempPath()),
-            loggerFactory.CreateLogger<StdioProcessLspTransport>());
+            diagnosis.ClientLog<StdioProcessLspTransport>(1));
 
-        _client = new VBLspClient(transport, loggerFactory.CreateLogger<VBLspClient>(), "vb6");
+        _client = new VBLspClient(transport, diagnosis.ClientLog<VBLspClient>(1), "vb6",
+            capture: capture, connectionId: ConnectionId);
         _client.DiagnosticsPublished += (_, p) => Published(p.Uri).TrySetResult(p);
         await _client.StartAsync(TestContext.Current.CancellationToken);
         return _client;
@@ -302,7 +312,21 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
     {
         var uri = $"vb6://module/Regions{Interlocked.Increment(ref _documents)}";
         await client.OpenDocumentAsync(uri, text, TestContext.Current.CancellationToken);
-        await Published(uri).Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        try
+        {
+            await ForeignServerWait.ForDiagnostics(Published(uri).Task, capture, ConnectionId, Timeout);
+        }
+        catch (Exception e) when (e is TimeoutException or InvalidOperationException)
+        {
+            await capture.DrainAsync();
+            var entries = capture.Snapshot(ConnectionId);
+            var exit = entries.LastOrDefault(entry => entry.Detail?.StartsWith("process exited", StringComparison.Ordinal) == true)?.Detail
+                ?? "no process exit notice recorded";
+            var conversation = string.Join(" | ", entries.Select(entry =>
+                $"{entry.Sequence} {entry.Direction} {entry.Kind} {entry.Method} {entry.Outcome} {entry.Detail}"));
+            throw new InvalidOperationException(diagnosis.Diagnosis(
+                $"publish wait for {uri} ended ({e.GetType().Name}): {e.Message}; server process alive={transport?.IsAlive}, {exit}; conversation: [{conversation}]"), e);
+        }
         return uri;
     }
 
@@ -394,13 +418,8 @@ public class BundledServerRespectsTheIdesRegionsTests : IAsyncDisposable
 
     private static string? FindUpwards(string relative)
     {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-        {
-            var candidate = Path.Join(dir.FullName, relative);
-            if (Directory.Exists(candidate))
-                return candidate;
-        }
-        return null;
+        var candidate = Path.Join(HexIDE.Tests.Infrastructure.RepoTree.Root(), relative);
+        return Directory.Exists(candidate) ? candidate : null;
     }
 
     /// <summary>The lines of <paramref name="text"/> that the IDE's regions cover, 0-based.</summary>

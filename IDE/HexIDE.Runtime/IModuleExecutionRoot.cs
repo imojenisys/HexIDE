@@ -13,6 +13,17 @@ public interface IModuleExecutionRoot
     // args carries a control-array event's leading `Index As Integer` (null for a parameterless handler).
     void ExecuteSub(string name, IReadOnlyList<Vb6Value>? args = null);
 
+    // MSFlexGrid's Compare must finish and return its ByRef Cmp before the sort continues (#1099).
+    System.Threading.Tasks.Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp) =>
+        throw new NotImplementedException("MSFlexGrid.Compare is not implemented by this execution root (#1099)");
+
+    // The designated argument is passed through a caller slot and read back after the handler returns.
+    void ExecuteEventByRef(string name, IReadOnlyList<Vb6Value> args, int byRefIndex, Action<Vb6Value> completed)
+    {
+        ExecuteSub(name, args);
+        completed(args[byRefIndex]);
+    }
+
     // Keyboard arguments must return before the character is applied (#2325).
     void ExecuteKeyboardEvent(string name, IReadOnlyList<Vb6Value> args, int writable, Action<int> completed)
     {
@@ -46,6 +57,16 @@ public interface IModuleExecutionRoot
     /// </summary>
     void ExecuteEvent(string name, Func<IReadOnlyList<Vb6Value>> args, EventCoalescing coalescing = EventCoalescing.None, Func<bool>? when = null) =>
         ExecuteSubIf(name, args(), when ?? (() => true));
+
+    /// <summary>An event called inside a control method, with writable arguments and completion before it returns.</summary>
+    System.Threading.Tasks.Task ExecuteControlEventAsync(string name, IReadOnlyList<CallArg> args)
+    {
+        var values = new List<Vb6Value>();
+        foreach (var arg in args)
+            values.Add(arg.Value);
+        ExecuteSub(name, values);
+        return System.Threading.Tasks.Task.CompletedTask;
+    }
 
     /// <summary>
     /// A Timer control's tick. While that Timer's own handler runs the tick is dropped, and while another handler runs

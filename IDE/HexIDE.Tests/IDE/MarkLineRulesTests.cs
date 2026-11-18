@@ -30,7 +30,8 @@ public class MarkLineRulesTests
 
     // The model splits a form after its designer block, so the attribute run is the code's first lines.
     private static readonly CodeWindowText Form =
-        new(FormText, FormText.IndexOf("Attribute VB_Name", StringComparison.Ordinal));
+        new(FormText, FormText.IndexOf("Attribute VB_Name", StringComparison.Ordinal),
+            new Vb6ReadOnlyRegionReader().Regions(FormText, FormText.IndexOf("Attribute VB_Name", StringComparison.Ordinal)));
 
     private static string? Breakpoints(params int[] lines) =>
         MarkLineRules.Refusal(Form, "P/frmOrders", lines, [], first: 1, "breakpoint");
@@ -63,8 +64,8 @@ public class MarkLineRulesTests
     {
         var refusal = Breakpoints(3, 12);
 
-        refusal.Should().StartWith("3 is in a read-only part of P/frmOrders")
-            .And.Contain("its header (1..9)")
+        refusal.Should().StartWith("3 is read-only text in P/frmOrders")
+            .And.Contain("which only the IDE changes")
             .And.Contain("its code starts at 10")
             .And.EndWith("Nothing was changed.");
     }
@@ -74,16 +75,16 @@ public class MarkLineRulesTests
     {
         // run_to_cursor and set_next_statement ask for a "line"; "no line can go there" would say nothing.
         MarkLineRules.Refusal(Form, "P/frmOrders", [3], [], first: 1, "line")
-            .Should().Contain("so execution can never stop there").And.NotContain("no line");
+            .Should().Contain("so execution can't be sent there").And.NotContain("no line");
     }
 
     [Fact]
     public void ALineOfTheAttributeRunIsRefusedLikeTheDesignerBlock() =>
-        Breakpoints(9).Should().StartWith("9 is in a read-only part");
+        Breakpoints(9).Should().StartWith("9 is read-only text");
 
     [Fact]
     public void ARefusalListsEveryOffendingLineOnce() =>
-        Breakpoints(4, 2, 4).Should().StartWith("2, 4 are in a read-only part");
+        Breakpoints(4, 2, 4).Should().StartWith("2, 4 are read-only text");
 
     [Fact]
     public void AReadOnlyLineAlreadyMarkedIsLetThrough()
@@ -96,12 +97,12 @@ public class MarkLineRulesTests
     [Fact]
     public void ADocumentWithNoHeaderDoesNotTalkAboutOne()
     {
-        var text = new CodeWindowText(
-            "Public Function Total() As Currency\r\nAttribute Total.VB_Description = \"x\"\r\nEnd Function\r\n", 0);
+        const string code = "Public Function Total() As Currency\r\nAttribute Total.VB_Description = \"x\"\r\nEnd Function\r\n";
+        var text = new CodeWindowText(code, 0, new Vb6ReadOnlyRegionReader().Regions(code, 0));
 
         var refusal = MarkLineRules.Refusal(text, "P/Order", [2], [], first: 1, "breakpoint");
 
-        refusal.Should().Contain("the Attribute lines that describe a member")
+        refusal.Should().Contain("read-only text in P/Order, which only the IDE changes")
             .And.NotContain("header").And.NotContain("code starts");
     }
 

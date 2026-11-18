@@ -58,7 +58,7 @@ public class UnsavedMemberRefusalTests : IDisposable
             return Task.FromResult(true);
         });
         // The project has never been saved, so its save asks where: here.
-        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>())
+        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
             .Returns(ci => Task.FromResult<string?>(
                 Path.Join(dir, ci.Arg<Avalonia.Platform.Storage.FilePickerSaveOptions>().SuggestedFileName)));
 
@@ -68,8 +68,7 @@ public class UnsavedMemberRefusalTests : IDisposable
         var localization = Substitute.For<HexIDE.Localization.ILocalizationService>();
         localization.GetString("Str.Dialog.UnsavedMembers.NothingWritten").Returns(RefusalText);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
@@ -78,7 +77,7 @@ public class UnsavedMemberRefusalTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             localization,
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     /// <summary>A project as File ▸ New Project makes it: a <c>Form1</c> that is its startup form, and no files.</summary>

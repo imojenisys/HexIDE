@@ -54,16 +54,16 @@ public partial class ComponentsViewModel : ObservableObject, IDialog
     public List<ComponentsComponentViewModel> InsertableObjects => showOnlySelectedInsertableObjects ? selectedInsertableObjects : allInsertableObjects;
     [Notify] private ComponentsComponentViewModel? selectedInsertableObject;
 
-    public ComponentsViewModel(ProjectDefinition projectDefinition, IWindowManager? windowManager = null,
+    public ComponentsViewModel(ProjectDefinition projectDefinition, IComponentRegistry componentRegistry, IWindowManager? windowManager = null,
         ILocalizationService? localization = null)
     {
         project = projectDefinition;
         this.windowManager = windowManager;
         this.localization = localization;
-        Title = "Components";
+        Title = localization?.GetString("Str.Dialog.Components.Title") ?? "Components";
 
         var referenced = project.ObjectReferences.ToList();
-        foreach (var library in ControlLibraries.All.OrderBy(l => l.Description, StringComparer.OrdinalIgnoreCase))
+        foreach (var library in componentRegistry.Libraries.OrderBy(l => l.Description, StringComparer.OrdinalIgnoreCase))
         {
             var row = new ComponentsComponentViewModel(library.Description, library.File, library)
             {
@@ -73,7 +73,7 @@ public partial class ComponentsViewModel : ObservableObject, IDialog
             allControls.Add(row);
         }
         // A control library the project references that HexIDE doesn't implement: listed, checked, and not to be changed here.
-        foreach (var other in referenced.Where(r => ControlLibraries.For(r) is null))
+        foreach (var other in referenced.Where(r => !componentRegistry.Libraries.Any(library => library.IsNamedBy(r))))
             allControls.Add(new ComponentsComponentViewModel(
                 string.Format(localization?.GetString("Str.Dialog.Components.NotImplemented") ?? "{0} (not implemented in HexIDE)", other.File),
                 other.File, library: null) { IsSelected = true });
@@ -118,7 +118,7 @@ public partial class ComponentsViewModel : ObservableObject, IDialog
         });
         Refused?.Invoke(library);
         _ = windowManager?.MessageBox(localization?.GetString("Str.Dialog.Components.InUse") ?? "Can't remove control or reference; in use",
-            "HexIDE", MessageBoxButtons.Ok, MessageBoxIcon.Warning);
+            HexIDE.IDE.Distribution.DisplayName, MessageBoxButtons.Ok, MessageBoxIcon.Warning);
     }
 
     /// <summary>Raised when unchecking a library is refused because a form uses it.</summary>

@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using HexIDE.Runtime.BuiltinTypes;
 using HexIDE.Runtime.Components;
@@ -47,8 +49,15 @@ public class VBListBox : ListBox
     // A Shift press on an Extended list, whose range comes at the release.
     private bool shiftPressed;
 
+    private int? pointerTop;
+    private bool scrollIntoViewOnLayout;
+    private bool rowsNeedPadding;
+
     static VBListBox()
     {
+        AttachedProperties.FontProperty.Changed.AddClassHandler<VBListBox>((list, _) => list.UpdateRows());
+        ControlKeyEvents.Attach<VBListBox>();
+        IsTextSearchEnabledProperty.OverrideDefaultValue<VBListBox>(true);
         // VB6 selects nothing for a right or middle press, where Avalonia's ListBox selects on a right one. Handled on
         // the way down, its own press handler never sees it; the mouse events take handled presses too. A left press on
         // a multi-select list is VB6's to handle, for the same reason.
@@ -62,7 +71,7 @@ public class VBListBox : ListBox
                 e.Handled = true;
             }
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
-        // A multi-select list's keys, on the way down: its focused item would take Space first.
+        // Take keys on the way down: a focused item takes Space, and its ScrollViewer takes paging first.
         KeyDownEvent.AddClassHandler<VBListBox>((list, e) =>
         {
             // What it takes raises Click, changed or not (measured).
@@ -71,7 +80,20 @@ public class VBListBox : ListBox
                 e.Handled = true;
                 list.ExecuteSub(ComponentBaseClass.ClickEvent);
             }
+            else if (!list.IsMultiSelect && e.Key is Key.Down or Key.Up or Key.PageDown or Key.PageUp or Key.Home or Key.End)
+            {
+                // An item keeps the focus after a click. Take navigation before its ScrollViewer takes paging.
+                list.OnKeyDown(e);
+                e.Handled = true;
+            }
         }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        // Only scroll-bar pointer input participates; wheel and code scrolling must stay silent (#3275).
+        PointerPressedEvent.AddClassHandler<VBListBox>((list, e) => list.BeginBarInput(e), RoutingStrategies.Tunnel);
+        PointerMovedEvent.AddClassHandler<VBListBox>((list, e) => list.BeginBarInput(e), RoutingStrategies.Tunnel);
+        PointerReleasedEvent.AddClassHandler<VBListBox>((list, e) => list.BeginBarInput(e), RoutingStrategies.Tunnel);
+        PointerPressedEvent.AddClassHandler<VBListBox>((list, e) => list.EndBarInput(), handledEventsToo: true);
+        PointerMovedEvent.AddClassHandler<VBListBox>((list, e) => list.EndBarInput(), handledEventsToo: true);
+        PointerReleasedEvent.AddClassHandler<VBListBox>((list, e) => list.EndBarInput(), handledEventsToo: true);
         // Before the mouse events, so Click comes before MouseUp.
         PointerPressedEvent.AddClassHandler<VBListBox>((list, e) => list.Pressed(e), handledEventsToo: true);
         PointerMovedEvent.AddClassHandler<VBListBox>((list, e) => list.Moved(e), handledEventsToo: true);
@@ -84,6 +106,25 @@ public class VBListBox : ListBox
 
     public VBListBox()
     {
+        // Code and keys scroll synchronously; a queued anchor scroll would undo a later TopIndex (#4229).
+        AutoScrollToSelectedItem = false;
+        LayoutUpdated += (_, _) =>
+        {
+            if (rowsNeedPadding)
+            {
+                rowsNeedPadding = false;
+                UpdateRows();
+            }
+            if (!scrollIntoViewOnLayout || !CanScrollNow())
+                return;
+            scrollIntoViewOnLayout = false;
+            // ListIndex rather than the index chosen: an item added above it since then moves it down.
+            if (ListIndex >= 0)
+            {
+                ScrollIntoView(ListIndex);
+                UpdateLayout();
+            }
+        };
         // Clear leaves a multi-select list's focus at 0 (measured). What RemoveItem does to it is not measured; it is
         // kept on an item while there is one.
         Items.CollectionChanged += (_, e) =>
@@ -95,6 +136,128 @@ public class VBListBox : ListBox
         };
     }
 
+    protected override void PrepareContainerForItemOverride(Control container, object? item, int index)
+    {
+        base.PrepareContainerForItemOverride(container, item, index);
+        if (container is ListBoxItem listItem && ListBoxRowHeights.Find(AttachedProperties.GetFont(this)) is { } height)
+        {
+            listItem.UseLayoutRounding = false;
+            listItem.Height = height;
+            rowsNeedPadding = true;
+        }
+        else
+            ApplyRowHeight(container);
+    }
+
+    private void UpdateRows()
+    {
+        // VB6's first row starts at the list's inner edge: the theme's top padding pushed the last of 1,425 twips' seven
+        // rows partly out of view (#4073, seen live). The bottom padding stays: it is the scroll slack that lets
+        // SetTopIndexFromCode reach the measured last page when the viewport isn't a whole number of rows.
+        // Horizontal padding is unmeasured and left as it is.
+        ClearValue(PaddingProperty);
+        if (ListBoxRowHeights.Find(AttachedProperties.GetFont(this)) is not null)
+            Padding = new Thickness(Padding.Left, 0, Padding.Right, Padding.Bottom);
+        foreach (var container in GetRealizedContainers())
+            ApplyRowHeight(container);
+    }
+
+    private void ApplyRowHeight(Control container)
+    {
+        if (container is not ListBoxItem item)
+            return;
+        if (ListBoxRowHeights.Find(AttachedProperties.GetFont(this)) is { } height)
+        {
+            item.UseLayoutRounding = false;
+            item.Height = height;
+            item.ClearValue(PaddingProperty);
+            var padding = item.Padding;
+            item.Padding = new Thickness(padding.Left, 0, padding.Right, 0);
+        }
+        else
+        {
+            item.ClearValue(UseLayoutRoundingProperty);
+            item.ClearValue(HeightProperty);
+            item.ClearValue(PaddingProperty);
+        }
+    }
+
+    // #3275: TopIndex assignments raise Scroll only when the resulting top row changes.
+    internal int TopIndex
+    {
+        get
+        {
+            EnsureTopIndexLayout();
+            var height = RowHeight();
+            if (height <= 0 || Scroll is not { } scroll)
+                throw new NotImplementedException("ListBox.TopIndex cannot determine row layout (#3986)");
+            return (int)Math.Floor(scroll.Offset.Y / height + 0.000001);
+        }
+    }
+
+    private void EnsureTopIndexLayout()
+    {
+        UpdateLayout();
+        if (RowHeight() > 0 && Scroll is { } scroll && scroll.Viewport.Height > 0)
+            return;
+        // A loaded form need not be shown for TopIndex (#3986). Measure and arrange the list at its
+        // form dimensions so the real template supplies the same row height and viewport as when shown.
+        // Initialize from the host: its content presenter must attach the list without showing the window.
+        if (!double.IsFinite(Width) || !double.IsFinite(Height))
+            return;
+        Control root = this;
+        while (root.Parent is Control parent)
+            root = parent;
+        InitializeLayout(root);
+        InvalidateMeasure();
+        Measure(new Size(Width, Height));
+        Arrange(new Rect(Bounds.Position, DesiredSize));
+        UpdateLayout();
+    }
+
+    private static void InitializeLayout(Control control)
+    {
+        if (!control.IsInitialized)
+        {
+            control.BeginInit();
+            control.EndInit();
+        }
+        control.ApplyStyling();
+        control.ApplyTemplate();
+        // Detached presenters defer creating their child; force it before measuring the hidden form.
+        if (control is Avalonia.Controls.Presenters.ContentPresenter presenter)
+            presenter.UpdateChild();
+        foreach (var child in control.GetVisualChildren())
+            if (child is Control childControl)
+                InitializeLayout(childControl);
+        control.InvalidateMeasure();
+    }
+
+    private double RowHeight()
+    {
+        foreach (var container in GetRealizedContainers())
+            if (container.Bounds.Height > 0)
+                return container.Bounds.Height;
+        return 0;
+    }
+
+    internal void SetTopIndexFromCode(int index)
+    {
+        if (index < 0 || index >= ItemCount)
+            throw new VBRunTimeException(VBStandardError.InvalidPropertyValue);
+        scrollIntoViewOnLayout = false;
+        EnsureTopIndexLayout();
+        var height = RowHeight();
+        if (height <= 0 || Scroll is not { } scroll)
+            throw new NotImplementedException("ListBox.TopIndex cannot determine row layout (#3986)");
+        var before = TopIndex;
+        var lastPage = Math.Max(0, ItemCount - (int)Math.Floor(scroll.Viewport.Height / height));
+        scroll.Offset = new Vector(scroll.Offset.X, Math.Min(index, lastPage) * height);
+        UpdateLayout();
+        if (TopIndex != before)
+            this.ExecuteSub(ListBoxComponentClass.ScrollEvent);
+    }
+
     /// <summary>The form's MultiSelect, which VB6 sets at design time only.</summary>
     public VBMultiSelect MultiSelect
     {
@@ -102,6 +265,7 @@ public class VBListBox : ListBox
         init
         {
             multiSelect = value;
+            IsTextSearchEnabled = value == VBMultiSelect.None;
             if (value != VBMultiSelect.None)
                 SelectionMode = SelectionMode.Multiple;
         }
@@ -120,6 +284,37 @@ public class VBListBox : ListBox
 
     /// <summary>Text as VB6 reads it: the text of the item at ListIndex, or "".</summary>
     internal string ListIndexText => ListIndex >= 0 && ListIndex < ItemCount ? Items[ListIndex] as string ?? "" : "";
+
+    internal bool IsScrollBarSource(object? source)
+    {
+        for (var visual = source as Visual; visual is not null && !ReferenceEquals(visual, this); visual = visual.GetVisualParent())
+            if (visual is ScrollBar bar && bar.Orientation == Avalonia.Layout.Orientation.Vertical)
+                return true;
+        return false;
+    }
+
+    private void BeginBarInput(PointerEventArgs e)
+    {
+        pointerTop = !IsMultiSelect && IsScrollBarSource(e.Source) ? TopIndex : null;
+        if (pointerTop is not null)
+            for (var visual = e.Source as Visual; visual is not null && !ReferenceEquals(visual, this); visual = visual.GetVisualParent())
+                if (visual is ScrollBar bar)
+                {
+                    bar.SetCurrentValue(ScrollBar.SmallChangeProperty, RowHeight());
+                    bar.SetCurrentValue(ScrollBar.LargeChangeProperty, Math.Max(RowHeight(), Scroll!.Viewport.Height - RowHeight()));
+                }
+    }
+
+    private void EndBarInput()
+    {
+        var before = pointerTop;
+        pointerTop = null;
+        if (before is null)
+            return;
+        UpdateLayout();
+        if (TopIndex != before)
+            this.ExecuteSub(ListBoxComponentClass.ScrollEvent);
+    }
 
     private void Pressed(PointerPressedEventArgs e)
     {
@@ -194,16 +389,47 @@ public class VBListBox : ListBox
             this.ExecuteSub(ComponentBaseClass.ClickEvent);
     }
 
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        var before = SelectedIndex;
+        base.OnTextInput(e);
+        if (SelectedIndex != before)
+            this.ExecuteSub(ComponentBaseClass.ClickEvent);
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         // A multi-select list's keys are taken on the way down; Avalonia's own would select as Avalonia does.
-        if (IsMultiSelect)
+        if (IsMultiSelect || e.Handled)
             return;
         var before = SelectedIndex;
-        base.OnKeyDown(e);
+        var scrollKey = e.Key is Key.Down or Key.Up or Key.PageDown or Key.PageUp or Key.Home or Key.End;
+        var top = scrollKey && RowHeight() > 0 ? TopIndex : (int?)null;
+        if (e.Key is Key.PageDown or Key.PageUp && top is not null && ItemCount > 0)
+        {
+            var page = Math.Max(1, (int)Math.Floor(Scroll!.Viewport.Height / RowHeight()) - 1);
+            // Both keys move the selection a page, the rows shown less one, from wherever it is; the view then scrolls
+            // the least it can to show it. The top row plays no part (measured, #3986).
+            SelectedIndex = e.Key == Key.PageUp
+                ? Math.Max(0, SelectedIndex - page)
+                : Math.Min(ItemCount - 1, SelectedIndex + page);
+            e.Handled = true;
+        }
+        else
+            base.OnKeyDown(e);
+        if (top is not null && SelectedIndex != before)
+        {
+            ScrollIntoView(SelectedIndex);
+            UpdateLayout();
+            if (e.Key is Key.PageDown or Key.PageUp)
+                ContainerFromIndex(SelectedIndex)?.Focus(NavigationMethod.Unspecified);
+        }
+        var scrolled = top is not null && TopIndex != top;
         // An arrow that moves the selection raises Click; one that can go no further does not.
         if (SelectedIndex != before)
             this.ExecuteSub(ComponentBaseClass.ClickEvent);
+        if (scrolled)
+            this.ExecuteSub(ListBoxComponentClass.ScrollEvent);
     }
 
     // Up, Down and Space, the keys measured. Others do nothing on a multi-select list.
@@ -292,8 +518,37 @@ public class VBListBox : ListBox
         if (IsMultiSelect)
             focusIndex = index;
         else
-            SelectedIndex = index;
+            SelectFromCode(index);
         this.ExecuteSub(ComponentBaseClass.ClickEvent);
+    }
+
+    private void SelectFromCode(int index)
+    {
+        SelectedIndex = index;
+        if (index >= 0)
+            ScrollIntoViewFromCode(index);
+        else
+            scrollIntoViewOnLayout = false;
+    }
+
+    private bool CanScrollNow() =>
+        IsEffectivelyVisible && RowHeight() > 0 && Scroll is { Viewport.Height: > 0 };
+
+    /// <summary>
+    /// Brings an item code selected into view, the least it can, before the statement after it runs: inside Click and
+    /// without Scroll (#3986). A MultiSelect list's Selected(i) = True does the same (measured, #4229). A list not laid
+    /// out yet, as in Form_Load, scrolls when it is, unless a TopIndex assignment comes first.
+    /// </summary>
+    private void ScrollIntoViewFromCode(int index)
+    {
+        scrollIntoViewOnLayout = false;
+        if (!CanScrollNow())
+        {
+            scrollIntoViewOnLayout = true;
+            return;
+        }
+        ScrollIntoView(index);
+        UpdateLayout();
     }
 
     /// <summary>
@@ -317,6 +572,7 @@ public class VBListBox : ListBox
         {
             Selection.Select(index);
             focusIndex = index;
+            ScrollIntoViewFromCode(index);
         }
         else
             Selection.Deselect(index);
@@ -336,7 +592,8 @@ public class VBListBox : ListBox
             for (var i = 0; i < ItemCount && index < 0; i++)
                 if (string.Equals(Items[i] as string, text, StringComparison.OrdinalIgnoreCase))
                     index = i;
-            SelectedIndex = index;
+            if (index != SelectedIndex)
+                SelectFromCode(index);
         }
         this.ExecuteSub(ComponentBaseClass.ClickEvent);
     }

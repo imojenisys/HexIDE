@@ -29,8 +29,26 @@ public class SilentServerTests : IAsyncDisposable
     private readonly List<IAsyncDisposable> _clients = [];
     private readonly List<IDisposable> _disposables = [];
 
+    private readonly WireDiagnosis diagnosis = new(TestContext.Current.CancellationToken);
+    private int connections;
+    private volatile bool unexpectedDrop;
+    private volatile bool stopping;
+
+    private sealed class ConnectionState
+    {
+        public volatile bool ExpectedClose;
+    }
+
+    private async Task Wait(Task task)
+    {
+        try { await task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken); }
+        catch (TimeoutException e) { throw new TimeoutException(diagnosis.Diagnosis("a 20-second wait timed out"), e); }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        var dropped = unexpectedDrop ? diagnosis.Diagnosis("a stand-in connection dropped before teardown") : null;
+        stopping = true;
         foreach (var client in _clients)
         {
             try { await client.DisposeAsync(); } catch { /* teardown is best effort */ }
@@ -43,12 +61,17 @@ public class SilentServerTests : IAsyncDisposable
             }
         }
         GC.SuppressFinalize(this);
+        if (dropped is not null) throw new InvalidOperationException(dropped);
     }
 
-    /// <summary>Answers nothing, ever. The <c>initialize</c> request arrives and simply never completes.</summary>
+    /// <summary>Never completes initialize unless the callback fails or closes the connection.</summary>
     private sealed class MuteServer
     {
         private readonly TaskCompletionSource _never =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Action? OnInitialize { get; set; }
+        public TaskCompletionSource ConnectionClosed { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private int _calls;
@@ -58,6 +81,7 @@ public class SilentServerTests : IAsyncDisposable
         public async Task<JsonElement> Initialize(JsonElement _)
         {
             Interlocked.Increment(ref _calls);
+            OnInitialize?.Invoke();
             await _never.Task;              // deliberately never completed
             return default;
         }
@@ -74,7 +98,7 @@ public class SilentServerTests : IAsyncDisposable
     /// green this suite exists to avoid. Capturing the level makes the assertion mean what it says.
     /// </para>
     /// </summary>
-    private sealed class RecordingLogger : ILogger<VBLspClient>
+    private sealed class RecordingLogger(ILogger<VBLspClient>? forward = null, Action<string>? observed = null) : ILogger<VBLspClient>
     {
         private readonly List<(LogLevel Level, string Message)> _entries = [];
 
@@ -90,38 +114,72 @@ public class SilentServerTests : IAsyncDisposable
             LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
+            observed?.Invoke(formatter(state, exception));
+            forward?.Log(logLevel, eventId, state, exception, formatter);
             lock (_entries) _entries.Add((logLevel, exception is null
                 ? formatter(state, exception)
                 : $"{formatter(state, exception)}{Environment.NewLine}{exception}"));
         }
     }
 
+    private sealed class TeeLogger(ILogger<VBLspClient> recording, ILogger<VBLspClient> supplied) : ILogger<VBLspClient>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel level) => true;
+        public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            recording.Log(level, id, state, exception, formatter);
+            supplied.Log(level, id, state, exception, formatter);
+        }
+    }
+
     private VBLspClient ClientTalkingTo(
-        MuteServer server, TimeSpan timeout, bool canReconnect, ILogger<VBLspClient>? logger = null)
+        MuteServer server, TimeSpan timeout, bool canReconnect, ILogger<VBLspClient>? logger = null,
+        bool closeOnInitialize = false)
     {
         // A fresh channel per connect, because that is what reconnecting means. Handing back the same pair
         // would give the retry a stream this client had already disposed, and the test would then be
         // measuring a dead socket rather than a server that stays silent.
+        var current = new ConnectionState();
+        var recording = new RecordingLogger(diagnosis.ClientLog<VBLspClient>(connections + 1),
+            message => { if (message.Contains("Abandoning the handshake")) current.ExpectedClose = true; });
+        ILogger<VBLspClient> clientLogger = logger is null ? recording : new TeeLogger(recording, logger);
         var transport = Substitute.For<ILspTransport>();
         transport.IsAlive.Returns(true);
         transport.CanReconnect.Returns(canReconnect);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
+                var state = new ConnectionState();
+                current = state;
+                var number = Interlocked.Increment(ref connections);
                 var (clientSide, serverSide) = FullDuplexStream.CreatePair();
+                var peer = diagnosis.TapPeer(serverSide);
                 var serverRpc = new JsonRpc(
-                    new HeaderDelimitedMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
+                    new LspMessageHandler(peer, peer, new SystemTextJsonFormatter()),
                     server);
+                diagnosis.Watch(serverRpc, "stand-in", number);
+                serverRpc.Disconnected += (_, _) =>
+                {
+                    if (!state.ExpectedClose && !stopping) unexpectedDrop = true;
+                    server.ConnectionClosed.TrySetResult();
+                };
+                if (closeOnInitialize) server.OnInitialize = () =>
+                {
+                    state.ExpectedClose = true;
+                    serverSide.Dispose();
+                };
                 serverRpc.StartListening();
                 lock (_disposables) _disposables.Add(serverRpc);
 
                 return Task.FromResult<IJsonRpcMessageHandler?>(
-                    new HeaderDelimitedMessageHandler(
+                    new LspMessageHandler(
                         clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>()));
             });
 
         var client = new VBLspClient(
-            transport, logger ?? Substitute.For<ILogger<VBLspClient>>(),
+            transport, clientLogger,
             DocumentLanguage.Vb6, workspace: null, initializeTimeout: timeout);
         _clients.Add(client);
         return client;
@@ -144,7 +202,7 @@ public class SilentServerTests : IAsyncDisposable
 #pragma warning restore xUnit1051
 
         finished.Should().BeSameAs(start,
-            "a server that never answers initialize must not hold the handshake open indefinitely");
+            diagnosis.Diagnosis("a server that never answers initialize must not hold the handshake open indefinitely"));
         await start;
     }
 
@@ -153,7 +211,7 @@ public class SilentServerTests : IAsyncDisposable
     {
         var sut = ClientTalkingTo(new MuteServer(), TimeSpan.FromMilliseconds(300), canReconnect: false);
 
-        await sut.StartAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await Wait(sut.StartAsync(TestContext.Current.CancellationToken));
 
         sut.IsRunning.Should().BeFalse("the handshake never completed, so there is nothing to talk to");
         sut.AdvertisedCapabilities.Should().BeNull("nothing was ever advertised");
@@ -167,7 +225,7 @@ public class SilentServerTests : IAsyncDisposable
         var server = new MuteServer();
         var sut = ClientTalkingTo(server, TimeSpan.FromMilliseconds(300), canReconnect: false);
 
-        await sut.StartAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await Wait(sut.StartAsync(TestContext.Current.CancellationToken));
 
         server.InitializeCalls.Should().Be(1, "the client must have actually sent initialize and waited");
     }
@@ -181,7 +239,9 @@ public class SilentServerTests : IAsyncDisposable
         var sut = ClientTalkingTo(new MuteServer(), TimeSpan.FromMilliseconds(300), canReconnect: false,
             logger: logger);
 
-        await sut.StartAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        // Only the handshake deadline may give up here; runner cancellation belongs to the outer wait.
+        using var handshake = new CancellationTokenSource();
+        await Wait(sut.StartAsync(handshake.Token));
 
         logger.Entries.Should().ContainSingle(e =>
                 e.Level == LogLevel.Warning && e.Message.Contains("did not answer initialize"),
@@ -193,6 +253,31 @@ public class SilentServerTests : IAsyncDisposable
             string.Join(Environment.NewLine, logger.Entries.Select(e => $"{e.Level}: {e.Message}")));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnEarlyHandshakeFailureIsReportedAtWarningAndTornDown(bool closeConnection)
+    {
+        var logger = new RecordingLogger();
+        var server = new MuteServer
+        {
+            OnInitialize = () => throw new InvalidOperationException("initialize refused by test server")
+        };
+        var sut = ClientTalkingTo(server, TimeSpan.FromSeconds(30), canReconnect: false,
+            logger: logger, closeOnInitialize: closeConnection);
+
+        await Wait(sut.StartAsync(TestContext.Current.CancellationToken));
+
+        server.InitializeCalls.Should().Be(1, "the server must receive initialize before failing");
+        logger.Entries.Should().ContainSingle(e => e.Level == LogLevel.Warning
+            && e.Message.Contains("Abandoning the handshake")
+            && e.Message.Contains("initialize failed")
+            && (closeConnection || e.Message.Contains("initialize refused by test server")));
+        sut.IsRunning.Should().BeFalse();
+        sut.AdvertisedCapabilities.Should().BeNull();
+        await Wait(server.ConnectionClosed.Task);
+    }
+
     [Fact]
     public async Task AReconnectingTransportKeepsTryingRatherThanGivingUpOnce()
     {
@@ -202,13 +287,33 @@ public class SilentServerTests : IAsyncDisposable
         var server = new MuteServer();
         var sut = ClientTalkingTo(server, TimeSpan.FromMilliseconds(200), canReconnect: true);
 
-        await sut.StartAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await Wait(sut.StartAsync(TestContext.Current.CancellationToken));
 
         // The loop's first delay is a second, so allow for one further attempt beyond the initial one.
         await Task.Delay(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         server.InitializeCalls.Should().BeGreaterThan(1,
             "a transport that can reconnect should retry the handshake rather than stay silently dead");
+    }
+
+    [Fact]
+    public async Task StopAsyncDuringTheHandshakeIsNotReportedAsAFailure()
+    {
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new MuteServer { OnInitialize = () => received.TrySetResult() };
+        var logger = new RecordingLogger();
+        var sut = ClientTalkingTo(server, TimeSpan.FromSeconds(30), canReconnect: false, logger: logger);
+        var start = sut.StartAsync(TestContext.Current.CancellationToken);
+        await Wait(received.Task);
+
+        stopping = true;
+        await sut.StopAsync();
+        await Wait(start);
+
+        server.InitializeCalls.Should().Be(1);
+        logger.Entries.Should().NotContain(e => e.Level >= LogLevel.Warning,
+            "stopping the client tears down RPC without cancelling the caller's token");
+        sut.LastAttempt!.Steps.Last().Outcome.Should().Be(LanguageConnectionStepOutcome.Cancelled);
     }
 
     [Fact]
@@ -223,9 +328,10 @@ public class SilentServerTests : IAsyncDisposable
         using var stopping = new CancellationTokenSource();
         var start = sut.StartAsync(stopping.Token);
         await Task.Delay(200, TestContext.Current.CancellationToken);
+        this.stopping = true;
         await stopping.CancelAsync();
 
-        await start.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+        await Wait(start);
 
         logger.Entries.Should().NotContain(e => e.Level >= LogLevel.Warning,
             "a shutdown that races the handshake is routine, and a timeout that cries wolf on every exit "

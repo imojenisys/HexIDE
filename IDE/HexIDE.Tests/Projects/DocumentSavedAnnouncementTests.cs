@@ -54,8 +54,7 @@ public class DocumentSavedAnnouncementTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             _windows,
             _eventBus,
             projectManager,
@@ -64,7 +63,7 @@ public class DocumentSavedAnnouncementTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>(), lspClient: () => _lsp);
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry(), lspClient: () => _lsp);
     }
 
     private ProjectDefinition AProjectWith(params string[] moduleNames)
@@ -94,6 +93,20 @@ public class DocumentSavedAnnouncementTests : IDisposable
         };
         project.AddForm(form);
         return form;
+    }
+
+    [Fact]
+    public async Task SavesReportCompletedDiskChangesDirectly()
+    {
+        var module = AProjectWith("Module1").Modules[0];
+        var service = MakeService();
+        await service.SaveModule(module, false);
+        await service.SaveModule(module, false);
+        File.Exists(module.AbsolutePath).Should().BeTrue();
+        var calls = _lsp.ReceivedCalls().Where(c => c.GetMethodInfo().Name == "NotifyWatchedFile").ToArray();
+        calls.Should().HaveCount(2);
+        calls[0].GetArguments().Should().Equal(module.AbsolutePath, 1);
+        calls[1].GetArguments().Should().Equal(module.AbsolutePath, 2);
     }
 
     [Theory]
@@ -140,7 +153,7 @@ public class DocumentSavedAnnouncementTests : IDisposable
         var original = module.AbsolutePath!;
         _lsp.ClearReceivedCalls();
         var target = Path.Combine(_dir, "Copy.bas");
-        _windows.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>()).Returns(target);
+        _windows.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>()).Returns(target);
         await service.SaveModule(module, true);
         File.Exists(original).Should().BeTrue();
         File.Exists(target).Should().BeTrue();

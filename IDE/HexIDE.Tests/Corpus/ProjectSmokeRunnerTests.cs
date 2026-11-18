@@ -24,18 +24,67 @@ internal sealed record SmokeStage(string Status, string? Detail = null)
 {
     public bool Failed => Status == "crashed";
     public static SmokeStage FromException(Exception exception) => exception is NotImplementedException
+        // Two evidence projects under corpus/member-attributes keep a Public Const in a class, which vb6.exe's
+        // IDE saves and its compiler refuses (#3335, #3350). Refusing them is the right answer, not a crash.
+        || exception is VBCompileErrorException && exception.Message.Contains(PrePass.PublicMemberOfObjectModule)
         ? new("refused", exception.Message) : new("crashed", exception.ToString());
+}
+
+internal sealed class SmokeStageRecorder(string output)
+{
+    private readonly object gate = new();
+    private bool recorded;
+
+    public void Record(SmokeStage stage)
+    {
+        lock (gate)
+        {
+            if (recorded) return; // The first fault wins; later reports describe its aftermath (#3019).
+            AtomicFileWriter.WriteAllText(output, JsonSerializer.Serialize(stage));
+            recorded = true;
+        }
+    }
 }
 
 internal static class ProjectSmokeRunner
 {
     internal const int StartupSeconds = 3;
 
+    internal sealed class PreparationBudget
+    {
+        private TimeSpan? entered;
+
+        public string? Timeout(bool started, TimeSpan elapsed)
+        {
+            if (started) entered ??= elapsed;
+            if (entered is { } began)
+                return elapsed - began >= TimeSpan.FromSeconds(60)
+                    ? "Startup worker did not become ready within 60 seconds of entering the worker." : null;
+            // Host startup is separate from project preparation, but must still be bounded (#2934).
+            return elapsed >= TimeSpan.FromSeconds(300)
+                ? "Test host did not enter the startup worker within 300 seconds." : null;
+        }
+    }
+
+    internal static async Task<SmokeStage> ReadResult(string result, Func<string, string>? read = null)
+    {
+        var clock = Stopwatch.StartNew();
+        while (true)
+        {
+            try { return JsonSerializer.Deserialize<SmokeStage>((read ?? File.ReadAllText)(result))!; }
+            catch (IOException) when (clock.Elapsed < TimeSpan.FromSeconds(2))
+            {
+                await Task.Delay(20, CancellationToken.None);
+            }
+        }
+    }
+
     // A separate process bounds even a synchronous infinite loop in a startup event.
     public static async Task<SmokeStage> Run(string project, int startupSeconds = StartupSeconds)
     {
         var result = project + ".smoke-result.json";
         var ready = result + ".ready";
+        var started = result + ".started";
         var start = new ProcessStartInfo("dotnet")
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
@@ -52,15 +101,18 @@ internal static class ProjectSmokeRunner
         try
         {
             var clock = Stopwatch.StartNew();
-            while (!process.HasExited && !File.Exists(ready) && !File.Exists(result) && clock.Elapsed < TimeSpan.FromSeconds(60))
+            var budget = new PreparationBudget();
+            while (!process.HasExited && !File.Exists(ready) && !File.Exists(result))
+            {
+                if (budget.Timeout(File.Exists(started), clock.Elapsed) is { } timeout)
+                    return new("crashed", timeout);
                 await Task.Delay(20, CancellationToken.None);
-            if (!process.HasExited && !File.Exists(ready) && !File.Exists(result))
-                return new("crashed", "Startup worker did not become ready within 60 seconds.");
+            }
             clock.Restart();
             while (!process.HasExited && !File.Exists(result) && clock.Elapsed < TimeSpan.FromSeconds(startupSeconds))
                 await Task.Delay(20, CancellationToken.None);
             if (File.Exists(result))
-                return JsonSerializer.Deserialize<SmokeStage>(File.ReadAllText(result))!;
+                return await ReadResult(result);
             return process.HasExited
                 ? new("crashed", $"Startup worker exited {process.ExitCode}: {await stdout}\n{await stderr}")
                 : new("ran to the time limit");
@@ -73,12 +125,43 @@ internal static class ProjectSmokeRunner
             await Task.WhenAll(stdout, stderr);
             File.Delete(result);
             File.Delete(ready);
+            File.Delete(started);
         }
     }
 }
 
 public class ProjectSmokeRunnerTests
 {
+    [Fact]
+    public void Slow_host_does_not_spend_the_workers_preparation_budget()
+    {
+        var budget = new ProjectSmokeRunner.PreparationBudget();
+        budget.Timeout(false, TimeSpan.FromSeconds(90)).Should().BeNull();
+        budget.Timeout(true, TimeSpan.FromSeconds(98)).Should().BeNull();
+        budget.Timeout(true, TimeSpan.FromSeconds(157)).Should().BeNull();
+        budget.Timeout(true, TimeSpan.FromSeconds(158)).Should()
+            .Be("Startup worker did not become ready within 60 seconds of entering the worker.");
+    }
+
+    [Fact]
+    public void Host_that_never_enters_the_worker_has_a_separate_bound()
+    {
+        var budget = new ProjectSmokeRunner.PreparationBudget();
+        budget.Timeout(false, TimeSpan.FromSeconds(299)).Should().BeNull();
+        budget.Timeout(false, TimeSpan.FromSeconds(300)).Should()
+            .Be("Test host did not enter the startup worker within 300 seconds.");
+    }
+
+    [Fact]
+    public void Preparation_hang_is_bounded_even_while_the_started_marker_stays_present()
+    {
+        var budget = new ProjectSmokeRunner.PreparationBudget();
+        budget.Timeout(true, TimeSpan.FromSeconds(5)).Should().BeNull();
+        budget.Timeout(true, TimeSpan.FromSeconds(64)).Should().BeNull();
+        budget.Timeout(true, TimeSpan.FromSeconds(65)).Should()
+            .Be("Startup worker did not become ready within 60 seconds of entering the worker.");
+    }
+
     private sealed class Sink : IDeserializeErrorSink
     {
         public void LogError(string error) { }
@@ -132,16 +215,18 @@ public class ProjectSmokeRunnerTests
     {
         var path = Environment.GetEnvironmentVariable("HEXIDE_SMOKE_PROJECT");
         if (path is null) return; // Only the isolated invocation runs a corpus startup.
+        var output = Environment.GetEnvironmentVariable("HEXIDE_SMOKE_RESULT")!;
+        File.WriteAllText(output + ".started", "started");
         // Match the Standalone host's theme and runtime control resources.
         Application.Current!.Styles.Add(new SimpleTheme());
-        VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Standalone/form.ico")));
-        foreach (var dictionary in new[] { "VBLabel.axaml", "Resources.axaml" })
+        VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico")));
+        foreach (var dictionary in new[] { "SystemColors.axaml", "VBLabel.axaml", "Resources.axaml" })
             Application.Current.Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://HexIDE.Standalone/"))
             {
                 Source = new Uri("avares://HexIDE.Runtime/BuiltinControls/" + dictionary)
             });
-        var output = Environment.GetEnvironmentVariable("HEXIDE_SMOKE_RESULT")!;
-        void Record(SmokeStage stage) => AtomicFileWriter.WriteAllText(output, JsonSerializer.Serialize(stage));
+        var recorder = new SmokeStageRecorder(output);
+        void Record(SmokeStage stage) => recorder.Record(stage);
         void Fault(VBWindowContext _, Exception exception) => Record(SmokeStage.FromException(exception));
         void RuntimeFault(VBWindowContext context, VBRunTimeException exception) => Fault(context, exception);
         void CompileFault(VBWindowContext context, VBCompileErrorException exception) => Fault(context, exception);
@@ -168,7 +253,7 @@ public class ProjectSmokeRunnerTests
             File.WriteAllText(output + ".ready", "ready");
             // This is the entry point used by HexIDE.Standalone.App.
             await VBLoader.RunMadeProgram(project, TestContext.Current.CancellationToken, out _);
-            if (!File.Exists(output)) Record(new("ran to completion"));
+            Record(new("ran to completion"));
         }
         catch (Exception exception)
         {

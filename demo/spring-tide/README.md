@@ -16,27 +16,28 @@ which needs no server at all. What RDCore supplies:
 
 | On screen | Protocol |
 |---|---|
-| The fold markers in the gutter | `textDocument/foldingRange` — six regions: `Enum`, `Type`, `Sub`, `Function`, `Property Get`, `Function` |
-| The red squiggle on line 48 | `textDocument/diagnostic` — one `VBC00001` syntax error |
+| The fold markers in the gutter | `textDocument/foldingRange` — seven regions: `Enum`, `Type`, `Sub`, `Function`, the `For` loop inside it, `Property Get`, `Function` |
+| The red squiggle on line 48 | `textDocument/diagnostic` — one syntax error, `VBC00055`, among RDCore's Information hints |
 
 To see it for yourself rather than take the screenshot's word for it, launch with `--capture-lsp` and open
 **Tools → Protocol Inspector**: both requests and their answers are there.
 
 ## Running it
 
-**You need a published RDCore language server that includes
-[rubberduck-vba/RDCore#260](https://github.com/rubberduck-vba/RDCore/pull/260)** (merged as `0ed29c9`).
-Before it, answering `textDocument/diagnostic` killed the server's entire output channel, so the first pull
-silenced everything after it. From an RDCore checkout at or after that commit, run its `PlatformPublish.ps1`.
-Measured on Windows, over a named pipe, against RDCore `d1c04b5`, which has `0ed29c9` as an ancestor, except
-where a section names a later commit.
+**You need a published RDCore language server at or after `6c1ed90d`.** An older build refuses the `.rdproj` this
+profile writes, because the file is in format `1.0`, unless you add `"settings": { "version": "0.1.0" }` to the entry's
+`workspaceArtifact`. And before [rubberduck-vba/RDCore#260](https://github.com/rubberduck-vba/RDCore/pull/260)
+(merged as `0ed29c9`), answering `textDocument/diagnostic` killed the server's entire output channel, so the first pull
+silenced everything after it. From an RDCore checkout at or after `6c1ed90d`, run its `PlatformPublish.ps1`. The table
+above was measured on Windows, over a named pipe, against RDCore `950a394d`. The rest was measured against `d1c04b5`,
+which has `0ed29c9` as an ancestor, except where a section names a later commit.
 
 Two things about the published server are worth knowing before you point HexIDE at it:
 
 - **Keep the whole published tree, and set `command` to the executable inside it.** The server derives its
   platform root as the *parent* of its own directory, and reads its configuration, its parse server and its
   extensions from there. An executable copied out on its own starts and then analyses nothing.
-- **The build is framework-dependent**, so the machine needs a .NET 10 runtime. `PlatformPublish.ps1` does
+- **The build is framework-dependent**, so the machine needs a .NET 11 runtime. `PlatformPublish.ps1` does
   not produce a self-contained binary.
 
 **1. Make a profile.** HexIDE keeps settings, layout and its language server configuration in a per-user
@@ -69,7 +70,7 @@ undoing.
 
 **`.rdproj`, which HexIDE writes.** RDCore analyses only modules listed in a `.rdproj` at the workspace root,
 and HexIDE hands it the directory holding the `.vbp`. The profile's entry declares
-`"workspaceArtifact": { "path": ".rdproj", "provider": "rdcore" }`, so on the first open HexIDE asks
+`"workspaceArtifact": { "path": ".rdproj", "provider": "rdcore", "restartOnChange": true }`, so on the first open HexIDE asks
 whether the server may write that file, then writes it from the project: `TideTable.bas` as a module, the
 project's references, and its Conditional Compilation Arguments. Choose **Allow**. Choose **Deny**, and the
 server starts without it and analyses nothing, which looks exactly like clean code. The file is ignored by

@@ -27,8 +27,28 @@ public partial class ComponentInstanceViewModel : ObservableObject
         this.Instance.OnComponentPropertyChanging += InstancePropertyChanging;
     }
 
+    private string? previewFailure;
+    public string? PreviewFailure
+    {
+        get => previewFailure;
+        internal set
+        {
+            if (SetProperty(ref previewFailure, value))
+            {
+                OnPropertyChanged(nameof(HasDesignerPreview));
+                parentViewModel.RefreshPreviewSelection();
+            }
+        }
+    }
+
+    public bool HasDesignerPreview => PreviewFailure is null;
+
     private void InstancePropertyChanging(ComponentInstance _, PropertyClass propertyClass, object? oldvalue, object? newValue)
     {
+        if (propertyClass == VBProperties.DesignIndexProperty
+            && ControlArrayIndex.RefusalFor(instance, newValue as string ?? "",
+                parentViewModel.AllComponents.Select(c => c.Instance)) is { } indexRefusal)
+            throw new DataValidationException(indexRefusal.Localized(parentViewModel.Localization));
         if (propertyClass == VBProperties.NameProperty
             && ComponentNaming.RefusalFor(instance, oldvalue as string, newValue as string,
                 parentViewModel.AllComponents.Select(c => c.Instance), parentViewModel.FormDefinition,
@@ -77,6 +97,12 @@ public partial class ComponentInstanceViewModel : ObservableObject
                 module.Name = Name;
             OnPropertyChanged(nameof(Name));
             OnPropertyChanged(nameof(AddressedName));
+            parentViewModel.RefreshPreviewSelection();
+        }
+        else if (propertyClass == VBProperties.DesignIndexProperty)
+        {
+            OnPropertyChanged(nameof(AddressedName));
+            parentViewModel.RefreshPreviewSelection();
         }
         else if (propertyClass == VBProperties.TabIndexProperty)
             OnPropertyChanged(nameof(TabIndex));
@@ -199,7 +225,7 @@ public partial class ComponentInstanceViewModel : ObservableObject
 
     /// <summary>How far inside its own bounds this component measures its contents from.</summary>
     private Thickness ClientInset =>
-        instance.BaseClass is ComponentBaseClass baseClass ? baseClass.ClientInset(instance) : default;
+        instance.BaseClass is IDesignerComponentClass baseClass ? baseClass.ClientInset(instance) : default;
 
     /// <summary>
     /// The canvas position, which is NOT what the model stores. The model stores the VB6 value — relative to

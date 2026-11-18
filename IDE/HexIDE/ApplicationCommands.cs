@@ -18,7 +18,7 @@ public class ApplicationCommands
     public static readonly RoutedCommand NYICommand = new RoutedCommand(nameof(NYICommand));
     public static readonly RoutedCommand ExitCommand = new RoutedCommand(nameof(ExitCommand), new KeyGesture(Key.Q, GetPlatformCommandKey()));
     public static readonly RoutedCommand AboutCommand = new RoutedCommand(nameof(AboutCommand));
-    public static readonly RoutedCommand AvaloniaOnWebCommand = new RoutedCommand(nameof(AvaloniaOnWebCommand));
+    public static readonly RoutedCommand ProductOnWebCommand = new RoutedCommand(nameof(ProductOnWebCommand));
     public static readonly RoutedCommand AddProcedureCommand = new RoutedCommand(nameof(AddProcedureCommand));
     public static readonly RoutedCommand OpenOptionsCommand = new RoutedCommand(nameof(OpenOptionsCommand));
     public static readonly RoutedCommand SaveProjectCommand = new RoutedCommand(nameof(SaveProjectCommand));
@@ -53,6 +53,7 @@ public class ApplicationCommands
     public static readonly RoutedCommand PasteAsCommentCommand = new RoutedCommand(nameof(PasteAsCommentCommand));
     public static readonly RoutedCommand PasteLinkCommand = new RoutedCommand(nameof(PasteLinkCommand));
     public static readonly RoutedCommand RemoveCommand = new RoutedCommand(nameof(RemoveCommand));
+    public static readonly RoutedCommand DeleteLineCommand = new RoutedCommand(nameof(DeleteLineCommand), new KeyGesture(Key.Y, GetPlatformCommandKey()));
     public static readonly RoutedCommand DeleteCommand = new RoutedCommand(nameof(DeleteCommand), new KeyGesture(Key.Delete));
     public static readonly RoutedCommand SelectAllCommand = new RoutedCommand(nameof(SelectAllCommand), new KeyGesture(Key.A, GetPlatformCommandKey()));
     public static readonly RoutedCommand FindCommand = new RoutedCommand(nameof(FindCommand), new KeyGesture(Key.F, GetPlatformCommandKey()));
@@ -67,15 +68,26 @@ public class ApplicationCommands
     public static readonly RoutedCommand ParameterInfoCommand = new RoutedCommand(nameof(ParameterInfoCommand), new KeyGesture(Key.I, GetPlatformCommandKey() | KeyModifiers.Shift));
     public static readonly RoutedCommand CompleteWordCommand = new RoutedCommand(nameof(CompleteWordCommand), new KeyGesture(Key.Space, GetPlatformCommandKey()));
     public static readonly RoutedCommand BookmarksCommand = new RoutedCommand(nameof(BookmarksCommand));
+    public static readonly RoutedCommand SplitWindowCommand = new RoutedCommand(nameof(SplitWindowCommand));
     public static readonly RoutedCommand ToggleFoldCommand = new RoutedCommand(nameof(ToggleFoldCommand), GetToggleFoldKeyGestures(RuntimeInformation.IsOSPlatform(OSPlatform.OSX)));
     public static readonly RoutedCommand ToggleBookmarkCommand = new RoutedCommand(nameof(ToggleBookmarkCommand), new KeyGesture(Key.F2, GetPlatformCommandKey()));
     public static readonly RoutedCommand NextBookmarkCommand = new RoutedCommand(nameof(NextBookmarkCommand));
-    public static readonly RoutedCommand PreviousBookmarkCommand = new RoutedCommand(nameof(PreviousBookmarkCommand), new KeyGesture(Key.F2, KeyModifiers.Shift));
+    public static readonly RoutedCommand PreviousBookmarkCommand = new RoutedCommand(nameof(PreviousBookmarkCommand));
     public static readonly RoutedCommand ClearAllBookmarksCommand = new RoutedCommand(nameof(ClearAllBookmarksCommand), new KeyGesture(Key.F2, GetPlatformCommandKey() | KeyModifiers.Shift));
-    public static readonly RoutedCommand GoToDefinitionCommand = new RoutedCommand(nameof(GoToDefinitionCommand));
-    public static readonly RoutedCommand GoToDeclarationCommand = new RoutedCommand(nameof(GoToDeclarationCommand));
+    public static readonly RoutedCommand CallHierarchyCommand = new RoutedCommand(nameof(CallHierarchyCommand));
+    public static readonly RoutedCommand TypeHierarchyCommand = new RoutedCommand(nameof(TypeHierarchyCommand));
+    public static readonly RoutedCommand RunCodeLensCommand = new RoutedCommand(nameof(RunCodeLensCommand));
+    public static readonly RoutedCommand FindReferencesCommand = new RoutedCommand(nameof(FindReferencesCommand), new KeyGesture(Key.F12, KeyModifiers.Shift));
+    // F12 beside VB6's Shift+F2: both have always worked here, so Default.json can't document this one in its single slot.
+    public static readonly RoutedCommand GoToDefinitionCommand = AlsoOn(new RoutedCommand(nameof(GoToDefinitionCommand), new KeyGesture(Key.F2, KeyModifiers.Shift)), new KeyGesture(Key.F12));
+    public static readonly RoutedCommand GoToImplementationCommand = new RoutedCommand(nameof(GoToImplementationCommand));
+    public static readonly RoutedCommand GoToTypeDefinitionCommand = new RoutedCommand(nameof(GoToTypeDefinitionCommand));
+    public static readonly RoutedCommand GoToDeclarationCommand = new RoutedCommand(nameof(GoToDeclarationCommand), new KeyGesture(Key.F12, GetPlatformCommandKey()));
     public static readonly RoutedCommand RenameSymbolCommand = new RoutedCommand(nameof(RenameSymbolCommand));
-    public static readonly RoutedCommand FormatDocumentCommand = new RoutedCommand(nameof(FormatDocumentCommand));
+    public static readonly RoutedCommand ExpandSelectionCommand = new RoutedCommand(nameof(ExpandSelectionCommand));
+    public static readonly RoutedCommand ShrinkSelectionCommand = new RoutedCommand(nameof(ShrinkSelectionCommand));
+    public static readonly RoutedCommand FormatSelectionCommand = new RoutedCommand(nameof(FormatSelectionCommand));
+    public static readonly RoutedCommand FormatDocumentCommand = new RoutedCommand(nameof(FormatDocumentCommand), new KeyGesture(Key.F, KeyModifiers.Shift | KeyModifiers.Alt));
     public static readonly RoutedCommand BringToFrontCommand = new RoutedCommand(nameof(BringToFrontCommand), new KeyGesture(Key.J, GetPlatformCommandKey()));
     public static readonly RoutedCommand SendToBackCommand = new RoutedCommand(nameof(SendToBackCommand), new KeyGesture(Key.K, GetPlatformCommandKey()));
     public static readonly RoutedCommand MakeProjectCommand = new RoutedCommand(nameof(MakeProjectCommand));
@@ -84,19 +96,19 @@ public class ApplicationCommands
     public static readonly RoutedCommand MakeWithVb6Command = new RoutedCommand(nameof(MakeWithVb6Command));
     public static readonly RoutedCommand RemoveProjectCommand = new RoutedCommand(nameof(RemoveProjectCommand));
     public static readonly RoutedCommand ProjectReferencesCommand = new RoutedCommand(nameof(ProjectReferencesCommand));
-    public static readonly RoutedCommand ProjectComponentsCommand = new RoutedCommand(nameof(ProjectComponentsCommand));
+    public static readonly RoutedCommand ProjectComponentsCommand = new RoutedCommand(nameof(ProjectComponentsCommand), new KeyGesture(Key.T, GetPlatformCommandKey()));
     public static readonly RoutedCommand ProjectPropertiesCommand = new RoutedCommand(nameof(ProjectPropertiesCommand));
 
     public static readonly RoutedCommand StepIntoCommand = new RoutedCommand(nameof(StepIntoCommand), new KeyGesture(Key.F8));
-    public static readonly RoutedCommand StepOverCommand = new RoutedCommand(nameof(StepOverCommand));
-    public static readonly RoutedCommand StepOutCommand = new RoutedCommand(nameof(StepOutCommand));
-    public static readonly RoutedCommand RunToCursorCommand = new RoutedCommand(nameof(RunToCursorCommand));
+    public static readonly RoutedCommand StepOverCommand = new RoutedCommand(nameof(StepOverCommand), new KeyGesture(Key.F8, KeyModifiers.Shift));
+    public static readonly RoutedCommand StepOutCommand = new RoutedCommand(nameof(StepOutCommand), new KeyGesture(Key.F8, GetPlatformCommandKey() | KeyModifiers.Shift));
+    public static readonly RoutedCommand RunToCursorCommand = new RoutedCommand(nameof(RunToCursorCommand), new KeyGesture(Key.F8, GetPlatformCommandKey()));
     public static readonly RoutedCommand AddWatchCommand = new RoutedCommand(nameof(AddWatchCommand));
-    public static readonly RoutedCommand EditWatchCommand = new RoutedCommand(nameof(EditWatchCommand));
-    public static readonly RoutedCommand QuickWatchCommand = new RoutedCommand(nameof(QuickWatchCommand));
+    public static readonly RoutedCommand EditWatchCommand = new RoutedCommand(nameof(EditWatchCommand), new KeyGesture(Key.W, GetPlatformCommandKey()));
+    public static readonly RoutedCommand QuickWatchCommand = new RoutedCommand(nameof(QuickWatchCommand), new KeyGesture(Key.F9, KeyModifiers.Shift));
     public static readonly RoutedCommand ToggleBreakpointCommand = new RoutedCommand(nameof(ToggleBreakpointCommand), new KeyGesture(Key.F9));
     public static readonly RoutedCommand ClearAllBreakpointsCommand = new RoutedCommand(nameof(ClearAllBreakpointsCommand), new KeyGesture(Key.F9, GetPlatformCommandKey() | KeyModifiers.Shift));
-    public static readonly RoutedCommand SetNextStatementCommand = new RoutedCommand(nameof(SetNextStatementCommand));
+    public static readonly RoutedCommand SetNextStatementCommand = new RoutedCommand(nameof(SetNextStatementCommand), new KeyGesture(Key.F9, GetPlatformCommandKey()));
     public static readonly RoutedCommand ShowNextStatementCommand = new RoutedCommand(nameof(ShowNextStatementCommand));
 
     public static readonly RoutedCommand CenterHorizontallyCommand = new RoutedCommand(nameof(CenterHorizontallyCommand));
@@ -130,6 +142,12 @@ public class ApplicationCommands
 #pragma warning disable CS0067
         public event EventHandler? CanExecuteChanged;
 #pragma warning restore CS0067
+    }
+
+    private static RoutedCommand AlsoOn(RoutedCommand command, KeyGesture gesture)
+    {
+        command.Gestures.Add(gesture);
+        return command;
     }
 
     private static KeyModifiers GetPlatformCommandKey()

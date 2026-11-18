@@ -23,15 +23,42 @@ public static class AttachedEvents
         InputElement.GotFocusEvent.AddClassHandler<T>((control, e) =>
         {
             if (e is FocusChangedEventArgs moved
-                && OwnsThePointerEvent(control, moved.NewFocusedElement) && !OwnsThePointerEvent(control, moved.OldFocusedElement))
-                control.ExecuteSub(ComponentBaseClass.GotFocusEvent);
+                && OwnsTheFocus(control, moved.NewFocusedElement) && !OwnsTheFocus(control, moved.OldFocusedElement))
+            {
+                if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
+                    form.ControlFocused(control);
+                else
+                    control.ExecuteSub(ComponentBaseClass.GotFocusEvent);
+            }
         }, handledEventsToo: true);
         InputElement.LostFocusEvent.AddClassHandler<T>((control, e) =>
         {
             if (e is FocusChangedEventArgs moved
-                && OwnsThePointerEvent(control, moved.OldFocusedElement) && !OwnsThePointerEvent(control, moved.NewFocusedElement))
-                control.ExecuteSub(ComponentBaseClass.LostFocusEvent);
+                && OwnsTheFocus(control, moved.OldFocusedElement) && !OwnsTheFocus(control, moved.NewFocusedElement))
+            {
+                if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
+                {
+                    // Leaving the window belongs to the activation switch; hiding or disabling a control does not.
+                    if (VBFormRuntime.FindControl(form, moved.NewFocusedElement as ILogical) is not null
+                        || form.IsEffectivelyVisible && form.IsEffectivelyEnabled
+                        && (!control.IsEffectivelyVisible || !control.IsEffectivelyEnabled))
+                        form.BlurControl();
+                }
+                else
+                    control.ExecuteSub(ComponentBaseClass.LostFocusEvent);
+            }
         }, handledEventsToo: true);
+    }
+
+    private static bool OwnsTheFocus(Control control, object? source)
+    {
+        if (OwnsThePointerEvent(control, source))
+            return true;
+        // A combo's popup items belong to the same control despite living outside its visual tree (#1101, #2325).
+        if (control is not VBComboBox || source is not Visual visual)
+            return false;
+        var item = visual as ComboBoxItem ?? visual.FindAncestorOfType<ComboBoxItem>();
+        return item is not null && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), control);
     }
 
     public static void AttachClick<T>(ClickRelease release = ClickRelease.Anywhere) where T : Control
@@ -71,7 +98,7 @@ public static class AttachedEvents
     /// Avalonia registered first, so MouseUp follows it there. A control whose Click this class raises on release must
     /// attach the mouse events before its Click, so MouseUp comes first.</para>
     /// </remarks>
-    public static void AttachMouse<T>(DblClick dblClick = DblClick.None, bool raiseDoubleClick = true) where T : Control
+    public static void AttachMouse<T>(DblClick dblClick = DblClick.None, bool raiseDoubleClick = true, bool suppressSecondMouseUp = false, bool mouseMove = true) where T : Control
     {
         InputElement.PointerPressedEvent.AddClassHandler<T>((control, e) =>
         {
@@ -86,10 +113,14 @@ public static class AttachedEvents
             if (second && raiseDoubleClick)
                 control.ExecuteSub(ComponentBaseClass.DblClickEvent);
         }, handledEventsToo: true);
-        InputElement.PointerReleasedEvent.AddClassHandler<T>(
-            (control, e) => RaiseMouse(control, e, ComponentBaseClass.MouseUpEvent), handledEventsToo: true);
-        InputElement.PointerMovedEvent.AddClassHandler<T>(
-            (control, e) => RaiseMouse(control, e, ComponentBaseClass.MouseMoveEvent), handledEventsToo: true);
+        InputElement.PointerReleasedEvent.AddClassHandler<T>((control, e) =>
+        {
+            if (!suppressSecondMouseUp || !IsSecondPress(control))
+                RaiseMouse(control, e, ComponentBaseClass.MouseUpEvent);
+        }, handledEventsToo: true);
+        if (mouseMove)
+            InputElement.PointerMovedEvent.AddClassHandler<T>(
+                (control, e) => RaiseMouse(control, e, ComponentBaseClass.MouseMoveEvent), handledEventsToo: true);
     }
 
     /// <summary>
@@ -221,6 +252,9 @@ public static class AttachedEvents
 
     internal static void RaiseMouse(Control control, PointerEventArgs e, EventClass eventClass, object? source = null, Func<bool>? when = null)
     {
+        if (control is VBListBox list && !list.IsMultiSelect && list.IsScrollBarSource(source ?? e.Source)
+            && (eventClass == ComponentBaseClass.MouseDownEvent || eventClass == ComponentBaseClass.MouseUpEvent))
+            return;
         if (!OwnsThePointerEvent(control, source ?? e.Source) || VBProps.GetName(control) is null)
             return;
         // A PictureBox counts from inside its border, in its own ScaleMode, as its child host does. Every other control
@@ -267,8 +301,8 @@ public static class AttachedEvents
                     args.Add(new Vb6Value(i));
                 args.Add(new Vb6Value(button));
                 args.Add(new Vb6Value(shift));
-                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(x, mode, vertical: false)));
-                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(y, mode, vertical: true)));
+                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(x, mode, vertical: false, origin as Control)));
+                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(y, mode, vertical: true, origin as Control)));
                 return args;
             }, coalescing, when);
     }

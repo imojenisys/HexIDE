@@ -18,9 +18,8 @@ public class ImageListTests : BaseVBTestFixture
 
     internal static string Corpus(string name)
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !Directory.Exists(Path.Join(root.FullName, "corpus"))) root = root.Parent;
-        var basePath = Path.Join(root!.FullName, "corpus", "inbox-controls");
+        var root = RepoTree.Root();
+        var basePath = Path.Join(root, "corpus", "inbox-controls");
         var saved = Path.Join(basePath, "saved", "imagelist");
         return Path.Join(Directory.Exists(saved) ? saved : Path.Join(basePath, "pending", "imagelist"), name, "Form1.frm");
     }
@@ -53,6 +52,35 @@ public class ImageListTests : BaseVBTestFixture
         var control = ((HexIDE.Runtime.Components.ComponentBaseClass)component.BaseClass).Instantiate(component);
         context.AllocVariable(rootEnv, "il", new Vb6Value((Avalonia.Controls.Control)control));
         return control;
+    }
+
+    // #2265, oracle/in-box-classes-a-bare-name-binds-to-the-first-library.md.
+    [Theory]
+    [InlineData("ImageList", "il", "ImageList")]
+    [InlineData("ListImages", "il.ListImages", "IImages")]
+    [InlineData("ListImage", "il.ListImages(1)", "IImage")]
+    public async Task Library_typed_image_slots_preserve_their_class(string name, string expression, string typeName)
+    {
+        Loaded();
+        var interpreter = new BasicInterpreter(new MockStdLib(debug), context, rootEnv, $"""
+            Dim x As {name}, q As MSComctlLib.{name}, original As Object
+            Debug.Print TypeName(x), TypeName(q)
+            Set original = {expression}
+            Set x = original
+            Set q = original
+            Debug.Print TypeName(x), TypeName(q), x Is q
+            Debug.Print TypeOf x Is {name}, TypeOf q Is MSComctlLib.{name}
+            On Error Resume Next
+            Set x = New Collection
+            Debug.Print Err.Number, x Is original
+            Err.Clear
+            Set q = New Collection
+            Debug.Print Err.Number, q Is original
+            """);
+        interpreter.SetAppInfo(new AppInfo(ControlLibraries: [Components.InBox.ControlLibraries.MSComctlLib]));
+        await interpreter.Execute();
+        debug.Select(v => v.Value?.ToString()).Should().Equal("Nothing", "Nothing", typeName, typeName,
+            "True", "True", "True", "13", "True", "13", "True");
     }
 
     // #1083 issuecomment-6427015606: interface names, picture types/sizes, keys/tags and For Each order.

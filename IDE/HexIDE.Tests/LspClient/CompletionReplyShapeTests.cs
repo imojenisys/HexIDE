@@ -47,7 +47,7 @@ public class CompletionReplyShapeTests : IAsyncDisposable
         var (clientSide, serverSide) = FullDuplexStream.CreatePair();
         var server = new StubServer(replyJson);
         var serverRpc = new JsonRpc(
-            new HeaderDelimitedMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
+            new LspMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
             server);
         serverRpc.StartListening();
 
@@ -55,7 +55,7 @@ public class CompletionReplyShapeTests : IAsyncDisposable
         transport.IsAlive.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
             .Returns(ci => Task.FromResult<IJsonRpcMessageHandler?>(
-                new HeaderDelimitedMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
+                new LspMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
 
         var client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), DocumentLanguage.Vb6);
         _disposables.Add(client);
@@ -69,6 +69,15 @@ public class CompletionReplyShapeTests : IAsyncDisposable
             .Should().Be("file:///module.bas");
         server.Parameters.Value.GetProperty("position").GetProperty("line").GetInt32().Should().Be(2);
         return result;
+    }
+
+    [Fact]
+    public async Task ListIndentationDefaultIsInheritedButItemModeWins()
+    {
+        var items = await Read("""{"isIncomplete":false,"itemDefaults":{"insertTextMode":2},"items":[{"label":"inherited","kind":1},{"label":"explicit","kind":1,"insertTextMode":1}]}""");
+        var json = JsonSerializer.SerializeToElement(items, LspJsonContext.Default.Options);
+        json[0].GetProperty("insertTextMode").GetInt32().Should().Be(2);
+        json[1].GetProperty("insertTextMode").GetInt32().Should().Be(1);
     }
 
     [Theory]
