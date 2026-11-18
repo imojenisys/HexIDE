@@ -16,12 +16,29 @@ namespace HexIDE.Standalone;
 
 public partial class App : Application
 {
+    private StandaloneRun? runner;
+
     public override void Initialize()
     {
         // The user's regional settings, as the IDE takes them (#777). This host pins no culture of its own, so the
         // thread's culture would give the same answer today; set explicitly, so the two hosts cannot drift apart.
         VbLocale.Default = System.Globalization.CultureInfo.CurrentCulture;
         AvaloniaXamlLoader.Load(this);
+    }
+
+    internal static string ErrorString(string key)
+    {
+        using var stream = typeof(App).Assembly.GetManifestResourceStream("HexIDE.Standalone.ErrorStrings.json")!;
+        using var pack = System.Text.Json.JsonDocument.Parse(stream);
+        return pack.RootElement.GetProperty("strings").GetProperty(key).GetString()!;
+    }
+
+    private static Task ShowFatalError(Window window)
+    {
+        var closed = new TaskCompletionSource();
+        window.Closed += (_, _) => closed.TrySetResult();
+        window.Show();
+        return closed.Task;
     }
 
     public override void OnFrameworkInitializationCompleted()
@@ -40,10 +57,16 @@ public partial class App : Application
                 desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                 try
                 {
-                    // Every form with no Icon line runs with the runner's icon; a form's own Icon, or (None), is its own (#1594).
-                    VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Standalone/form.ico")));
-                    run = VBLoader.RunMadeProgram(Program.Project, default, out _);
-                    run.ContinueWith(_ => Dispatcher.UIThread.Post(() => desktop.Shutdown(0)));
+                    // Every form with no Icon line uses the shared neutral window icon (#4187); own Icon and (None) stay as saved (#1594).
+                    VBLoader.DefaultFormIcon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico")));
+                    runner = new StandaloneRun(Program.Project, ShowFatalError, () => Environment.Exit(Environment.ExitCode), ErrorString);
+                    desktop.Exit += (_, _) => runner.Dispose();
+                    run = runner.Run(default);
+                    run.ContinueWith(_ => Dispatcher.UIThread.Post(() =>
+                    {
+                        if (!runner.IsReporting)
+                            desktop.Shutdown(0);
+                    }));
                 }
                 catch (Exception e)
                 {
@@ -67,7 +90,7 @@ public partial class App : Application
                 };
                 window.Content = msgBox;
                 desktop.MainWindow = window;
-                window.Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Standalone/form.ico")));
+                window.Icon = new WindowIcon(AssetLoader.Open(new Uri("avares://HexIDE.Runtime/form.ico")));
                 msgBox.AcceptRequest += _ => window.Close();
             }
         }

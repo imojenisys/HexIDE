@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO.Pipes;
+using HexIDE.Processes;
 using Microsoft.Extensions.Logging;
 using StreamJsonRpc;
 
@@ -96,6 +97,13 @@ public sealed class NamedPipeLspTransport : ILspTransport
 
     private PipeStream? _pipe;
     private Process? _process;
+    private readonly Lock _exitGate = new();
+    private bool _exitReported;
+    private volatile bool _shutdownCompleted;
+    private volatile bool _endedAfterShutdown;
+
+    private bool _disposing;
+    private ChildProcessJob? _job;
 
     /// <summary>
     /// Set when a launch was configured, ran, and produced no handle to own.
@@ -144,12 +152,24 @@ public sealed class NamedPipeLspTransport : ILspTransport
         _connectTimeout = connectTimeout ?? TimeSpan.FromSeconds(DefaultConnectTimeoutSeconds);
     }
 
+    // Test seam for checking exit-lock ownership and flag publication at termination (#3217).
+    internal Action<Process> KillProcess { get; set; } = LaunchedServerGuard.Kill;
+
+    // Test seam: let an immediate child exit before startup observation continues (#2685).
+    internal Action<Process>? ExitObservationEnabled { get; set; }
+
     public bool IsAlive => _pipe is { IsConnected: true } && _process is not { HasExited: true };
+
+    public void ShutdownCompleted()
+    {
+        _shutdownCompleted = true;
+    }
 
     // A server this transport launched is one-shot, matching StdioProcessLspTransport: a crash does
     // not auto-respawn. A pre-existing endpoint we merely dialled can be re-dialled.
     /// <summary>Why the last connect attempt failed, in this transport's words. See ILspTransport.</summary>
     public string? LastFailure { get; private set; }
+    public bool WaitingForWorkspace { get; private set; }
 
     /// <summary>
     /// Nothing when HexIDE launched the server behind this pipe and can see it, and the process half when
@@ -171,10 +191,10 @@ public sealed class NamedPipeLspTransport : ILspTransport
     /// </remarks>
     public string? Unobservable =>
         _launch is null
-            ? "This server was already running when HexIDE connected to it, so its start, its exit code and "
+            ? "This server was already running when " + HexIDE.IDE.Distribution.DisplayName + " connected to it, so its start, its exit code and "
               + "anything it writes to standard error belong to whoever launched it. Messages are captured in full."
         : _launchedWithoutHandle
-            ? "HexIDE started this server but the operating system gave back no handle for it — the request "
+            ? HexIDE.IDE.Distribution.DisplayName + " started this server but the operating system gave back no handle for it — the request "
               + "went to an instance that was already running — so its exit code and standard error cannot be "
               + "read. Messages are captured in full."
             : null;
@@ -183,7 +203,82 @@ public sealed class NamedPipeLspTransport : ILspTransport
 
     public bool LeaveServerRunning => _process is null;
 
-    public event EventHandler? Closed;
+    private EventHandler? _closed;
+    private bool _closedReported;
+    private EventHandler<TransportNotice>? _notice;
+    private readonly List<TransportNotice> _notices = [];
+    private bool _noticeSubscribed;
+    private readonly Queue<Action> _notifications = new();
+    private bool _dispatching;
+    private readonly AsyncLocal<bool> _delivering = new();
+
+    // Called under _exitGate; delivery is serialized, but never holds the process/readers' gate.
+    private void QueueNotification(Action notification)
+    {
+        _notifications.Enqueue(notification);
+        if (_dispatching) return;
+        _dispatching = true;
+        _ = Task.Run(DispatchNotifications);
+    }
+
+    private void DispatchNotifications()
+    {
+        _delivering.Value = true;
+        while (true)
+        {
+            Action notification;
+            lock (_exitGate)
+            {
+                if (!_notifications.TryDequeue(out notification!))
+                {
+                    _dispatching = false;
+                    return;
+                }
+            }
+            try { notification(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Named pipe transport subscriber failed."); }
+        }
+    }
+
+    private Task DrainNotificationsAsync()
+    {
+        // Disposal from a handler (including its async continuations) must not wait for itself.
+        if (_delivering.Value) return Task.CompletedTask;
+        lock (_exitGate)
+        {
+            if (!_dispatching) return Task.CompletedTask;
+            var drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            QueueNotification(() => drained.SetResult());
+            return drained.Task;
+        }
+    }
+
+    private void QueueClosed(EventHandler? handlers)
+    {
+        if (handlers is null) return;
+        foreach (EventHandler handler in handlers.GetInvocationList())
+            QueueNotification(() => handler(this, EventArgs.Empty));
+    }
+
+    private void QueueNotice(EventHandler<TransportNotice>? handlers, TransportNotice notice)
+    {
+        if (handlers is null) return;
+        foreach (EventHandler<TransportNotice> handler in handlers.GetInvocationList())
+            QueueNotification(() => handler(this, notice));
+    }
+
+    public event EventHandler? Closed
+    {
+        add
+        {
+            lock (_exitGate)
+            {
+                _closed += value;
+                if (_closedReported) QueueClosed(value);
+            }
+        }
+        remove { lock (_exitGate) _closed -= value; }
+    }
 
     /// <summary>
     /// Standard error and the exit code, for a server this transport launched.
@@ -200,7 +295,34 @@ public sealed class NamedPipeLspTransport : ILspTransport
     /// <see cref="Unobservable"/> says so in words the reader sees.
     /// </para>
     /// </remarks>
-    public event EventHandler<TransportNotice>? Notice;
+    public event EventHandler<TransportNotice>? Notice
+    {
+        add
+        {
+            lock (_exitGate)
+            {
+                if (value is null) return;
+                _notice += value;
+                if (!_noticeSubscribed)
+                {
+                    _noticeSubscribed = true;
+                    foreach (var notice in _notices) QueueNotice(value, notice);
+                    _notices.Clear();
+                }
+            }
+        }
+        remove { lock (_exitGate) _notice -= value; }
+    }
+
+    private void PublishNotice(TransportNotice notice)
+    {
+        // Subscription and publication share a gate: a late observer gets each notice once (#2685).
+        lock (_exitGate)
+        {
+            if (!_noticeSubscribed) _notices.Add(notice);
+            QueueNotice(_notice, notice);
+        }
+    }
 
     public async Task<IJsonRpcMessageHandler?> ConnectAsync(
         IJsonRpcMessageFormatter formatter, CancellationToken cancellationToken = default)
@@ -208,10 +330,21 @@ public sealed class NamedPipeLspTransport : ILspTransport
         // Drop any previous connection (reconnect) so the far side observes the close and frees its
         // endpoint, rather than leaking a half-open pipe that the next dial would collide with.
         await DisposeAsync();
+        lock (_exitGate)
+        {
+            _disposing = false;
+            _exitReported = false;
+            _closedReported = false;
+            _notices.Clear();
+            _shutdownCompleted = false;
+            _endedAfterShutdown = false;
+        }
 
         // Resolved before the pipe exists and before anything is started, because a placeholder that
         // cannot be filled is a knowable precondition rather than a connect failure — and reporting it as
         // a timeout thirty seconds later would describe the wrong problem.
+        WaitingForWorkspace = false;
+        LastFailure = null;
         string? arguments = null;
         string[]? argumentList = null;
         if (_launch?.ArgumentList is { } list)
@@ -287,7 +420,7 @@ public sealed class NamedPipeLspTransport : ILspTransport
         // Tapped, so the record can say when the first bytes actually reached the server and came back, not only
         // when a message was serialized (#390). One tap for both directions, as the pipe is one stream.
         var tapped = new ChannelTapStream(_pipe!,
-            text => Notice?.Invoke(this, new TransportNotice(TransportNoticeKind.Lifecycle, text)));
+            text => PublishNotice(new TransportNotice(TransportNoticeKind.Lifecycle, text)));
         return new HeaderDelimitedMessageHandler(tapped, tapped, formatter);
     }
 
@@ -330,10 +463,10 @@ public sealed class NamedPipeLspTransport : ILspTransport
         var directory = WorkspaceDirectory();
         if (string.IsNullOrWhiteSpace(directory))
         {
+            WaitingForWorkspace = true;
             LastFailure =
-                $"'{_launch!.FileName}' is configured with a workspace placeholder and no project is open, "
-                + "so there is no workspace to give it";
-            _logger.LogWarning("{Failure}.", LastFailure);
+                $"'{_launch!.FileName}' is configured with a workspace placeholder and "
+                + "no project is open or the project has not been saved yet, so there is no workspace to give it";
             return null;
         }
 
@@ -413,14 +546,10 @@ public sealed class NamedPipeLspTransport : ILspTransport
             UseShellExecute = false,
             CreateNoWindow = true,
 
-            // Standard error only. The protocol rides the pipe, so this stream carries nothing but the
-            // server's own words — which for a pipe server is the only thing it has to say when it fails
-            // before the pipe exists.
-            //
-            // Standard OUTPUT is deliberately left alone. A pipe server is exactly the kind that writes a
-            // banner there, and redirecting a stream nobody reads fills its buffer and blocks the child —
-            // turning a diagnostic into a hang. Redirect what is read; read what is redirected.
+            // The protocol rides the pipe; both streams carry the server's own words.
+            // Redirect what is read; read what is redirected, so neither can block the child.
             RedirectStandardError = true,
+            RedirectStandardOutput = true,
         };
 
         if (argumentList is not null)
@@ -437,6 +566,8 @@ public sealed class NamedPipeLspTransport : ILspTransport
             startInfo.Arguments,
             string.IsNullOrEmpty(startInfo.WorkingDirectory) ? "<inherited>" : startInfo.WorkingDirectory);
 
+        _job = new ChildProcessJob();
+        LaunchedServerGuard.Wrap(startInfo);
         var process = Process.Start(startInfo);
         if (process is null)
         {
@@ -449,38 +580,64 @@ public sealed class NamedPipeLspTransport : ILspTransport
         }
 
         _process = process;
-        process.EnableRaisingEvents = true;
+        LaunchedServerGuard.NoteStarted(process);
+        _job.Assign(process);
 
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is not { Length: > 0 }) return;
 
             _logger.LogDebug("[lsp stderr] {Data}", e.Data);
-            Notice?.Invoke(this, new TransportNotice(TransportNoticeKind.StandardError, e.Data));
+            PublishNotice(new TransportNotice(TransportNoticeKind.StandardError, e.Data));
         };
 
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not { Length: > 0 }) return;
+
+            _logger.LogDebug("[lsp stdout] {Data}", e.Data);
+            PublishNotice(new TransportNotice(TransportNoticeKind.StandardOutput, e.Data));
+        };
+
+        // Enabling events can report an already-exited child synchronously. Subscribe first.
         process.Exited += OnServerExited;
+        process.EnableRaisingEvents = true;
+        ExitObservationEnabled?.Invoke(process);
         process.BeginErrorReadLine();
+        process.BeginOutputReadLine();
     }
 
     private void OnServerExited(object? sender, EventArgs e)
     {
-        // Read first: Kill() and Dispose() are both moments away, and ExitCode throws once the handle
-        // is gone.
         var code = ExitCode();
+        lock (_exitGate)
+        {
+            if (!ReferenceEquals(sender, _process)) return;
+            ReportExit(code);
+            if (!_disposing && !_closedReported)
+            {
+                _closedReported = true;
+                QueueClosed(_closed);
+            }
+        }
+    }
 
-        _logger.LogWarning(
-            "Language server process exited{Code}", code is null ? "" : $" with code {code}");
+    private void ReportExit(int? code)
+    {
+        if (_exitReported) return;
+        _exitReported = true;
+        if (_endedAfterShutdown) return;
+        _logger.Log(_disposing ? LogLevel.Information : LogLevel.Warning,
+            "[{Server}] Language server process exited{Code}", _launch!.FileName,
+            code is null ? "" : $" with code {code}");
 
         // BEFORE Closed, which is what tears the connection down. An exit code arriving after the record
         // stopped accepting entries would be the one fact nobody could see — and for a pipe server that
         // died during startup it is very nearly the only fact there is.
-        Notice?.Invoke(this, new TransportNotice(
+        PublishNotice(new TransportNotice(
             TransportNoticeKind.Lifecycle,
             code is null ? "process exited" : $"process exited with code {code}",
             Fault: code is not (null or 0)));
-
-        Closed?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>The exit code, or null when the process cannot tell us.</summary>
@@ -496,10 +653,11 @@ public sealed class NamedPipeLspTransport : ILspTransport
 
     public async ValueTask DisposeAsync()
     {
+        var disposal = Stopwatch.StartNew();
         var pipe = _pipe;
         var process = _process;
         _pipe = null;
-        _process = null;
+        lock (_exitGate) _disposing = true;
 
         if (pipe is not null)
         {
@@ -507,20 +665,18 @@ public sealed class NamedPipeLspTransport : ILspTransport
         }
 
         if (process is null)
+        {
+            _job?.Dispose();
+            _job = null;
+            await DrainNotificationsAsync();
             return;
+        }
 
-        // Killing the child is required, not tidy-up. A real third-party server was measured taking a
-        // client PID on its command line, silently ignoring it, logging that it "will not be able to
-        // automatically exit", and then outliving every client — leaving orphaned server processes on
-        // each run. A transport that owns a child has to assume nothing else will reap it.
-        //
-        // Unsubscribe first: the kill would otherwise raise Closed during teardown and invite the
-        // client to reconnect to a transport that is being disposed.
-        process.Exited -= OnServerExited;
+        // Keep observing the child through the grace period; deliberate teardown must not raise Closed.
         try
         {
             // A server may still be starting children after initialize answers (#313).
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
+            await process.WaitForExitAsync().WaitAsync(LaunchedServerGuard.ExitTimeout);
         }
         catch { /* grace period elapsed, or already gone */ }
 
@@ -528,12 +684,39 @@ public sealed class NamedPipeLspTransport : ILspTransport
         {
             if (!process.HasExited)
             {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(2));
+                // Publish before Kill: the exit callback must see this without waiting on its gate.
+                _endedAfterShutdown = _shutdownCompleted;
+                KillProcess(process);
+                if (_endedAfterShutdown)
+                {
+                    var detail = $"stopped after shutdown; still exiting after {LaunchedServerGuard.ExitTimeout.TotalSeconds:g} s, so ended";
+                    PublishNotice(new TransportNotice(TransportNoticeKind.Lifecycle, detail));
+                    _logger.LogInformation("[{Server}] {Detail}", _launch!.FileName, detail);
+                }
+                if (!_endedAfterShutdown)
+                {
+                    _logger.LogInformation("[{Server}] Language server process killed after waiting {Timeout:g} for exit.",
+                        _launch!.FileName, LaunchedServerGuard.ExitTimeout);
+                    PublishNotice(new TransportNotice(TransportNoticeKind.Lifecycle,
+                        "process killed after waiting for exit"));
+                }
+                await process.WaitForExitAsync().WaitAsync(LaunchedServerGuard.ReapTimeout(disposal));
             }
         }
         catch { /* already gone */ }
 
+        // Process queries can wait on Windows; never hold the exit callback's gate over them.
+        var hasExited = process.HasExited;
+        var code = ExitCode();
+        lock (_exitGate)
+        {
+            if (hasExited) ReportExit(code);
+            _process = null;
+        }
+        process.Exited -= OnServerExited;
         process.Dispose();
+        _job?.Dispose();
+        _job = null;
+        await DrainNotificationsAsync();
     }
 }

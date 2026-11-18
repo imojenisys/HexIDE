@@ -1,3 +1,4 @@
+using HexIDE.Runtime.AvaloniaInterop;
 using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
@@ -12,9 +13,10 @@ public class StandaloneStandardLib : IBasicStandardLibrary
 {
     private readonly Window _parent;
 
-    public StandaloneStandardLib(Window parent)
+    public StandaloneStandardLib(Window parent, string fallbackTitle)
     {
         _parent = parent;
+        OmittedTitleStandIn = fallbackTitle;
     }
 
     /// <summary>
@@ -26,11 +28,14 @@ public class StandaloneStandardLib : IBasicStandardLibrary
     /// here means there was no project behind the program at all — a bare interpreter or the headless
     /// runner. This is the last resort for that case, not the application-name default.
     /// </remarks>
-    private const string OmittedTitleStandIn = "HexIDE";
+    private readonly string OmittedTitleStandIn;
 
-    public async Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon)
+    public Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon)
+        => MsgBox(text, caption, buttons, icon, MessageBoxLayout.None);
+
+    public async Task<MessageBoxResult> MsgBox(string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, MessageBoxLayout layout)
     {
-        var msgBox = new MessageBox { Text = text, Buttons = buttons, Icon = icon };
+        var msgBox = new MessageBox { Text = text, Buttons = buttons, Icon = icon, Layout = layout };
         var window = new Window
         {
             Title = caption ?? OmittedTitleStandIn,
@@ -54,6 +59,7 @@ public class StandaloneStandardLib : IBasicStandardLibrary
             WindowStartupLocation = WindowStartupLocation.CenterOwner,
             CanResize = false
         };
+        inputBox.ApplyProgramChrome(window);
         inputBox.TextRequest += r => { result = r; window.Close(); };
         if (_parent.IsVisible)
             await window.ShowDialog(_parent);
@@ -85,6 +91,9 @@ public class StandaloneStandardLib : IBasicStandardLibrary
     public ITextClipboard Clipboard => new AvaloniaTextClipboard(() => _parent.Clipboard);
     public IVbSettingsStore Settings => VbSettingsStores.ForThisUser();
 
+    private AvaloniaInterop.AvaloniaDisplay? display;
+    public IVbDisplay Display => display ??= new AvaloniaInterop.AvaloniaDisplay(() => _parent);
+
     /// <summary>A CommonDialog's Open or Save As (#1084), as the platform's own picker over the program's window.</summary>
     public async Task<VbFileDialogAnswer?> ShowFileDialog(VbFileDialogRequest request)
     {
@@ -101,8 +110,24 @@ public class StandaloneStandardLib : IBasicStandardLibrary
                 : null;
         }
         var opened = await provider.OpenFilePickerAsync(VbFileDialogOptions.Open(request, start));
-        return opened.Count > 0 && opened[0].TryGetLocalPath() is { } openedPath ? new VbFileDialogAnswer(openedPath, null) : null;
+        if (opened.Count == 0 || opened[0].TryGetLocalPath() is not { } firstPath)
+            return null;
+        var paths = new List<string> { firstPath };
+        foreach (var file in opened.Skip(1))
+            paths.Add(file.TryGetLocalPath()
+                      ?? throw new NotImplementedException("A CommonDialog non-local file selection is not implemented (#1084)"));
+        return new VbFileDialogAnswer(paths[0], null, paths.Skip(1).ToArray());
     }
+
+    public async Task<bool> ShowPrintDialog() =>
+        HostDialogs.Print is { } application
+            ? await application()
+            : throw new NotImplementedException("A CommonDialog's print dialog is not implemented outside the IDE (#2299)");
+
+    public async Task<int?> ShowColorDialog(int initial) =>
+        HostDialogs.Color is { } application
+            ? await application(initial)
+            : throw new NotImplementedException("A CommonDialog's color dialog is not implemented outside the IDE (#2299)");
 
     /// <summary>A CommonDialog's ShowFont (#1084): the application's font dialog, where it has one.</summary>
     public async Task<VbFontChoice?> ShowFontDialog(VbFontChoice initial) =>

@@ -19,6 +19,43 @@ namespace HexIDE.Forms.Views;
 
 public partial class RelatedDocumentEditorView : UserControl
 {
+    private EditorLanguageFeatures? _languageFeatures;
+    internal Task? PendingLanguageRequests => _languageFeatures?.PendingRequests is { IsCompleted: false } pending
+        ? pending : null;
+    internal IReadOnlyList<Avalonia.Controls.Primitives.Popup> OpenLanguagePopups => _languageFeatures?.OpenPopups ?? [];
+    public void TriggerCompletion() => _languageFeatures?.TriggerCompletion();
+    public void TriggerSignatureHelp() => _languageFeatures?.TriggerSignatureHelp();
+
+    private void CanFormatDocument(object? sender, Avalonia.Labs.Input.CanExecuteRoutedEventArgs e)
+    {
+        e.CanExecute = DataContext is RelatedDocumentEditorViewModel { CanFormatDocument: true };
+        e.Handled = true;
+    }
+
+    private void CanFormatSelection(object? sender, Avalonia.Labs.Input.CanExecuteRoutedEventArgs e)
+    {
+        e.CanExecute = DataContext is RelatedDocumentEditorViewModel { CanFormatSelection: true };
+        e.Handled = true;
+    }
+
+    private void FormatDocumentExecuted(object? sender, Avalonia.Labs.Input.ExecutedRoutedEventArgs e) => Format(false);
+    private void FormatSelectionExecuted(object? sender, Avalonia.Labs.Input.ExecutedRoutedEventArgs e) => Format(true);
+    private void Format(bool selection)
+    {
+        if (_languageFeatures is { } features && _foldingEditor is { } editor && DataContext is RelatedDocumentEditorViewModel vm)
+            _ = features.FormatAsync(selection, vm.ApplyFormatting, () => vm.RefuseFormatting(editor.IsReadOnly));
+    }
+
+    private sealed class CarriedFileCompletionRules(RelatedDocumentEditorViewModel vm) : IEditorCompletionRules
+    {
+        public bool MayOpenCompletion() => vm.Settings.AutoListMembers && vm.LoadError is null;
+        public bool RefusesTyping(int offset, int length) => vm.LoadError is not null;
+        public bool Commits(Avalonia.Input.Key key) => key is Avalonia.Input.Key.Return or Avalonia.Input.Key.Tab;
+        public bool HandlesReturn => true;
+        public bool CompletionAtWordStart => false;
+        public IReadOnlyList<string>? FixedSignatureTriggers => null;
+    }
+
     private Action? _onPaletteChanged;
     private LspTextMarkerService? _markerService;
     private FoldingManager? _foldingManager;
@@ -29,6 +66,8 @@ public partial class RelatedDocumentEditorView : UserControl
     private LspDiagnosticsColorizer? _colorizer;
     private System.ComponentModel.PropertyChangedEventHandler? _vmCaretSync;
     private EventHandler? _caretMoved;
+    private EventHandler? _selectionChanged;
+    private bool _syncingSelection;
 
     public RelatedDocumentEditorView()
     {
@@ -83,6 +122,12 @@ public partial class RelatedDocumentEditorView : UserControl
         OnMarkersChanged(vm.Markers);
 
         AttachCaretSync(editor, vm);
+        _languageFeatures = new EditorLanguageFeatures(editor.TextArea, vm, new CarriedFileCompletionRules(vm));
+        _languageFeatures.AttachHover(editor, () => vm.Markers, marker => new TextBlock { Text = marker.Message }, uri =>
+        {
+            if (uri.Scheme is "http" or "https" && TopLevel.GetTopLevel(this) is { } top)
+                _ = top.Launcher.LaunchUriAsync(uri);
+        });
 
         // Folding, on the same terms as the VB6 editor. A carried file's URI is a real file: one, so an
         // attached server can answer for it; the registry decides whether any server may.
@@ -201,6 +246,7 @@ public partial class RelatedDocumentEditorView : UserControl
     {
         _vmCaretSync = (_, args) =>
         {
+            if (_syncingSelection) return;
             switch (args.PropertyName)
             {
                 case nameof(RelatedDocumentEditorViewModel.SelectionStart):
@@ -213,7 +259,9 @@ public partial class RelatedDocumentEditorView : UserControl
                     var length = Math.Clamp(vm.SelectionLength, 0, editor.Document.TextLength - start);
                     if (editor.SelectionStart != start || editor.SelectionLength != length)
                     {
-                        editor.Select(start, length);
+                        _syncingSelection = true;
+                        try { editor.Select(start, length); }
+                        finally { _syncingSelection = false; }
                         if (length > 0)
                             editor.TextArea.Caret.BringCaretToView();
                     }
@@ -222,18 +270,60 @@ public partial class RelatedDocumentEditorView : UserControl
                 case nameof(RelatedDocumentEditorViewModel.CaretOffset):
                     var caret = Math.Clamp(vm.CaretOffset, 0, editor.Document.TextLength);
                     if (editor.CaretOffset != caret)
-                        editor.CaretOffset = caret;
+                        MoveCaret(editor, caret);
                     break;
             }
         };
         vm.PropertyChanged += _vmCaretSync;
 
+        // A view made for a caret already placed, as open_file places one in a carried file it opens (#2403), takes it
+        // once laid out, and scrolls to it, as the code window does: the document arrives by binding, and moving the caret
+        // before it has would be lost.
+        var placed = vm.CaretOffset;
+        if (placed > 0 || vm.SelectionLength > 0)
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext != vm) return;
+                MoveCaret(editor, Math.Clamp(placed, 0, editor.Document.TextLength));
+                if (vm.SelectionLength > 0)
+                    _vmCaretSync?.Invoke(vm, new System.ComponentModel.PropertyChangedEventArgs(
+                        nameof(RelatedDocumentEditorViewModel.SelectionLength)));
+            }, Avalonia.Threading.DispatcherPriority.Loaded);
+
         _caretMoved = (_, _) => vm.CaretOffset = editor.CaretOffset;
         editor.TextArea.Caret.PositionChanged += _caretMoved;
+        _selectionChanged = (_, _) =>
+        {
+            if (_syncingSelection) return;
+            _syncingSelection = true;
+            try
+            {
+                vm.SelectionStart = editor.SelectionStart;
+                vm.SelectionLength = editor.SelectionLength;
+            }
+            finally { _syncingSelection = false; }
+        };
+        editor.TextArea.SelectionChanged += _selectionChanged;
+    }
+
+    /// <summary>
+    /// Puts the caret at <paramref name="caret"/> as the code window does (#2403): a fold over it is opened, or it would
+    /// sit unseen, and the editor scrolls to it, since navigation can arrive while this editor is already active.
+    /// </summary>
+    private void MoveCaret(TextEditor editor, int caret)
+    {
+        if (_foldingManager is { } folds)
+            foreach (var fold in folds.GetFoldingsContaining(caret))
+                if (fold.IsFolded && fold.StartOffset < caret && caret <= fold.EndOffset)
+                    fold.IsFolded = false;
+        editor.CaretOffset = caret;
+        editor.ScrollToLine(editor.TextArea.Caret.Line);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
+        _languageFeatures?.Dispose();
+        _languageFeatures = null;
         _foldCts?.Cancel();
         _foldCts?.Dispose();
         _foldCts = null;
@@ -275,12 +365,14 @@ public partial class RelatedDocumentEditorView : UserControl
             if (_markerService is not null) editor.TextArea.TextView.BackgroundRenderers.Remove(_markerService);
             if (_colorizer is not null) editor.TextArea.TextView.LineTransformers.Remove(_colorizer);
             if (_caretMoved is not null) editor.TextArea.Caret.PositionChanged -= _caretMoved;
+            if (_selectionChanged is not null) editor.TextArea.SelectionChanged -= _selectionChanged;
         }
 
         _markerService = null;
         _colorizer = null;
         _vmCaretSync = null;
         _caretMoved = null;
+        _selectionChanged = null;
     }
 
     private void OnMarkersChanged(IReadOnlyList<LspMarker> markers)

@@ -28,7 +28,12 @@ public sealed class LanguageServerRegistrationFactory(
     ILspWorkspace? workspace = null,
     ConversationLog? capture = null,
     IWorkspaceArtifactProviderRegistry? artifactProviders = null,
-    ConversationRedactor? workspaceNames = null)
+    ConversationRedactor? workspaceNames = null,
+    Func<string>? locale = null,
+    HexIDE.IDE.ISettingsService? settings = null,
+    Func<string, ShowDocumentParams, CancellationToken, Task<bool>>? showDocument = null,
+    Func<string, ShowMessageRequestParams, CancellationToken, Task<MessageActionItem?>>? showMessageRequest = null,
+    Func<WorkspaceEdit, Func<string, RenameDocumentSnapshot?>, CancellationToken, Task<string?>>? applyEdit = null)
 {
     /// <summary>
     /// The registrations for these entries, skipping the ones that are switched off.
@@ -65,7 +70,11 @@ public sealed class LanguageServerRegistrationFactory(
                     trace: trace,
                     // The id, not the language: two servers can serve one language, and a record that
                     // could not tell them apart would be worse than no record.
-                    capture: capture, connectionId: id, workspaceNames: workspaceNames),
+                    capture: capture, connectionId: id, workspaceNames: workspaceNames, locale: locale, settings: settings, showDocument: showDocument is null ? null :
+                        (request, token) => showDocument(string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName, request, token),
+                    showMessageRequest: showMessageRequest is null ? null :
+                        (request, token) => showMessageRequest(string.IsNullOrWhiteSpace(entry.DisplayName) ? id : entry.DisplayName, request, token),
+                    applyEdit: applyEdit, initializationOptions: entry.InitializationOptions, serverSettings: entry.Settings),
                 Priority: entry.Priority ?? 0,
                 Transport: transport.Kind,
                 Endpoint: transport.Endpoint,
@@ -76,7 +85,14 @@ public sealed class LanguageServerRegistrationFactory(
                 WorkspaceArtifact: WorkspaceArtifactSpecReader.TryRead(
                     id, entry.WorkspaceArtifact, artifactProviders, out var artifact, out _)
                         ? artifact
-                        : null));
+                        : null,
+                WorkspaceArtifactRefused: entry.WorkspaceArtifact is not null && artifact is null,
+                ProjectImport: ProjectImportSpecReader.TryRead(id, entry.ProjectImport, out var import, out _) ? import : null,
+                RestartOnProjectChange: entry.RestartOnProjectChange == true, Settings: entry.Settings?.Clone(),
+                // The configuration file's servers, HexIDE's own and a consented add-in's all come through here, which is
+                // what lets them offer AI Chat tools (#4257). A value the loader reported as unreadable asks before every
+                // call: a misspelled setting about approval errs towards asking.
+                ChatTools: ServerChatToolsSetting.Parse(entry.ChatTools) ?? ServerChatToolsPolicy.AskEveryCall));
         }
 
         return registrations;
@@ -114,6 +130,9 @@ public sealed class LanguageServerRegistrationFactory(
             "stdio" => new TransportChoice(create, LanguageConnectionTransport.Stdio,
                 string.Join(' ', new[] { entry.Command?.Trim(), entry.Arguments?.ToString() }
                     .Where(part => !string.IsNullOrWhiteSpace(part)))),
+
+            "tcp" => new TransportChoice(create, LanguageConnectionTransport.Tcp,
+                $"{entry.Endpoint?.Trim()} ({(string.Equals(entry.TcpRole?.Trim(), "listen", StringComparison.OrdinalIgnoreCase) ? "listen" : "connect")})"),
 
             "websocket" => new TransportChoice(create, LanguageConnectionTransport.WebSocket,
                 entry.Endpoint?.Trim()),
@@ -170,6 +189,12 @@ public sealed class LanguageServerRegistrationFactory(
                 loggerFactory.CreateLogger<StdioProcessLspTransport>(),
                 workspace,
                 serverId: entry.Id),
+
+            "tcp" when !string.IsNullOrWhiteSpace(entry.Endpoint) => () => new TcpLspTransport(
+                entry.Endpoint!.Trim(),
+                string.Equals(entry.TcpRole?.Trim(), "listen", StringComparison.OrdinalIgnoreCase)
+                    ? TcpRole.Listen : TcpRole.Connect,
+                loggerFactory.CreateLogger<TcpLspTransport>(), LaunchFor(entry), workspace),
 
             "websocket" when !string.IsNullOrWhiteSpace(entry.Endpoint) => () => new WebSocketLspTransport(
                 entry.Endpoint!.Trim(), loggerFactory.CreateLogger<WebSocketLspTransport>(),

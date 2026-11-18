@@ -9,6 +9,11 @@ A byte pattern is unsafe here: Git for Windows uses UTF-mode matching even under
 pattern for the two UTF-8 bytes misses the control (#1881). Conversely, matching the range without
 UTF mode on Linux would flag continuation bytes in ordinary punctuation.
 
+A doc or spec cited by line number, as `<file>.md:<line>` or a capability's name and a line, fails: the line moves as
+soon as anything above it changes, and the citation goes on reading as an authority. Cite a heading or a scenario. A
+source file's line (`Foo.cs:12`) stays legal, because an audit reports what it read at a commit. Records of past state
+aren't scanned: the changelog, `docs/archive`, `openspec/changes/archive`, the oracle's measurements and `scripts/probes`.
+
 ## Verification
 
 - **WSL Ubuntu, Git 2.53.0 (2026-10-25):** the explicit UTF pattern detects C1 controls, including
@@ -17,5 +22,6 @@ UTF mode on Linux would flag continuation bytes in ordinary punctuation.
   its clean and punctuation runs retain native matching.
 - **Git Bash, Git for Windows 2.55.0.windows.5 (issue #1881, 2026-10-25):** the original byte pattern
   missed the planted C1 file (four of 78 selftest assertions failed). The issue's probe matched
-  U+0085 with `(*UTF)\x{85}`. The revised guard's full selftest still needs a Windows run; Linux
-  emulation of UTF mode does not establish a Windows result.
+  U+0085 with `(*UTF)\x{85}`.
+- **Git Bash, Git for Windows 2.55.0.windows.5 (2026-11-08, main at `d3a7fd893`):** the revised guard's full
+  selftest passes on Windows, all 141 assertions.

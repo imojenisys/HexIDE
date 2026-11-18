@@ -21,6 +21,7 @@ using HexIDE.Forms.ViewModels;
 using HexIDE.Forms.Views;
 using HexIDE.IDE;
 using HexIDE.Localization;
+using HexIDE.Language;
 using HexIDE.Lsp;
 using HexIDE.Lsp.Messages;
 using HexIDE.Projects;
@@ -60,6 +61,7 @@ public class MemberRunFoldTests : IDisposable
     private Func<CodeEditorViewModel, FoldingRange[]> folds = _ => [];
 
     private CodeEditorViewModel? answering;
+    private Action<CreateOrNavigateToSubEvent>? navigate;
 
     public MemberRunFoldTests()
     {
@@ -103,7 +105,7 @@ public class MemberRunFoldTests : IDisposable
     private CodeEditorViewModel MakeViewModel()
     {
         var eventBus = Substitute.For<IEventBus>();
-        eventBus.Subscribe<CreateOrNavigateToSubEvent>(Arg.Any<Action<CreateOrNavigateToSubEvent>>()).Returns(Substitute.For<IDisposable>());
+        eventBus.Subscribe(Arg.Do<Action<CreateOrNavigateToSubEvent>>(a => navigate = a)).Returns(Substitute.For<IDisposable>());
         eventBus.Subscribe<ApplyAllUnsavedChangesEvent>(Arg.Any<Action<ApplyAllUnsavedChangesEvent>>()).Returns(Substitute.For<IDisposable>());
         eventBus.Subscribe<FormUnloadedEvent>(Arg.Any<Action<FormUnloadedEvent>>()).Returns(Substitute.For<IDisposable>());
         eventBus.Subscribe<DocumentSavedEvent>(Arg.Any<Action<DocumentSavedEvent>>()).Returns(Substitute.For<IDisposable>());
@@ -117,6 +119,24 @@ public class MemberRunFoldTests : IDisposable
             Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>());
         made.Add(vm);
         return vm;
+    }
+
+    [AvaloniaFact]
+    public void Navigating_to_a_described_handler_keeps_its_attribute_run_folded()
+    {
+        var form = FormDefinition.NewForm(new ProjectDefinition(VBProjectType.EXE, "P"), FormComponentClass.Instance, "Form1");
+        form.UpdateCode(Procedure.Replace("Go", "Form_Load"));
+        var vm = MakeViewModel().Initialize(form);
+        answering = vm;
+        var (_, editor) = Show(vm);
+        RunFold(editor, "Public Sub Form_Load()")!.IsFolded.Should().BeTrue();
+
+        navigate!(new CreateOrNavigateToSubEvent(form, "Form_Load", "Form", "Load"));
+        Dispatcher.UIThread.RunJobs();
+
+        editor.CaretOffset.Should().Be(editor.Document.Text.IndexOf("    Debug.Print 1", StringComparison.Ordinal));
+        RunFold(editor, "Public Sub Form_Load()")!.IsFolded.Should().BeTrue();
+        vm.ExpandedHangingRegions.Should().BeEmpty();
     }
 
     private CodeEditorViewModel Open(string code, ModuleKind kind = ModuleKind.StandardModule)
@@ -162,8 +182,13 @@ public class MemberRunFoldTests : IDisposable
     }
 
     /// <summary>The fold starting at the end of the line holding <paramref name="declaration"/>, if there is one.</summary>
-    private static FoldingSection? RunFold(TextEditor editor, string declaration, int nth = 0) =>
-        Folding(editor).GetFoldingsAt(LineWith(editor, declaration, nth).EndOffset).SingleOrDefault();
+    private static FoldingSection? RunFold(TextEditor editor, string declaration, int nth = 0)
+    {
+        var anchor = LineWith(editor, declaration, nth).EndOffset;
+        var run = ReadOnlyRegions.MemberRuns(editor.Document.Text, 0).FirstOrDefault(r => r.Anchor == anchor);
+        return run is null ? null : Folding(editor).GetFoldingsAt(anchor)
+            .SingleOrDefault(f => f.EndOffset == run.LastContentEnd);
+    }
 
     /// <summary>The server's fold of the Sub, 0-based as a server sends it.</summary>
     private static FoldingRange[] ServerFoldsTheSub(CodeEditorViewModel vm)
@@ -236,7 +261,7 @@ public class MemberRunFoldTests : IDisposable
         ToggleFold(editor);
 
         run.IsFolded.Should().Be(!initiallyFolded);
-        Folding(editor).GetFoldingsAt(declaration.Offset).Single().IsFolded.Should().BeFalse();
+        Folding(editor).GetFoldingsAt(declaration.EndOffset).Single(f => f.EndOffset == LineWith(editor, "End Sub").EndOffset).IsFolded.Should().BeFalse();
     }
 
     [AvaloniaFact]
@@ -254,7 +279,7 @@ public class MemberRunFoldTests : IDisposable
 
         run.IsFolded.Should().BeTrue();
         Caret(editor).Should().Be(run.StartOffset);
-        Folding(editor).GetFoldingsAt(LineWith(editor, "Public Sub Go()").Offset).Single().IsFolded.Should().BeFalse();
+        Folding(editor).GetFoldingsAt(LineWith(editor, "Public Sub Go()").EndOffset).Single(f => f.EndOffset == LineWith(editor, "End Sub").EndOffset).IsFolded.Should().BeFalse();
         Dispatcher.UIThread.RunJobs();
         vm.ReloadFrom(vm.Document.Text[..vm.BufferPrefixLength], vm.BufferBody + "\r\n");
         Dispatcher.UIThread.RunJobs();
@@ -271,7 +296,7 @@ public class MemberRunFoldTests : IDisposable
         var (_, editor) = Show(vm);
         await SettleFolding();
         PutCaret(editor, LineWith(editor, "Debug.Print 1").Offset + 5);
-        var procedure = Folding(editor).GetFoldingsAt(LineWith(editor, "Public Sub Go()").Offset).Single();
+        var procedure = Folding(editor).GetFoldingsAt(LineWith(editor, "Public Sub Go()").EndOffset).Single(f => f.EndOffset == LineWith(editor, "End Sub").EndOffset);
 
         ToggleFold(editor);
 
@@ -339,12 +364,12 @@ public class MemberRunFoldTests : IDisposable
         await SettleFolding();
 
         var declaration = LineWith(editor, "Public Sub Go()");
-        var procedure = Folding(editor).GetFoldingsAt(declaration.Offset).Single();
+        var procedure = Folding(editor).GetFoldingsAt(declaration.EndOffset).Single(f => f.EndOffset == LineWith(editor, "End Sub").EndOffset);
         var run = RunFold(editor, "Public Sub Go()")!;
         procedure.EndOffset.Should().Be(LineWith(editor, "End Sub").EndOffset, "the premise: the server's fold is the Sub");
         procedure.IsFolded.Should().BeFalse("a server's fold opens expanded, as it always has");
         run.IsFolded.Should().BeTrue("and the run's inside it is folded");
-        (run.StartOffset > procedure.StartOffset && run.EndOffset < procedure.EndOffset).Should().BeTrue("nested");
+        (run.StartOffset == procedure.StartOffset && run.EndOffset < procedure.EndOffset).Should().BeTrue("nested");
 
         procedure.IsFolded = true;
         Dispatcher.UIThread.RunJobs();
@@ -353,6 +378,42 @@ public class MemberRunFoldTests : IDisposable
         procedure.IsFolded = false;
         Dispatcher.UIThread.RunJobs();
         run.IsFolded.Should().BeTrue("and opening it again leaves the run as it was");
+
+        foreach (var folded in new[] { false, true })
+        {
+            run.IsFolded = folded;
+            ServerStateChanged();
+            await SettleFolding();
+            RunFold(editor, "Public Sub Go()")!.IsFolded.Should().Be(folded);
+            Folding(editor).AllFoldings.Should().HaveCount(2);
+        }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARunKeepsItsStateWhenTheSameStartProcedureFoldDisappears(bool runFolded)
+    {
+        folds = ServerFoldsTheSub;
+        var vm = Open(Procedure);
+        var (_, editor) = Show(vm);
+        await SettleFolding();
+        var run = RunFold(editor, "Public Sub Go()")!;
+        var procedure = Folding(editor).GetFoldingsAt(run.StartOffset)
+            .Single(f => f.EndOffset == LineWith(editor, "End Sub").EndOffset);
+        run.IsFolded = runFolded;
+        procedure.IsFolded = !runFolded;
+
+        folds = _ => [];
+        ServerStateChanged();
+        await SettleFolding();
+
+        Folding(editor).AllFoldings.Should().ContainSingle();
+        RunFold(editor, "Public Sub Go()")!.IsFolded.Should().Be(runFolded);
+        ServerStateChanged();
+        await SettleFolding();
+        RunFold(editor, "Public Sub Go()")!.IsFolded.Should().Be(runFolded,
+            "the surviving section must still be recognised as the run");
     }
 
     [AvaloniaFact]
@@ -589,7 +650,7 @@ public class MemberRunFoldTests : IDisposable
         vm.Document.EndUpdate();
         Dispatcher.UIThread.RunJobs();
 
-        vm.MemberRunsNow.Single().Key.Should().Be(new MemberRunKey("GOO", 0), "the premise: the run is Goo's now");
+        vm.HangingRegionsNow.Single().Key.Should().Be(new HangingRegionKey("GOO", 0), "the premise: the run is Goo's now");
         var after = RunFold(editor, "Public Sub Goo()");
         after.Should().BeSameAs(fold, "the premise: the section was paired, not made anew");
         after!.EndOffset.Should().Be(LineWith(editor, "Attribute Go.VB_HelpID").EndOffset);
@@ -640,7 +701,7 @@ public class MemberRunFoldTests : IDisposable
         var end = LineWith(editor, "End Property");
         vm.Document.Remove(get.Offset, end.Offset + end.TotalLength - get.Offset);
         Dispatcher.UIThread.RunJobs();
-        vm.MemberRunsNow.Single(r => r.DescribesMember).Key.Should().Be(new MemberRunKey("TOTAL", 0),
+        vm.HangingRegionsNow.Single().Key.Should().Be(new HangingRegionKey("TOTAL", 0),
             "the premise: the Let's run has the Get's key");
         RunFold(editor, "Property Let Total")!.IsFolded.Should().BeFalse("the premise: and is still open");
 
@@ -702,8 +763,8 @@ public class MemberRunFoldTests : IDisposable
         vm.Document.Insert(LineWith(editor, "End Property").Offset, "Attribute Total.VB_Description = \"Sets the total\"\r\n");
         Dispatcher.UIThread.RunJobs();
 
-        vm.MemberRunsNow.Where(r => r.DescribesMember).Select(r => r.Key)
-            .Should().Equal([new MemberRunKey("TOTAL", 0), new MemberRunKey("TOTAL", 1)], "the premise: the Let's run is first");
+        vm.HangingRegionsNow.Select(r => r.Key)
+            .Should().Equal([new HangingRegionKey("TOTAL", 0), new HangingRegionKey("TOTAL", 1)], "the premise: the Let's run is first");
         RunFold(editor, "Property Let Total")!.IsFolded.Should().BeTrue();
         RunFold(editor, "Property Get Total")!.IsFolded.Should().BeFalse();
 
@@ -776,10 +837,9 @@ public class MemberRunFoldTests : IDisposable
     }
 
     [AvaloniaFact]
-    public void ARunTypedInUnderItsDeclarationIsMadeExpandedSoTheLineBeingTypedStaysOnScreen()
+    public async Task ATypedMemberAttributeIsNotFoldedUntilTheCaretLeavesItsLine()
     {
-        // A run typed by hand describes the procedure from its first '.', and is read-only from then on (design.md,
-        // "Settled while building 4.1"). Folded there, the line would vanish into a box under the caret.
+        // The line being typed stays the developer's until they leave it (#3819).
         var vm = Open("Option Explicit\r\n\r\nPublic Sub Halt()\r\n\r\nEnd Sub\r\n");
         var (_, editor) = Show(vm);
         PutCaret(editor, LineWith(editor, "Public Sub Halt()").EndOffset + 2);
@@ -788,10 +848,13 @@ public class MemberRunFoldTests : IDisposable
         RunFold(editor, "Public Sub Halt()").Should().BeNull("the premise: no run yet");
         TypeText(editor, ".");
 
-        var fold = RunFold(editor, "Public Sub Halt()");
-        fold.Should().NotBeNull("the run describes Halt now");
-        fold!.IsFolded.Should().BeFalse();
+        RunFold(editor, "Public Sub Halt()").Should().BeNull("the line is still being typed");
         Caret(editor).Should().Be(LineWith(editor, "Attribute Halt.").EndOffset, "and the caret is where it was typed");
+        PutCaret(editor, LineWith(editor, "End Sub").Offset);
+        await SettleFolding();
+        var fold = RunFold(editor, "Public Sub Halt()");
+        fold.Should().NotBeNull("leaving the line admits it without changing the text");
+        fold!.IsFolded.Should().BeTrue();
     }
 
     // ── The caret at a folded run ──────────────────────────────────────────────────────────────────────────
@@ -1024,6 +1087,53 @@ public class MemberRunFoldTests : IDisposable
     }
 
     [AvaloniaFact]
+    public void SelectAllInAFileThatARunEndsSelectsTheRunButLeavesTheCaretAtTheDeclaration()
+    {
+        // #1019: retain this edge case; the measured VB6-saved corpus has final line breaks.
+        var vm = Open("Option Explicit\r\n\r\nPublic Total As Long\r\nAttribute Total.VB_VarDescription = \"The total\"");
+        var (_, editor) = Show(vm);
+        var fold = RunFold(editor, "Public Total As Long")!;
+        fold.IsFolded.Should().BeTrue();
+        fold.EndOffset.Should().Be(vm.Document.TextLength, "the premise: the run ends the file");
+        PutCaret(editor, LineWith(editor, "Option Explicit").Offset);
+
+        editor.FindAncestorOfType<CodeEditorView>()!.SelectAll.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        editor.SelectionStart.Should().Be(0);
+        editor.SelectionLength.Should().Be(vm.Document.TextLength);
+        Caret(editor).Should().Be(fold.StartOffset);
+        fold.IsFolded.Should().BeTrue();
+
+        Press(editor, Key.Left, KeyModifiers.Shift);
+
+        editor.SelectionStart.Should().Be(0);
+        editor.SelectionLength.Should().Be(fold.StartOffset - 1);
+        Caret(editor).Should().Be(fold.StartOffset - 1);
+        fold.IsFolded.Should().BeTrue();
+    }
+
+    [AvaloniaFact]
+    public void SelectToDocumentEndInAFileThatARunEndsSelectsOnlyToTheDeclaration()
+    {
+        var vm = Open("Option Explicit\r\n\r\nPublic Total As Long\r\nAttribute Total.VB_VarDescription = \"The total\"");
+        var (_, editor) = Show(vm);
+        var fold = RunFold(editor, "Public Total As Long")!;
+        fold.IsFolded.Should().BeTrue();
+        fold.EndOffset.Should().Be(vm.Document.TextLength, "the premise: the run ends the file");
+        var start = LineWith(editor, "Option Explicit").EndOffset;
+        PutCaret(editor, start);
+
+        EditingCommands.SelectToDocumentEnd.Execute(null, editor.TextArea);
+        Dispatcher.UIThread.RunJobs();
+
+        editor.SelectionStart.Should().Be(start);
+        editor.SelectionLength.Should().Be(fold.StartOffset - start);
+        Caret(editor).Should().Be(fold.StartOffset);
+        fold.IsFolded.Should().BeTrue();
+    }
+
+    [AvaloniaFact]
     public async Task AServersFoldOfTheAttributeLinesThemselvesNestsInsideTheRunsFoldAndTheCaretRuleStillHolds()
     {
         // A server that folds the run's own lines, from the first's start to the last's end: inside the run's fold, so
@@ -1043,7 +1153,7 @@ public class MemberRunFoldTests : IDisposable
         var first = LineWith(editor, "Attribute Go.VB_Description");
         var last = LineWith(editor, "Attribute Go.VB_UserMemId");
         Folding(editor).AllFoldings.Select(f => (f.StartOffset, f.EndOffset, f.IsFolded)).Should().Equal(
-            [(declaration.EndOffset, last.EndOffset, true), (first.Offset, last.EndOffset, false)]);
+            [(declaration.EndOffset, last.EndOffset, true), (first.EndOffset, last.EndOffset, false)]);
         PutCaret(editor, declaration.Offset);
         Press(editor, Key.End);
         Caret(editor).Should().Be(declaration.EndOffset);
@@ -1226,7 +1336,7 @@ public class MemberRunFoldTests : IDisposable
         var (_, editor) = Show(vm);
         RunFold(editor, "Public Sub P7()")!.IsFolded = false;
         Dispatcher.UIThread.RunJobs();
-        var scans = vm.MemberRunScans;
+        var scans = vm.HangingRegionScans;
 
         var reduction = vm.ApplyFormatting([new TextEdit(
             new HexIDE.Lsp.Messages.Range(new Position(0, 0), new Position(vm.Document.LineCount, 0)),
@@ -1234,7 +1344,7 @@ public class MemberRunFoldTests : IDisposable
         Dispatcher.UIThread.RunJobs();
 
         reduction.Changes.Should().HaveCount(200, "the premise: one change per body line, in one group");
-        (vm.MemberRunScans - scans).Should().BeLessThanOrEqualTo(2,
+        (vm.HangingRegionScans - scans).Should().BeLessThanOrEqualTo(2,
             "the runs are read as the group begins and once it has changed the text, not at each of its changes");
         RunFold(editor, "Public Sub P7()")!.IsFolded.Should().BeFalse("and what was recorded still holds");
         RunFold(editor, "Public Sub P8()")!.IsFolded.Should().BeTrue();
@@ -1247,13 +1357,13 @@ public class MemberRunFoldTests : IDisposable
         // prefix's length says the runs were read against another split. Here the prefix takes in the declaration, and
         // the run below it hangs from no line of code.
         var vm = Open(Procedure);
-        vm.MemberRunsNow.Should().ContainSingle(r => r.DescribesMember, "the premise");
+        vm.HangingRegionsNow.Should().ContainSingle("the premise");
         var text = vm.Document.Text;
         var split = text.IndexOf("Attribute Go.VB_Description", StringComparison.Ordinal);
 
         vm.ReloadFrom(text[..split], text[split..]);
 
         vm.Document.Text.Should().Be(text, "the premise: the text is the same");
-        vm.MemberRunsNow.Should().NotContain(r => r.DescribesMember);
+        vm.HangingRegionsNow.Should().BeEmpty();
     }
 }

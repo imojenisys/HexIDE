@@ -127,7 +127,7 @@ public class DoLoopTests : BaseVBTestFixture
     }
 
     [Fact]
-    public async Task DoLoop_ShouldSkipToNextIterationWithConditionCheck()
+    public async Task ContinueDo_IsRefusedBeforeExecution()
     {
         string code = @"
             Dim i, result
@@ -142,9 +142,12 @@ public class DoLoopTests : BaseVBTestFixture
             Loop Until i > 4
         ";
 
-        await Run(code);
-
-        AssertDebugLog([ new Vb6Value(1), new Vb6Value(3), new Vb6Value(4) ]);
+        Func<Task> act = () => Run(code);
+        var error = (await act.Should().ThrowAsync<VBCompileErrorException>()).Which;
+        error.Message.ReplaceLineEndings("\n").Should().Be(
+            "Compile error:\n\nContinue Do isn't part of VB6, VBA or VBScript, so this interpreter doesn't run it.");
+        error.Line.Should().Be(7);
+        debug.Should().BeEmpty();
     }
 
     [Fact]

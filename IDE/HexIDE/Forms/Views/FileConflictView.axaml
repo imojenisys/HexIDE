@@ -21,13 +21,11 @@
             <ListBox ItemsSource="{CompiledBinding Files}">
                 <ListBox.Styles>
                     <Style Selector="ListBoxItem:selected">
-                        <Style Selector="^:not(:focus-within)">
-                            <Setter Property="Foreground"
-                                    Value="{DynamicResource {x:Static common:SystemColors.HighlightTextBrushKey}}"/>
-                            <Style Selector="^ /template/ Border#Bd">
-                                <Setter Property="Background"
-                                        Value="{DynamicResource {x:Static common:SystemColors.HighlightBrushKey}}"/>
-                            </Style>
+                        <Setter Property="Foreground"
+                                Value="{DynamicResource {x:Static common:SystemColors.HighlightTextBrushKey}}"/>
+                        <Style Selector="^ /template/ ContentPresenter#PART_ContentPresenter">
+                            <Setter Property="Background"
+                                    Value="{DynamicResource {x:Static common:SystemColors.HighlightBrushKey}}"/>
                         </Style>
                     </Style>
                 </ListBox.Styles>
@@ -41,6 +39,11 @@
             <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
                     Command="{CompiledBinding KeepAll}"
                     Content="{DynamicResource Str.Dialog.FileConflict.Button.KeepAll}" />
+            <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                    IsVisible="{CompiledBinding CanCancel}"
+                    IsCancel="True"
+                    Command="{CompiledBinding Cancel}"
+                    Content="{DynamicResource Str.Dialog.FileConflict.Button.Cancel}" />
         </StackPanel>
 
     </Grid>

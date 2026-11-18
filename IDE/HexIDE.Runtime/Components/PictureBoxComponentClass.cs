@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using HexIDE.Runtime.BuiltinTypes;
+using HexIDE.Runtime.Serialization;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -24,6 +25,8 @@ public class PictureBoxComponentClass : ComponentBaseClass
     {
     }
 
+    public override string? DesignerDoubleClickEvent => "Click";
+
     public override string Name => "Picture";
     public override string VBTypeName => "VB.PictureBox";
 
@@ -47,6 +50,7 @@ public class PictureBoxComponentClass : ComponentBaseClass
         var pictureData = instance.GetPropertyOrDefault(PictureProperty);
         if (pictureData != null)
             box.PictureData = pictureData;
+        box.AutoSize = instance.GetPropertyOrDefault(AutoSizeProperty);
         return box;
     }
 
@@ -72,6 +76,41 @@ public class PictureBoxComponentClass : ComponentBaseClass
             (VBBorder.FixedSingle, _) => (ClassicBorderStyle.Thin, new Thickness(1)),
             _ => (ClassicBorderStyle.None, new Thickness(0)),
         };
+
+    // #922: docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md.
+    public override IReadOnlyList<PropertyChange> ApplyDesignerConsequences(ComponentInstance instance, PropertyClass property)
+    {
+        if (!ReferenceEquals(property, PictureProperty) || !instance.GetPropertyOrDefault(AutoSizeProperty))
+            return [];
+        var size = AutoSizePixels(instance.GetPropertyOrDefault(PictureProperty),
+            ClientBorder(instance.GetPropertyOrDefault(BorderStyleProperty),
+                instance.GetPropertyOrDefault(AppearanceProperty)).Style);
+        if (size is not { } fitted)
+            return [];
+        var width = fitted.Width;
+        var height = fitted.Height;
+        var oldWidth = instance.GetPropertyOrDefault(WidthProperty);
+        var oldHeight = instance.GetPropertyOrDefault(HeightProperty);
+        instance.SetProperty(WidthProperty, width);
+        instance.SetProperty(HeightProperty, height);
+        return [new PropertyChange(WidthProperty, oldWidth, width), new PropertyChange(HeightProperty, oldHeight, height)];
+    }
+
+    internal static Size? AutoSizePixels(byte[]? data, ClassicBorderStyle border)
+    {
+        if (data is null || data.Length == 0)
+            return null;
+        var payload = FrxImageHelper.PicturePayload(data) ?? data;
+        if (FrxImageHelper.DetectKind(payload) != FrxImageHelper.FrxBlobKind.Bitmap)
+            throw new NotImplementedException("PictureBox AutoSize for a non-bitmap picture is not measured (#922)");
+        if (border is not (ClassicBorderStyle.None or ClassicBorderStyle.Sunken))
+            throw new NotImplementedException("PictureBox AutoSize with a flat border is not measured (#922)");
+        using var bitmap = FrxImageHelper.TryDecodeToAvaloniaBitmap(data);
+        if (bitmap is null)
+            return null;
+        var extra = border == ClassicBorderStyle.Sunken ? 4 : 0;
+        return new Size(bitmap.PixelSize.Width + extra, bitmap.PixelSize.Height + extra);
+    }
 
     public override bool TryGetChildHost(Control control, [NotNullWhen(true)] out Canvas? host)
     {

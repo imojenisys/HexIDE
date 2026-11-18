@@ -3,6 +3,7 @@ using System.Linq;
 using HexIDE.Forms.ViewModels;
 using HexIDE.IDE;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 
 namespace HexIDE.Tests.ViewModels;
 
@@ -38,6 +39,53 @@ public class ReferencesViewModelTests
         var libraries = Substitute.For<IReferenceLibraryService>();
         libraries.GetAvailableReferences().Returns(available);
         return new ReferencesViewModel(project, libraries, Substitute.For<IWindowManager>());
+    }
+
+    // Measured in VB6 SP6: https://github.com/hexide-io/HexIDE/issues/1468 (2026-11-16 comment).
+    [Theory]
+    [InlineData("Project1")]
+    [InlineData("Renamed")]
+    public void Never_saved_title_uses_the_current_project_name(string name)
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "Project1");
+        project.Name = name;
+
+        Dialog(project).Title.Should().Be($"References - {name}");
+    }
+
+    [Theory]
+    [InlineData(@"C:\Projects\Other.vbp")]
+    [InlineData("/projects/Other.vbp")]
+    public void Saved_title_uses_the_file_name_even_after_renaming(string path)
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "Project1") { AbsolutePath = path };
+        Dialog(project).Title.Should().Be("References - Other.vbp");
+
+        project.Name = "Renamed";
+
+        Dialog(project).Title.Should().Be("References - Other.vbp");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void References_OK_regroups_the_save_but_cancel_keeps_read_order(bool accept)
+    {
+        const string reference = @"Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0##OLE Automation";
+        var project = Project(new VbReference(OleAutomation.Guid, "2.0", 0, "", "OLE Automation"));
+        project.KnownLineKeys.AddRange(new[] { "Type", "Designer", "Reference", "Name" });
+        project.PreserveItemLine("Designer=Probe.dsr", 1);
+        project.UnknownPreSectionLines.Add((3, "Object=kept"));
+        var dialog = Dialog(project);
+        dialog.CloseRequested += ok => { if (ok) dialog.Apply(project); };
+        (accept ? dialog.OkCommand : dialog.CancelCommand).Execute(null);
+
+        var expected = accept
+            ? new[] { "Type=Exe", reference, "Object=kept", "Designer=Probe.dsr", "Name=\"P\"", "" }
+            : new[] { "Type=Exe", "Designer=Probe.dsr", reference, "Object=kept", "Name=\"P\"", "" };
+        var serializer = new ProjectSerializer();
+        serializer.Serialize(project, @"C:\a\b\P.vbp").Should().Be(string.Join("\r\n", expected));
+        serializer.Serialize(project, @"C:\a\b\P.vbp").Should().Be(string.Join("\r\n", expected));
     }
 
     [Fact]

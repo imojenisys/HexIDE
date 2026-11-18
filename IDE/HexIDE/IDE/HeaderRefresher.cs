@@ -6,6 +6,7 @@ using HexIDE.Bookmarks;
 using HexIDE.Debugging;
 using HexIDE.Events;
 using HexIDE.Forms.ViewModels;
+using HexIDE.Language;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Runtime.Serialization;
 using Serilog;
@@ -94,7 +95,17 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
             return;
         }
 
-        var header = new FormSerializer().SerializeDesignerText(form, fileName);
+        // Through the form's own format: an add-in's form has its header rendered by the add-in, or by nothing.
+        string header;
+        try
+        {
+            header = (form.Owner.FormFormat ?? ProjectFormats.Of(form.Owner)).RenderDesignerHeader(form, fileName);
+        }
+        catch (HexIDE.Projects.RenderRefusal refusal)
+        {
+            Log.Debug("HeaderRefresher: not re-rendering {Document} — {Reason}", identity.Display, refusal.Message);
+            return;
+        }
 
         // One undo entry per commit, however many of the IDE's writes it takes. A rename moves both the
         // designer block's Begin line and the code section's VB_Name, and two entries would let any undo that
@@ -126,7 +137,7 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
     public void ApplyHeader(FormDefinition form, string header)
     {
         var identity = DocumentIdentity.For(form);
-        var current = FormCodeText.Prefix(form);
+        var current = ProjectFormats.Of(form.Owner).CodePrefix(form);
 
         // The model half only when the model actually moves, because the marks move with it and a shift of
         // zero must not announce itself to two stores, three gutters and the sidecar.
@@ -172,6 +183,13 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
         {
             if (header is not null && (document.Form ?? document.Module?.FormPart) is { } designer)
                 ApplyHeader(designer, header);
+            else if (header is not null && document.Module is { } module)
+            {
+                var current = ProjectFormats.Of(module.Owner).CodePrefix(module);
+                module.RecordOriginalHeader(header);
+                ShiftMarks(document, current, header);
+                editor?.RefreshPrefix(header);
+            }
             editor?.AdoptRewrittenQualifiers(document.Module?.Code ?? document.Form!.Code);
         }
         finally
@@ -187,8 +205,8 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
     /// <remarks>
     /// <para>
     /// <b>Where the line lives depends on the kind, and so does the write.</b> A <c>.bas</c> or <c>.cls</c>
-    /// keeps it in the header, which the model already renders from the live name, so only an open buffer
-    /// can be stale and re-heading it is the whole job. A form keeps it in <c>Code</c>, and a UserControl or
+    /// keeps it in the header, which the model renders from the live name. If no header was read, a name
+    /// typed into the code instead follows the rename there (#3757). A form keeps it in <c>Code</c>, and a UserControl or
     /// PropertyPage in its module's <c>Code</c>, because their code section opens with the attribute run —
     /// so for those the model's text is rewritten too, which is what makes a closed document's next save say
     /// the right thing.
@@ -209,27 +227,29 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
 
         if (document.Module is { } module)
         {
-            if (!ModuleFileFormat.HandlesHeader(module.Kind))
-                RetargetCode(module.Code, name, module.UpdateCode);
+            if (ProjectFormats.Of(module.Owner) is { } own && own.PrefixCarriesName(module))
+                RetargetCode(module.Owner, module.Code, name, module.UpdateCode, moduleLevel: true, prefix: own.CodePrefix(module));
+            else
+                RetargetCode(module.Owner, module.Code, name, module.UpdateCode);
         }
         else if (document.Form is { } form)
         {
-            RetargetCode(form.Code, name, form.UpdateCode);
+            RetargetCode(form.Owner, form.Code, name, form.UpdateCode);
         }
 
         if (EditorFor(document) is { } editor)
         {
-            if (document.Module is { } headed && ModuleFileFormat.HandlesHeader(headed.Kind))
-                editor.RefreshPrefix(FormCodeText.Prefix(headed));
+            if (document.Module is { } headed && ProjectFormats.Of(headed.Owner) is { } own && own.PrefixCarriesName(headed))
+                editor.RefreshPrefix(own.CodePrefix(headed));
             editor.RetargetVbName(name);
         }
     }
 
-    private static void RetargetCode(string code, string name, Action<string> update)
+    private void RetargetCode(ProjectDefinition project, string code, string name, Action<string> update, bool moduleLevel = false,
+        string prefix = "")
     {
-        var retargeted = FormCodeText.RetargetVbName(code, name);
-        if (!ReferenceEquals(retargeted, code))
-            update(retargeted);
+        if (ProjectFormats.WriterOf(project)?.NameRewrite(prefix + code, prefix.Length, name, moduleLevel) is { } change)
+            update(TextChanges.Apply(code, [new HexIDE.Language.TextChange(change.Offset - prefix.Length, change.Length, change.Text)]));
     }
 
     /// <summary>
@@ -265,7 +285,7 @@ public sealed class HeaderRefresher : IHeaderRefresher, IDisposable
 
         var marks = breakpoints.GetBreakpoints(document);
         if (marks.Count > 0)
-            breakpoints.SetDocument(document, Shift(marks, oldLines + 1, delta));
+            breakpoints.MoveLines(document, oldLines + 1, delta);
 
         var marked = bookmarks.GetBookmarks(document);
         if (marked.Count > 0)

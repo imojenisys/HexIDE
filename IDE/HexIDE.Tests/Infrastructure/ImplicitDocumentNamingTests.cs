@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.Reflection;
 using System.Text.Json;
 using Dock.Model.Core;
@@ -45,8 +46,8 @@ public class ImplicitDocumentNamingTests
             projects.LoadedProjects.Returns([First, Second]);
             var runner = Substitute.For<IProjectRunnerService>();
             runner.RunningProject.Returns(Second);
-            Context = new IdeContext(projects, Dock, Substitute.For<ILspClient>(), null!, runner,
-                null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
+            Context = new IdeContext(projects, Dock, Substitute.For<ILspClient>(), Substitute.For<IEditorService>(), runner,
+                null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
             Tools = new HexIdeTools(Context);
         }
         public void Tabs(params IDockable[] tabs)
@@ -71,6 +72,106 @@ public class ImplicitDocumentNamingTests
     }
 
     private static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value, ReplyJson.Options);
+
+    private static HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel Carried(ProjectDefinition project)
+    {
+        var file = new RelatedDocumentDefinition(project, "snipmod", null);
+        project.AddRelatedDocument(file);
+        return new HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(),
+            Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>()).Initialize(file);
+    }
+
+    [AvaloniaFact]
+    public async Task Carried_tab_identities_match_open_file_across_projects()
+    {
+        using var f = new Fixture();
+        using var first = Carried(f.First);
+        using var second = Carried(f.Second);
+        f.Tabs(first, second);
+        var openedFirst = await f.Tools.OpenFileAsync("snipmod", project: "First");
+        var openedSecond = await f.Tools.OpenFileAsync("snipmod", project: "Second");
+        openedFirst.Success.Should().BeTrue();
+        openedSecond.Success.Should().BeTrue();
+
+        var tabs = Json(await f.Tools.GetDocumentTabsAsync(TestContext.Current.CancellationToken)).GetProperty("tabs");
+
+        tabs[0].GetProperty("project").GetString().Should().Be(openedFirst.Project).And.Be("First");
+        tabs[0].GetProperty("document").GetString().Should().Be(openedFirst.Document).And.Be("snipmod");
+        tabs[1].GetProperty("project").GetString().Should().Be(openedSecond.Project).And.Be("Second");
+        tabs[1].GetProperty("document").GetString().Should().Be(openedSecond.Document).And.Be("snipmod");
+    }
+
+    [AvaloniaFact]
+    public async Task A_carried_tab_is_activated_by_name_and_project()
+    {
+        using var f = new Fixture();
+        using var first = Carried(f.First);
+        using var second = Carried(f.Second);
+        f.Tabs(first, second);
+        f.Dock.TryActivateAny(Arg.Any<Func<IDockable, bool>>()).Returns(call =>
+        {
+            f.Dock.AllTabs.Single(call.Arg<Func<IDockable, bool>>()).Should().BeSameAs(second);
+            return true;
+        });
+
+        var result = await TabCall(f.Tools, false, name: "SNIPMOD", project: "second");
+
+        result.Success.Should().BeTrue();
+        result.Project.Should().Be("Second");
+        result.Document.Should().Be("snipmod");
+        f.Dock.Received(1).TryActivateAny(Arg.Any<Func<IDockable, bool>>());
+    }
+
+    [AvaloniaFact]
+    public async Task A_carried_file_without_an_open_tab_is_refused_like_a_module()
+    {
+        using var f = new Fixture();
+        using var carried = Carried(f.First);
+        f.Tabs();
+
+        var result = await TabCall(f.Tools, false, name: "snipmod");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("No open tab for First/snipmod.");
+        f.Dock.DidNotReceive().TryActivateAny(Arg.Any<Func<IDockable, bool>>());
+    }
+
+    [AvaloniaFact]
+    public async Task Ambiguous_carried_names_use_open_files_refusal()
+    {
+        using var f = new Fixture();
+        using var first = Carried(f.First);
+        using var second = Carried(f.Second);
+        f.Tabs(first, second);
+
+        var result = await TabCall(f.Tools, false, name: "snipmod");
+
+        result.Error.Should().Be(NamedDocuments.Find([f.First, f.Second], "snipmod", null, carried: true).Error)
+            .And.Contain("First/snipmod").And.Contain("Second/snipmod").And.Contain("project");
+        f.Dock.DidNotReceive().TryActivateAny(Arg.Any<Func<IDockable, bool>>());
+    }
+
+    [AvaloniaTheory]
+    [InlineData(" *")]
+    [InlineData("*")]
+    public async Task A_caption_with_the_unsaved_marker_activates_its_tab(string marker)
+    {
+        using var f = new Fixture();
+        using var tab = Carried(f.First);
+        tab.Document.Text = "edited";
+        tab.IsModified.Should().BeTrue();
+        f.Tabs(tab);
+        f.Dock.TryActivateAny(Arg.Any<Func<IDockable, bool>>()).Returns(call =>
+        {
+            f.Dock.AllTabs.Single(call.Arg<Func<IDockable, bool>>()).Should().BeSameAs(tab);
+            return true;
+        });
+
+        var result = await TabCall(f.Tools, false, title: tab.Title + marker);
+
+        result.Success.Should().BeTrue();
+        result.Note.Should().Contain("title leaves the unsaved marker out");
+    }
 
     [AvaloniaTheory]
     [InlineData(false)]
@@ -148,6 +249,88 @@ public class ImplicitDocumentNamingTests
         f.Dock.DidNotReceive().TryCloseAny(Arg.Any<Func<IDockable, bool>>());
     }
 
+    // A first-time caller passed "Var1" as `title` for the tab "Probe2 - Var1 (Code)" and was refused (#3338). A title
+    // that is no tab's is now tried as a document name, and the one tab showing that document is the one acted on.
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_document_name_passed_as_title_reaches_the_one_tab_showing_it(bool close)
+    {
+        using var f = new Fixture();
+        using var second = Designer(f.Second);
+        f.Tabs(second);
+        IDockable? target = null;
+        if (close)
+            f.Dock.TryCloseAny(Arg.Any<Func<IDockable, bool>>()).Returns(call =>
+            { target = f.Dock.AllTabs.Single(call.Arg<Func<IDockable, bool>>()); return true; });
+        else
+            f.Dock.TryActivateAny(Arg.Any<Func<IDockable, bool>>()).Returns(call =>
+            { target = f.Dock.AllTabs.Single(call.Arg<Func<IDockable, bool>>()); return true; });
+
+        second.Title.Should().NotBeEquivalentTo("form1", "the case only means something when the title is more than the name");
+        var result = await TabCall(f.Tools, close, title: "form1");
+
+        result.Success.Should().BeTrue();
+        target.Should().BeSameAs(second);
+        result.Project.Should().Be("Second");
+        result.Document.Should().Be("Form1");
+        result.Note.Should().StartWith($"No tab is titled 'form1', so it was taken as a document name: '{second.Title}' is the one tab")
+            .And.Contain("`name` is the parameter for a document");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_document_name_passed_as_title_with_code_and_designer_open_asks_for_a_type(bool close)
+    {
+        using var f = new Fixture();
+        using var designer = Designer(f.Second);
+        using var code = Code(f.Second.Forms[0]);
+        f.Tabs(designer, code);
+
+        var result = await TabCall(f.Tools, close, title: "Form1");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain($"'{designer.Title}'").And.Contain($"'{code.Title}'")
+            .And.Contain("`type` (code or designer)").And.NotContain("`project`");
+        f.Dock.DidNotReceive().TryActivateAny(Arg.Any<Func<IDockable, bool>>());
+        f.Dock.DidNotReceive().TryCloseAny(Arg.Any<Func<IDockable, bool>>());
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_document_name_passed_as_title_open_in_two_projects_asks_for_a_project(bool close)
+    {
+        using var f = new Fixture();
+        using var first = Designer(f.First);
+        using var second = Designer(f.Second);
+        f.Tabs(first, second);
+
+        var result = await TabCall(f.Tools, close, title: "Form1");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain($"'{first.Title}'").And.Contain($"'{second.Title}'")
+            .And.Contain("`project` for the document").And.NotContain("`type`");
+        f.Dock.DidNotReceive().TryActivateAny(Arg.Any<Func<IDockable, bool>>());
+        f.Dock.DidNotReceive().TryCloseAny(Arg.Any<Func<IDockable, bool>>());
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_title_that_is_neither_a_tab_nor_a_document_still_lists_the_open_tabs(bool close)
+    {
+        using var f = new Fixture();
+        using var second = Designer(f.Second);
+        f.Tabs(second);
+
+        var result = await TabCall(f.Tools, close, title: "Var1");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be($"No document tab with title 'Var1'. Open tabs: {second.Title}.");
+    }
+
     [AvaloniaFact]
     public async Task Listings_identify_each_designer_and_the_active_editor()
     {
@@ -201,6 +384,16 @@ public class ImplicitDocumentNamingTests
         var properties = schema.GetProperty("properties");
         properties.TryGetProperty("name", out _).Should().BeTrue();
         properties.TryGetProperty("project", out _).Should().BeTrue();
+    }
+
+    [Fact]
+    public void An_idle_break_reply_says_there_is_no_current_statement()
+    {
+        // #4261's measured idle Break (oracle PR #4270).
+        using var f = new Fixture();
+        var method = typeof(HexIdeTools).GetMethod("PausedAt", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)!;
+        method.Invoke(f.Tools, [new StoppedInfo(StopReason.Pause, "", 0)]).Should()
+            .Be("Paused with no current statement (Pause).");
     }
 
     [Fact]

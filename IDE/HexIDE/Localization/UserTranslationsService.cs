@@ -19,6 +19,7 @@ namespace HexIDE.Localization;
 public sealed partial class UserTranslationsService : IUserTranslationsService
 {
     private readonly string _dir;
+    private readonly bool _recoveryMode = Static.IsRecoveryMode;
 
     // The canonical (en) map — used only to reject orphan keys and validate placeholders. Never mutated.
     private readonly Dictionary<string, string> _canonical;
@@ -44,7 +45,8 @@ public sealed partial class UserTranslationsService : IUserTranslationsService
         _dir = dir;
         try
         {
-            Directory.CreateDirectory(_dir);
+            if (!_recoveryMode)
+                Directory.CreateDirectory(_dir);
         }
         catch (Exception ex)
         {
@@ -62,6 +64,8 @@ public sealed partial class UserTranslationsService : IUserTranslationsService
 
     public void LoadAll()
     {
+        if (_recoveryMode)
+            return;
         _byId.Clear();
 
         string[] files;
@@ -161,13 +165,17 @@ public sealed partial class UserTranslationsService : IUserTranslationsService
 
     public IReadOnlyCollection<string> OverriddenIds => _byId.Keys;
 
-    public bool PreservesPlaceholders(string canonicalKey, string candidate)
+    public bool PreservesPlaceholders(string canonicalKey, string candidate) =>
+        PreservesPlaceholders(_canonical, canonicalKey, candidate);
+
+    internal static bool PreservesPlaceholders(IReadOnlyDictionary<string, string> canonicalStrings,
+        string canonicalKey, string candidate)
     {
         var candSet = IndexSet(candidate);
 
         // A key with a canonical entry must keep exactly the same {N} index set; a key with none imposes
         // no index requirement (but still must be a well-formed format string — checked below).
-        if (_canonical.TryGetValue(canonicalKey, out var canonical) && !IndexSet(canonical).SetEquals(candSet))
+        if (canonicalStrings.TryGetValue(canonicalKey, out var canonical) && !IndexSet(canonical).SetEquals(candSet))
             return false;
 
         // Reject anything string.Format cannot render — a stray unescaped '{' or '}' passes the index-set
@@ -205,13 +213,14 @@ public sealed partial class UserTranslationsService : IUserTranslationsService
 
     private void Persist(string id)
     {
+        if (_recoveryMode) return;
         if (!_byId.TryGetValue(id, out var map)) return;
         try
         {
             Directory.CreateDirectory(_dir);
             var record = new LanguagePackRecord(id, null, new Dictionary<string, string>(map));
             var json = JsonSerializer.Serialize(record, LocalizationJsonContext.Default.LanguagePackRecord);
-            File.WriteAllText(PathFor(id), json);
+            AtomicFileWriter.WriteRecoverableText(PathFor(id), json);
             Log.Debug("UserTranslationsService: Wrote overrides for '{Id}'", id);
         }
         catch (Exception ex)
@@ -222,11 +231,12 @@ public sealed partial class UserTranslationsService : IUserTranslationsService
 
     private void DeleteFile(string id)
     {
+        if (_recoveryMode) return;
         try
         {
             var path = PathFor(id);
             if (File.Exists(path))
-                File.Delete(path);
+                AtomicFileWriter.DeleteRecoverable(path);
         }
         catch (Exception ex)
         {

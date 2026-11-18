@@ -16,22 +16,32 @@ public abstract class InBoxComponentClass : ComponentBaseClass
 {
     /// <param name="extender">The extender's properties beyond the base's Name, Left, Top, Width, Height, Visible and Tag.</param>
     /// <param name="own">The control's own persisted properties, in the order it writes them.</param>
-    protected InBoxComponentClass(IReadOnlyList<PropertyClass> extender, IReadOnlyList<PropertyClass> own, IReadOnlyList<EventClass> events)
-        : base([.. extender, .. own], events)
+    protected InBoxComponentClass(IReadOnlyList<PropertyClass> extender, IReadOnlyList<PropertyClass> own, IReadOnlyList<EventClass> events, bool invisible = false)
+        : base([.. extender, .. own], events, hasBounds: !invisible, hasVisible: !invisible)
     {
         OwnProperties = own;
     }
+
+    /// <summary>The in-box controls HexIDE implements (#1082), which the toolbox offers from each library declaring one.</summary>
+    public static IReadOnlyList<InBoxComponentClass> Implemented =>
+        [ProgressBarComponentClass.Instance, ListViewComponentClass.Instance, FlexGridComponentClass.Instance, SliderComponentClass.Instance, StatusBarComponentClass.Instance, ImageListComponentClass.Instance, SSTabComponentClass.Instance,
+            CommonDialogComponentClass.Instance, RichTextBoxComponentClass.Instance, UpDownComponentClass.Instance, FlatScrollBarComponentClass.Instance];
+
+    /// <summary>Every in-box control with a component model, including those not yet offered in the toolbox.</summary>
+    public static IReadOnlyList<ComponentBaseClass> Modelled =>
+        [.. Implemented, TreeViewComponentClass.Instance, TabStripComponentClass.Instance, ToolbarComponentClass.Instance,
+            DTPickerComponentClass.Instance, MonthViewComponentClass.Instance, MaskedEdBoxComponentClass.Instance];
 
     /// <summary>The control's class name, as its libraries declare it: <c>ProgressBar</c>.</summary>
     public abstract string ControlClassName { get; }
 
     /// <summary>The newest library that declares it, whose type name a new one takes.</summary>
-    public virtual ControlLibrary Library => ControlLibraries.MSComctlLib;
+    public virtual RuntimeLibrary Library => ControlLibraries.MSComctlLib;
 
     public override string VBTypeName => Library.TypeName(ControlClassName);
 
-    /// <summary>Every library that declares the control, each under whose type name a form may hold it.</summary>
-    public IEnumerable<ControlLibrary> Libraries =>
+    /// <summary>Every library under whose type name HexIDE implements the control.</summary>
+    public virtual IEnumerable<RuntimeLibrary> Libraries =>
         ControlLibraries.All.Where(l => l.Controls.ContainsKey(ControlClassName));
 
     /// <summary>The control's own persisted properties, in the order it writes them.</summary>
@@ -41,7 +51,7 @@ public abstract class InBoxComponentClass : ComponentBaseClass
     /// The control's own members, as its type libraries declare them, with where each comes from (#1082). The hidden ones
     /// are left out: VB6 offers neither to a program's completion nor its Object Browser.
     /// </summary>
-    public abstract IReadOnlyList<InBoxMember> Members { get; }
+    public abstract override IReadOnlyList<InBoxMember> Members { get; }
 
     /// <summary>The member named <paramref name="name"/>, in any case, or null.</summary>
     public InBoxMember? Member(string name) =>
@@ -56,12 +66,18 @@ public abstract class InBoxComponentClass : ComponentBaseClass
     /// </summary>
     public virtual IReadOnlyList<(string Name, PropertyClass After)> CarriedOwnProperties => [];
 
+    /// <summary>Own scalar lines carried verbatim, in their measured file order.</summary>
+    public virtual IReadOnlyList<string> CarriedPropertyOrder => [];
+
+    /// <summary>Whether a carried own scalar line differs from its measured default.</summary>
+    public virtual bool WriteCarriedProperty(ComponentInstance.UnknownRawProperty property) => true;
+
     /// <summary>The type name <paramref name="instance"/> is written under: the one it was read under, or this class's.</summary>
     public string TypeNameOf(ComponentInstance instance) =>
         instance.GetPropertyOrDefault(LoadedTypeNameProperty) ?? VBTypeName;
 
     /// <summary>The library <paramref name="instance"/> is in, by the type name it is written under.</summary>
-    public ControlLibrary LibraryOf(ComponentInstance instance) =>
+    public RuntimeLibrary LibraryOf(ComponentInstance instance) =>
         ControlLibraries.ForTypeName(TypeNameOf(instance)) ?? Library;
 
     /// <summary>The type name the instance was read under, where it was read: <c>ComctlLib.ProgressBar</c>.</summary>
@@ -90,7 +106,7 @@ public abstract class InBoxComponentClass : ComponentBaseClass
     /// it was read with, even where a hand-edited file's disagree with its Width and Height, or the control's default where
     /// the file had none; once sized, or for one never read, they are its size's.
     /// </summary>
-    public (int X, int Y) ExtentsToWrite(ComponentInstance instance, int? readX, int? readY)
+    public virtual (int X, int Y) ExtentsToWrite(ComponentInstance instance, int? readX, int? readY)
     {
         var width = instance.GetPropertyOrDefault(VBProperties.WidthProperty);
         var height = instance.GetPropertyOrDefault(VBProperties.HeightProperty);

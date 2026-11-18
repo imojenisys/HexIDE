@@ -158,6 +158,35 @@ public class GuardedEditorInputTests : IDisposable
             Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>());
     }
 
+    [AvaloniaFact]
+    public void RenameProtectedLineNeverAsksForPreparation()
+    {
+        var lsp = Substitute.For<ILspClient>();
+        var vm = OpenForm(client: lsp);
+        var (window, editor) = Show(vm);
+        editor.TextArea.Caret.Offset = InHeader(vm);
+        ((CodeEditorView)window.Content!).RenameSymbol();
+        Dispatcher.UIThread.RunJobs();
+        lsp.DidNotReceiveWithAnyArgs().RequestPrepareRenameAsync(default!, default!, Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaFact]
+    public void RenamePreparationRefusalPreventsThePrompt()
+    {
+        var dialogs = Substitute.For<IWindowManager>();
+        var lsp = Substitute.For<ILspClient>();
+        lsp.RequestPrepareRenameAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>())
+            .Returns(new PrepareRenameResult(false, Refusal: "Server refusal"));
+        var vm = OpenForm(windowManager: dialogs, client: lsp);
+        var (window, editor) = Show(vm);
+        editor.TextArea.Caret.Offset = vm.Document.Text.IndexOf("cmdOK_Click", StringComparison.Ordinal) + 2;
+        ((CodeEditorView)window.Content!).RenameSymbol();
+        Dispatcher.UIThread.RunJobs();
+        lsp.Received(1).RequestPrepareRenameAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>());
+        dialogs.DidNotReceiveWithAnyArgs().InputBox(default!, default!, default!);
+        dialogs.Received(1).MessageBox("Server refusal", icon: MessageBoxIcon.Information);
+    }
+
     // ── Enter, taken ahead of AvaloniaEdit by a tunnel handler ──────────────────────────────────────────
 
     [AvaloniaFact]
@@ -300,7 +329,10 @@ public class GuardedEditorInputTests : IDisposable
         var before = vm.Document.Text;
         editor.TextArea.Caret.Offset = before.IndexOf("Option Explicit", StringComparison.Ordinal);
 
-        UiAutomationDriver.PressKey(editor, "Back", null).Success.Should().BeFalse();
+        var outcome = UiAutomationDriver.PressKey(editor, "Back", null);
+        outcome.Success.Should().BeFalse();
+        outcome.Error.Should().Contain("Edit after that read-only text instead.")
+            .And.NotContain("Deleting the whole");
 
         vm.Document.Text.Should().Be(before);
     }

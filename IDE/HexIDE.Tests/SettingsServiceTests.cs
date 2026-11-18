@@ -28,6 +28,85 @@ public class SettingsServiceTests : IDisposable
         return new SettingsService(SettingsPath);
     }
 
+    [Fact]
+    public void RevocationUrlDefaultsWhenUnsetButPreservesExplicitEmpty()
+    {
+        CreateSut().RevocationListUrl.Should().Be("https://hexide.io/revocations.json");
+        File.WriteAllText(SettingsPath, "{}");
+        CreateSut().RevocationListUrl.Should().Be("https://hexide.io/revocations.json");
+        File.WriteAllText(SettingsPath, "{\"RevocationListUrl\":null}");
+        CreateSut().RevocationListUrl.Should().Be("https://hexide.io/revocations.json");
+        var settings = CreateSut();
+        settings.RevocationListUrl = "";
+        settings.Save();
+        CreateSut().RevocationListUrl.Should().BeEmpty();
+        settings.RevocationListUrl = "https://example.invalid/custom";
+        settings.Save();
+        CreateSut().RevocationListUrl.Should().Be("https://example.invalid/custom");
+    }
+
+    [Fact]
+    public void SavingRetainsPreviousDiskBytesForRecovery()
+    {
+        var settings = CreateSut();
+        settings.TabWidth = 6;
+        settings.Save();
+        var original = File.ReadAllBytes(SettingsPath);
+        settings.TabWidth = 8;
+        settings.Save();
+        Directory.GetFiles(_tempDir, "settings.json.*.recovery")
+            .Select(File.ReadAllBytes).Should().Contain(bytes => bytes.SequenceEqual(original));
+        CreateSut().TabWidth.Should().Be(8);
+    }
+
+    [Fact]
+    public void InlayHintsToggleIsStagedPersistedAndRestored()
+    {
+        var settings = CreateSut();
+        settings.ShowInlayHints.Should().BeTrue();
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        page.ShowInlayHints.Should().BeTrue();
+        page.ShowInlayHints = false;
+        settings.ShowInlayHints.Should().BeTrue();
+        page.SaveToSettings();
+        settings.ShowInlayHints.Should().BeFalse();
+        CreateSut().ShowInlayHints.Should().BeFalse();
+        page.RestoreDefaults();
+        page.ShowInlayHints.Should().BeTrue();
+        page.SaveToSettings();
+        CreateSut().ShowInlayHints.Should().BeTrue();
+    }
+
+    [Fact]
+    public void CodeLensesToggleIsStagedPersistedAndRestored()
+    {
+        var setting = typeof(SettingsService).GetProperty("ShowCodeLenses");
+        var option = typeof(HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel).GetProperty("ShowCodeLenses");
+        setting.Should().NotBeNull();
+        option.Should().NotBeNull();
+        var settings = CreateSut();
+        setting!.GetValue(settings).Should().Be(true);
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        option!.SetValue(page, false);
+        setting.GetValue(settings).Should().Be(true);
+        page.SaveToSettings();
+        setting.GetValue(CreateSut()).Should().Be(false);
+        page.RestoreDefaults();
+        page.SaveToSettings();
+        setting.GetValue(CreateSut()).Should().Be(true);
+    }
+
+    [Fact]
+    public void SavingPreservesFileAtOldStagingName()
+    {
+        var settings = CreateSut();
+        File.WriteAllText(SettingsPath + ".tmp", "user file");
+        settings.TabWidth = 8;
+        settings.Save();
+        CreateSut().TabWidth.Should().Be(8);
+        File.ReadAllText(SettingsPath + ".tmp").Should().Be("user file");
+    }
+
     [Theory]
     [InlineData(nameof(SettingsService.RequireVariableDeclaration), true)]
     [InlineData(nameof(SettingsService.AutoListMembers), false)]
@@ -51,6 +130,9 @@ public class SettingsServiceTests : IDisposable
     [InlineData(nameof(SettingsService.IsDebugToolbarVisible), true)]
     [InlineData(nameof(SettingsService.IsFormEditorToolbarVisible), true)]
     [InlineData(nameof(SettingsService.IsMinimapVisible), false)]
+    [InlineData(nameof(SettingsService.ColorBracketsByDepth), false)]
+    [InlineData("IsStickyScrollEnabled", false)]
+    [InlineData("StickyScrollDepth", 5)]
     public void Save_PreservesOtherInstancesChanges(string propertyName, object value)
     {
         var first = CreateSut();
@@ -67,6 +149,46 @@ public class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public void StickyScroll_OptionsLoadSaveAndRestoreDefaults()
+    {
+        var settings = CreateSut();
+        var enabled = typeof(SettingsService).GetProperty("IsStickyScrollEnabled");
+        var depth = typeof(SettingsService).GetProperty("StickyScrollDepth");
+        enabled.Should().NotBeNull();
+        depth.Should().NotBeNull();
+        enabled!.GetValue(settings).Should().Be(true);
+        depth!.GetValue(settings).Should().Be(3);
+        enabled.SetValue(settings, false);
+        depth.SetValue(settings, 7);
+        var page = new HexIDE.Forms.ViewModels.Options.EditorGeneralPageViewModel(settings);
+        var pageEnabled = page.GetType().GetProperty("IsStickyScrollEnabled")!;
+        var pageDepth = page.GetType().GetProperty("StickyScrollDepth")!;
+        pageEnabled.GetValue(page).Should().Be(false);
+        pageDepth.GetValue(page).Should().Be(7);
+        page.RestoreDefaults();
+        enabled.GetValue(settings).Should().Be(false, "reset previews until Apply");
+        depth.GetValue(settings).Should().Be(7);
+        pageEnabled.GetValue(page).Should().Be(true);
+        pageDepth.GetValue(page).Should().Be(3);
+        page.SaveToSettings();
+        settings.Save();
+        enabled.GetValue(CreateSut()).Should().Be(true);
+        depth.GetValue(CreateSut()).Should().Be(3);
+    }
+
+    [Theory]
+    [InlineData(-2, 1)]
+    [InlineData(100, 10)]
+    public void StickyScroll_DepthIsClampedWhenLoading(int input, int expected)
+    {
+        File.WriteAllText(SettingsPath, "{\"stickyScrollDepth\":" + input + "}");
+        var settings = CreateSut();
+        var depth = typeof(SettingsService).GetProperty("StickyScrollDepth");
+        depth.Should().NotBeNull();
+        depth!.GetValue(settings).Should().Be(expected);
+    }
+
+    [Fact]
     public void Save_PreservesHandEditsAndUnknownFields()
     {
         var sut = CreateSut();
@@ -79,6 +201,20 @@ public class SettingsServiceTests : IDisposable
         json.RootElement.GetProperty("revocationListUrl").GetString().Should()
             .Be("https://example.invalid/revocations.json");
         json.RootElement.GetProperty("futureSetting").GetInt32().Should().Be(42);
+    }
+
+    [Fact]
+    public void ServerChatTools_RoundTrips_AndIsADetachedCopy()
+    {
+        var sut = CreateSut();
+        var chosen = new Dictionary<string, string> { ["rdcore"] = "ask", ["probe"] = "off" };
+        sut.ServerChatTools = chosen;
+        chosen["rdcore"] = "on";
+        sut.ServerChatTools["probe"] = "on";
+        sut.Save();
+
+        CreateSut().ServerChatTools.Should().BeEquivalentTo(new Dictionary<string, string> { ["rdcore"] = "ask", ["probe"] = "off" },
+            "the person's per-server choice for AI Chat tools persists, and only through the setter (#4257)");
     }
 
     [Fact]

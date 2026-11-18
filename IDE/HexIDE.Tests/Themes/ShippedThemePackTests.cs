@@ -1,6 +1,11 @@
 using System.Text.Json;
 using System.Xml.Linq;
+using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
+using Avalonia.Headless.XUnit;
+using Avalonia.Styling;
+using Avalonia.Themes.Simple;
 using HexIDE.Themes;
 
 namespace HexIDE.Tests.Themes;
@@ -34,12 +39,44 @@ public class ShippedThemePackTests
     /// </summary>
     private const double Distinct = 1.5;
 
-    public static TheoryData<string> Packs => new() { "Classic", "Dark", "Abyss" };
+    public static TheoryData<string> Packs => new() { "Classic", "Dark", "Abyss", "HighContrastLight", "HighContrastDark" };
+
+    [Theory]
+    [MemberData(nameof(Packs))]
+    public void LinkTextIsThemedAndLegible(string pack)
+    {
+        ColorKeyMapping.Table.Should().ContainKey("LinkText");
+        ColorKeyMapping.Table["LinkText"].Should().Be(("LinkTextBrush", true));
+        var colours = ColoursOf(pack);
+        colours.Should().ContainKey("LinkText");
+        var link = Color.Parse(colours["LinkText"]);
+        if (pack == "Classic") link.Should().Be(ClassicDefault("LinkTextBrush"));
+        SyntaxHighlightingTheme.ContrastRatio(link, Color.Parse(colours["Window"]))
+            .Should().BeGreaterThanOrEqualTo(Legible);
+    }
+
+    [Fact]
+    public void IndentGuidesHaveDistinctThemeColours()
+    {
+        foreach (var key in new[] { "IndentGuide", "ActiveIndentGuide" })
+        {
+            ColorKeyMapping.Table.Should().ContainKey(key);
+            ColorKeyMapping.Table[key].Should().Be(($"{key}Brush", true));
+            ClassicDefault(ColorKeyMapping.Table[key].Key).Should().NotBeNull();
+        }
+        foreach (var pack in new[] { "Classic", "Dark", "Abyss" })
+        {
+            var colours = ColoursOf(pack);
+            colours.Should().ContainKey("IndentGuide").And.ContainKey("ActiveIndentGuide");
+            colours["IndentGuide"].Should().NotBe(colours["ActiveIndentGuide"]);
+        }
+    }
 
     [Fact]
     public void ThePacksTestedHereAreTheOnesTheIdeShips()
     {
-        new ThemeService().AvailableThemes.Should().BeEquivalentTo(Packs.Select(row => (string)row.Data));
+        var missingDirectory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), Guid.NewGuid().ToString());
+        new ThemeService(missingDirectory).AvailableThemes.Should().BeEquivalentTo(Packs.Select(row => (string)row.Data));
     }
 
     [Fact]
@@ -61,11 +98,12 @@ public class ShippedThemePackTests
     public static IEnumerable<object[]> DarkPackKeys =>
         from pack in new[] { "Dark", "Abyss" }
         from key in ColorKeyMapping.Table.Keys
+        where !ColorKeyMapping.Table[key].IsBrush || ClassicDefault(ColorKeyMapping.Table[key].Key) is not null
         select new object[] { pack, key };
 
     [Theory]
     [MemberData(nameof(DarkPackKeys))]
-    public void EveryDarkPackCarriesEveryMappedKey(string pack, string key)
+    public void EveryDarkPackCarriesEveryClassicPaletteKey(string pack, string key)
     {
         ColoursOf(pack).Should().ContainKey(key);
     }
@@ -94,6 +132,76 @@ public class ShippedThemePackTests
         SyntaxHighlightingTheme.ContrastRatio(border, background).Should().BeGreaterThanOrEqualTo(3);
         SyntaxHighlightingTheme.ContrastRatio(border, Color.Parse(colours["Window"]))
             .Should().BeGreaterThanOrEqualTo(3);
+    }
+
+    [Theory]
+    [MemberData(nameof(Packs))]
+    public void ShippedDarkPacksDeclareTheirBaseBackground(string pack)
+    {
+        var record = JsonSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(ThemesDirectory(), "Packs", pack + ".json")),
+            ThemeJsonContext.Default.ThemePackRecord)!;
+        if (record.ThemeVariant == "Dark")
+            record.Colors.Should().ContainKey("ThemeBackgroundBrush", $"{pack} must not inherit Simple's grey");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Abyss")]
+    [InlineData("Dark")]
+    public void DarkChromeTextAndIndicatorsMeetContrastThresholds(string pack)
+    {
+        var colours = ColoursOf(pack);
+        string[] backgrounds = ["ThemeBackgroundBrush", "ThemeControlMidBrush",
+            "ThemeControlHighlightMidBrush", "ThemeAccentBrush2", "ThemeAccentBrush3", "ThemeAccentBrush4",
+            "DockThemeBackgroundBrush", "DockThemeControlBackgroundBrush", "DockDocumentTabStripBackgroundBrush",
+            "DockSurfacePanelBrush", "DockSurfaceHeaderBrush", "DockSurfaceSidebarBrush",
+            "DockTabBackgroundBrush", "DockTabActiveBackgroundBrush"];
+        var simple = new SimpleTheme();
+        var app = Application.Current!;
+        var previousVariant = app.RequestedThemeVariant;
+        app.RequestedThemeVariant = ThemeVariant.Dark;
+        var styles = app.Styles;
+        styles.Add(simple);
+        var dock = new Dock.Avalonia.Themes.Simple.DockSimpleTheme();
+        styles.Add(dock);
+        var baseColour = Color.Parse(colours["ThemeBackgroundBrush"]);
+        Color Of(string key)
+        {
+            if (colours.TryGetValue(key, out var value)) return Composite(Color.Parse(value), baseColour);
+            return Composite(((ISolidColorBrush)app.FindResource(ThemeVariant.Dark, key)!).Color,
+                baseColour);
+        }
+        try
+        {
+            foreach (var background in backgrounds.Where(colours.ContainsKey))
+            {
+                var text = background.StartsWith("Dock", StringComparison.Ordinal)
+                    ? "DockTabForegroundBrush" : "ThemeForegroundBrush";
+                SyntaxHighlightingTheme.ContrastRatio(Of(text), Of(background))
+                    .Should().BeGreaterThanOrEqualTo(Legible, $"{pack}: {text} on {background}");
+                foreach (var declaredText in new[] { "ThemeForegroundLowBrush", "DockTabSelectedForegroundBrush",
+                             "DockTabActiveForegroundBrush" }.Where(colours.ContainsKey))
+                    SyntaxHighlightingTheme.ContrastRatio(Of(declaredText), Of(background))
+                        .Should().BeGreaterThanOrEqualTo(Legible, $"{pack}: {declaredText} on {background}");
+                if (colours.ContainsKey("ThemeControlMidHighBrush"))
+                    SyntaxHighlightingTheme.ContrastRatio(Of("ThemeControlMidHighBrush"), Of(background))
+                        .Should().BeGreaterThanOrEqualTo(3, $"{pack}: borders and scrollbar thumbs on {background}");
+            }
+        }
+        finally
+        {
+            styles.Remove(dock);
+            styles.Remove(simple);
+            app.RequestedThemeVariant = previousVariant;
+        }
+    }
+
+    private static Color Composite(Color foreground, Color background)
+    {
+        var alpha = foreground.A / 255d;
+        return Color.FromRgb((byte)(foreground.R * alpha + background.R * (1 - alpha)),
+            (byte)(foreground.G * alpha + background.G * (1 - alpha)),
+            (byte)(foreground.B * alpha + background.B * (1 - alpha)));
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -108,13 +109,54 @@ public class CaretPlacementTests : IDisposable
         lsp.DiagnosticsPublished += Raise.Event<EventHandler<PublishDiagnosticsParams>>(
             lsp, new PublishDiagnosticsParams(vm.GetDocumentUriPublic(), []));
         Dispatcher.UIThread.RunJobs();
-        await lsp.Received().RequestDocumentSymbolsAsync(vm.GetDocumentUriPublic());
+        await lsp.Received().RequestDocumentSymbolsAsync(vm.GetDocumentUriPublic(), Arg.Any<CancellationToken>());
         var typed = await UiAutomationDriver.TypeKeysAsync(editor, "Debug.Print \"loaded\"");
         Dispatcher.UIThread.RunJobs();
 
         typed.Success.Should().BeTrue(typed.Error);
         editor.Document.Text.ReplaceLineEndings("\n").Should()
             .Contain("Private Sub Form_Click()\nDebug.Print \"loaded\"\nEnd Sub");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, "body")]
+    [InlineData(true, "body")]
+    [InlineData(false, "header")]
+    [InlineData(true, "header")]
+    [InlineData(false, "attribute")]
+    [InlineData(true, "attribute")]
+    public async Task Opening_without_a_line_reads_the_caret_without_moving_it(bool alreadyOpen, string position)
+    {
+        var vm = Model(position == "attribute" ? WithRun : Body);
+        var module = vm.ModuleDefinition!;
+        module.Owner.AddModule(module);
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns([module.Owner]);
+        var dock = Substitute.For<IDocumentDockService>();
+        var editors = Substitute.For<IEditorService>();
+        void Open()
+        {
+            dock.OpenDocuments.Returns([vm]);
+            Show(vm);
+        }
+        if (alreadyOpen) Open();
+        else editors.When(e => e.EditCode(module)).Do(_ => Open());
+        var offset = position == "header" ? 0 : position == "attribute"
+            ? vm.Document.Text.IndexOf("Attribute Init.", StringComparison.Ordinal)
+            : vm.Document.GetLineByNumber(5).Offset + 2;
+        vm.CaretOffset = offset;
+        using var context = new HexIDE.Desktop.Server.IdeContext(projects, dock, lsp, editors,
+            null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
+        var tools = new HexIDE.Desktop.Server.HexIdeTools(context);
+
+        var reply = await tools.OpenFileAsync("Module1");
+
+        reply.Success.Should().BeTrue(reply.Error);
+        var at = vm.Document.GetLocation(vm.CaretOffset);
+        reply.Note.Should().Contain($"The caret is at line {at.Line}, column {at.Column}: offset {vm.CaretOffset} in the text get_file_content returns.")
+            .And.NotContain("as asked");
+        vm.CaretOffset.Should().Be(offset);
+        if (position != "body") reply.Note.Should().Contain("nearest place that can be edited");
     }
 
     private static FoldingManager Folds(TextEditor editor) =>
@@ -306,10 +348,119 @@ public class CaretPlacementTests : IDisposable
             + "type_text would write there.");
     }
 
+    // ── A caret where type_text would be refused (#2578) ─────────────────────────────────────────────────────────
+
+    // The refusal used to be the first a caller heard of it, after open_file put the caret in a form's header and said
+    // only where it was.
+    [AvaloniaFact]
+    public void A_caret_in_a_form_s_header_says_so_and_names_the_nearest_place_that_can_be_edited()
+    {
+        var vm = Model(code: "", form: true);
+        CaretPlacement.Place(vm, 2, 1).Should().BeTrue();
+        vm.IsReadOnlyRegion(vm.CaretOffset, 0).Should().BeTrue("line 2 is the header's");
+
+        var past = vm.PastReadOnlyRegion(vm.CaretOffset);
+        var to = vm.Document.GetLocation(past);
+        CaretPlacement.Where(vm, 2, 1).Should().Be($"The caret is at line 2, column 1: offset {vm.CaretOffset} in the text "
+            + "get_file_content returns. That is in the document's header (its designer block, class header or leading Attribute lines), which only the IDE changes, so type_text there would "
+            + $"be refused. The nearest place that can be edited is line {to.Line}, column {to.Column}: offset {past}.");
+        vm.IsReadOnlyRegion(past, 0).Should().BeFalse("the place it names is one type_text writes at");
+    }
+
+    [AvaloniaFact]
+    public void A_caret_in_a_member_s_Attribute_lines_names_the_member()
+    {
+        var vm = Model("Public Sub Foo()\r\nAttribute Foo.VB_Description = \"Says hello\"\r\n    \r\nEnd Sub\r\n");
+        CaretPlacement.Place(vm, 3, 1).Should().BeTrue();
+
+        CaretPlacement.Where(vm, 3, 1).Should().Contain("That is in the Attribute lines describing Foo, which only the IDE "
+            + "changes, so type_text there would be refused. The nearest place that can be edited is line 4, column 1:");
+    }
+
+    [AvaloniaFact]
+    public void A_caret_where_type_text_writes_adds_nothing()
+    {
+        var vm = Model();
+        CaretPlacement.Place(vm, 5, 5).Should().BeTrue();
+
+        CaretPlacement.Where(vm, 5, 5).Should().Be($"The caret is at line 5, column 5: offset {vm.CaretOffset} in the text "
+            + "get_file_content returns.");
+    }
+
+    // ── A carried file's editor, which open_file refused a line for until #2403 ─────────────────────────────────
+
+    private const string Carried = "int once(int x);\nint twice(int x)\n{\n    return once(once(x));\n}\n";
+
+    private (RelatedDocumentEditorViewModel Model, TextEditor Editor) ShowCarried(RelatedDocumentEditorViewModel? vm = null)
+    {
+        vm ??= CarriedModel();
+        var view = new RelatedDocumentEditorView { DataContext = vm };
+        var window = new Window { Width = 800, Height = 600, Content = view };
+        windows.Add(window);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        return (vm, view.FindControl<TextEditor>("TextEditor")!);
+    }
+
+    private RelatedDocumentEditorViewModel CarriedModel()
+    {
+        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
+        vm.Document.Text = Carried;
+        return vm;
+    }
+
+    [AvaloniaFact]
+    public void A_carried_file_s_caret_goes_where_its_editor_numbers_the_line_and_column()
+    {
+        var (vm, editor) = ShowCarried();
+
+        CaretPlacement.Place(vm, 4, 12).Should().BeTrue();
+        Dispatcher.UIThread.RunJobs();
+
+        editor.TextArea.Caret.Line.Should().Be(4);
+        editor.TextArea.Caret.Column.Should().Be(12);
+        CaretPlacement.Where(vm, 4, 12).Should().Be($"The caret is at line 4, column 12: offset {vm.CaretOffset} in the "
+            + "text get_file_content returns.");
+    }
+
+    [AvaloniaFact]
+    public void A_carried_file_opened_for_a_caret_already_placed_takes_it_once_laid_out()
+    {
+        // open_file places the caret in the model it has just opened, before its view exists.
+        var vm = CarriedModel();
+        CaretPlacement.Place(vm, 4, 12).Should().BeTrue();
+        var placed = vm.CaretOffset;
+
+        var (_, editor) = ShowCarried(vm);
+
+        editor.CaretOffset.Should().Be(placed);
+        vm.CaretOffset.Should().Be(placed, "the editor's own caret, at 0 when its document arrived, must not overwrite it");
+    }
+
+    [AvaloniaFact]
+    public void A_fold_ending_where_a_carried_file_s_caret_goes_is_opened_onto_it()
+    {
+        // AvaloniaEdit opens a fold a caret lands strictly inside by itself. One the caret lands at the end of, it leaves
+        // closed, with the caret's line hidden in it, as the code window found at a member run's end (#700 review).
+        var (vm, editor) = ShowCarried();
+        var folds = editor.TextArea.LeftMargins.OfType<FoldingMargin>().Single().FoldingManager;
+        var body = folds.CreateFolding(Carried.IndexOf('{'), Carried.LastIndexOf('}') + 1);
+        body.IsFolded = true;
+
+        // Line 5, column 2: just after the closing brace, the fold's end.
+        CaretPlacement.Place(vm, 5, 2).Should().BeTrue();
+        Dispatcher.UIThread.RunJobs();
+
+        vm.CaretOffset.Should().Be(body.EndOffset);
+        body.IsFolded.Should().BeFalse("the line the caret is on would sit unseen in the fold");
+        editor.TextArea.Caret.Line.Should().Be(5);
+        editor.TextArea.Caret.Column.Should().Be(2);
+    }
+
     [AvaloniaFact]
     public void Set_property_reads_the_carried_file_caret_after_the_view_clamps_it()
     {
-        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>());
+        var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>());
         vm.Document.Text = "0123456789";
         var view = new RelatedDocumentEditorView { DataContext = vm };
         var window = new Window { Width = 800, Height = 600, Content = view };

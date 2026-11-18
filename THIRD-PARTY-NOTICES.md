@@ -23,12 +23,15 @@ see each project for its authors and full license text.
 
 **MIT**
 - **Avalonia UI** and its `Desktop`, `Skia`, `Browser`, `Themes.Simple`, `Controls.ColorPicker`,
-  `Controls.DataGrid` packages — © The Avalonia Project
+  `Controls.DataGrid`, `Wayland` packages — © The Avalonia Project
+- **NWayland** — © 2014 Steven Kirk — MIT. <https://github.com/kekekeks/NWayland>
 - **AvaloniaEdit** (a port of ICSharpCode AvalonEdit) — © the AvaloniaUI community
 - **Avalonia.Labs** — the experimental `RoutedCommand`/`CommandManager` **vendored** into
   `IDE/HexIDE/AvaloniaLabs.CommandManager/` — © The Avalonia Project; the MIT notice ships in that
   folder's `LICENSE`. <https://github.com/AvaloniaUI/Avalonia.Labs>
-- **Dock** (`Avalonia`, `Model`, `Model.Avalonia`, `Model.MVVM`, `Serializer`, `Themes.Simple`) — © Wiesław Šoltés
+- **Dock** (`Avalonia`, `Model`, `Model.Avalonia`, `Model.MVVM`, `Themes.Simple`) — © Wiesław Šoltés.
+  `IDE/HexIDE/Themes/ToolChrome.axaml` adapts its 12.0.0.2 tool-header template; the MIT notice is retained
+  in that file. <https://github.com/wieslawsoltes/Dock>
 - **Classic.Avalonia** (Theme, CommonControls) — © the Avalonia community
 - **CommunityToolkit.Mvvm** — © .NET Foundation and Contributors
 - **R3** — © Cysharp, Inc.
@@ -53,7 +56,8 @@ Upstream fork: HexIDE is a derived work of **AvaloniaVisualBasic6** by Bartosz K
 <https://github.com/BAndysc/AvaloniaVisualBasic6>. Icons: see **Icons** below.
 
 *Build- and test-time only (not redistributed in the app):* Antlr4BuildTasks, Svg.Skia, xUnit,
-NSubstitute, AwesomeAssertions, coverlet, Microsoft.NET.Test.Sdk, Avalonia.Headless.
+NSubstitute, AwesomeAssertions, Avalonia.Headless, Microsoft.CodeAnalysis.CSharp,
+Microsoft.Testing.Extensions.HangDump.
 The MCP automation server (`ModelContextProtocol.AspNetCore`) is compiled in for **Debug only** and is
 excluded from Release binaries.
 
@@ -63,6 +67,42 @@ Protocol's `metaModel.json` — **© Microsoft Corporation, [CC BY 4.0](https://
 from <https://github.com/microsoft/language-server-protocol>. These are downloaded into the gitignored
 `artifacts/` directory when the tests run; a clone contains none of them and no release artefact does
 either. The attribution above is given because CC BY asks for it, not because the file is conveyed.
+
+## Installer
+
+The Windows installer, `hexide-windows-amd64-setup.exe`, is built with **Inno Setup 6.7.3**, and its setup
+program carries Inno Setup's own code. HexIDE's code is unaffected. Inno Setup's licence, as published with
+release `is-6_7_3` at <https://github.com/jrsoftware/issrc/blob/is-6_7_3/license.txt>:
+
+```
+Inno Setup License
+==================
+
+Except where otherwise noted, all of the documentation and software included in the Inno
+Setup package is copyrighted by Jordan Russell.
+
+Copyright (C) 1997-2026 Jordan Russell. All rights reserved.
+Portions Copyright (C) 2000-2026 Martijn Laan. All rights reserved.
+
+This software is provided "as-is," without any express or implied warranty. In no event shall
+the author be held liable for any damages arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose, including commercial
+applications, and to alter and redistribute it, provided that the following conditions are met:
+
+1. All redistributions of source code files must retain all copyright notices that are currently
+   in place, and this list of conditions without modification.
+
+2. All redistributions in binary form must retain all occurrences of the above copyright notice
+   and web site addresses that are currently in place (for example, in the About boxes).
+
+3. The origin of this software must not be misrepresented; you must not claim that you wrote
+   the original software. If you use this software to distribute a product, an acknowledgment
+   in the product documentation would be appreciated but is not required.
+
+4. Modified versions in source or binary form must be plainly marked as such, and must not
+   be misrepresented as being the original software.
+```
 
 ## Icons
 

@@ -9,6 +9,10 @@ public static class VBProperties
     // this merges nothing that was apart.
     public static Dictionary<string, List<PropertyClass>> PropertiesByName { get; } = new(StringComparer.OrdinalIgnoreCase);
 
+    // Design-time adapter over the preserved .frm line; never a run-time class property.
+    public static readonly PropertyClass<string> DesignIndexProperty = new("Index",
+        "The control array element's index, or empty for a plain control.", PropertyCategory.Misc, "");
+
     public static PropertyClass<string> NameProperty = new PropertyClass<string>("(Name)", "The identifier used to refer to this object in code.", PropertyCategory.Misc);
 
     public static PropertyClass<double> LeftProperty = new PropertyClass<double>("Left", "The distance from the inside-left of the container to the control's left edge.", PropertyCategory.Position, 0);
@@ -29,11 +33,14 @@ public static class VBProperties
 
     public static PropertyClass<bool> CausesValidationProperty = new PropertyClass<bool>("CausesValidation", "Whether moving focus off this control validates the control that lost focus.", PropertyCategory.Behavior, true);
 
-    public static PropertyClass<VBCursorType> MousePointerProperty = new PropertyClass<VBCursorType>("MousePointer", "The pointer shape shown while the mouse is over the object.", PropertyCategory.Misc, VBCursorType.Arrow);
+    public static PropertyClass<VBCursorType> MousePointerProperty = new PropertyClass<VBCursorType>("MousePointer", "The pointer shape shown while the mouse is over the object.", PropertyCategory.Misc, VBCursorType.Default);
 
     public static PropertyClass<bool> RightToLeftProperty = new PropertyClass<bool>("RightToLeft", "Whether text and layout are mirrored for right-to-left languages.", PropertyCategory.Behavior);
 
     public static PropertyClass<string?> ToolTipTextProperty = new PropertyClass<string?>("ToolTipText", "The tooltip shown when the pointer rests on the control.", PropertyCategory.Misc);
+
+    public static readonly PropertyClass<int> HelpContextIDProperty = new PropertyClass<int>("HelpContextID",
+        "The context number of the object's help topic.", PropertyCategory.Misc);
 
     public static PropertyClass<int> WhatsThisHelpIdProperty = new PropertyClass<int>("WhatsThisHelpID", "A context number that links the object to a help topic.", PropertyCategory.Misc);
 
@@ -92,7 +99,7 @@ public static class VBProperties
     public static readonly PropertyClass<byte[]?> ItemDataProperty = new PropertyClass<byte[]?>("ItemData",
         "Per-item numeric values stored alongside a list control's items.", PropertyCategory.Misc);
 
-    public static PropertyClass<int> IntervalProperty = new PropertyClass<int>("Interval", "The delay, in milliseconds, between a Timer control's events.", PropertyCategory.Misc, defaultValue: 1000);
+    public static PropertyClass<int> IntervalProperty = new PropertyClass<int>("Interval", "The delay, in milliseconds, between a Timer control's events.", PropertyCategory.Misc, defaultValue: 0);
 
     public static readonly PropertyClass<string> TextProperty = new PropertyClass<string>("Text", "The text held by the control.", PropertyCategory.Misc, "");
 
@@ -191,6 +198,8 @@ public static class VBProperties
     /// </summary>
     public static PropertyClass<bool> OptionValueProperty = new PropertyClass<bool>("Value", "Whether this option button is the selected one in its group.", PropertyCategory.Misc, false);
 
+    public static PropertyClass<bool> CommandValueProperty = new PropertyClass<bool>("Value", "Clicks the command button when set to True.", PropertyCategory.Misc, false);
+
     public static PropertyClass<bool> LockedProperty = new PropertyClass<bool>("Locked", "Whether the control's contents can be edited.", PropertyCategory.Behavior, false);
 
     /// <summary>A ListBox's MultiSelect: set at design time, and read-only to a program (measured, #1413).</summary>
@@ -216,6 +225,10 @@ public static class VBProperties
     public static PropertyClass<int> TabIndexProperty = new PropertyClass<int>("TabIndex", "The control's position in the form's tab order.", PropertyCategory.Behavior);
 
     public static PropertyClass<bool> TabStopProperty = new PropertyClass<bool>("TabStop", "Whether the user can reach the control with the Tab key.", PropertyCategory.Behavior, true);
+
+    public static PropertyClass<bool> DefaultProperty = new PropertyClass<bool>("Default", "Whether Enter clicks this button.", PropertyCategory.Behavior, false);
+
+    public static PropertyClass<bool> CancelProperty = new PropertyClass<bool>("Cancel", "Whether Esc clicks this button.", PropertyCategory.Behavior, false);
 
     public static PropertyClass<bool> KeyPreviewProperty = new PropertyClass<bool>("KeyPreview", "Whether the form receives keyboard events before its controls do.", PropertyCategory.Behavior, false);
 

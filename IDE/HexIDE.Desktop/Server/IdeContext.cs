@@ -9,6 +9,7 @@ namespace HexIDE.Desktop.Server;
 
 internal sealed class IdeContext : IDisposable
 {
+    public ArchiveProjectService? Archives { get; }
     public IProjectManager ProjectManager { get; }
     public IDocumentDockService DocumentDockService { get; }
     public ILspClient LspClient { get; }
@@ -22,9 +23,12 @@ internal sealed class IdeContext : IDisposable
     public MainViewViewModel RootViewModel { get; }
     public DiagnosticsCache Diagnostics { get; }
     public ToolBoxToolViewModel ToolBoxViewModel { get; }
-    public IPersonalityService PersonalityService { get; }
+    public IProfileService ProfileService { get; }
     public AddinProjectTemplateService AddinProjectTemplateService { get; }
     public ILanguageSwitchService LanguageSwitch { get; }
+
+    /// <summary>The saved settings, for a tool that confirms a choice the Options dialog would otherwise save (#2268).</summary>
+    public ISettingsService Settings { get; }
 
     /// <summary>The IDE's strings, for a refusal a tool shares with the UI.</summary>
     public HexIDE.Localization.ILocalizationService Localization { get; }
@@ -48,13 +52,16 @@ internal sealed class IdeContext : IDisposable
         HexIDE.Runtime.Debugging.IDebugController debugController,
         MainViewViewModel rootViewModel,
         ToolBoxToolViewModel toolBoxViewModel,
-        IPersonalityService personalityService,
+        IProfileService profileService,
         AddinProjectTemplateService addinProjectTemplateService,
         ILanguageSwitchService languageSwitch,
         HexIDE.Conversations.ConversationLog capture,
         HexIDE.Redaction.Pseudonymiser pseudonyms,
-        HexIDE.Localization.ILocalizationService localization)
+        HexIDE.Localization.ILocalizationService localization,
+        ISettingsService settings,
+        ArchiveProjectService? archives = null)
     {
+        Archives = archives;
         ProjectManager = projectManager;
         DocumentDockService = documentDockService;
         LspClient = lspClient;
@@ -68,12 +75,13 @@ internal sealed class IdeContext : IDisposable
         RootViewModel = rootViewModel;
         Diagnostics = new DiagnosticsCache(lspClient);
         ToolBoxViewModel = toolBoxViewModel;
-        PersonalityService = personalityService;
+        ProfileService = profileService;
         AddinProjectTemplateService = addinProjectTemplateService;
         LanguageSwitch = languageSwitch;
         Capture = capture;
         Pseudonyms = pseudonyms;
         Localization = localization;
+        Settings = settings;
     }
 
     public void Dispose() => Diagnostics.Dispose();

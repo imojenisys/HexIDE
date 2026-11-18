@@ -24,6 +24,7 @@ Avalonia.Headless	MIT
 Avalonia.Headless.XUnit	MIT
 Avalonia.Skia	MIT
 Avalonia.Themes.Simple	MIT
+Avalonia.Wayland	MIT
 AwesomeAssertions	Apache-2.0
 Classic.Avalonia.Theme	MIT
 CommunityToolkit.Mvvm	MIT
@@ -35,7 +36,9 @@ Dock.Model.MVVM	MIT
 EmmyLua.LanguageServer.Framework	MIT
 LanguageExt.Core	MIT
 MessagePack	MIT
+Microsoft.CodeAnalysis.CSharp	MIT
 Microsoft.Extensions.Logging.Abstractions	MIT
+Microsoft.Testing.Extensions.HangDump	MIT
 ModelContextProtocol.AspNetCore	Apache-2.0
 NSubstitute	BSD-3-Clause
 Nerdbank.MessagePack	MIT
@@ -45,6 +48,7 @@ R3	MIT
 Serilog	Apache-2.0
 Serilog.Extensions.Logging	Apache-2.0
 Serilog.Sinks.File	Apache-2.0
+SharpFuzz	MIT
 StreamJsonRpc	MIT
 Svg.Skia	MIT
 xunit.analyzers	Apache-2.0

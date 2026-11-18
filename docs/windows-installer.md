@@ -14,8 +14,9 @@ remains.
 **Decided 2026-10-25: Inno Setup, with no auto-update for alpha** (part of #77).
 `installer/HexIDE.iss` packages the staged self-contained Windows x64 Desktop build, including
 its LSP server, standalone runner and any published add-ins. The build supplies the version from
-`IDE/Directory.Build.props`; `publish.yml` produces `HexIDE-Setup-<version>.exe` on the Windows
-x64 leg and attaches it to the release beside the portable archives.
+`IDE/Directory.Build.props`; `publish.yml` produces `hexide-windows-amd64-setup.exe` on the Windows
+x64 leg and attaches it to the release beside the portable archives. The name carries no version, like
+every other asset, so hexide.io can link it through `releases/latest/download/`.
 
 Installation requires administrator approval and defaults to `{autopf}\HexIDE` (64-bit Program
 Files). It creates a common Start-menu shortcut and an uninstaller, with no file associations.
@@ -38,7 +39,7 @@ it is publisher-hosted, not computed here. Keep the Authenticode status and Pyrs
 check, as documented by [the publisher's verification instructions](https://jrsoftware.org/isdl-verify.php).
 Moving to Inno Setup 7 requires a separate evaluation.
 
-**#77 remains open until #314 and #315 land.** Package verification and revocation fixes are
+**#77 closed on 2026-10-28; #314 and #315 are still open.** Package verification and revocation fixes are
 reviewed separately; this installer creates the protected install location they must defend.
 Windows compilation and a real install/uninstall must be verified on Windows, including a
 standard user's inability to write `addins/`, Start-menu launch, and operation without a

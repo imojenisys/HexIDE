@@ -47,7 +47,9 @@ public sealed class LanguageServerStepViewModel
     /// <summary>Cancelled is called out separately because it is NOT a fault: the IDE was shutting down.</summary>
     public bool IsCancelled => _s.Outcome == LanguageConnectionStepOutcome.Cancelled;
 
-    public string Elapsed => _s.At is { } at ? $"{at.TotalMilliseconds:N0} ms" : "";
+    public string Elapsed => _s.At is { } at
+        ? string.Format(_localization.GetString("Str.Tool.LanguageServers.Vm.Elapsed"), $"{at.TotalMilliseconds:N0}")
+        : "";
 
     /// <summary>Verbatim machine text — an exception message, an OS error. Never translated: it is the
     /// thing worth quoting to whoever wrote the server.</summary>
@@ -69,16 +71,36 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
     private readonly ILocalizationService _localization;
     private readonly ConversationLog _capture;
     private readonly IEventBus? _events;
+    private readonly ILanguageConnectionRegistry? _registry;
 
     public LanguageServerRowViewModel(
         LanguageServerConnection connection, ILocalizationService localization, ConversationLog capture,
-        IEventBus? events = null)
+        IEventBus? events = null, ILanguageConnectionRegistry? registry = null)
     {
         _c = connection;
         _localization = localization;
         _capture = capture;
         _events = events;
+        _registry = registry;
     }
+
+    public string OutputText => _capture.Output.Text(Id) is { Length: > 0 } text
+        ? text : _localization.GetString("Str.Tool.LanguageServers.OutputEmpty");
+
+    internal void LanguageChanged()
+    {
+        OnPropertyChanged(nameof(State));
+        OnPropertyChanged(nameof(Age));
+        OnPropertyChanged(nameof(Chain));
+        OnPropertyChanged(nameof(OutputText));
+    }
+
+    internal void AgeChanged() => OnPropertyChanged(nameof(Age));
+
+    internal void OutputChanged() => OnPropertyChanged(nameof(OutputText));
+
+    [RelayCommand]
+    private Task RestartAsync() => _registry?.RestartAsync(Id) ?? Task.CompletedTask;
 
     /// <summary>
     /// Opens the protocol inspector on this server's traffic alone.
@@ -97,8 +119,7 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
     /// Whether message bodies are being kept for this server.
     /// </summary>
     /// <remarks>
-    /// <b>The row's only writable state, and the window's first interactivity of any kind.</b> It reads
-    /// through to the capture rather than holding a copy, so it cannot drift from what is actually being
+    /// It reads through to the capture rather than holding a copy, so it cannot drift from what is actually being
     /// recorded — which matters here more than usual, because two other things arm the same connection: the
     /// automation surface and the launch flag.
     ///
@@ -127,6 +148,12 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
     public string Id => _c.Id;
     public string DisplayName => string.IsNullOrWhiteSpace(_c.DisplayName) ? _c.Id : _c.DisplayName;
 
+    /// <summary>The add-in that contributed this connection (#2760); empty for the configuration file and the bundled server.</summary>
+    public string Origin => _c.Origin ?? "";
+    public bool HasOrigin => !string.IsNullOrWhiteSpace(_c.Origin);
+
+    public bool IsLanguageServer => _c.Kind == LanguageConnectionKind.LanguageServer;
+
     /// <summary>
     /// Which protocol this row speaks. Not localized: <c>LSP</c> and <c>DAP</c> are protocol names, in the
     /// same class as the transport words below — translating them would make them harder to recognise, not
@@ -138,6 +165,7 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
     /// character. Not a localization key for that reason.</summary>
     public string Transport => _c.Transport switch
     {
+        LanguageConnectionTransport.Tcp => "tcp",
         LanguageConnectionTransport.Pipe => "pipe",
         LanguageConnectionTransport.WebSocket => "websocket",
         _ => "stdio",
@@ -182,9 +210,11 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
             if (_c.StateSince is not { } since) return "";
             var d = DateTimeOffset.UtcNow - since;
             if (d < TimeSpan.Zero) d = TimeSpan.Zero;
-            var text = d.TotalSeconds < 60 ? $"{(int)d.TotalSeconds} s"
-                     : d.TotalMinutes < 60 ? $"{(int)d.TotalMinutes} m {d.Seconds} s"
-                     : $"{(int)d.TotalHours} h {d.Minutes} m";
+            var text = d.TotalSeconds < 60
+                ? string.Format(_localization.GetString("Str.Tool.LanguageServers.Vm.Age.Seconds"), (int)d.TotalSeconds)
+                : d.TotalMinutes < 60
+                    ? string.Format(_localization.GetString("Str.Tool.LanguageServers.Vm.Age.Minutes"), (int)d.TotalMinutes, d.Seconds)
+                    : string.Format(_localization.GetString("Str.Tool.LanguageServers.Vm.Age.Hours"), (int)d.TotalHours, d.Minutes);
             return string.Format(
                 _localization.GetString("Str.Tool.LanguageServers.Vm.For"), text);
         }
@@ -277,11 +307,15 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
         var lines = new List<string>
         {
             $"{DisplayName}  [{Id}]  {Kind}",
+        };
+        if (HasOrigin) lines.Add($"  added by  : {Origin}");
+        lines.AddRange(
+        [
             $"  transport : {Transport}" + (HasEndpoint ? $" · {RedactedEndpoint(redactor)}" : ""),
             $"  claims    : {Claims}",
             $"  priority  : {Priority}",
             $"  state     : {State}{(Age.Length > 0 ? " · " + Age : "")}",
-        };
+        ]);
         if (HasReportedIdentity) lines.Add($"  reported  : {ReportedBy}");
         if (HasChain)
         {
@@ -290,7 +324,7 @@ public sealed partial class LanguageServerRowViewModel : ObservableObject
             {
                 lines.Add($"    {step.Marker} {step.Stage}"
                         + (step.Elapsed.Length > 0 ? $"  ({step.Elapsed})" : "")
-                        + (step.HasDetail ? $"  {step.Detail}" : ""));
+                        + (step.HasDetail ? $"  {redactor.Body(step.Detail)}" : ""));
             }
         }
         if (HasDeclined) lines.Add($"  declined by the client: {string.Join(", ", Declined)}");

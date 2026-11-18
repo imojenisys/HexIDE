@@ -18,13 +18,14 @@ internal partial class KeymapJsonContext : JsonSerializerContext { }
 /// <summary>
 /// Maps JSON command names to their RoutedCommand instances.
 /// Covers all commands in ApplicationCommands so packs can assign gestures to any command.
-/// Keep in sync with ApplicationCommands.cs when adding new commands.
+/// Guarded against ApplicationCommands by KeymapServiceTests.
 /// </summary>
 internal static class CommandKeyMapping
 {
     internal static readonly IReadOnlyDictionary<string, RoutedCommand> Table =
         new Dictionary<string, RoutedCommand>
         {
+            ["ReopenClosedDocumentCommand"] = ApplicationCommands.ReopenClosedDocumentCommand,
             // ── File ──────────────────────────────────────────────
             ["NewProjectCommand"]                      = ApplicationCommands.NewProjectCommand,
             ["AddProjectCommand"]                      = ApplicationCommands.AddProjectCommand,
@@ -44,8 +45,10 @@ internal static class CommandKeyMapping
             ["CutCommand"]                             = ApplicationCommands.CutCommand,
             ["CopyCommand"]                            = ApplicationCommands.CopyCommand,
             ["PasteCommand"]                           = ApplicationCommands.PasteCommand,
+            ["PasteAsCommentCommand"]                   = ApplicationCommands.PasteAsCommentCommand,
             ["PasteLinkCommand"]                       = ApplicationCommands.PasteLinkCommand,
             ["RemoveCommand"]                          = ApplicationCommands.RemoveCommand,
+            ["DeleteLineCommand"]                      = ApplicationCommands.DeleteLineCommand,
             ["DeleteCommand"]                          = ApplicationCommands.DeleteCommand,
             ["SelectAllCommand"]                       = ApplicationCommands.SelectAllCommand,
             ["FindCommand"]                            = ApplicationCommands.FindCommand,
@@ -65,8 +68,18 @@ internal static class CommandKeyMapping
             ["NextBookmarkCommand"]                    = ApplicationCommands.NextBookmarkCommand,
             ["PreviousBookmarkCommand"]                = ApplicationCommands.PreviousBookmarkCommand,
             ["ClearAllBookmarksCommand"]               = ApplicationCommands.ClearAllBookmarksCommand,
+            ["CallHierarchyCommand"]                    = ApplicationCommands.CallHierarchyCommand,
+            ["TypeHierarchyCommand"]                    = ApplicationCommands.TypeHierarchyCommand,
+            ["RunCodeLensCommand"] = ApplicationCommands.RunCodeLensCommand,
+            ["FindReferencesCommand"]                   = ApplicationCommands.FindReferencesCommand,
             ["GoToDefinitionCommand"]                  = ApplicationCommands.GoToDefinitionCommand,
+            ["GoToImplementationCommand"]              = ApplicationCommands.GoToImplementationCommand,
+            ["GoToTypeDefinitionCommand"]              = ApplicationCommands.GoToTypeDefinitionCommand,
+            ["GoToDeclarationCommand"]                 = ApplicationCommands.GoToDeclarationCommand,
             ["RenameSymbolCommand"]                    = ApplicationCommands.RenameSymbolCommand,
+            ["ExpandSelectionCommand"]                 = ApplicationCommands.ExpandSelectionCommand,
+            ["ShrinkSelectionCommand"]                 = ApplicationCommands.ShrinkSelectionCommand,
+            ["FormatSelectionCommand"]                 = ApplicationCommands.FormatSelectionCommand,
             ["FormatDocumentCommand"]                  = ApplicationCommands.FormatDocumentCommand,
             // ── View ──────────────────────────────────────────────
             ["ViewCodeCommand"]                        = ApplicationCommands.ViewCodeCommand,
@@ -74,6 +87,7 @@ internal static class CommandKeyMapping
             ["OpenImmediateCommand"]                   = ApplicationCommands.OpenImmediateCommand,
             ["OpenLocalsCommand"]                      = ApplicationCommands.OpenLocalsCommand,
             ["OpenWatchesCommand"]                     = ApplicationCommands.OpenWatchesCommand,
+            ["OpenCallStackCommand"]                   = ApplicationCommands.OpenCallStackCommand,
             ["OpenProjectExplorerCommand"]             = ApplicationCommands.OpenProjectExplorerCommand,
             ["OpenPropertiesCommand"]                  = ApplicationCommands.OpenPropertiesCommand,
             ["OpenFormLayoutCommand"]                  = ApplicationCommands.OpenFormLayoutCommand,
@@ -81,6 +95,8 @@ internal static class CommandKeyMapping
             ["OpenToolBoxCommand"]                     = ApplicationCommands.OpenToolBoxCommand,
             ["OpenDataViewCommand"]                    = ApplicationCommands.OpenDataViewCommand,
             ["OpenColorPaletteCommand"]                = ApplicationCommands.OpenColorPaletteCommand,
+            ["SplitWindowCommand"]                     = ApplicationCommands.SplitWindowCommand,
+            ["ResetWindowLayoutCommand"]               = ApplicationCommands.ResetWindowLayoutCommand,
             // ── Run ───────────────────────────────────────────────
             ["StartDefaultProjectCommand"]             = ApplicationCommands.StartDefaultProjectCommand,
             ["StartDefaultProjectWithFullCompileCommand"] = ApplicationCommands.StartDefaultProjectWithFullCompileCommand,
@@ -106,7 +122,7 @@ internal static class CommandKeyMapping
             ["OpenOptionsCommand"]                     = ApplicationCommands.OpenOptionsCommand,
             ["AddProcedureCommand"]                    = ApplicationCommands.AddProcedureCommand,
             ["AboutCommand"]                           = ApplicationCommands.AboutCommand,
-            ["AvaloniaOnWebCommand"]                   = ApplicationCommands.AvaloniaOnWebCommand,
+            ["ProductOnWebCommand"]                    = ApplicationCommands.ProductOnWebCommand,
             // ── Project ────────────────────────────────────────────
             ["ProjectReferencesCommand"]               = ApplicationCommands.ProjectReferencesCommand,
             ["ProjectComponentsCommand"]               = ApplicationCommands.ProjectComponentsCommand,

@@ -38,8 +38,9 @@ internal sealed class ProjectNames
     {
     }
 
-    /// <summary>The names <paramref name="reader"/> sees unqualified that another standard module declares.</summary>
-    public static ProjectNames For(ModuleInfo reader, IReadOnlyList<ModuleInfo> modules)
+    /// <summary>The names <paramref name="reader"/> sees unqualified that another standard module declares. With no reader,
+    /// the names every module exports: what a watch on (All Modules) sees (#4452).</summary>
+    public static ProjectNames For(ModuleInfo? reader, IReadOnlyList<ModuleInfo> modules)
     {
         var names = new ProjectNames();
         foreach (var owner in modules)
@@ -63,20 +64,21 @@ internal sealed class ProjectNames
                     foreach (var member in members.Keys)
                         names.Add(reader, owner, member);
         }
-        // A Public variable or Const beside another module's Public procedure of the name is ambiguous as well (measured
-        // for a Sub and for a Function).
+        // A Public variable or Const beside another module's visible procedure or Property is ambiguous as well
+        // (Sub and Function measured in #880; Property Get and Let-only in #3359).
         foreach (var name in new List<string>(names.owners.Keys))
             foreach (var other in modules)
                 if (!ReferenceEquals(other, reader) && !ReferenceEquals(other, names.owners[name])
                     && other.Kind == InterpreterModuleKind.Standard
-                    && other.PrePass.Procedures.TryGetValue(name, out var procedure) && !procedure.IsPrivate)
+                    && ((other.PrePass.Procedures.TryGetValue(name, out var procedure) && !procedure.IsPrivate)
+                        || (other.PrePass.Properties.TryGetValue(name, out var property) && BasicInterpreter.IsVisibleOutside(property))))
                     names.owners[name] = null;
         return names;
     }
 
-    private void Add(ModuleInfo reader, ModuleInfo owner, string name)
+    private void Add(ModuleInfo? reader, ModuleInfo owner, string name)
     {
-        if (DeclaresItself(reader, name))
+        if (reader is not null && DeclaresItself(reader, name))
             return;
         owners[name] = owners.ContainsKey(name) ? null : owner;
     }

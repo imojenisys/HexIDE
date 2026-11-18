@@ -72,6 +72,8 @@ public static class PackageVerification
 
         if (manifest.Schema > AddinManifest.CurrentSchema)
             return Incompatible($"requires manifest schema {manifest.Schema}; this build supports {AddinManifest.CurrentSchema}");
+        if (manifest.Schema >= 2 && !AddinCapabilities.IsValid(manifest.Capabilities))
+            return Incompatible("invalid capabilities declaration");
         if (manifest.MinHexideVersion is { } minimum)
         {
             if (!Version.TryParse(minimum, out var required))
@@ -217,6 +219,9 @@ public static class PackageVerification
             IntermediateId = inter.IntermediateId,
             LogoPath = logoPath,
             Chain = chain,
+            VerifiedDeclaration = new AddinCapabilityDeclaration(manifest, manifestHash),
+            // From the record whose signature was checked above, never from the manifest (#4258).
+            PublisherNamespaces = HexIDE.Addins.PublisherNamespaces.From(pub.Namespaces),
         };
     }
 

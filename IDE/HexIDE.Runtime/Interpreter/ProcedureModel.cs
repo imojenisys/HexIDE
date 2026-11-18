@@ -22,9 +22,8 @@ public sealed record ProcedureInfo(
     // slot is seeded with a real zero-initialised UDT (its ReturnType is the generic UDT ValueType, which has
     // no concrete identity). Null for scalar/Enum/no return.
     string? ReturnUdtTypeName = null,
-    // For a Function or Property Get declared to return an array of a scalar type or of Variant (`As Integer()`), that
-    // array type, so a store into the return name can be checked against it (#986). Null otherwise, including `As
-    // Object()` and `As Collection()`, whose element type is not modelled.
+    // For a Function or Property Get declared to return an array of a base type, the array type checked at a store
+    // (#986, #999). A named class element is resolved at the call, once all modules are known.
     Vb6Value.ValueType? CheckedArrayReturn = null,
     // Whether the return reads as a Variant's: declared with no As clause, `As Variant`, or `As Object`, which VB6 binds
     // late as it binds a Variant (measured, #1005: `GetObj().P` with `GetObj() As Object` is a Variant, and `GetFoo().P`
@@ -36,6 +35,15 @@ public sealed record ProcedureInfo(
     // Object` one is read late all the same, as ReturnsVariant says.
     bool ReturnsObject = false)
 {
+    public Antlr4.Runtime.ParserRuleContext? Declaration { get; init; }
+
+    /// <summary>
+    /// <c>Get</c>, <c>Let</c> or <c>Set</c> for a Property procedure, null for a Sub or Function. Each accessor is a
+    /// context of its own: VB6's Add Watch lists them as <c>X(Get)</c> and <c>X(Let)</c>, and a watch scoped to one reads
+    /// <c>&lt;Out of context&gt;</c> while the other runs (measured, #4401).
+    /// </summary>
+    public string? Accessor { get; init; }
+
     private IReadOnlyList<VB6Parser.VariableSubStmtContext>? declaredLocals;
 
     /// <summary>

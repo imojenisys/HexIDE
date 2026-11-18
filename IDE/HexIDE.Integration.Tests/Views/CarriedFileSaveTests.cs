@@ -33,7 +33,7 @@ public class CarriedFileSaveTests : IDisposable
     {
         var path = Path.Combine(_dir, "carried.dsr");
         File.WriteAllBytes(path, bytes);
-        return new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), _windowManager, _localization)
+        return new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), _windowManager, _localization, Substitute.For<HexIDE.IDE.ISettingsService>())
             .Initialize(new RelatedDocumentDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "carried.dsr", path));
     }
 
@@ -71,6 +71,75 @@ public class CarriedFileSaveTests : IDisposable
         var expected = (byte[])original.Clone();
         if (edit) expected[bom ? 3 : 0] = 0x64;
         File.ReadAllBytes(vm.RelatedDocument!.AbsolutePath!).Should().Equal(expected);
+        vm.IsDirty.Should().BeFalse();
+    }
+
+    [AvaloniaFact]
+    public async Task SavingRetainsPreviousDiskBytesForRecovery()
+    {
+        using var vm = Open([0x63, 0xE9]);
+        var path = vm.RelatedDocument!.AbsolutePath!;
+        vm.Document.Text = "edited";
+        await vm.SaveAsync();
+        var recovery = Directory.GetFiles(_dir, "carried.dsr.*.recovery").Should().ContainSingle().Subject;
+        File.ReadAllBytes(recovery).Should().Equal(0x63, 0xE9);
+        File.ReadAllText(path).Should().Be("edited");
+        vm.Document.Text = "again";
+        await vm.SaveAsync();
+        Directory.GetFiles(_dir, "carried.dsr.*.recovery").Should().HaveCount(2);
+        File.ReadAllBytes(recovery).Should().Equal(0x63, 0xE9);
+    }
+
+    [AvaloniaFact]
+    public async Task PartialWriteFailurePreservesBytesAndDirtyStateUntilRetry()
+    {
+        using var vm = Open([0x63]);
+        var path = vm.RelatedDocument!.AbsolutePath!;
+        vm.Document.Text = "edited";
+        var previous = AtomicFileWriter.OpenStream.Value;
+        bool injected = false;
+        AtomicFileWriter.OpenStream.Value = temporary =>
+        {
+            injected = true;
+            return new PartialFailureStream(temporary);
+        };
+        try
+        {
+            Func<Task> save = () => vm.SaveAsync();
+            await save.Should().ThrowAsync<IOException>().WithMessage("Disk full");
+            injected.Should().BeTrue();
+            File.ReadAllBytes(path).Should().Equal(0x63);
+            Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty();
+            vm.IsDirty.Should().BeTrue();
+        }
+        finally { AtomicFileWriter.OpenStream.Value = previous; }
+
+        await vm.SaveAsync();
+        File.ReadAllText(path).Should().Be("edited");
+        vm.IsDirty.Should().BeFalse();
+    }
+
+    private sealed class PartialFailureStream(string path) : FileStream(path, FileMode.CreateNew, FileAccess.Write)
+    {
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            base.Write(buffer[..Math.Min(1, buffer.Length)]);
+            throw new IOException("Disk full");
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SavingPreservesFileAtOldStagingName()
+    {
+        using var vm = Open([0x63]);
+        var path = vm.RelatedDocument!.AbsolutePath!;
+        File.WriteAllText(path + ".hexide-tmp", "user file");
+        vm.Document.Text = "edited";
+
+        await vm.SaveAsync();
+
+        File.ReadAllText(path).Should().Be("edited");
+        File.ReadAllText(path + ".hexide-tmp").Should().Be("user file");
         vm.IsDirty.Should().BeFalse();
     }
 

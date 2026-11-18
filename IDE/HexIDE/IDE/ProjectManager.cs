@@ -22,6 +22,19 @@ public partial class ProjectManager : IProjectManager
     public event Action<ProjectDefinition>? ProjectLoaded;
     public event Action<ProjectDefinition>? ProjectUnloaded;
 
+    public event Action? ReloadStarted;
+    public event Action? ReloadFinished;
+    private int reloadDepth;
+
+    public IDisposable BeginReload()
+    {
+        if (reloadDepth++ == 0) ReloadStarted?.Invoke();
+        return new HexIDE.Utils.ActionDisposable(() =>
+        {
+            if (--reloadDepth == 0) ReloadFinished?.Invoke();
+        });
+    }
+
     [Notify] private ProjectDefinition? startupProject;
     [Notify] private ProjectGroupDefinition? currentGroup;
 
@@ -31,6 +44,8 @@ public partial class ProjectManager : IProjectManager
     {
         this.editorService = editorService;
         this.eventBus = eventBus;
+        // Open only after loading has established sidecars and the unedited baselines.
+        eventBus.Subscribe<ProjectOpenedEvent>(e => editorService.RestoreOpenDocuments(e.Project));
         PropertyChanged += async (_, args) =>
         {
             if (args.PropertyName != nameof(StartupProject) || lspClient is null) return;
@@ -41,9 +56,20 @@ public partial class ProjectManager : IProjectManager
 
     public void AddProject(ProjectDefinition proj)
     {
-        loadedProjects.Add(proj);
+        var replacesStartup = false;
+        if (heldPlace is { Unloaded: true } held && proj.AbsolutePath is { } path && HexIDE.IO.HostFilePath.Equals(path, held.Path))
+        {
+            loadedProjects.Insert(Math.Min(held.Index, loadedProjects.Count), proj);
+            replacesStartup = startupProject == held.Project;
+            heldPlace = null;
+        }
+        else
+            loadedProjects.Add(proj);
         ProjectLoaded?.Invoke(proj);
-        StartupProject ??= proj;
+        if (replacesStartup)
+            StartupProject = proj;
+        else
+            StartupProject ??= proj;
     }
 
     public void UnloadAllProjects()
@@ -55,20 +81,57 @@ public partial class ProjectManager : IProjectManager
 
     public void UnloadProject(ProjectDefinition proj)
     {
+        editorService.SaveOpenDocuments(proj);
         foreach (var form in proj.Forms)
             eventBus.Publish(new FormUnloadedEvent(form));
         eventBus.Publish(new ProjectUnloadedEvent(proj));
         loadedProjects.Remove(proj);
         ProjectUnloaded?.Invoke(proj);
-        if (startupProject == proj)
+        var holding = heldPlace?.Project == proj;
+        if (holding)
+            heldPlace!.Unloaded = true;
+        // Keep the held startup until its replacement arrives, so its workspace never passes through null (#4044).
+        if (startupProject == proj && !holding)
             StartupProject = loadedProjects.FirstOrDefault();
-        if (loadedProjects.Count <= 1)
+        if (loadedProjects.Count <= 1 && !holding)
             CurrentGroup = null;
     }
 
-    public ProjectDefinition NewProject(IAddinProjectTemplate projectTemplate, string name)
+    private HeldPlace? heldPlace;
+
+    private sealed class HeldPlace(ProjectDefinition project, string path, int index)
+    {
+        public ProjectDefinition Project { get; } = project;
+        public string Path { get; } = path;
+        public int Index { get; } = index;
+        public bool Unloaded { get; set; }
+    }
+
+    public IDisposable HoldPlace(ProjectDefinition project)
+    {
+        if (project.AbsolutePath is not { } path)
+            return new HexIDE.Utils.ActionDisposable(() => { });
+        var held = new HeldPlace(project, path, loadedProjects.IndexOf(project));
+        heldPlace = held;
+        return new HexIDE.Utils.ActionDisposable(() =>
+        {
+            if (heldPlace != held)
+                return;
+            // Not opened again: end as an unload always has.
+            heldPlace = null;
+            if (!held.Unloaded)
+                return;
+            if (loadedProjects.Count <= 1)
+                CurrentGroup = null;
+            if (startupProject == held.Project || startupProject is null)
+                StartupProject = loadedProjects.FirstOrDefault();
+        });
+    }
+
+    public ProjectDefinition NewProject(IAddinProjectTemplate projectTemplate, string name, Action<ProjectDefinition>? beforeAdd = null)
     {
         var definition = projectTemplate.Create(name);
+        beforeAdd?.Invoke(definition);
         AddProject(definition);
         if (definition.Forms.Count > 0)
             editorService.EditForm(definition.Forms[0]);

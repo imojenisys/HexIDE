@@ -56,7 +56,7 @@ public enum EventCoalescing
 /// on a debugger: a run with none needs the order as much.
 /// </para>
 /// </remarks>
-public sealed class EventPump
+public sealed class EventPump : HexIDE.IDE.IProgramActivity
 {
     /// <summary>One handler's run.</summary>
     internal sealed class Walk(string name)
@@ -148,13 +148,24 @@ public sealed class EventPump
     /// </summary>
     public IReadOnlyList<string> BusySince(IReadOnlyCollection<object> before)
     {
-        List<string> since = [.. live.Where(w => !before.Contains(w)).Select(w => w.Name), .. queue.Select(w => w.Name)];
+        List<string> since = [.. live.Where(w => !before.Contains(w)).Select(w => w.Name)];
         return since.Count > 0 ? since : Busy;
     }
 
-    /// <summary>The handlers part way through, then those waiting, by name: what a reply names when it cannot wait.</summary>
+    /// <summary>
+    /// The walks in <paramref name="before"/> that have finished since, by name, a Timer's left out: what a reply says when
+    /// an action let a handler it found running run to its end, as answering the MsgBox it waited at does (#2720). A Timer
+    /// ticks on its own, so naming its walks would put one on most replies.
+    /// </summary>
+    public IReadOnlyList<string> FinishedSince(IReadOnlyCollection<object> before) =>
+        [.. before.OfType<Walk>().Where(w => !w.ByTimer && !live.Contains(w)).Select(w => w.Name)];
+
+    /// <summary>The handlers part way through, by name: what a reply names when it cannot wait.</summary>
     public IReadOnlyList<string> Busy =>
-        [.. running.Where(r => r.Value > 0).Select(r => r.Key), .. queue.Select(w => w.Name)];
+        [.. running.Where(r => r.Value > 0).Select(r => r.Key)];
+
+    /// <summary>The handlers waiting to start, by name.</summary>
+    public IReadOnlyList<string> WaitingHandlers => [.. queue.Select(w => w.Name)];
 
     /// <summary>
     /// Raise an event, whose handler is <paramref name="work"/>: nested in the running walk if one is, else at once if
@@ -172,7 +183,11 @@ public sealed class EventPump
         }
         if (Current is { } raiser)
         {
-            var started = Start(name, work, coalescing == EventCoalescing.Timer);
+            // A statement can raise several events before it can await any of them (#2547). A suspended
+            // sibling must finish first, just as it would if its handler had never given up the thread.
+            var started = raiser.Raised is { Count: > 0 } raised && !raised[^1].IsCompleted
+                ? StartAfter(raised[^1], name, work, coalescing == EventCoalescing.Timer)
+                : Start(name, work, coalescing == EventCoalescing.Timer);
             if (!started.IsCompleted)
                 (raiser.Raised ??= []).Add(started);
             return;
@@ -458,6 +473,13 @@ public sealed class EventPump
                 topLevel--;
             }
         }
+    }
+
+    private async Task StartAfter(Task previous, string name, Func<Task> work, bool byTimer)
+    {
+        await previous;
+        if (!closed)
+            await Start(name, work, byTimer);
     }
 
     private async Task Start(string name, Func<Task> work, bool byTimer = false)

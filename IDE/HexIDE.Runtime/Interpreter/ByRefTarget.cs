@@ -13,6 +13,8 @@ public interface IByRefTarget
     /// <summary>Whether the target is a Variant.</summary>
     bool IsVariant { get; }
 
+    int? FixedStringWidth => null;
+
     Vb6Value Read();
 
     void Write(Vb6Value value);
@@ -40,6 +42,8 @@ public sealed record ArrayElementRef(VBArray Array, IReadOnlyList<int> Index, bo
             ? type
             : null;
 
+    public int? FixedStringWidth => Array.FixedStringWidth;
+
     public bool IsVariant => HeldAsVariant || Array.ElementType is not { } type || type == Vb6Value.ValueType.EmptyVariant;
 
     public Vb6Value Read() => Array.GetValue(Index);
@@ -49,4 +53,31 @@ public sealed record ArrayElementRef(VBArray Array, IReadOnlyList<int> Index, bo
     public void Lock() => Array.LockCount++;
 
     public void Unlock() => Array.LockCount--;
+}
+
+/// <summary>
+/// A slot, as one element of a ParamArray stands for it (#2462): the caller's variable, a slot standing for a field or an
+/// element (<see cref="ExecutionState.AllocRef"/>), or the call's own copy of any other argument. A store converts as a store
+/// into the variable does. Measured, native and p-code: `a(0) = 5.7` through an Integer's element leaves it 6, still an
+/// Integer, `a(0) = "abc"` raises 13 and leaves it as it was, and a Variant's takes the String.
+/// </summary>
+public sealed record SlotRef(ExecutionState State, int Location) : IByRefTarget
+{
+    public Vb6Value.ValueType? DeclaredType => State.DeclaredTypeOf(Location);
+
+    public bool IsVariant => DeclaredType is null;
+
+    public int? FixedStringWidth => State.FixedStringWidthOf(Location);
+
+    public Vb6Value Read() => State[Location];
+
+    public void Write(Vb6Value value)
+    {
+        if (State.DeclaredTypeOf(Location) is { } declared)
+            value = VbNumeric.CoerceOnStore(value, declared, null);
+        if (FixedStringWidth is { } width)
+            value = FixedLengthString.Store(value, width);
+        ModuleExecutionContext.CheckObjectStore(value, State.DeclaredClassOf(Location));
+        State[Location] = value;
+    }
 }

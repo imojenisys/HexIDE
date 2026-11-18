@@ -40,6 +40,73 @@ public class ObjectBrowserBehaviourTests
         return (vm, client, editor, form ? DocumentWireName.For(definition) : DocumentWireName.For(module));
     }
 
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ServerStartingReplacesVbaStatusWithoutReselecting(bool allLibraries)
+    {
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns(new List<ProjectDefinition>());
+        var client = Substitute.For<ILspClient>();
+        client.RequestBuiltinSymbolsAsync(Arg.Any<CancellationToken>())
+            .Returns([new VbaBuiltinSymbol("Abs", "Function Abs(number)", "Absolute value")]);
+        var registry = Substitute.For<ILanguageConnectionRegistry>();
+        registry.Connections.Returns([]);
+        var vm = new ObjectBrowserToolViewModel(projects, client, Substitute.For<IEditorService>(),
+            Substitute.For<IComponentRegistry>(), Substitute.For<ITypeLibraryService>(),
+            Substitute.For<IFocusedProjectUtil>(), Substitute.For<ILocalizationService>(), registry);
+        var vba = vm.Libraries.Single(l => l.Name == "VBA");
+        if (!allLibraries) vm.SelectedLibrary = vba;
+        var selection = vm.SelectedLibrary;
+        vba.Classes.Should().ContainSingle().Which.IsStatus.Should().BeTrue();
+
+        using var caps = System.Text.Json.JsonDocument.Parse(
+            """{"experimental":{"vbBuiltinSymbols":true}}""");
+        registry.Connections.Returns([new LanguageServerConnection("server", "Server",
+            LanguageConnectionKind.LanguageServer, LanguageConnectionState.Running, [".bas"], "vb6",
+            caps.RootElement.Clone())]);
+        await Task.Run(() => registry.ConnectionsChanged += Raise.Event());
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        vm.SelectedLibrary.Should().BeSameAs(selection);
+        vba.IsLoaded.Should().BeTrue();
+        vba.Classes.Should().ContainSingle().Which.IsStatus.Should().BeFalse();
+        vm.FilteredClasses.Should().ContainSingle(c => c.LibraryName == "VBA");
+        vm.SelectedClass = vba.Classes.Single();
+        vm.FilteredMembers.Should().ContainSingle().Which.Name.Should().Be("Abs");
+    }
+
+    // The IDE raises LanguageChanged on the UI thread (Apply swaps Application.Resources), and the browser refreshes there
+    // at once rather than queuing it (#4382).
+    [AvaloniaFact]
+    public void LanguageSwitchRefreshesStatusAtOnceOnTheUiThread()
+    {
+        var projects = Substitute.For<IProjectManager>();
+        projects.LoadedProjects.Returns(new List<ProjectDefinition>());
+        var loc = Substitute.For<ILocalizationService>();
+        loc.GetString(Arg.Any<string>()).Returns(ci => "Old " + ci.Arg<string>());
+        var vm = new ObjectBrowserToolViewModel(projects, Substitute.For<ILspClient>(),
+            Substitute.For<IEditorService>(), Substitute.For<IComponentRegistry>(),
+            Substitute.For<ITypeLibraryService>(), Substitute.For<IFocusedProjectUtil>(), loc,
+            Substitute.For<ILanguageConnectionRegistry>());
+        vm.SelectedLibrary = vm.Libraries.Single(l => l.Name == "VBA");
+        vm.SelectedClass = vm.FilteredClasses.Single();
+        var cls = vm.SelectedClass;
+        var changedOnUiThread = false;
+        cls.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(cls.Name))
+                changedOnUiThread = Avalonia.Threading.Dispatcher.UIThread.CheckAccess();
+        };
+        loc.GetString(Arg.Any<string>()).Returns(ci => "New " + ci.Arg<string>());
+
+        loc.LanguageChanged += Raise.Event<System.Action>();
+
+        cls.Name.Should().Be("New Str.Tool.ObjectBrowser.Vba.NoServer");
+        vm.SelectedClass.Should().BeSameAs(cls);
+        changedOnUiThread.Should().BeTrue();
+    }
+
     private static DocumentSymbol Symbol(string name) => new(name, SymbolKind.Method,
         new LspRange(new Position(7, 0), new Position(12, 0)),
         new LspRange(new Position(8, 11), new Position(8, 11 + name.Length)));

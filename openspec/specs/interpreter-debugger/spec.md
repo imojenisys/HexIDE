@@ -5,6 +5,8 @@ Define the VB6-style step-through debugging experience over HexIDE's in-box tree
 breakpoints, break mode, stepping, and the inspection windows a VB6 developer expects to find behind
 F5, F8 and F9.
 
+**Known divergence:** Edit Watch has no default key, where the scenarios below bind Ctrl+W (#3430).
+
 The debugger is deliberately built on the interpreter rather than deferred to an external compiled-execution
 backend, because the interpreter is a permanent part of HexIDE and a developer who cannot stop a program on a
 line cannot evaluate the IDE at all. Its limits follow from that choice and are stated as behaviour, not
@@ -12,6 +14,40 @@ hidden: execution is a live host call stack rather than a re-pointable program c
 prompt for a reset and the execution point moves only between top-level statements of the paused procedure.
 
 ## Requirements
+
+### Requirement: Desktop run-time dialogs and keyboard focus
+
+A run-time error dialog SHALL retain the active running form as owner and SHALL disable all existing desktop
+windows, including the IDE, until answered, restoring each window's previous enabled state afterwards.
+Opening the error SHALL NOT activate the IDE. Debug from the error and entering break mode after Ctrl+Break
+SHALL activate the IDE. With a desktop running form focused, IDE shortcuts SHALL NOT execute; Ctrl+Break
+SHALL still reach the IDE's Break command. Measured on vb6.exe SP6 in
+[issue #1297's 2026-11-16 comment](https://github.com/hexide-io/HexIDE/issues/1297).
+
+#### Scenario: Error while the running form is active
+- **WHEN** the running form is active and an unhandled run-time error opens its dialog
+- **THEN** the form owns the dialog, and the IDE is disabled without being brought forward
+- **AND** choosing Debug closes the dialog, restores enabled states and activates the IDE
+
+#### Scenario: Keys while a running form has focus
+- **WHEN** a desktop running form has focus
+- **THEN** Find and Immediate shortcuts do not open IDE windows
+- **AND** Ctrl+Break requests a pause and the IDE comes forward when the statement gate enters break mode
+
+
+### Requirement: Failed breakpoint conditions explain the stop
+
+The interpreter SHALL pause when a breakpoint condition cannot be evaluated. The stop SHALL retain
+the expression and evaluation error as breakpoint details. The IDE SHALL show the expression, module,
+line and error in its localized status bar while paused. Run-control replies and debug-state inspection
+SHALL explain the failed condition and its line; the evaluation error SHALL NOT enter program output.
+
+#### Scenario: A condition cannot be parsed or resolved in the executing frame
+- **WHEN** evaluating a breakpoint condition returns an error or throws
+- **THEN** execution pauses before the statement with the failed expression and error attached
+- **AND** the run or step note and debug-state note explain the failed evaluation
+- **AND** only program output appears in `printed`
+- **AND** resuming or ending the run clears the paused failure detail
 
 ### Requirement: Breakpoints SHALL be toggleable from every VB6-familiar entry point
 The IDE SHALL let the developer toggle a breakpoint from the keyboard, the Debug menu, and the breakpoint gutter, and SHALL clear every breakpoint on request.
@@ -43,7 +79,7 @@ VB6 discarded breakpoints when the project closed. HexIDE keeps them, stored per
 ### Requirement: Breakpoints SHALL only take effect in code loaded for the run
 A breakpoint SHALL cause a break only when it sits in code loaded into the interpreter for the current run.
 
-A form's run loads its code and the project's standard (`.bas`) and class (`.cls`) modules into the interpreter. UserControl (`.ctl`) and PropertyPage (`.pag`) modules are not loaded as free-standing modules by this path.
+A form's run loads its code and the project's standard (`.bas`) and class (`.cls`) modules into the interpreter. UserControl (`.ctl`) definitions with designer parts are registered as instance templates for placed controls, sharing the program interpreter; their declarations run per placed instance. PropertyPage (`.pag`) modules are not loaded by this path.
 
 #### Scenario: A breakpoint in a standard or class module
 - **WHEN** the developer sets a breakpoint on an executable line in a `.bas` or `.cls` module and the running form calls that code
@@ -58,15 +94,35 @@ A form's run loads its code and the project's standard (`.bas`) and class (`.cls
 ### Requirement: The developer SHALL be able to suspend and resume a running program
 The IDE SHALL let the developer break into a running program, continue from break mode, and end the run from either state.
 
-Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` statement, and left by continuing or ending the run.
+Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` statement, and left by continuing, ending the run, or a step returning from the outermost event handler without another stop.
 
 #### Scenario: Breaking into a running program
 - **WHEN** the developer presses Ctrl+Break, or chooses Run ▸ Break, while the project is running
 - **THEN** the program suspends at the next executed statement and enters break mode
+- **AND** between events it enters break mode immediately with no current statement
+
+#### Scenario: Breaking a DoEvents loop from the IDE
+- **WHEN** a running form has focus and its event handler loops with `DoEvents`
+- **THEN** the Standard and Debug toolbar Break buttons remain enabled
+- **AND** invoking Break suspends execution at the next statement
+- **AND** those controls disable while paused and enable again on Continue
 
 #### Scenario: Continuing from break mode
 - **WHEN** the developer presses F5 while paused
 - **THEN** the program resumes, the current-statement bar clears, the inspection windows blank, and any frozen event handlers are released
+
+#### Scenario: A step returns to event idle
+- **WHEN** Step Into or Step Over runs off the outermost event handler
+- **THEN** break-mode chrome clears and frozen events are released
+- **AND** the step remains armed for the next event's handler declaration, before any statement executes
+- **AND** events raised inside the still-running chain retain its stepping depth rules
+
+#### Scenario: Stepping from idle break mode
+- **WHEN** a program is paused between events with no current statement
+- **THEN** Continue resumes with no step armed
+- **AND** Step Into and Step Over resume with a step armed for the next handler's declaration
+- **AND** stepping from that declaration stops at the first statement with the handler on the call stack
+- **AND** Show Next Statement, Set Next Statement, Step Out, Run To Cursor and Call Stack are disabled until a statement exists
 
 #### Scenario: Ending the run from break mode
 - **WHEN** the developer chooses End while paused
@@ -157,6 +213,32 @@ Locals is the primary inspection surface, showing what is in scope where executi
 - **WHEN** the developer expands an array, a user-defined type, or an object instance
 - **THEN** its elements or fields are shown, guarded against cycles and bounded in depth
 
+#### Scenario: Expanding a control whose property cannot be read
+- **WHEN** the developer expands a control one of whose listed properties raises when read
+- **THEN** that property is listed with the raised error's own description in angle brackets, and the member's declared
+  type where it is measured, as a Timer's is, and otherwise no type
+- **AND** the control's other properties are still listed, and the expansion does not fail
+
+#### Scenario: Expanding a Timer
+- **WHEN** the developer expands a Timer
+- **THEN** it lists VB6's seven rows in VB6's order, `[_Default]`, `Enabled`, `Index`, `Interval`, `Name`, `Parent` and
+  `Tag`, each with the member's declared type, and `Parent` opens to the form
+
+#### Scenario: Expanding a control array
+- **WHEN** the developer expands a control array
+- **THEN** its elements are listed as `Item 1`, `Item 2` and on, in index order, numbered from 1 whatever their Index
+
+#### Scenario: An object's Type column
+- **WHEN** the paused procedure holds `Dim objO As Object` set to a Class1, and `Dim nilC As Class1` never set
+- **THEN** `objO`'s Type reads `Object/Class1`, and `nilC` reads `Nothing` with type `Class1`
+- **AND** an array declared `(1 To 2) As Class1` reads `Class1(1 to 2)`, and its elements follow the same rule
+
+#### Scenario: Expanding a running form's Me
+- **WHEN** the developer expands `Me` on a running form
+- **THEN** its first row is `[_Default]`, reading VB6's "Wrong number of arguments" error with type `Object`
+- **AND** its properties, controls and own variables follow as one list sorted by name, case ignored, and an `Item`
+  row per control ends it, in the order the form's file holds them
+
 ### Requirement: The Immediate window SHALL evaluate expressions against the paused frame
 The Immediate window SHALL evaluate expressions and execute assignments against the paused frame, and SHALL reject calls to user procedures.
 
@@ -179,7 +261,7 @@ The Immediate window is VB6's primary interactive debugging surface. It is a sin
 - **THEN** a message explains that evaluation is only available in break mode
 
 ### Requirement: Editing code during a run SHALL offer VB6's reset prompt
-The IDE SHALL prompt to reset the project when code is edited during a run, because edits cannot be applied to a suspended execution.
+The IDE SHALL prompt to reset the project when code is edited during a run, because edits cannot be applied to a suspended execution. While the prompt waits, the IDE SHALL disable every other desktop window and restore each window's previous enabled state when the prompt finishes.
 
 The interpreter cannot hot-patch a running program: the execution position is a live host call stack, not a re-pointable program counter. Rather than silently diverging, HexIDE surfaces the same prompt VB6 showed whenever it could not apply an edit live — which is both honest and familiar.
 
@@ -192,8 +274,9 @@ The interpreter cannot hot-patch a running program: the execution position is a 
 - **WHEN** the reset prompt is asked while the code window's own window is visible and not minimized
 - **THEN** the prompt is modal over that window, which it disables until answered
 - **AND** when that window is minimized, the prompt is modal over the top window instead, which may be the running form
-- **AND** in VB6 the running form owns the prompt and every window of the IDE and the program is disabled; the
-  difference is recorded as D2 in `docs/debugger-vb6-divergences.md`
+- **AND** all other desktop windows, including the IDE and running forms, are disabled until the prompt finishes
+- **AND** a window that was already disabled remains disabled afterwards
+- **AND** ownership still differs from VB6, as recorded in D2 in `docs/debugger-vb6-divergences.md`
 
 ### Requirement: The debugger SHALL expose the VB6 default keyboard gestures
 The default keymap SHALL bind the VB6 debugging gestures without requiring an opt-in keymap pack.
@@ -203,6 +286,34 @@ The debug keymap is the deepest layer of VB6 muscle memory and is bound by defau
 #### Scenario: Using the VB6 debug keys
 - **WHEN** the developer uses the default keymap
 - **THEN** F5 starts or continues, Shift+F5 restarts, Ctrl+Break breaks, F8 steps into, Shift+F8 steps over, Ctrl+Shift+F8 steps out, Ctrl+F8 runs to cursor, F9 toggles a breakpoint, Ctrl+Shift+F9 clears all breakpoints, Ctrl+F9 sets the next statement, Shift+F9 opens Quick Watch, Ctrl+W edits a watch, Ctrl+G opens the Immediate window, and Ctrl+L opens the Call Stack
+
+### Requirement: Debug command enablement follows the handler guards
+The shared routed Debug commands SHALL follow their handler guards: Toggle Breakpoint and Run To Cursor require a code window; Edit Watch requires a selected watch. Without an active external debugger, Set Next Statement SHALL require a code window and a current interpreter stop, and Show Next Statement SHALL require a current stop. Both commands SHALL retain their existing enablement during an active external debugger session.
+
+#### Scenario: Changing the active document
+- **WHEN** the active document changes between a code window and another document or no document
+- **THEN** Toggle Breakpoint, Run To Cursor and Set Next Statement refresh their enablement
+
+#### Scenario: Setting the next statement in design mode
+- **WHEN** a code window is active without a paused interpreter or an active external debugger
+- **THEN** Set Next Statement is disabled
+
+#### Scenario: Entering or leaving a debugger stop
+- **WHEN** the debug controller raises Stopped or Continued (including reset)
+- **THEN** Set Next Statement and Show Next Statement refresh their enablement from the current stop
+
+#### Scenario: Changing watch selection without changing focus
+- **WHEN** a watch row is selected or selection is cleared, including when the rows are rebuilt
+- **THEN** Edit Watch refreshes its enablement without requiring a focus change
+
+### Requirement: Set Next Statement is scoped to the running project
+The interpreter's Set Next Statement menu handler SHALL refuse a document outside the running project,
+or a request with no running project, before passing its module name to the debug controller. Refusal
+SHALL display the localized Set Next Statement refusal message.
+
+#### Scenario: Another project's same-named module
+- **WHEN** the interpreter is paused and the active code window belongs to another project with the same module name
+- **THEN** Set Next Statement refuses the move and leaves the execution point unchanged
 
 ### Requirement: The debugger SHALL be drivable by automation
 The debugger SHALL expose an automation surface mirroring the IDE debug commands.
@@ -239,9 +350,56 @@ Watches persist an expression across breaks, so the developer does not re-type i
 - **WHEN** the developer chooses Debug ▸ Add Watch, or presses Shift+F9 with the caret on an identifier
 - **THEN** the Add Watch dialog opens, pre-filled with that identifier where one was under the caret
 
+#### Scenario: Choosing a watch context
+- **WHEN** the developer adds or edits an interpreter watch
+- **THEN** the dialog SHALL offer the project's code modules in project order and the selected module's collected procedures, preceded by `(All Procedures)`
+- **AND** changing Module SHALL refill Procedure
+- **AND** OK SHALL store `Module` for `(All Procedures)` or `Module.Procedure` for a chosen procedure, displayed verbatim in the Watches Context column
+- **AND** Edit Watch SHALL initially select and retain its stored choice, including a stored procedure the collected list does not name
+
+#### Scenario: Procedure lists without server symbols
+- **WHEN** Add Watch collects the project's procedure choices
+- **THEN** an open code window SHALL supply its outline symbols, or its current text if the outline is empty
+- **AND** an unopened module SHALL supply declarations from its loaded code without a server request
+- **AND** each Property accessor SHALL be an entry of its own, written `Name(Get)`, `Name(Let)` or `Name(Set)` as VB6 writes it, and the list SHALL be sorted rather than in source order (measured, #4401)
+- **AND** a watch stored as `Module.Name(Get)` SHALL evaluate only while that accessor runs, reading `<Out of context>` while another accessor of the same property runs (measured, #4401)
+- **AND** the shared VB-family collector SHALL collect Sub, Function, Property Get/Let/Set, Enum and Type headers without binding names or selecting conditional-compilation branches
+
+#### Scenario: A watch on (All Modules)
+- **WHEN** the developer opens Add Watch
+- **THEN** the Module list SHALL start with `(All Modules)`, which offers `(All Procedures)` alone, and SHALL default to it when no code window is active and no program is paused (measured, #4452)
+- **AND** a watch added there SHALL show a blank Context column
+- **AND** while paused it SHALL evaluate against the project's Public module-level names only, so a module's Private variable, a class's Private variable or a procedure's local SHALL read `<Expression not defined in context>`, even where the program is paused in its scope (measured, #4452)
+- **AND** that text SHALL come from a name missing as the expression is evaluated, never from checking its names up front
+- **AND** outside break mode it SHALL read `<Out of context>`, as every watch does, where VB6 evaluates it (divergence D34)
+
+#### Scenario: Adding a watch from declarations
+- **WHEN** the active code window's caret is in the module's declarations
+- **THEN** Add Watch SHALL default to that module and `(All Procedures)` ([measured context](../../../docs/vb6-fidelity-oracle/a-watch-and-its-context.md), #4354)
+- **AND** with the caret inside a procedure, or no active code window, a paused program SHALL give the paused frame's `Module.Procedure` whole, which is unmeasured and retains the earlier choice
+- **AND** otherwise the unmeasured fallback SHALL choose the active module, then the project's first code module, with `(All Procedures)`
+- **AND** existing bare `(All Procedures)` watch contexts SHALL retain their existing behaviour
+- **AND** an external session's watch dialog SHALL stay expression-only, showing the selected frame's context as fixed text
+
+#### Scenario: Localizing a watch context
+- **WHEN** the IDE language changes
+- **THEN** the all-procedures context label SHALL refresh in existing Watches rows and the Add/Edit Watch dialog
+- **AND** named module/procedure contexts SHALL remain unchanged
+
 #### Scenario: Watching a value across breaks
 - **WHEN** an expression watch exists and the program breaks
 - **THEN** its current value is displayed, expandable in the same way as Locals
+
+#### Scenario: Evaluating a stored watch context while paused
+- **WHEN** an expression watch names the paused module or one of its procedures
+- **THEN** a module-scoped watch SHALL exclude procedure locals
+- **AND** a procedure-scoped watch SHALL read that procedure's frame anywhere on the call stack
+- **AND** an undefined module-scoped name SHALL display `<Expression not defined in context>` with type `Empty`
+- **AND** a procedure that has returned SHALL display `<Out of context>` with type `Empty`
+
+#### Scenario: Inactive watch types
+- **WHEN** an interpreter watch is displayed at design time or after End
+- **THEN** its Type column SHALL show `Empty`
 
 #### Scenario: Selecting an expanded watch child
 - **WHEN** the developer selects a child of an expanded watch after selecting another watch
@@ -260,6 +418,12 @@ The call stack answers "how did execution get here", which Locals alone cannot.
 #### Scenario: Viewing the call stack while paused
 - **WHEN** the developer presses Ctrl+L while paused
 - **THEN** the Call Stack window lists the active procedure activations, deepest first, each with its name and current line
+
+#### Scenario: Showing a caller
+- **WHEN** the developer selects or double-clicks a caller in the built-in Call Stack window
+- **THEN** the code window opens that module at the calling statement with a green call-site triangle
+- **AND** the current execution statement stays unchanged
+- **AND** the call-site marker clears on continuing or the next break
 
 #### Scenario: A concurrent event frozen above the paused frame
 - **WHEN** an event handler was frozen by break mode after the paused frame began
@@ -345,3 +509,45 @@ The IDE SHALL show localized design, run and break title tags, with break select
 - **THEN** the title shows the break tag and the running status message is cleared
 - **WHEN** execution continues
 - **THEN** the title shows the run tag and the running status message returns
+
+### Requirement: Procedure boundary stop positions
+
+The interpreter debugger SHALL honour breakpoints on Sub declarations before
+executing their bodies, and on Sub, Function and Property Get natural End lines after the last statement and before returning.
+A step from the last statement of a called Sub or Function SHALL stop on its End line; the following step
+SHALL reach the caller's next line. These positions retain the callee's frame until return (#2172).
+Entry procedures SHALL retain breakpoint-only End positions, so startup stepping advances from
+Initialize's last statement into Load's first statement.
+
+#### Scenario: Break on a procedure's natural End line
+- **WHEN** a procedure finishes its last statement with a breakpoint on its End line
+- **THEN** execution pauses on that line before the caller continues
+- **AND** the call stack still contains the callee
+
+#### Scenario: Step from a Function's last statement
+- **WHEN** Step Over runs the Function's last statement
+- **THEN** execution pauses on End Function
+- **AND** the next Step Over pauses on the caller's next line
+
+#### Scenario: Step through form startup
+- **WHEN** Step Into from design mode starts a form with Form_Initialize
+- **THEN** execution pauses on Initialize's first statement
+- **AND** a step from its last statement pauses on Load's first statement
+- **WHEN** the form has no Form_Initialize
+- **THEN** the initial step pauses on Load's first statement
+
+### Requirement: A made program surfaces fatal errors
+The standalone host SHALL apply the same event boundary when deciding whether a run-time error is unhandled. It SHALL
+show a warning box titled with the program's name, containing the run-time error number and description, with OK only.
+Nothing in the program, including Timers, SHALL run behind it. Dismissal SHALL exit the process without QueryUnload,
+Unload or Terminate. Compile errors and faults SHALL also be reported; an unimplemented construct SHALL be identified
+as such and an engine fault SHALL report Internal error (51).
+
+#### Scenario: A sink fails in a made program
+- **WHEN** a RaiseEvent sink leaves a run-time error unhandled
+- **THEN** the warning box appears before any handler in the raiser can catch it
+- **AND** dismissal exits the program without running that handler or unload and terminate events
+
+#### Scenario: Startup or event failure
+- **WHEN** Sub Main or an event procedure leaves a run-time error unhandled
+- **THEN** the host shows the fatal warning and holds execution until dismissal

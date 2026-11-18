@@ -76,6 +76,34 @@ public class OptionsViewModelTests
     private static AddinOptionsPageViewModel Addin(OptionsViewModel sut, string title)
         => Flatten(sut.RootNodes).Select(n => n.Page).OfType<AddinOptionsPageViewModel>().First(p => p.Title == title);
 
+    [AvaloniaFact]
+    [Trait("Issue", "4307")]
+    public async Task AddinPagesReceiveOnlyTheServersOfTheirManifestId()
+    {
+        var first = _addinA with { Id = "first", Title = "Same title" };
+        var second = _addinB with { Id = "second", Title = "Same title" };
+        _addinRegistry.GetAll().Returns([first, second]);
+        await using var router = new HexIDE.Lsp.LspClientRegistry([],
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<HexIDE.Lsp.LspClientRegistry>.Instance);
+        var contributions = new HexIDE.Lsp.LanguageServerContributions(_settings, router,
+            new HexIDE.Lsp.LanguageServerRegistrationFactory(Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance),
+            new HexIDE.Lsp.LanguageServerConfigLoader(Microsoft.Extensions.Logging.Abstractions.NullLogger<HexIDE.Lsp.LanguageServerConfigLoader>.Instance),
+            new HashSet<string>(StringComparer.Ordinal),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<HexIDE.Lsp.LanguageServerContributions>.Instance);
+        await using var connection = contributions.Register(new AddinLanguageServer(new HexIDE.Lsp.LanguageServerEntry
+        {
+            Id = "example", DisplayName = "Example server", Extensions = [".example"], LanguageId = "example",
+            Transport = "stdio", Command = "example-server",
+        }), "Same title");
+        _addinOptions.TrackServer("first", "Example server", connection);
+        var sut = CreateSut();
+        var pages = Flatten(sut.RootNodes).Select(node => node.Page).OfType<AddinOptionsPageViewModel>().ToList();
+        pages.Should().HaveCount(2);
+        pages[0].Servers.Should().ContainSingle().Which.Name.Should().Be("Example server");
+        pages[1].Servers.Should().BeEmpty();
+        sut.CancelCommand.Execute(null);
+    }
+
     // ── Tree / navigation ───────────────────────────────────────
 
     [AvaloniaFact]
@@ -87,7 +115,7 @@ public class OptionsViewModelTests
         // server's transport became a property of its entry in the configuration file (#255). An empty
         // group is worse than no group.
         sut.RootNodes.Select(n => n.Title)
-            .Should().Equal("Environment", "Editor", "Form Designer", "Add-Ins");
+            .Should().Equal("Environment", "Editor", "Form Designer", "Workspace files", "Add-Ins");
     }
 
     [AvaloniaFact]
@@ -99,6 +127,8 @@ public class OptionsViewModelTests
         _localization.Apply("fr");   // e.g. the in-dialog Language page previews French live
 
         sut.RootNodes[0].Title.Should().Be("Environnement");
+        sut.RootNodes.Single(n => n.Page is WorkspaceArtifactPageViewModel).Title
+            .Should().Be(_localization.GetString("Str.LspArtifact.Title"));
     }
 
     [AvaloniaFact]
@@ -143,7 +173,8 @@ public class OptionsViewModelTests
 
         sut.SelectedNode.Should().BeSameAs(sut.RootNodes.Single(n => n.Key == "Str.Options.Node.AddIns"));
         sut.SelectedNode!.IsExpanded.Should().BeTrue();
-        sut.CurrentPage.Should().BeNull();
+        var overview = sut.CurrentPage.Should().BeOfType<AddinsOverviewPageViewModel>().Subject;
+        overview.Addins.Should().Equal(installed ? new[] { _addinA, _addinB } : []);
         sut.CanRestorePageDefaults.Should().BeFalse();
     }
 
@@ -457,7 +488,8 @@ public class OptionsViewModelTests
         group.Children.Should().ContainSingle();
         sut.SelectedNode = group.Children[0];
         sut.SelectedNode.Title.Should().Be("(no add-ins installed)");
-        sut.CurrentPage.Should().BeNull();
+        sut.CurrentPage.Should().BeSameAs(group.Page);
+        sut.CurrentPage.Should().BeOfType<AddinsOverviewPageViewModel>().Subject.Addins.Should().BeEmpty();
         sut.CanRestorePageDefaults.Should().BeFalse();
     }
 
@@ -528,5 +560,26 @@ public class OptionsViewModelTests
     {
         // default add-ins A and B have no contributed pages registered
         Addin(CreateSut(), "Add-in A").HasContributedContent.Should().BeFalse();
+    }
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Addin_pages_share_the_dialog_language_and_unsubscribe_on_close(bool accept)
+    {
+        _addinRegistry.GetAll().Returns([_addinA with { Title = "" }]);
+        var sut = CreateSut();
+        var node = Flatten(sut.RootNodes).Single(n => n.Page is AddinOptionsPageViewModel);
+        var page = (AddinOptionsPageViewModel)node.Page!;
+        var changed = new List<string?>();
+        page.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+        _localization.Apply("de");
+        page.ToggleLabel.Should().Be(_localization.GetString("Str.Options.Addin.Deactivate"));
+        node.Title.Should().Be(_localization.GetString("Str.Options.Addin.Unnamed"));
+        changed.Should().Contain("ToggleLabel");
+        if (accept) sut.OkCommand.Execute(null);
+        else sut.CancelCommand.Execute(null);
+        changed.Clear();
+        _localization.Apply("pseudo");
+        changed.Should().BeEmpty();
     }
 }

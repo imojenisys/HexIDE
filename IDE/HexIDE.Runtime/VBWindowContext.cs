@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Avalonia.Controls;
+using Avalonia.LogicalTree;
+using HexIDE.Runtime.AvaloniaInterop;
 using System.Threading.Tasks;
 using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Interpreter;
@@ -22,9 +26,14 @@ public class VBWindowContext : IModuleExecutionRoot
     internal void CloseFiles() => interpreter?.BuiltIns.Files.CloseAll();
     private VbObject? instance;
     private bool formDeclarationsRun;
+    internal ProjectElements.FormDefinition? FormDefinition { get; set; }
+    private bool handlersChecked;
+
     // Set once StartAsync begins. A started form's declarations run there and nowhere else, so an event can never run
     // them late, after Load has used the variables they would re-create (#1010 review).
     private bool started;
+    private bool controlsStarted;
+    private bool controlsShown;
 
     public ModuleExecutionContext ExecutionContext { get; private set; } = new();
 
@@ -91,7 +100,7 @@ public class VBWindowContext : IModuleExecutionRoot
     /// <param name="classModules">
     /// The project's class modules, so <c>New SomeClass</c> resolves from a form.
     /// </param>
-    public void SetCode(string code, string moduleName = "Module1", Debugging.IDebugController? debugController = null,
+    public void SetCode(string code, string moduleName = "Module1", Debugging.IDebugGate? debugController = null,
         Interpreter.AppInfo? appInfo = null,
         IReadOnlyList<(string Name, string Code)>? additionalModules = null,
         IReadOnlyList<(string Name, string Code)>? classModules = null)
@@ -105,6 +114,7 @@ public class VBWindowContext : IModuleExecutionRoot
         };
         instance = null;
         formDeclarationsRun = false;
+        handlersChecked = false;
         // What `App` reports. Null means no project behind this run (a bare context), and App then reports
         // empty rather than inventing an identity.
         if (appInfo is not null)
@@ -119,7 +129,7 @@ public class VBWindowContext : IModuleExecutionRoot
     internal BasicInterpreter? Interpreter => interpreter;
 
     /// <summary>Whether this context belongs to the named run, for hosts listening to static runtime events.</summary>
-    public bool IsInDebugSession(Debugging.IDebugController controller, int session)
+    public bool IsInDebugSession(Debugging.IDebugGate controller, int session)
         => interpreter?.IsInDebugSession(controller, session) == true;
 
     /// <summary>The running form, an instance of the form module (#822), or null before <see cref="SetCode"/>.</summary>
@@ -168,6 +178,14 @@ public class VBWindowContext : IModuleExecutionRoot
             existing.FormWindow = Window;
     }
 
+    internal void AttachControl(VBProgram program, ModuleInfo module)
+    {
+        Attach(program, module, "", new VbObject(module, module.ModuleEnv.Clone()) { FormLoaded = true, Interpreter = program.Interpreter });
+        formDeclarationsRun = false;
+        started = false;
+        program.Interpreter.AddRef(Vb6Value.NewObject(instance!));
+    }
+
     /// <summary>
     /// Make the instance's start before its load (#822): the modules' declarations, the form's own, then
     /// <c>Form_Initialize</c>, inside the walk that first used the form's name, as VB6 runs it (measured). An error in
@@ -194,7 +212,121 @@ public class VBWindowContext : IModuleExecutionRoot
         form.FormUnloaded = false;
         ExecutionContext.State.ClearPendingControls(form);
         Program?.Loaded(this);
-        await Report(() => interpreter!.RaiseFormEvent(form, "Form_Load"));
+        // A UserControl's Initialize, ReadProperties and Resize are reported as any event's fault is (#4266).
+        if (await Report(StartControls) == Outcome.Over)
+            return;
+        await Report(() => RaiseLoad(form));
+    }
+
+    internal bool Loading { get; private set; }
+
+    private async Task RaiseLoad(VbObject form)
+    {
+        Loading = true;
+        try
+        {
+            await interpreter!.RaiseFormEvent(form, "Form_Load");
+        }
+        finally
+        {
+            Loading = false;
+        }
+    }
+
+    private bool initiallyFocused;
+
+    internal void FocusFirstControl()
+    {
+        if (initiallyFocused || Window is null)
+            return;
+        initiallyFocused = true;
+        // The first eligible tab stop takes the focus after Activate, including a Show inside Load (#2436).
+        Window.GetLogicalDescendants().OfType<Control>()
+            .Where(c => TabOrder.HasTabStop(c) && TabOrder.GetTabStop(c)
+                && c is { Focusable: true, IsEffectivelyVisible: true, IsEffectivelyEnabled: true })
+            .OrderBy(TabOrder.Get).FirstOrDefault()?.Focus();
+    }
+
+    private bool formFocused;
+
+    internal void FocusFormWithoutControl()
+    {
+        if (Window is null || Window.GetLogicalDescendants().OfType<Control>().Any(c =>
+                c is { Focusable: true, IsEffectivelyVisible: true, IsEffectivelyEnabled: true }
+                && FormControls.TryOf(c, out _)))
+            return;
+        formFocused = true;
+        ExecuteSub("Form_GotFocus");
+    }
+
+    internal void BlurForm()
+    {
+        if (!formFocused)
+            return;
+        formFocused = false;
+        ExecuteSub("Form_LostFocus");
+    }
+
+    internal async Task ControlEvent(string name, IReadOnlyList<Vb6Value>? args = null)
+    {
+        await EnsureDeclarations();
+        await interpreter!.RaiseFormEvent(EnsureInstance(), name, args);
+    }
+
+    // The event is measured; PropertyBag operations are not part of #1631 and remain explicitly refused.
+    internal sealed class UnimplementedPropertyBag : ICSharpProxy, ICSharpPropertyBag
+    {
+        public void Call(string method, List<Vb6Value> args) => throw new NotImplementedException($"PropertyBag.{method}");
+        public bool TryGetProperty(string name, out Vb6Value value) => throw new NotImplementedException($"PropertyBag.{name}");
+        public bool TrySetProperty(string name, Vb6Value value) => throw new NotImplementedException($"PropertyBag.{name}");
+    }
+
+    private IEnumerable<VBUserControl> UserControls => EnsureInstance().Controls?.All.OfType<VBUserControl>()
+        .OrderBy(AvaloniaInterop.UserControlMembers.Windowless) ?? Enumerable.Empty<VBUserControl>();
+
+    // Keep each array in index order, including elements loaded out of order, without reordering other controls.
+    private IEnumerable<VBUserControl> OrderedUserControls => UserControls
+        .GroupBy(c => ControlArrayGroup.TryGetArrayOf(c, out var group) ? (object)group : c)
+        .SelectMany(group => group.OrderBy(VBProps.GetIndex));
+
+    private async Task StartControls()
+    {
+        if (controlsStarted)
+            return;
+        controlsStarted = true;
+        foreach (var control in UserControls)
+        {
+            if (control.Context is not { } context)
+                continue;
+            await context.ControlEvent("UserControl_Initialize");
+            await context.ControlEvent("UserControl_ReadProperties", [new Vb6Value(new UnimplementedPropertyBag())]);
+            if (!AvaloniaInterop.UserControlMembers.Invisible(control))
+                await context.ControlEvent("UserControl_Resize");
+        }
+    }
+
+    internal void ShowControls()
+    {
+        if (controlsShown)
+            return;
+        controlsShown = true;
+        foreach (var control in OrderedUserControls)
+            if ((!control.LoadedAtRunTime || control.IsVisible) && !AvaloniaInterop.UserControlMembers.Invisible(control))
+                control.ExecuteSub("UserControl_Show");
+    }
+
+    private async Task StopControls()
+    {
+        foreach (var control in OrderedUserControls)
+        {
+            if (control.Context is not { } context)
+                continue;
+            if (!AvaloniaInterop.UserControlMembers.Invisible(control))
+                await context.ControlEvent("UserControl_Hide");
+            await context.ControlEvent("UserControl_Terminate");
+        }
+        controlsStarted = false;
+        controlsShown = false;
     }
 
     // Whether the window has been shown since the form loaded, and its extent when Resize was last raised (#994).
@@ -209,8 +341,9 @@ public class VBWindowContext : IModuleExecutionRoot
     /// </summary>
     public void Shown()
     {
-        if (shownSinceLoad || instance is not { FormLoaded: true } || Window is not IFormView view)
+        if (shownSinceLoad || instance is not { FormLoaded: true } || FormRoot.View(Window) is not { } view)
             return;
+        ShowControls();
         shownSinceLoad = true;
         resizedAt = view.Extent;
         ExecuteSub("Form_Resize");
@@ -223,15 +356,20 @@ public class VBWindowContext : IModuleExecutionRoot
     /// A size setter also reports while hidden (#1570), inside the assignment; Show still raises its own Resize.
     /// And a Move to the size the form has raises none in VB6 (measured).
     /// </summary>
-    public void WindowResized(bool sizeSet = false)
+    public void WindowResized(bool sizeSet = false, bool paintGrowth = false)
     {
-        if ((!shownSinceLoad && !sizeSet) || instance is not { FormLoaded: true } || Window is not IFormView view)
+        if ((!shownSinceLoad && !sizeSet) || instance is not { FormLoaded: true } || FormRoot.View(Window) is not { } view)
             return;
         var now = view.Extent;
         if (now == resizedAt)
             return;
+        // Mixed growth and shrinkage was not measured; keep its existing lack of Paint (#2389).
+        var grew = now.Size.Width >= resizedAt.Size.Width && now.Size.Height >= resizedAt.Size.Height
+            && (now.Size.Width > resizedAt.Size.Width || now.Size.Height > resizedAt.Size.Height);
         resizedAt = now;
         ExecuteSub("Form_Resize");
+        if (paintGrowth && grew)
+            ExecuteSub("Form_Paint");
     }
 
     /// <summary>Run the form's Terminate, as the program does at its end for a form whose instance it still holds.</summary>
@@ -309,6 +447,7 @@ public class VBWindowContext : IModuleExecutionRoot
             unloading = false;
         }
         form.FormLoaded = false;
+        await StopControls();
         form.FormUnloaded = true;
         HoldControls(form);
         if (Window is not null)
@@ -369,7 +508,7 @@ public class VBWindowContext : IModuleExecutionRoot
             return false;
         // Held by a modal form, the close box is refused, as VB6's disabled window ignores a click on it: nothing is
         // raised, the window stays, and the modal form comes forward (#822).
-        if (Window is IFormView { HeldBy: { } modal })
+        if (FormRoot.View(Window) is { HeldBy: { } modal })
         {
             modal.ActivateForm();
             return true;
@@ -420,6 +559,8 @@ public class VBWindowContext : IModuleExecutionRoot
         // The start holds the gate as any handler does, so an event that comes during Load waits for it (#766).
         return await Events.Run("Form_Load", async () =>
         {
+            var session = interpreter.DebugController?.Session;
+            interpreter.DebugController?.NotifyDispatchStarted();
             try
             {
                 if (await Report(EnsureDeclarations) != Outcome.Completed)
@@ -433,7 +574,10 @@ public class VBWindowContext : IModuleExecutionRoot
                     form.FormLoaded = true;
                     ExecutionContext.State.ClearPendingControls(form);
                     Program?.Loaded(this);
-                    if (await Report(() => interpreter.RaiseFormEvent(form, "Form_Load")) == Outcome.Over)
+                    // Unreported, a refusal in a UserControl's ReadProperties ended the run with nothing said (#4266).
+                    if (await Report(StartControls) == Outcome.Over || RunIsOver())
+                        return false;
+                    if (await Report(() => RaiseLoad(form)) == Outcome.Over)
                         return false;
                 }
                 // A form that unloaded itself in Load, as `Unload Me` there does, is not shown (measured, #1046 review).
@@ -441,7 +585,8 @@ public class VBWindowContext : IModuleExecutionRoot
             }
             finally
             {
-                interpreter.DebugController?.NotifyDispatchIdle();
+                if (interpreter.DebugController?.Session == session)
+                    interpreter.DebugController?.NotifyDispatchIdle();
             }
         });
     }
@@ -450,6 +595,7 @@ public class VBWindowContext : IModuleExecutionRoot
 
     private async Task EnsureDeclarations()
     {
+        CheckControlHandlers();
         await interpreter!.RunModuleDeclarations();
         if (formDeclarationsRun)
             return;
@@ -457,11 +603,92 @@ public class VBWindowContext : IModuleExecutionRoot
         await interpreter.RunFormDeclarations(EnsureInstance());
     }
 
+    // Checked on entry to this form, before declarations or Initialize, on both startup paths (#4205).
+    private void CheckControlHandlers()
+    {
+        if (handlersChecked || FormDefinition is null)
+            return;
+        var module = EnsureInstance().ClassDef;
+        foreach (var component in FormDefinition.Components)
+        {
+            if (component.BaseClass is Components.FormComponentClass)
+                continue;
+            var name = component.GetPropertyOrDefault(Components.VBProperties.NameProperty);
+            foreach (var ev in component.BaseClass.Events)
+            {
+                if (!module.PrePass.Procedures.TryGetValue($"{name}_{ev.Name}", out var procedure) || procedure.IsFunction)
+                    continue;
+                var element = component.IsControlArrayElement;
+                var parameters = procedure.Parameters;
+                if (parameters.Count == ev.Arguments.Length + (element ? 1 : 0)
+                    && (!element || parameters[0].DeclaredType == Vb6Value.ValueType.Integer && parameters[0].ByRef))
+                    continue;
+                var line = procedure.Declaration?.Start.Line ?? 1;
+                var error = new VBCompileErrorException(
+                    "Procedure declaration does not match description of event or procedure having the same name") { Line = line };
+                HexIDE.IDE.ErrorLocation.Note(error, module.Name, line);
+                Log.Error("Event procedure {Procedure} in {Module}, line {Line}: {Message}", procedure.Name, module.Name, line, error.Message);
+                throw error;
+            }
+        }
+        handlersChecked = true;
+    }
+
+    public void ExecuteKeyboardEvent(string name, IReadOnlyList<Vb6Value> args, int writable, Action<int> completed)
+    {
+        Events.Raise(name, async () =>
+        {
+            if (interpreter is null || RunIsOver() || EnsureInstance().FormUnloaded)
+                return;
+            await Dispatch(async () =>
+            {
+                if (!started)
+                    await EnsureDeclarations();
+                var state = ExecutionContext.State;
+                var slot = state.Alloc(args[writable]);
+                var callArgs = new List<CallArg>();
+                for (var i = 0; i < args.Count; i++)
+                    callArgs.Add(new CallArg(args[i], i == writable ? slot : null));
+                await interpreter.RaiseFormEvent(EnsureInstance(), name, callArgs);
+                completed(Convert.ToInt32(state[slot].Value));
+            });
+        });
+    }
+
+    public async Task ExecuteEditEventAsync(string name, IList<Vb6Value> args)
+    {
+        if (interpreter is null) return;
+        await Events.Run(name, async () =>
+        {
+            var form = EnsureInstance();
+            if (RunIsOver() || form.FormUnloaded) return false;
+            return await Dispatch(async () =>
+            {
+                if (!started) await EnsureDeclarations();
+                var callArgs = new List<CallArg>();
+                for (var i = 0; i < args.Count; i++)
+                    callArgs.Add(new CallArg(args[i], null, new EditArgument(args, i)));
+                await interpreter.RaiseFormEvent(form, name, callArgs);
+            });
+        });
+    }
+
+    private sealed record EditArgument(IList<Vb6Value> Arguments, int Index) : IByRefTarget
+    {
+        public Vb6Value.ValueType? DeclaredType => Arguments[Index].Type;
+        public bool IsVariant => false;
+        public Vb6Value Read() => Arguments[Index];
+        public void Write(Vb6Value value) => Arguments[Index] = value;
+    }
+
     public void ExecuteSub(string name, IReadOnlyList<Vb6Value>? args = null)
     {
         var argList = args is null ? null : new List<Vb6Value>(args);
         Raise(name, () => argList);
     }
+
+    public void ExecuteEventByRef(string name, IReadOnlyList<Vb6Value> args, int byRefIndex, Action<Vb6Value> completed) =>
+        Raise(name, () => args, byRefIndex: byRefIndex, completed: completed);
 
     /// <inheritdoc/>
     public void ExecuteSubIf(string name, IReadOnlyList<Vb6Value>? args, Func<bool> when)
@@ -471,8 +698,43 @@ public class VBWindowContext : IModuleExecutionRoot
     }
 
     /// <inheritdoc/>
-    public void ExecuteEvent(string name, Func<IReadOnlyList<Vb6Value>> args, EventCoalescing coalescing = EventCoalescing.None) =>
-        Raise(name, args, coalescing);
+    public void ExecuteEvent(string name, Func<IReadOnlyList<Vb6Value>> args, EventCoalescing coalescing = EventCoalescing.None, Func<bool>? when = null) =>
+        Raise(name, args, coalescing, when: when);
+
+    public async Task<int> CompareRowsAsync(string name, int row1, int row2, int cmp)
+    {
+        if (!Handles(name)) return cmp;
+        if (!started) await EnsureDeclarations();
+        var state = ExecutionContext.State;
+        var argument = new Vb6Value(cmp);
+        var result = state.Alloc(argument, Vb6Value.ValueType.Integer);
+        state.RefuseUntilAssigned(result, "MSFlexGrid.Compare initial Cmp is not implemented (#1099)");
+        // A sort raises Compare n log n times, so the slot is freed after each one rather than left for the run.
+        try
+        {
+            await interpreter!.RaiseFormEvent(EnsureInstance(), name, new List<CallArg>
+            {
+                new(new Vb6Value(row1), null),
+                new(new Vb6Value(row2), null),
+                new(argument, result),
+            });
+            return state[result].Value switch
+            {
+                short n => n,
+                int n => n,
+                _ => throw new NotImplementedException("MSFlexGrid.Compare Cmp conversion is not implemented (#1099)"),
+            };
+        }
+        finally { state.Free(result); }
+    }
+
+    public async Task ExecuteControlEventAsync(string name, IReadOnlyList<CallArg> args)
+    {
+        if (interpreter is null)
+            return;
+        await EnsureDeclarations();
+        await interpreter.RaiseFormEvent(EnsureInstance(), name, args);
+    }
 
     /// <inheritdoc/>
     public bool Handles(string name) => interpreter is not null && EnsureInstance().ClassDef.PrePass.Procedures.ContainsKey(name);
@@ -486,8 +748,31 @@ public class VBWindowContext : IModuleExecutionRoot
         Raise(name, () => argList, EventCoalescing.Timer, key);
     }
 
+    // Input the control cannot implement must use the run's fault boundary, even without an event handler (#1099).
+    internal void RefuseInput(NotImplementedException error) =>
+        Events.Raise("Input", async () => { await Report(() => Task.FromException(error)); });
+
+    internal void ExecuteControlInput(string name, Func<Task> work)
+    {
+        if (interpreter is null)
+            return;
+        Events.Raise(name, async () =>
+        {
+            var form = EnsureInstance();
+            if (RunIsOver() || form.FormUnloaded || Program is not null && !form.FormLoaded)
+                return;
+            await Dispatch(async () =>
+            {
+                if (!started)
+                    await EnsureDeclarations();
+                await work();
+            });
+        });
+    }
+
     private void Raise(string name, Func<IReadOnlyList<Vb6Value>?> args,
-        EventCoalescing coalescing = EventCoalescing.None, string? key = null, Func<bool>? when = null)
+        EventCoalescing coalescing = EventCoalescing.None, string? key = null, Func<bool>? when = null,
+        int? byRefIndex = null, Action<Vb6Value>? completed = null)
     {
         // An event raised before SetCode has no code to run, as when a form's controls fail to build and the
         // run is abandoned half way. It used to reach here anyway and log a NullReferenceException after the
@@ -495,6 +780,8 @@ public class VBWindowContext : IModuleExecutionRoot
         if (interpreter is null)
             return;
         var form = EnsureInstance();
+        if (!form.ClassDef.PrePass.Procedures.ContainsKey(name))
+            return;
         // The event is the form's: its own procedure of that name, run on its instance (#822). A context that was never
         // started, as a test's is, runs the declarations first; a started one ran them in StartAsync. The arguments are
         // worked out inside the dispatch, so one HexIDE can't work out is refused as the run's error (#974).
@@ -511,7 +798,23 @@ public class VBWindowContext : IModuleExecutionRoot
             {
                 if (!started)
                     await EnsureDeclarations();
-                await interpreter.RaiseFormEvent(form, name, args());
+                var values = args();
+                if (byRefIndex is not { } index)
+                    await interpreter.RaiseFormEvent(form, name, values);
+                else
+                {
+                    var state = ExecutionContext.State;
+                    var slot = state.Alloc(values![index]);
+                    try
+                    {
+                        var callArgs = new List<CallArg>();
+                        for (var i = 0; i < values.Count; i++)
+                            callArgs.Add(new CallArg(values[i], i == index ? slot : null));
+                        await interpreter.RaiseFormEvent(form, name, callArgs);
+                        completed!(state[slot]);
+                    }
+                    finally { state.Free(slot); }
+                }
             });
         }
 
@@ -526,6 +829,8 @@ public class VBWindowContext : IModuleExecutionRoot
         Events.Raise(key ?? name, Work, coalescing);
     }
 
+    internal Task DispatchInput(Func<Task> work) => Dispatch(work);
+
     // How a piece of a dispatch ended: it finished; it stopped on a run-time or compile error, which was reported and
     // leaves the run going (D22, D23); or the run is over, after a fault, a cancellation, or the debugger's Stop.
     private enum Outcome { Completed, Reported, Over }
@@ -534,17 +839,16 @@ public class VBWindowContext : IModuleExecutionRoot
     // run carries on afterwards.
     private async Task<bool> Dispatch(Func<Task> work)
     {
+        var session = interpreter?.DebugController?.Session;
+        interpreter?.DebugController?.NotifyDispatchStarted();
         try
         {
             return await Report(work) != Outcome.Over;
         }
         finally
         {
-            // Event-dispatch boundary: this handler chain has returned (or aborted). Disarm any step the
-            // front-end armed but never consumed, so a leftover Step Into/Over/Out can't spuriously break the
-            // NEXT event handler. A no-op unless a step is armed and the controller is Running. (Module top-level
-            // execution — the headless test path — never routes through here, so its stepping is unaffected.)
-            interpreter?.DebugController?.NotifyDispatchIdle();
+            if (interpreter?.DebugController?.Session == session)
+                interpreter?.DebugController?.NotifyDispatchIdle();
         }
     }
 

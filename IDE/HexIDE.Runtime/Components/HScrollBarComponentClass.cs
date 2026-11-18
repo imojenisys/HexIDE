@@ -10,6 +10,7 @@ public abstract class ScrollBarComponentClass : ComponentBaseClass
 {
     protected ScrollBarComponentClass() : base([CausesValidationProperty, EnabledProperty,
         SmallChangeProperty,
+        MousePointerProperty,
         LargeChangeProperty,
         MinProperty,
         ValueProperty,
@@ -41,6 +42,8 @@ public abstract class ScrollBarComponentClass : ComponentBaseClass
 
 public class HScrollBarComponentClass : ScrollBarComponentClass
 {
+    public override string? DesignerDoubleClickEvent => "Change";
+
     public override string Name => "HScroll";
     public override string VBTypeName => "VB.HScrollBar";
     public override (int Width, int Height) AddedSize => (1215, 255);

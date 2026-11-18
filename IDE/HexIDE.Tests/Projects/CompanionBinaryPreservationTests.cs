@@ -68,8 +68,7 @@ public class CompanionBinaryPreservationTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
@@ -78,7 +77,7 @@ public class CompanionBinaryPreservationTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     /// <summary>Copies a VB6-shipped form + its .frx into the scratch dir with a .vbp.</summary>
@@ -178,7 +177,7 @@ public class CompanionBinaryPreservationTests : IDisposable
     [Vb6TemplateFact]
     public async Task A_form_whose_records_HexIDE_does_not_model_saves_both_halves_as_VB6_wrote_them()
     {
-        // Web Browser's six pictures sit on an MSComctlLib.ImageList, which HexIDE does not model. The ImageList
+        // Web Browser's six pictures sit on an NoSuchLib.ImageList, which HexIDE does not model. The ImageList
         // is carried as a preserved block, and the records its lines cite go with it (#60). The companion is
         // deleted before the save, so only a save that rebuilds it from the model can put it back.
         var vbp = StageVb6Form(@"Forms\Web Browser.frm");

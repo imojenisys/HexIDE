@@ -40,15 +40,14 @@ public class NewFormFileTests : IDisposable
         projectManager.LoadedProjects.Returns(_ => loaded);
         // Every picker the save opens is answered with the name it suggests, in this test's folder.
         var windowManager = Substitute.For<IWindowManager>();
-        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>())
+        windowManager.SaveFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerSaveOptions>(), Arg.Any<string?>())
             .Returns(ci => Task.FromResult<string?>(
                 Path.Join(dir, ci.Arg<Avalonia.Platform.Storage.FilePickerSaveOptions>().SuggestedFileName)));
         var sidecar = Substitute.For<IUserSidecarService>();
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
@@ -57,7 +56,7 @@ public class NewFormFileTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     private ProjectDefinition NewProject()
@@ -91,7 +90,7 @@ public class NewFormFileTests : IDisposable
     [Fact]
     public void A_new_Standard_EXE_starts_from_a_form_in_VB6s_shape()
     {
-        var project = IProjectTemplate.StandardEXE.Create("Project1");
+        var project = Vb6ProjectType.StandardExe.Create("Project1");
 
         var form = project.Forms.Single();
         form.Code.Should().StartWith("Attribute VB_Name = \"Form1\"\r\n");

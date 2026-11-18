@@ -5,7 +5,8 @@
 # VBA grammar, a GPL-named licence file, a GPL SPDX header, or the embedded GNU GPL
 # licence body. Plain-prose mentions of "GPL" (historical notes, and legitimate
 # references to external GPL projects) are ALLOWED — this checks for real GPL
-# artifacts, not the word.
+# artifacts, not the word. Source notices are also checked against the permissive list
+# by check-source-licences.py (Python 3), with exact credited filenames as exceptions.
 #
 # NOTE: there is deliberately NO path-based "GPL server directory" check. The MIT
 # server now legitimately lives at LspServer/HexIDE.VbLspServer/ — it reclaimed that
@@ -24,7 +25,7 @@ EXCLUDE=( ':!scripts/check-licences.sh' ':!scripts/prepare-public-copy.sh' ':!sc
 fail=0
 note() { printf '  \xE2\x9C\x97 %s\n' "$1"; fail=1; }
 
-echo "check-licences: scanning for GPL and unknown-licence artifacts…"
+echo "check-licences: scanning for non-permissive and unknown-licence artifacts…"
 
 # 1. The Rubberduck VBA grammar (the origin of the GPL obligation) must not reappear.
 #    (Loops use process substitution so `fail` persists — a piped `while` runs in a subshell.)
@@ -32,12 +33,14 @@ while IFS= read -r f; do
   [ -n "$f" ] && note "Rubberduck GPL grammar file present: $f"
 done < <(git ls-files -- . "${EXCLUDE[@]}" | grep -Ei '(VBALexer|VBAParser|VBAConditionalCompilationParser)\.g4$')
 
-# 2. No GPL-named licence files (basename contains "gpl": COPYING.GPL, LICENSE-GPLv3, gpl-3.0.txt…).
+# 2. No GPL-named licence files (COPYING.GPL, LICENSE-GPLv3, gpl-3.0.txt…).
+#    Require a licence-file shape and a GPL-family token, not the middle of TestingPlatform or gplot.
 #    A bare COPYING (a BSD/MIT dep may ship one) is intentionally NOT flagged by name — check 4
 #    catches any actual GPL licence file by its embedded text instead.
 while IFS= read -r f; do
   [ -n "$f" ] && note "GPL-named licence file present: $f"
-done < <(git ls-files -- . "${EXCLUDE[@]}" | grep -Ei 'gpl[^/]*$')
+done < <(git ls-files -- . "${EXCLUDE[@]}" | grep -Ei '(^|/)((COPYING|LICEN[CS]E)[^/]*|[^/]*\.txt)$' |
+  grep -Ei '(^|[^a-z])l?a?gpl(v[0-9]|[^a-z/]|$)[^/]*$')
 
 # 3. No GPL SPDX headers in tracked source (matches GPL / AGPL / LGPL variants).
 while IFS= read -r hit; do
@@ -49,15 +52,15 @@ while IFS= read -r hit; do
   [ -n "$hit" ] && note "GNU GPL licence text: $hit"
 done < <(git grep -nI 'GNU GENERAL PUBLIC LICENSE' -- . "${EXCLUDE[@]}")
 
-# 5. No downloaded foreign language server may become tracked.
+# 5. No downloaded foreign language server or debug adapter may become tracked.
 #    The foreign-backend tests fetch real third-party servers at run time into a gitignored cache. One of
 #    them is GPL-licensed, which is fine to DRIVE — a separate process across a protocol boundary is not a
 #    derivative work, and nothing is redistributed — and not fine to SHIP. That distinction rests entirely
 #    on the binary never entering the tree, so it is enforced here rather than left to .gitignore, which a
 #    `git add -f` or a re-scoped ignore rule would quietly defeat.
 while IFS= read -r f; do
-  [ -n "$f" ] && note "downloaded language server is tracked (it must never be committed): $f"
-done < <(git ls-files -- artifacts/ 'IDE/HexIDE.Tests/[Tt]ools/' | grep -Ei '(rumdl|texlab|clangd)|\.(exe|tar\.gz|zip)$')
+  [ -n "$f" ] && note "downloaded server or adapter is tracked (it must never be committed): $f"
+done < <(git ls-files -- artifacts/ 'IDE/HexIDE.Tests/[Tt]ools/' | grep -Ei '(rumdl|texlab|clangd)|^artifacts/foreign-dap/|\.(exe|tar\.gz|zip)$')
 
 # 6. Every centrally-managed package must have a RECORDED, PERMITTED licence.
 #
@@ -73,7 +76,7 @@ if [ ! -f "$MANIFEST" ]; then
 else
   while IFS= read -r pkg; do
     [ -n "$pkg" ] || continue
-    lic=$(awk -F'	' -v p="$pkg" '$1==p{print $2}' "$MANIFEST" | head -n1)
+    lic=$(awk -F'	' -v p="$pkg" '{sub(/\r$/,"")} $1==p{print $2}' "$MANIFEST" | head -n1)
     if [ -z "$lic" ]; then
       note "package has no recorded licence: $pkg (add it to $MANIFEST)"
     elif ! printf '%s' "$lic" | grep -Eq "$PERMITTED"; then
@@ -92,6 +95,23 @@ fi
 while IFS= read -r hit; do
   [ -n "$hit" ] && note "reference to a licence-ambiguous origin (code must not travel inward): $hit"
 done < <(git grep -nIE '(using|namespace)[[:space:]]+RDCore(\.|;|[[:space:]])' -- . "${EXCLUDE[@]}")
+
+# 8. Source notices must use a permitted licence or name a credited third-party file.
+# Windows Store aliases can exist on PATH without running Python.
+PYTHON=()
+for candidate in python3 python py; do
+  command=("$candidate")
+  [ "$candidate" != py ] || command+=(-3)
+  if version=$("${command[@]}" --version 2>&1) && [[ "$version" == Python\ 3.* ]]; then
+    PYTHON=("${command[@]}")
+    break
+  fi
+done
+if [ -z "${PYTHON[0]:-}" ]; then
+  note "Python 3 is required for source licence checks; tried python3, python and py -3 (--version). Install Python 3 and add it to PATH."
+elif ! "${PYTHON[@]}" scripts/check-source-licences.py; then
+  fail=1
+fi
 
 if [ "$fail" -eq 0 ]; then
   echo "check-licences: OK — every dependency has a recorded, permitted licence."

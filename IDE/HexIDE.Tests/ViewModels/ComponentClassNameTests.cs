@@ -11,21 +11,25 @@ namespace HexIDE.Tests.ViewModels;
 
 public class ComponentClassNameTests
 {
-    private static ObjectBrowserToolViewModel Browser()
+    private static ObjectBrowserToolViewModel Browser(ILocalizationService? localization = null)
     {
         var projects = Substitute.For<IProjectManager>();
         projects.LoadedProjects.Returns(new List<ProjectDefinition>());
         var client = Substitute.For<ILspClient>();
         client.RequestBuiltinSymbolsAsync().Returns(Array.Empty<HexIDE.Lsp.Messages.VbaBuiltinSymbol>());
+        localization ??= Substitute.For<ILocalizationService>();
+        localization.GetString("Str.Tool.ObjectBrowser.MembersOf").Returns("Members of '{0}'");
+        localization.GetString("Str.Tool.ObjectBrowser.MemberOf").Returns("Member of {0}.{1}");
         return new ObjectBrowserToolViewModel(projects, client, Substitute.For<IEditorService>(),
             new ComponentRegistry(), Substitute.For<ITypeLibraryService>(), Substitute.For<IFocusedProjectUtil>(),
-            Substitute.For<ILocalizationService>(), Substitute.For<ILanguageConnectionRegistry>());
+            localization, Substitute.For<ILanguageConnectionRegistry>());
     }
 
     [Fact]
     public void Vb_library_uses_class_names_in_list_header_and_membership()
     {
-        var browser = Browser();
+        var localization = Substitute.For<ILocalizationService>();
+        var browser = Browser(localization);
         var library = browser.Libraries.Single(l => l.Name == "VB");
         library.Classes.Select(c => c.Name).Should().Equal("CheckBox", "ComboBox", "CommandButton", "Form",
             "Frame", "HScrollBar", "Image", "Label", "ListBox", "OptionButton", "PictureBox", "Shape",
@@ -33,7 +37,21 @@ public class ComponentClassNameTests
         browser.SelectedClass = library.Classes.Single(c => c.Name == "TextBox");
         browser.SelectedMember = browser.SelectedClass.Members[0];
         browser.MembersHeader.Should().Be("Members of 'TextBox'");
-        browser.DescriptionMembership.Should().Be("Member of VB.TextBox");
+        browser.DescriptionMembership.Should().Be(string.Format(
+            localization.GetString("Str.Tool.ObjectBrowser.MemberOf"), "VB", "TextBox"));
+    }
+
+    [Fact]
+    public void Description_membership_formats_the_localized_library_and_class()
+    {
+        var localization = Substitute.For<ILocalizationService>();
+        var browser = Browser(localization);
+        localization.GetString("Str.Tool.ObjectBrowser.MemberOf").Returns("Mitglied von {0}.{1}");
+        browser.SelectedClass = browser.Libraries.Single(l => l.Name == "VB")
+            .Classes.Single(c => c.Name == "TextBox");
+        browser.SelectedMember = browser.SelectedClass.Members[0];
+
+        browser.DescriptionMembership.Should().Be("Mitglied von VB.TextBox");
     }
 
     [Fact]

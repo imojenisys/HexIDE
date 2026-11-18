@@ -7,9 +7,18 @@ namespace HexIDE.Tests.Infrastructure;
 /// written in different projects, and only the description reaches a caller before the first call, so a grammar that
 /// changed in one and not the other would be learned from a refusal.
 /// </summary>
+[ToolDescription]
 public class InteractClickDescriptionTests
 {
     private static ToolSource.Tool Interact => ToolSource.Tools.Single(t => t.Name == "interact");
+
+    [Fact]
+    public void Code_window_input_describes_line_targets_and_position_replies()
+    {
+        Interact.Parameters.Single(p => p.Name == "value").Description.Should()
+            .Contain("line:N").And.Contain("line:N,col:M").And.Contain("line count");
+        Interact.Description.Should().Contain("project/document").And.Contain("breakpoint/bookmark");
+    }
 
     [Fact]
     public void The_value_description_gives_the_grammar_the_refusals_quote()
@@ -21,6 +30,15 @@ public class InteractClickDescriptionTests
     public void The_action_description_lists_click()
     {
         Interact.Parameters.Single(p => p.Name == "action").Description.Should().Contain("click (press and release a pointer");
+    }
+
+    [Fact]
+    public void Click_describes_a_drag_and_its_release_coordinates()
+    {
+        Interact.Parameters.Single(p => p.Name == "action").Description.Should().Contain("to drags");
+        Interact.Parameters.Single(p => p.Name == "value").Description.Should()
+            .Contain("to <path>:x,y").And.Contain("dump_visual_tree path, including spaces")
+            .And.Contain("to cannot accompany double");
     }
 
     [Fact]

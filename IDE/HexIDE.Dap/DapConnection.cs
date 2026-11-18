@@ -4,8 +4,8 @@ using System.Threading.Channels;
 namespace HexIDE.Dap;
 
 /// <summary>
-/// One DAP connection over owned streams. Reads start immediately. Consume Events promptly; an overflowing
-/// event queue closes the connection rather than dropping debugger state or growing memory without a bound.
+/// One DAP connection over owned streams. Reads start immediately. A full Events queue pauses stream reading.
+/// Its single consumer must keep draining while DAP requests are pending: a response can follow queued events.
 /// No UI dispatch, process ownership, handshake policy or automatic retry is hidden in this wire layer.
 /// </summary>
 public sealed class DapConnection : IAsyncDisposable
@@ -42,7 +42,7 @@ public sealed class DapConnection : IAsyncDisposable
         _events = Channel.CreateBounded<DapEvent>(new BoundedChannelOptions(_options.EventCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = true,
+            SingleWriter = false, // The delivery barrier writes alongside the wire reader.
             AllowSynchronousContinuations = false,
         });
         _capture?.Note("DAP connection opened.");
@@ -61,14 +61,18 @@ public sealed class DapConnection : IAsyncDisposable
     /// Cancellation during a write closes the connection because a partial frame cannot be reused safely.
     /// Connection shutdown fails requests with IOException, including disposal during an in-flight write.
     /// </summary>
+    /// <param name="requestTimeout">Deadline for this request; null uses the connection default.</param>
     public async Task<DapResponse> RequestAsync(string command, JsonElement? arguments = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, TimeSpan? requestTimeout = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
         if (arguments is { ValueKind: not JsonValueKind.Object })
             throw new ArgumentException("DAP arguments must be a JSON object or omitted.", nameof(arguments));
+        var timeout = requestTimeout ?? _options.RequestTimeout;
+        if (timeout <= TimeSpan.Zero || timeout.TotalMilliseconds > uint.MaxValue - 1)
+            throw new ArgumentOutOfRangeException(nameof(requestTimeout));
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
-        deadline.CancelAfter(_options.RequestTimeout);
+        deadline.CancelAfter(timeout);
         var token = deadline.Token;
         var reply = new TaskCompletionSource<DapResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
         var sequence = 0;
@@ -114,7 +118,7 @@ public sealed class DapConnection : IAsyncDisposable
         {
             lock (_sync)
                 if (_closed) throw new IOException("DAP connection is closed.", _failure);
-            throw new TimeoutException($"Debug adapter did not complete '{command}' within {_options.RequestTimeout}.");
+            throw new TimeoutException($"Debug adapter did not complete '{command}' within {timeout}.");
         }
         finally
         {
@@ -123,6 +127,15 @@ public sealed class DapConnection : IAsyncDisposable
             // A send can fail before awaiting the reply while closure faults it concurrently.
             if (reply.Task.IsFaulted) _ = reply.Task.Exception;
         }
+    }
+
+    /// <summary>Enqueues a local barrier behind events already read, for the final consumer to acknowledge.</summary>
+    public async Task QueueDeliveryBarrierAsync()
+    {
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await _events.Writer.WriteAsync(new(0, "", JsonSerializer.SerializeToElement(new { }))
+            { DeliveryBarrier = delivered }, _lifetime.Token).ConfigureAwait(false);
+        await delivered.Task.WaitAsync(_lifetime.Token).ConfigureAwait(false);
     }
 
     private void ThrowIfClosed()
@@ -178,8 +191,7 @@ public sealed class DapConnection : IAsyncDisposable
                     case "event":
                         var name = Text(message, "event");
                         RecordFrame();
-                        if (!_events.Writer.TryWrite(new(sequence, name, message)))
-                            throw new IOException("DAP event queue overflowed; the consumer is not keeping up.");
+                        await _events.Writer.WriteAsync(new(sequence, name, message), _lifetime.Token).ConfigureAwait(false);
                         break;
                     case "request":
                         var reverseCommand = Text(message, "command");
@@ -262,5 +274,26 @@ public sealed class DapConnection : IAsyncDisposable
     {
         Close(null);
         await _reader.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Ends what this side sends, so the adapter reads end of input, and goes on reading what it still writes until it
+    /// closes its output or <paramref name="drain"/> passes; then closes the connection. An adapter may write after its
+    /// last response: debugpy answers <c>disconnect</c> and then sends a <c>debugpySockets</c> event. Closing the read
+    /// side on the response made that write fail with a broken pipe, and debugpy exit 1 (#3894).
+    /// </summary>
+    public async Task CloseAfterDrainAsync(TimeSpan drain)
+    {
+        // A duplex stream can't be half-closed, so it closes as before.
+        if (!ReferenceEquals(_input, _output))
+        {
+            await _writer.WaitAsync().ConfigureAwait(false);
+            try { _output.Dispose(); }
+            catch (IOException) { }
+            finally { _writer.Release(); }
+            try { await _reader.WaitAsync(drain).ConfigureAwait(false); }
+            catch (TimeoutException) { }
+        }
+        await DisposeAsync().ConfigureAwait(false);
     }
 }

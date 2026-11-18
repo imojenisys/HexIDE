@@ -19,6 +19,7 @@ using HexIDE.Forms.ViewModels;
 using HexIDE.Forms.Views;
 using HexIDE.IDE;
 using HexIDE.Localization;
+using HexIDE.Language;
 using HexIDE.Lsp;
 using HexIDE.Lsp.Messages;
 using HexIDE.Projects;
@@ -42,6 +43,7 @@ namespace HexIDE.Integration.Tests.Views;
 public class MemberRunFollowsItsLineTests : IDisposable
 {
     private readonly List<Window> windows = [];
+    private readonly IWindowManager windowManager = Substitute.For<IWindowManager>();
     private readonly List<CodeEditorViewModel> made = [];
 
     public void Dispose()
@@ -76,7 +78,103 @@ public class MemberRunFollowsItsLineTests : IDisposable
         "Attribute Go.VB_Description = \"Goes\"\r\n" +
         "End Sub\r\n";
 
-    private CodeEditorViewModel Open(string code)
+    [AvaloniaTheory]
+    [InlineData("enter")]
+    [InlineData("shift")]
+    [InlineData("paste")]
+    [InlineData("type")]
+    public async Task ALineBreakBeforeATrailingCommentKeepsTheRunWithItsDeclaration(string writer)
+    {
+        var vm = Open(Procedure.Replace("Public Sub Go()", "Public Sub Go() ' does X"));
+        var editor = Show(vm);
+        var before = vm.Document.Text;
+        PutCaret(editor, before.IndexOf("' does X", StringComparison.Ordinal));
+        var inserted = writer is "paste" or "type" ? "A\r\nB" : "\r\n";
+        if (writer == "paste")
+        {
+            await SetClipboard(editor, "A\nB");
+            PressCommand(editor, HexIDE.ApplicationCommands.PasteCommand);
+            await UntilChanged(vm, before);
+        }
+        else if (writer == "type")
+            UiAutomationDriver.TypeText(editor, "A\nB").Success.Should().BeTrue();
+        else
+            Press(editor, Key.Enter, writer == "shift" ? KeyModifiers.Shift : KeyModifiers.None);
+
+        var head = inserted.StartsWith("A", StringComparison.Ordinal) ? "A" : "";
+        var tail = head.Length > 0 ? "B" : "";
+        vm.Document.Text.Should().Be(before.Replace("' does X", head)
+            .Replace("VB_UserMemId = 0\r\n", "VB_UserMemId = 0\r\n" + tail + "' does X\r\n"));
+        editor.CaretOffset.Should().Be(vm.Document.Text.IndexOf("' does X", StringComparison.Ordinal));
+        vm.HangingRegionsNow.Should().ContainSingle(r => r.Name == "Go");
+        RunFold(editor, "Public Sub Go()")!.IsFolded.Should().BeTrue();
+        editor.Undo();
+        Dispatcher.UIThread.RunJobs();
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("    public sub Go() ' does X", "X", "Go", "    ")]
+    [InlineData("Public Sub Go(Optional s As String = \"it's\") ' does X", "' does X", "Go", "")]
+    [InlineData("Public Count As Long ' how many", "' how many", "Count", "")]
+    [InlineData("Public Sub Go( _\r\n    ByVal x As Long) ' does X", "' does X", "Go", "    ")]
+    public void EnterSplitsACommentTailWithoutRecasingOrClosing(string declaration, string tail, string member, string indent)
+    {
+        var attribute = member == "Count" ? "VB_VarDescription" : "VB_Description";
+        var vm = Open($"Option Explicit\r\n{declaration}\r\nAttribute {member}.{attribute} = \"Goes\"\r\n");
+        var editor = Show(vm);
+        var before = vm.Document.Text;
+        PutCaret(editor, before.IndexOf(tail, StringComparison.Ordinal));
+
+        Press(editor, Key.Enter);
+
+        vm.Document.Text.Should().Be(before.Replace(tail, "")
+            .Replace("\"Goes\"\r\n", "\"Goes\"\r\n" + indent + tail + "\r\n"));
+        editor.CaretOffset.Should().Be(vm.Document.Text.IndexOf(tail, StringComparison.Ordinal));
+        vm.HangingRegionsNow.Should().ContainSingle(r => r.Name == member);
+    }
+
+    [AvaloniaFact]
+    public async Task InsertFileBeforeATrailingCommentLeavesTheFoldAndCaretBeforeTheMovedTail()
+    {
+        var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"hexide-insert-{Guid.NewGuid():N}.txt");
+        await System.IO.File.WriteAllTextAsync(path, "A\nB", TestContext.Current.CancellationToken);
+        try
+        {
+            windowManager.OpenFilePickerAsync(Arg.Any<Avalonia.Platform.Storage.FilePickerOpenOptions>())
+                .Returns(Task.FromResult<IReadOnlyList<string>?>([path]));
+            var vm = Open(Procedure.Replace("Public Sub Go()", "Public Sub Go() ' does X"));
+            var editor = Show(vm);
+
+            await vm.InsertFileAsync(vm.Document.Text.IndexOf("' does X", StringComparison.Ordinal), 0);
+            Dispatcher.UIThread.RunJobs();
+
+            vm.Document.Text.Should().Contain("Public Sub Go() A\r\nAttribute")
+                .And.Contain("VB_UserMemId = 0\r\nB' does X\r\n");
+            editor.CaretOffset.Should().Be(vm.Document.Text.IndexOf("' does X", StringComparison.Ordinal));
+            RunFold(editor, "Public Sub Go()")!.IsFolded.Should().BeTrue();
+        }
+        finally
+        {
+            System.IO.File.Delete(path);
+        }
+    }
+
+    [AvaloniaFact]
+    public void AnAddInsLineBreakBeforeATrailingCommentLeavesTheEditorUntouched()
+    {
+        var vm = Open(Procedure.Replace("Public Sub Go()", "Public Sub Go() ' does X"));
+        var editor = Show(vm);
+        var before = vm.Document.Text;
+
+        vm.ApplyEdits([new TextChange(before.IndexOf("' does X", StringComparison.Ordinal), 0, "\n")])
+            .Should().NotBeNull();
+
+        vm.Document.Text.Should().Be(before);
+        RunFold(editor, "Public Sub Go()")!.IsFolded.Should().BeTrue();
+    }
+
+    private CodeEditorViewModel Open(string code, int tabWidth = 4)
     {
         var eventBus = Substitute.For<IEventBus>();
         eventBus.Subscribe<CreateOrNavigateToSubEvent>(Arg.Any<Action<CreateOrNavigateToSubEvent>>()).Returns(Substitute.For<IDisposable>());
@@ -84,15 +182,15 @@ public class MemberRunFollowsItsLineTests : IDisposable
         eventBus.Subscribe<FormUnloadedEvent>(Arg.Any<Action<FormUnloadedEvent>>()).Returns(Substitute.For<IDisposable>());
         eventBus.Subscribe<DocumentSavedEvent>(Arg.Any<Action<DocumentSavedEvent>>()).Returns(Substitute.For<IDisposable>());
         var settings = Substitute.For<ISettingsService>();
-        settings.TabWidth.Returns(4);
+        settings.TabWidth.Returns(tabWidth);
         var lsp = Substitute.For<ILspClient>();
         lsp.IsRunning.Returns(false);
         lsp.RequestDocumentSymbolsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Array.Empty<DocumentSymbol>());
 
         var vm = new CodeEditorViewModel(
-            Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
+            windowManager, Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
             eventBus, lsp, settings, Substitute.For<IStatusBarService>(), new BookmarkService(), new BreakpointService(),
-            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>());
+            Substitute.For<IDebugController>(), new RunScope(), new LocalizationService());
         made.Add(vm);
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var module = new ModuleDefinition(project, "Module1", ModuleKind.StandardModule);
@@ -230,10 +328,103 @@ public class MemberRunFollowsItsLineTests : IDisposable
         }
     }
 
-    private static MemberRun RunOf(CodeEditorViewModel vm, string member) =>
-        vm.MemberRunsNow.Single(r => r.Member?.Name == member);
+    private static HangingRegion RunOf(CodeEditorViewModel vm, string member) =>
+        vm.HangingRegionsNow.Single(r => r.Name == member);
+
+    /// <summary>Every attribute run of the buffer as the VB6 reader judges it, the orphans the code window never sees included.</summary>
+    private static IReadOnlyList<MemberRun> VerdictsOf(CodeEditorViewModel vm) =>
+        ReadOnlyRegions.MemberRuns(vm.Document.Text, vm.BufferPrefixLength);
+
+    private static MemberRun VerdictOf(CodeEditorViewModel vm, string member) =>
+        VerdictsOf(vm).Single(r => r.Member?.Name == member);
 
     // ── The delta's scenario, and task 4.7's deletion case ──────────────────────────────────────────────────
+
+    [AvaloniaTheory]
+    [InlineData(2)]
+    [InlineData(8)]
+    public void AutoCloserUsesTheEditorsTabWidth(int tabWidth)
+    {
+        var vm = Open("    If True Then", tabWidth);
+        var editor = Show(vm);
+        var before = vm.Document.Text;
+        PutCaret(editor, vm.Document.TextLength);
+
+        Press(editor, Key.Enter);
+
+        vm.Document.Text.ReplaceLineEndings("\n").Should().Be(
+            before.ReplaceLineEndings("\n") + "\n" + new string(' ', 4 + tabWidth) + "\n    End If");
+        editor.TextArea.Caret.Column.Should().Be(5 + tabWidth);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Sub Foo()", "End Sub")]
+    [InlineData("Function Foo() As Long", "End Function")]
+    [InlineData("Property Get Foo() As Long", "End Property")]
+    [InlineData("If True Then", "End If")]
+    [InlineData("Select Case x", "End Select")]
+    [InlineData("For i = 1 To 2", "Next i")]
+    [InlineData("Do", "Loop While x")]
+    [InlineData("Do Until x", "Loop Until x")]
+    [InlineData("While x", "Wend")]
+    [InlineData("With x", "End With")]
+    [InlineData("Type Foo", "End Type")]
+    [InlineData("Enum Foo", "End Enum")]
+    [InlineData("#If True Then", "#End If")]
+    [InlineData("If True Then", "End If ' comment")]
+    public void EnterDoesNotDuplicateAnExistingCloser(string opener, string closer)
+    {
+        var vm = Open(opener + "\n    ' body comment\n    x = 1\n" + closer);
+        var editor = Show(vm);
+        var line = LineWith(editor, opener);
+        var before = vm.Document.Text;
+        PutCaret(editor, line.EndOffset);
+
+        Press(editor, Key.Enter);
+
+        vm.Document.Text.ReplaceLineEndings("\n").Should().Be(
+            before.Insert(line.EndOffset, "\n").ReplaceLineEndings("\n"));
+        editor.Undo();
+        vm.Document.Text.Should().Be(before);
+    }
+
+    [AvaloniaTheory]
+    [InlineData("If True Then\nEnd If\nEnd If", false)]
+    [InlineData("If True Then\nEnd If", true)]
+    [InlineData("End Sub\nSub Other()\nEnd If\nEnd Sub", true)]
+    [InlineData("End IfSomething", true)]
+    [InlineData("' body _\nEnd If", false)]
+    [InlineData("' End If\nDebug.Print \"End If\"", true)]
+    [InlineData("If True _\n Then\nEnd If\nEnd If", false)]
+    public void EnterMatchesNestingAndStopsAtTheProcedureBoundary(string tail, bool insertsCloser)
+    {
+        var vm = Open("Sub Foo()\nIf True Then\n" + tail);
+        var editor = Show(vm);
+        var line = LineWith(editor, "If True Then");
+        PutCaret(editor, line.EndOffset);
+        var before = vm.Document.Text;
+
+        Press(editor, Key.Enter);
+
+        var inserted = insertsCloser ? "\n    \nEnd If" : "\n";
+        vm.Document.Text.ReplaceLineEndings("\n").Should().Be(
+            before.Insert(line.EndOffset, inserted).ReplaceLineEndings("\n"));
+    }
+
+    [AvaloniaFact]
+    public void EnterDoesNotDuplicateAModuleConditionalAroundAProcedure()
+    {
+        var vm = Open("#If True Then\nSub Foo()\nEnd Sub\n#End If");
+        var editor = Show(vm);
+        var offset = LineWith(editor, "#If True Then").EndOffset;
+        var before = vm.Document.Text;
+        PutCaret(editor, offset);
+
+        Press(editor, Key.Enter);
+
+        vm.Document.Text.ReplaceLineEndings("\n").Should().Be(
+            before.Insert(offset, "\n").ReplaceLineEndings("\n"));
+    }
 
     [AvaloniaFact]
     public void DeletingADescribedProcedure()
@@ -251,7 +442,8 @@ public class MemberRunFollowsItsLineTests : IDisposable
 
         vm.Document.Text.Should().Be(before.Remove(from, end - from));
         vm.Document.Text.Should().NotContain("Attribute Go.", "none of its attribute lines is left behind");
-        vm.MemberRunsNow.Should().BeEmpty();
+        VerdictsOf(vm).Should().BeEmpty("no attribute line is left, orphaned or not");
+        vm.HangingRegionsNow.Should().BeEmpty();
     }
 
     [AvaloniaFact]
@@ -268,12 +460,13 @@ public class MemberRunFollowsItsLineTests : IDisposable
         Press(editor, Key.D, KeyModifiers.Control);
 
         vm.Document.Text.Should().Be(before.Replace("Public Sub Go()\r\n" + RunText, string.Empty));
-        vm.MemberRunsNow.Should().BeEmpty("no attribute line is left behind, orphaned or not");
+        VerdictsOf(vm).Should().BeEmpty("no attribute line is left behind, orphaned or not");
+        vm.HangingRegionsNow.Should().BeEmpty();
 
         editor.Undo();
         Dispatcher.UIThread.RunJobs();
         vm.Document.Text.Should().Be(before, "one undo step brings both back, where VB6 brings back the line alone (C5)");
-        RunOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
         RunFold(editor, "Public Sub Go()")!.IsFolded.Should().BeTrue("the run comes back as it was left");
     }
 
@@ -354,7 +547,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
         await UntilChanged(vm, before.Replace(cut, string.Empty));
 
         vm.Document.Text.Should().Be(before, "pasted back, the run is under its declaration again");
-        RunOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
     }
 
     [AvaloniaFact]
@@ -373,7 +566,10 @@ public class MemberRunFollowsItsLineTests : IDisposable
         await UntilChanged(vm, afterCut);
 
         vm.Document.Text.Should().EndWith("Option Explicit\r\n" + closed + opened);
-        vm.MemberRunsNow.Select(r => r.Member?.Name).Should().Equal("Closed", "Opened");
+        VerdictsOf(vm).Select(r => r.Member?.Name).Should().Equal("Closed", "Opened");
+        // The last pasted line is still the developer's until the caret leaves it (#3819).
+        PutCaret(editor, LineWith(editor, "Public Event Closed()").Offset);
+        vm.HangingRegionsNow.Select(r => r.Name).Should().Equal("Closed", "Opened");
         editor.Undo();
         vm.Document.Text.Should().Be(afterCut);
     }
@@ -407,7 +603,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
         TypeText(editor, "Public Sub Leave()");
 
         vm.Document.Text.Should().Contain("Public Sub Leave()\r\n" + RunText);
-        RunOf(vm, "Leave").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Leave").Kind.Should().Be(MemberRunKind.Procedure);
     }
 
     [AvaloniaFact]
@@ -472,7 +668,8 @@ public class MemberRunFollowsItsLineTests : IDisposable
         Press(editor, Key.Enter, KeyModifiers.Shift);
 
         vm.Document.Text.Should().Contain("Option Explicit\r\n\r\n\r\n" + RunText + "\r\n    Debug.Print 1");
-        vm.MemberRunsNow.Should().ContainSingle().Which.Kind.Should().Be(MemberRunKind.Orphan);
+        VerdictsOf(vm).Should().ContainSingle().Which.Kind.Should().Be(MemberRunKind.Orphan);
+        vm.HangingRegionsNow.Should().BeEmpty("the code window never sees an orphan");
     }
 
     // ── Enter and type_text over a selection write over it, as typing does (#1040) ─────────────────────────────
@@ -582,6 +779,69 @@ public class MemberRunFollowsItsLineTests : IDisposable
         editor.SelectionLength.Should().Be(0);
         editor.Document.UndoStack.Undo();
         vm.Document.Text.Should().Be(before, "one undo restores the replacement");
+    }
+
+    [AvaloniaFact]
+    public void TypeTextPastARunNamesTheFormatsRegion()
+    {
+        var vm = Open(Procedure);
+        var editor = Show(vm);
+        editor.CaretOffset = LineWith(editor, "Public Sub Go()").EndOffset;
+
+        var outcome = UiAutomationDriver.TypeText(editor, " \r\nx");
+
+        outcome.Success.Should().BeTrue(outcome.Error);
+        outcome.Detail.Should().Contain("The edit ended on the line above the Attribute lines describing Go");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Cut")]
+    [InlineData("DeleteLine")]
+    [InlineData("Indent")]
+    [InlineData("Outdent")]
+    [InlineData("Delete")]
+    public void ARefusedCommandInsideAnAttributeLineGivesNoBackspaceAdvice(string command)
+    {
+        var vm = Open(Procedure);
+        var editor = Show(vm);
+        var before = vm.Document.Text;
+        var line = LineWith(editor, "Attribute Go.VB_UserMemId");
+        RunFold(editor, "Public Sub Go()")!.IsFolded = false;
+        editor.Select(line.Offset + 4, line.Length - 4);
+        var gesture = command switch
+        {
+            "Cut" => HexIDE.ApplicationCommands.CutCommand.Gestures.First(),
+            "DeleteLine" => AvaloniaEditCommands.DeleteLine.Gesture!,
+            "Indent" => new KeyGesture(Key.Tab),
+            "Outdent" => new KeyGesture(Key.Tab, KeyModifiers.Shift),
+            _ => new KeyGesture(Key.Delete),
+        };
+
+        var outcome = UiAutomationDriver.PressKey(editor, gesture.Key.ToString(),
+            gesture.KeyModifiers == KeyModifiers.None ? null : gesture.KeyModifiers.ToString());
+
+        outcome.Success.Should().BeFalse();
+        vm.Document.Text.Should().Be(before);
+        outcome.Error.Should().NotContain("text before the caret")
+            .And.NotContain("line above that read-only text");
+        if (command != "Delete")
+            outcome.Error.Should().Contain("This text is read-only: only the IDE changes it.")
+                .And.NotContain("Select less");
+    }
+
+    [AvaloniaFact]
+    public void BackspaceAfterARunOffersTheAnchoredLineHint()
+    {
+        var vm = Open(Procedure);
+        var editor = Show(vm);
+        var runEnd = LineWith(editor, "Attribute Go.VB_UserMemId");
+        PutCaret(editor, runEnd.Offset + runEnd.TotalLength);
+
+        var outcome = UiAutomationDriver.PressKey(editor, "Back", null);
+
+        outcome.Success.Should().BeFalse();
+        outcome.Error.Should().Contain("the Attribute lines describing Go")
+            .And.Contain("Deleting the whole of the line above that read-only text");
     }
 
     [AvaloniaFact]
@@ -821,7 +1081,7 @@ public class MemberRunFollowsItsLineTests : IDisposable
         vm.Document.Text.Should().Be(before.Replace("\"Goes\"\r\nEnd Sub", "\"Goes\"\r\n\r\nEnd Sub"),
             "the closer is looked for past the run, and End Sub is there");
         editor.TextArea.Caret.Offset.Should().Be(LineWith(editor, "End Sub").Offset - 2, "on the new line");
-        RunOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
+        VerdictOf(vm, "Go").Kind.Should().Be(MemberRunKind.Procedure);
         var fold = RunFold(editor, "Public Sub Go()")!;
         fold.IsFolded.Should().Be(folded);
         fold.EndOffset.Should().Be(RunOf(vm, "Go").LastContentEnd,

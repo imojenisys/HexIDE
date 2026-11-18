@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -125,6 +126,30 @@ public class CodeEditorFoldingWhenTheServerArrivesTests : IDisposable
         await SettleFolding();
 
         _foldRequests.Should().Be(0, "there is no editor to fold");
+    }
+
+    [AvaloniaFact]
+    public async Task SemanticTokensAreAskedOnAttachChangeAndServerArrivalAndStopOnDetach()
+    {
+        var requests = 0;
+        _lspClient.RequestSemanticTokensAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => { requests++; return Task.FromResult<SemanticTokenResult?>(null); });
+        using var vm = MakeViewModel();
+        vm.Initialize(AModule());
+        Show(vm);
+        await SettleFolding();
+        requests.Should().BeGreaterThan(0);
+        var baseline = requests;
+        vm.Document.Insert(vm.Document.TextLength, "' changed");
+        await SettleFolding();
+        requests.Should().Be(baseline + 1);
+        RaiseServerStateChanged();
+        await SettleFolding();
+        requests.Should().Be(baseline + 2);
+        foreach (var window in _windows) window.Content = null;
+        RaiseServerStateChanged();
+        await SettleFolding();
+        requests.Should().Be(baseline + 2);
     }
 
     private void RaiseServerStateChanged()

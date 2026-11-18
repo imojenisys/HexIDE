@@ -182,7 +182,7 @@ public class FileSystemTests : BaseVBTestFixture, IDisposable
         var date = File.GetLastWriteTime(Path.Combine(dir,path));
         date = new DateTime(date.Ticks - date.Ticks % TimeSpan.TicksPerSecond);
         await Execute($"Debug.Print FileDateTime(\"{path}\")");
-        AssertDebugLog([new Vb6Value(date)]);
+        AssertDebugLog([new Vb6Value(VbDate.FromDateTime(date))]);
     }
 
     [Fact]
@@ -316,18 +316,6 @@ public class FileSystemTests : BaseVBTestFixture, IDisposable
     {
         await Execute("On Error Resume Next\nDebug.Print " + expression + "\nDebug.Print Err.Number");
         AssertDebugLog([Long(68)]);
-    }
-
-    [Theory]
-    [InlineData("CurDir(Drive:=\"C\")")]
-    [InlineData("Dir(PathName:=\"*\")")]
-    [InlineData("FileLen(PathName:=\"a.txt\")")]
-    [InlineData("FileDateTime(PathName:=\"a.txt\")")]
-    [InlineData("GetAttr(PathName:=\"a.txt\")")]
-    public async Task Unmeasured_named_calls_are_explicitly_refused(string expression)
-    {
-        var act = () => Execute("Debug.Print " + expression);
-        await act.Should().ThrowAsync<NotImplementedException>().WithMessage("Named arguments to * are not implemented yet");
     }
 
     [Fact]

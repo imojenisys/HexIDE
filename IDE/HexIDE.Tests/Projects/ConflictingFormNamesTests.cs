@@ -51,8 +51,7 @@ public class ConflictingFormNamesTests : IDisposable
         localization.GetString("Str.Dialog.ConflictingNames")
             .Returns("Conflicting names were found in '{0}'. The name '{1}' will be used.");
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
@@ -61,7 +60,7 @@ public class ConflictingFormNamesTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             localization,
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     private async Task<string> Stage(string beginName, string vbName)

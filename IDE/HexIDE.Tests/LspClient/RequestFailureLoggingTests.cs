@@ -1,7 +1,6 @@
 using System.Text.Json;
 using HexIDE.Lsp;
 using HexIDE.Lsp.Messages;
-using Microsoft.Extensions.Logging;
 using Nerdbank.Streams;
 using StreamJsonRpc;
 
@@ -28,24 +27,36 @@ namespace HexIDE.Tests.LspClient;
 public class RequestFailureLoggingTests : IAsyncDisposable
 {
     private readonly List<IAsyncDisposable> _disposables = [];
-    private readonly RecordingLogger _log = new();
+    private readonly WireDiagnosis.RecordingLogger<VBLspClient> _log;
+    private readonly List<int> _renames = [];
+    private readonly WireDiagnosis _diagnosis = new(TestContext.Current.CancellationToken);
+    private readonly List<JsonRpc> _peers = [];
+
+    public RequestFailureLoggingTests() => _log = _diagnosis.ClientLog<VBLspClient>(1);
 
     public async ValueTask DisposeAsync()
     {
+        var dropped = _diagnosis.HasDropped
+            ? _diagnosis.Diagnosis("a connection dropped during the test") : null;
         foreach (var d in _disposables)
         {
             try { await d.DisposeAsync(); } catch { /* teardown is best effort */ }
         }
+        foreach (var peer in _peers) peer.Dispose();
         GC.SuppressFinalize(this);
+        if (dropped is not null) throw new InvalidOperationException(dropped);
     }
 
-    private async Task<VBLspClient> ConnectedToThrowingServerAsync(ThrowingServer? server = null)
+    private async Task<VBLspClient> ConnectedToThrowingServerAsync(object? server = null)
     {
         var (clientSide, serverSide) = FullDuplexStream.CreatePair();
 
+        var remote = _diagnosis.TapPeer(serverSide);
         var serverRpc = new JsonRpc(
-            new HeaderDelimitedMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
-            server ?? new ThrowingServer());
+            new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()),
+            server ?? new ThrowingServer(renames: _renames));
+        _peers.Add(serverRpc);
+        _diagnosis.Watch(serverRpc, "stand-in", _peers.Count);
         serverRpc.StartListening();
 
         var transport = Substitute.For<ILspTransport>();
@@ -125,6 +136,7 @@ public class RequestFailureLoggingTests : IAsyncDisposable
     [Theory]
     [InlineData(-32801)]
     [InlineData(-32800)]
+    [InlineData(-32802)]
     public async Task AServerSupersededRequestKeepsTheFailureWarningAvailable(int errorCode)
     {
         var server = new ThrowingServer(errorCode);
@@ -154,15 +166,88 @@ public class RequestFailureLoggingTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ADeclinedDiagnosticPullKeepsTheFailureWarningAvailable()
+    {
+        var server = new DecliningDiagnosticServer();
+        var sut = await ConnectedToThrowingServerAsync(server);
+        const string uri = "file:///project/Module1.bas";
+        await sut.OpenDocumentAsync(uri, "x", TestContext.Current.CancellationToken);
+        await WaitForDiagnosticLogAsync();
+
+        _log.Warnings.Should().BeEmpty("ServerCancelled must not spend the warning (#3190)");
+        _log.Debugs.Should().Contain(m => m.Contains("textDocument/diagnostic") && m.Contains("superseded"));
+
+        await sut.ChangeDocumentAsync(uri, 2, "y", TestContext.Current.CancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            lock (_log.Warnings)
+                if (_log.Warnings.Count > 0) break;
+            await Task.Delay(10, timeout.Token);
+        }
+        _log.Warnings.Should().ContainSingle().Which.Should().Contain("textDocument/diagnostic");
+        server.Calls.Should().Be(2);
+    }
+
+    private async Task WaitForDiagnosticLogAsync()
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            lock (_log.Warnings)
+                if (_log.Warnings.Any(m => m.Contains("textDocument/diagnostic"))) return;
+            lock (_log.Debugs)
+                if (_log.Debugs.Any(m => m.Contains("textDocument/diagnostic") && m.Contains("superseded"))) return;
+            await Task.Delay(10, timeout.Token);
+        }
+    }
+
+    private sealed class DecliningDiagnosticServer
+    {
+        public int Calls { get; private set; }
+
+        [JsonRpcMethod("initialize", UseSingleObjectParameterDeserialization = true)]
+        public JsonElement Initialize(JsonElement _) => JsonDocument.Parse("""
+            {"capabilities":{"textDocumentSync":{"openClose":true,"change":1},"diagnosticProvider":true}}
+            """).RootElement.Clone();
+
+        [JsonRpcMethod("initialized")]
+        public void Initialized(JsonElement _) { }
+
+        [JsonRpcMethod("textDocument/didOpen", UseSingleObjectParameterDeserialization = true)]
+        public void DidOpen(JsonElement _) { }
+
+        [JsonRpcMethod("textDocument/didChange", UseSingleObjectParameterDeserialization = true)]
+        public void DidChange(JsonElement _) { }
+
+        [JsonRpcMethod("textDocument/diagnostic", UseSingleObjectParameterDeserialization = true)]
+        public JsonElement Diagnostic(JsonElement _)
+        {
+            if (++Calls == 1)
+                throw new LocalRpcException("declined, do not retrigger")
+                {
+                    ErrorCode = -32802,
+                    ErrorData = JsonDocument.Parse("""{"retriggerRequest":false}""").RootElement.Clone()
+                };
+            throw new LocalRpcException("a real failure") { ErrorCode = -32603 };
+        }
+    }
+
+    [Fact]
     public async Task ADeclinedCapabilityIsStillNotAFailure()
     {
         // The neighbouring case, kept distinct. A server that never advertised something is refusing
         // honestly; that already had its own once-per-capability warning and must not gain a second,
         // different one saying the request failed — because no request was made.
         var (clientSide, serverSide) = FullDuplexStream.CreatePair();
+        var remote = _diagnosis.TapPeer(serverSide);
         var serverRpc = new JsonRpc(
-            new HeaderDelimitedMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
+            new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()),
             new SilentServer());
+        _peers.Add(serverRpc);
+        _diagnosis.Watch(serverRpc, "stand-in", _peers.Count);
         serverRpc.StartListening();
 
         var transport = Substitute.For<ILspTransport>();
@@ -207,6 +292,46 @@ public class RequestFailureLoggingTests : IAsyncDisposable
         hover!.Contents.Value.Should().Be("still here");
     }
 
+    [Theory]
+    [InlineData(-32803)]
+    [InlineData(-32603)]
+    public async Task RenameReturnsTheServersRefusal(int code)
+    {
+        var sut = await ConnectedToThrowingServerAsync();
+        var result = await sut.RequestRenameAsync("vb6://module/M", new Position(0, 0),
+            code.ToString(System.Globalization.CultureInfo.InvariantCulture), TestContext.Current.CancellationToken);
+
+        _renames.Should().Equal(code);
+        result!.Refusal.Should().Be("This name cannot be renamed");
+        result.Edit.Should().BeNull();
+        sut.IsRunning.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task RenameRefusalDoesNotConsumeTheFailureWarning()
+    {
+        var sut = await ConnectedToThrowingServerAsync();
+        await sut.RequestRenameAsync("vb6://module/M", new Position(0, 0), "-32803", TestContext.Current.CancellationToken);
+        _log.Warnings.Should().BeEmpty();
+        _log.Debugs.Should().Contain(m => m.Contains("textDocument/rename"));
+
+        await sut.RequestRenameAsync("vb6://module/M", new Position(0, 0), "-32603", TestContext.Current.CancellationToken);
+        _log.Warnings.Should().ContainSingle().Which.Should().Contain("textDocument/rename");
+    }
+
+    [Theory]
+    [InlineData(-32800)]
+    [InlineData(-32801)]
+    public async Task RenameCancellationIsNotARefusal(int code)
+    {
+        var sut = await ConnectedToThrowingServerAsync();
+        var result = await sut.RequestRenameAsync("vb6://module/M", new Position(0, 0),
+            code.ToString(System.Globalization.CultureInfo.InvariantCulture), TestContext.Current.CancellationToken);
+        _renames.Should().Equal(code);
+        result.Should().BeNull();
+        _log.Warnings.Should().BeEmpty();
+    }
+
     /// <summary>
     /// A server that initializes normally, throws on two language requests, and answers a third.
     /// </summary>
@@ -214,7 +339,7 @@ public class RequestFailureLoggingTests : IAsyncDisposable
     /// The working method is not decoration: it is what distinguishes "that request failed" from "the
     /// connection is gone", and those were indistinguishable until the error-reply defect above was fixed.
     /// </remarks>
-    private sealed class ThrowingServer(int? supersededErrorCode = null)
+    private sealed class ThrowingServer(int? supersededErrorCode = null, List<int>? renames = null)
     {
         public int DocumentSymbolCalls { get; private set; }
 
@@ -222,7 +347,7 @@ public class RequestFailureLoggingTests : IAsyncDisposable
         public JsonElement Initialize(JsonElement _) =>
             JsonDocument.Parse("""
                 {"capabilities":{"documentSymbolProvider":true,"foldingRangeProvider":true,
-                                 "hoverProvider":true}}
+                                 "hoverProvider":true,"renameProvider":true}}
                 """).RootElement.Clone();
 
         [JsonRpcMethod("initialized")]
@@ -240,6 +365,14 @@ public class RequestFailureLoggingTests : IAsyncDisposable
         [JsonRpcMethod("textDocument/foldingRange", UseSingleObjectParameterDeserialization = true)]
         public JsonElement FoldingRange(JsonElement _) => throw new InvalidOperationException("no");
 
+        [JsonRpcMethod("textDocument/rename", UseSingleObjectParameterDeserialization = true)]
+        public JsonElement Rename(JsonElement p)
+        {
+            var code = int.Parse(p.GetProperty("newName").GetString()!, System.Globalization.CultureInfo.InvariantCulture);
+            renames?.Add(code);
+            throw new LocalRpcException("This name cannot be renamed") { ErrorCode = code };
+        }
+
         [JsonRpcMethod("textDocument/hover", UseSingleObjectParameterDeserialization = true)]
         public JsonElement Hover(JsonElement _) =>
             JsonDocument.Parse("""{"contents":{"kind":"plaintext","value":"still here"}}""")
@@ -255,34 +388,5 @@ public class RequestFailureLoggingTests : IAsyncDisposable
 
         [JsonRpcMethod("initialized")]
         public void Initialized(JsonElement _) { }
-    }
-
-    /// <summary>
-    /// Records what was logged at which level.
-    /// </summary>
-    /// <remarks>
-    /// A real logger rather than a substitute: <c>ILogger.Log</c> is generic over an internal state type, so
-    /// asserting on a mock's call means matching a type the framework does not expose. Twenty lines here
-    /// buys an assertion that reads as the thing being claimed.
-    /// </remarks>
-    private sealed class RecordingLogger : ILogger<VBLspClient>
-    {
-        public List<string> Warnings { get; } = [];
-        public List<string> Debugs { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(
-            LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
-        {
-            var message = formatter(state, exception);
-            switch (logLevel)
-            {
-                case LogLevel.Warning: lock (Warnings) Warnings.Add(message); break;
-                case LogLevel.Debug or LogLevel.Trace: lock (Debugs) Debugs.Add(message); break;
-            }
-        }
     }
 }

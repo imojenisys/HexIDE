@@ -6,10 +6,13 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using HexIDE.Runtime.Components;
 using Avalonia.Media;
 using HexIDE.Controls;
 using HexIDE.Events;
 using HexIDE.IDE;
+using HexIDE.Runtime.Components.InBox;
 using R3;
 using Serilog;
 
@@ -20,6 +23,14 @@ public partial class FormEditView : UserControl
     public FormEditView()
     {
         InitializeComponent();
+        FormContainer.AddHandler(KeyDownEvent, OnDesignerKeyDown, RoutingStrategies.Tunnel);
+        // Whether a button is held anywhere on the form, a control's own drag included, which marks its events handled.
+        FormContainer.AddHandler(PointerPressedEvent, (_, e) => _buttonHeld = AnyButton(e.GetCurrentPoint(FormContainer)),
+            RoutingStrategies.Tunnel, handledEventsToo: true);
+        FormContainer.AddHandler(PointerReleasedEvent, (_, e) => _buttonHeld = AnyButton(e.GetCurrentPoint(FormContainer)),
+            RoutingStrategies.Tunnel, handledEventsToo: true);
+        FormContainer.AddHandler(PointerCaptureLostEvent, (_, _) => _buttonHeld = false,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
         ControlsContainer.ReferenceChanged += OnControlsContainerReferenceChanged;
         NewControlSpawner.AddHandler(PointerPressedEvent, OnNewControlStarted);
         NewControlSpawner.AddHandler(PointerMovedEvent, OnNewControlMoving);
@@ -31,13 +42,28 @@ public partial class FormEditView : UserControl
         ControlsContainer.AddHandler(DoubleTappedEvent, VisualControl_OnDoubleTapped,
             Avalonia.Interactivity.RoutingStrategies.Bubble, handledEventsToo: true);
 
+        ControlsContainer.AddHandler(PointerPressedEvent, OnDesignerPagePressed,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
         FormContainer.AddHandler(PointerMovedEvent, OnFormPointerMoved);
         FormContainer.AddHandler(PointerReleasedEvent, OnFormPointerReleased);
     }
 
-    private double SnapToGrid(double x)
+    // A control's context menu is IDE chrome, but it opens from inside the ThemeVariantScope that keeps the form's canvas
+    // Light, and a popup takes the theme of what it opened from (#3400). So its popup is given the IDE's theme instead, on
+    // each opening, because a theme pack can change between two of them. The canvas keeps its own.
+    private void ControlMenuOpening(object? sender, EventArgs e)
     {
-        return SnapGridUtils.SnapToGrid(this, x);
+        if (sender is PopupFlyoutBase flyout && Application.Current is { } app)
+            flyout.Popup.SetValue(ThemeVariantScope.RequestedThemeVariantProperty, app.ActualThemeVariant);
+    }
+
+    private void OnDesignerPagePressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is FormEditViewModel vm && vm.ToolsBoxToolViewModel is { IsCursorSelected: true }
+            && e.Source is Control { DataContext: ComponentInstanceViewModel { Instance.BaseClass: SSTabComponentClass } }
+            && e.GetCurrentPoint(ControlsContainer).Properties.IsLeftButtonPressed
+            && vm.SwitchSSTabPage(e.GetPosition(ControlsContainer)))
+            e.Handled = true;
     }
 
     private Point newControlInitialPress;
@@ -52,6 +78,11 @@ public partial class FormEditView : UserControl
     // Guards against selection-change loops between VM and ControlsContainer
     private bool _syncingSelection;
 
+    private bool _buttonHeld;
+
+    private static bool AnyButton(PointerPoint point) =>
+        point.Properties is { IsLeftButtonPressed: true } or { IsRightButtonPressed: true } or { IsMiddleButtonPressed: true };
+
     private void OnNewPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (isSpawningNewControl && NewControlSpawnerPhantom.IsVisible)
@@ -61,9 +92,7 @@ public partial class FormEditView : UserControl
                 Log.Debug("FormEditView: Spawning control at ({Left},{Top} {Width}x{Height})",
                     Canvas.GetLeft(NewControlSpawnerPhantom), Canvas.GetTop(NewControlSpawnerPhantom),
                     NewControlSpawnerPhantom.Width, NewControlSpawnerPhantom.Height);
-                vm.SpawnControl(new Rect(Canvas.GetLeft(NewControlSpawnerPhantom),
-                    Canvas.GetTop(NewControlSpawnerPhantom), NewControlSpawnerPhantom.Width,
-                    NewControlSpawnerPhantom.Height));
+                vm.SpawnControlDrawn(newControlInitialPress, e.GetPosition(NewControlSpawner));
                 if (ControlsContainer.ContainerFromIndex(ControlsContainer.SelectedIndex) is { } control)
                 {
                     control.Focus();
@@ -74,19 +103,49 @@ public partial class FormEditView : UserControl
         isSpawningNewControl = false;
     }
 
+    private void OnDesignerKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is not FormEditViewModel vm)
+            return;
+
+        // VB6's designer visits every indexed control, ignoring runtime properties and containment (#4211).
+        var controls = vm.Components.Where(c => c.HasTabIndex).ToArray();
+
+        // While a button is held, Esc belongs to the drag in progress, not to the selection. An abandoned hold presses
+        // Escape and then moves back to where it was pressed and lets go, which puts a moved control back; selecting the
+        // form first would leave the control where the drag had taken it (HeldButtonTests).
+        if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None && !_buttonHeld
+            && vm.SelectedComponents.Count <= 1)
+        {
+            vm.SelectedComponent = vm.Form;
+        }
+        else if (e.Key == Key.Tab && e.KeyModifiers is KeyModifiers.None or KeyModifiers.Shift
+            && controls.Length > 0)
+        {
+            var ordered = controls.OrderBy(c => c.TabIndex).ToArray();
+            var index = Array.IndexOf(ordered, vm.SelectedComponent);
+            var backwards = e.KeyModifiers == KeyModifiers.Shift;
+            var next = index < 0 ? (backwards ? ordered.Length - 1 : 0)
+                : (index + (backwards ? ordered.Length - 1 : 1)) % ordered.Length;
+            vm.SelectedComponent = ordered[next];
+        }
+        else
+            return;
+
+        FormContainer.Focus();
+        e.Handled = true;
+    }
+
     private void OnNewControlMoving(object? sender, PointerEventArgs e)
     {
-        if (isSpawningNewControl)
+        if (isSpawningNewControl && DataContext is FormEditViewModel vm)
         {
             var point = e.GetCurrentPoint(NewControlSpawner).Position;
-            double left = SnapToGrid(Math.Min(point.X, newControlInitialPress.X));
-            double top = SnapToGrid(Math.Min(point.Y, newControlInitialPress.Y));
-            double right = SnapToGrid(Math.Max(point.X, newControlInitialPress.X));
-            double bottom = SnapToGrid(Math.Max(point.Y, newControlInitialPress.Y));
-            Canvas.SetLeft(NewControlSpawnerPhantom, left);
-            Canvas.SetTop(NewControlSpawnerPhantom, top);
-            NewControlSpawnerPhantom.Width = Math.Max(1, right - left);
-            NewControlSpawnerPhantom.Height = Math.Max(1, bottom - top);
+            var (rect, _) = vm.DrawnControlRectangle(newControlInitialPress, point);
+            Canvas.SetLeft(NewControlSpawnerPhantom, rect.Left);
+            Canvas.SetTop(NewControlSpawnerPhantom, rect.Top);
+            NewControlSpawnerPhantom.Width = rect.Width;
+            NewControlSpawnerPhantom.Height = rect.Height;
             NewControlSpawnerPhantom.IsVisible = true;
         }
     }
@@ -295,14 +354,7 @@ public partial class FormEditView : UserControl
             return;
         }
 
-        var eventClass = vm.Instance.BaseClass.Events.FirstOrDefault();
-        Log.Debug("FormEditView: DoubleTapped on {ControlName} ({ControlType}), default event={Event}",
-            vm.Name, vm.Instance.BaseClass.Name, eventClass?.Name ?? "(none)");
-
-        if (eventClass == null)
-            rootVm.RequestCode(null);
-        else
-            rootVm.RequestCode($"{vm.Name}_{eventClass.Name}");
+        rootVm.RequestControlDoubleClickCode(vm);
         e.Handled = true;
     }
 
@@ -312,7 +364,9 @@ public partial class FormEditView : UserControl
         if (DataContext is not FormEditViewModel rootVm)
             return;
 
-        rootVm.RequestCode(rootVm.RootDoubleClickProcedure);
+        rootVm.RequestCode(rootVm.RootDoubleClickProcedure,
+            rootVm.Form.Instance.BaseClass.Name,
+            ((HexIDE.Runtime.Components.FormComponentClass)rootVm.Form.Instance.BaseClass).DesignerDoubleClickEvent);
         e.Handled = true;
     }
 

@@ -71,6 +71,19 @@ public class HeaderRefresherTests
     // -- The arithmetic ----------------------------------------------------------------------------
 
     [Fact]
+    public void HeaderShiftMovesTheConditionWithItsBreakpoint()
+    {
+        var form = Deserialize(OneLabel);
+        var document = DocumentIdentity.For(form);
+        breakpoints.SetDocument(document, [12]);
+        breakpoints.SetCondition(document, 12, "i = 3");
+        CreateSut().ShiftMarks(document, Header(10), Header(13));
+        breakpoints.GetBreakpoints(document).Should().Equal(15);
+        breakpoints.GetCondition(document, 15).Should().Be("i = 3");
+        breakpoints.GetCondition(document, 12).Should().BeNull();
+    }
+
+    [Fact]
     public void MarksBelowTheHeaderMoveByTheDifference()
     {
         var form = Deserialize(OneLabel);
@@ -556,7 +569,7 @@ public class HeaderRefresherTests
         // LayoutChanged fires on every committed nudge of a control. An undo entry per nudge would be one
         // Ctrl+Z the developer did not earn, and pushing any entry clears their redo stack.
         var form = Deserialize(FiveAttributes);
-        var editor = NewCodeEditor().Initialize(form);
+        using var editor = NewCodeEditor().Initialize(form);
         dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
         var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
         sut.LayoutChanged(form);                  // settle the header on the serializer's own formatting
@@ -574,7 +587,7 @@ public class HeaderRefresherTests
         // the code window's own Undo (#513), two entries would separate them and leave the buffer naming the
         // form one way in its header and another in its code.
         var form = Deserialize(FiveAttributes);
-        var editor = NewCodeEditor().Initialize(form);
+        using var editor = NewCodeEditor().Initialize(form);
         dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
         var sut = new HeaderRefresher(bus, dock, breakpoints, bookmarks);
         sut.LayoutChanged(form);
@@ -655,6 +668,148 @@ public class HeaderRefresherTests
 
         editor.Document.Text[editor.CaretOffset..].Should().StartWith("Explicit");
         editor.Dispose();
+    }
+
+    // #3777 measures these file shapes and the two editor paths reaching an unsplit name.
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task ANameBelowACommentReachesTheSavedFile(bool open, bool afterProcedure)
+    {
+        var dir = Path.Join(Path.GetTempPath(), "HexIDE.Tests.3757", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        CodeEditorViewModel? editor = null;
+        try
+        {
+            const string function = "Public Function F() As Long\r\nF = 7\r\nEnd Function\r\n";
+            const string attribute = "Attribute VB_Name = \"QName\"\r\n";
+            var source = afterProcedure ? function + attribute : "' c\r\n" + attribute + function;
+            var path = Path.Join(dir, "Odd.bas");
+            File.WriteAllText(path, source);
+            var vbp = Path.Join(dir, "P.vbp");
+            File.WriteAllText(vbp, "Type=Exe\r\nModule=QName; Odd.bas\r\nName=\"P\"\r\n");
+            var project = (await new ProjectLoader().LoadAsync(vbp, NullSink.Instance)).Project;
+            var module = project.Modules.Single();
+            var sut = CreateSut();
+            if (open)
+            {
+                editor = NewCodeEditor().Initialize(module);
+                dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+            }
+            module.Name = "QRenamed";
+            sut.NameChanged(DocumentIdentity.For(module));
+            if (editor is not null)
+            {
+                editor.Document.Text.Should().StartWith("Attribute VB_Name = \"QRenamed\"\r\n");
+                module.UpdateCode(editor.BufferBody);
+            }
+            File.WriteAllText(path, ModuleFileFormat.ToFileContent(module.Code, module.Name, module.Kind, module.OriginalHeader));
+            File.ReadAllText(path).Should().Be("Attribute VB_Name = \"QRenamed\"\r\n" + (afterProcedure ? "" : "' c\r\n") + function);
+        }
+        finally
+        {
+            editor?.Dispose();
+            Directory.Delete(dir, true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void DeletingTheCommentThenClosingStillRenamesTheSavedName()
+    {
+        var module = TestHelpers.CreateModule(name: "QName");
+        var (header, body) = ModuleFileFormat.SplitHeader("' c\r\nAttribute VB_Name = \"QName\"\r\nPublic X As Long\r\n", module.Kind);
+        module.RecordOriginalHeader(header);
+        module.UpdateCode(body);
+        using (var editor = NewCodeEditor().Initialize(module))
+        {
+            var comment = editor.Document.Text.IndexOf("' c", StringComparison.Ordinal);
+            editor.Document.Remove(comment, "' c\r\n".Length);
+            module.UpdateCode(editor.BufferBody);
+        }
+        module.Name = "QRenamed";
+        CreateSut().NameChanged(DocumentIdentity.For(module));
+        SaveAndRead(module).Should().Be("Attribute VB_Name = \"QRenamed\"\r\nPublic X As Long\r\n");
+    }
+
+    [Fact]
+    public void AClassWithAttributesBelowACommentSavesItsRenamedHeader()
+    {
+        var header = ModuleFileFormat.Header("QName", ModuleKind.ClassModule);
+        var file = header.Replace("Attribute VB_Name", "' c\r\nAttribute VB_Name") + "Option Explicit\r\n";
+        var module = TestHelpers.CreateModule(name: "QName", kind: ModuleKind.ClassModule);
+        var (prefix, body) = ModuleFileFormat.SplitHeader(file, module.Kind);
+        module.RecordOriginalHeader(prefix);
+        module.UpdateCode(body);
+        module.Name = "QRenamed";
+        CreateSut().NameChanged(DocumentIdentity.For(module));
+        SaveAndRead(module).Should().Be(ModuleFileFormat.Header("QRenamed", module.Kind) + "' c\r\nOption Explicit\r\n");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(ModuleKind.StandardModule)]
+    [InlineData(ModuleKind.ClassModule)]
+    public void AHeaderNameLeavesAnUnmeasuredSecondNameAlone(ModuleKind kind)
+    {
+        var module = TestHelpers.CreateModule(name: "QName", kind: kind);
+        const string second = "Attribute VB_Name = \"Second\"\r\nOption Explicit\r\n";
+        var (header, body) = ModuleFileFormat.SplitHeader(ModuleFileFormat.Header("QName", kind) + second, kind);
+        module.RecordOriginalHeader(header);
+        module.UpdateCode(body);
+        var sut = CreateSut();
+        using var editor = NewCodeEditor().Initialize(module);
+        dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { editor });
+        module.Name = "QRenamed";
+        sut.NameChanged(DocumentIdentity.For(module));
+        module.UpdateCode(editor.BufferBody);
+        SaveAndRead(module).Should().Be(ModuleFileFormat.Header("QRenamed", kind) + second);
+    }
+
+    private static string SaveAndRead(ModuleDefinition module)
+    {
+        var path = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".bas");
+        try
+        {
+            File.WriteAllText(path, ModuleFileFormat.ToFileContent(module.Code, module.Name, module.Kind, module.OriginalHeader));
+            return File.ReadAllText(path);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void ATypedNameInAHeaderlessModuleFollowsARename(bool commentAbove, bool open)
+    {
+        var module = TestHelpers.CreateModule(name: "QName");
+        module.RecordOriginalHeader("");
+        module.UpdateCode("Public X As Long\r\n");
+        var sut = CreateSut();
+        using (var editor = NewCodeEditor().Initialize(module))
+        {
+            editor.Document.Insert(0, (commentAbove ? "' c\r\n" : "") + "Attribute VB_Name = \"WName\"\r\n");
+            module.UpdateCode(editor.BufferBody);
+        }
+        using var reopened = open ? NewCodeEditor().Initialize(module) : null;
+        if (reopened is not null)
+            dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel> { reopened });
+        module.Name = "QRenamed";
+        sut.NameChanged(DocumentIdentity.For(module));
+        if (reopened is not null)
+        {
+            reopened.Document.Text.Should().Contain("Attribute VB_Name = \"QRenamed\"");
+            module.UpdateCode(reopened.BufferBody);
+        }
+        var path = Path.Join(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".bas");
+        try
+        {
+            File.WriteAllText(path, ModuleFileFormat.ToFileContent(module.Code, module.Name, module.Kind, module.OriginalHeader));
+            File.ReadAllText(path).Should().Contain("Attribute VB_Name = \"QRenamed\"");
+        }
+        finally { File.Delete(path); }
     }
 
     /// <summary>A code editor with every collaborator stubbed: only the buffer is under test here.</summary>

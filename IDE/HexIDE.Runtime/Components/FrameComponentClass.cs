@@ -12,11 +12,14 @@ public class FrameComponentClass : ComponentBaseClass
     BackColorProperty,
     ForeColorProperty,
     FontProperty,
+    MousePointerProperty,
     // As a Label's: in the tab order without taking focus, and on every Frame VB6 writes (#925).
     TabIndexProperty,
-    ToolTipTextProperty], [ClickEvent, DblClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent])
+    ToolTipTextProperty], [ClickEvent, DblClickEvent, DesignerRootEvents.DragDropEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent])
     {
     }
+
+    public override string? DesignerDoubleClickEvent => "DragDrop";
 
     public override string Name => "Frame";
     public override string VBTypeName => "VB.Frame";

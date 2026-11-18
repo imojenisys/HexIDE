@@ -13,8 +13,71 @@ namespace HexIDE.Tests.Redaction;
 /// </remarks>
 public class ConversationRedactorTests
 {
+    [Fact]
+    public void Archive_entry_export_redacts_entry_and_nested_container()
+    {
+        const string uri = "archive-entry:/Secret/Module%20%23%201.twin?container=file%3A%2F%2F%2FC%3A%2FPrivate%2FDemo.twinproj";
+        var result = Redactor().Body("{\"uri\":\"" + uri + "\"}");
+        result.Should().Contain("archive-entry:/").And.Contain(".twin?container=file%3A")
+            .And.NotContain("Secret").And.NotContain("Module").And.NotContain("Private").And.NotContain("Demo");
+        Redactor(pseudonymise: false).Body(uri).Should().Be(uri);
+        var names = Redactor();
+        names.Uri(uri).Should().NotBe(names.Uri(uri.Replace("Secret", "%53ecret")),
+            "different wire spellings must remain visible in pseudonymised exports");
+    }
+
     private static ConversationRedactor Redactor(int seed = 11, bool pseudonymise = true) =>
         new(new Pseudonymiser(new Random(seed)), pseudonymise);
+
+    [Theory]
+    [InlineData("<home>", @"C:\Fixtures\Jane Doe")]
+    [InlineData("<temp>", @"C:\Fixtures\Temp Space")]
+    [InlineData("<workspace>", @"C:\Fixtures\Jane Doe\My Project")]
+    [InlineData("<home>", "/fixtures/Jane Doe")]
+    [InlineData("<workspace>", @"\\fixture-host\Jane Doe")]
+    public void SensitiveRootsAreRemovedBeforeProsePathsAreMatched(string token, string root)
+    {
+        var redactor = new ConversationRedactor(new Pseudonymiser(), sensitiveRoots: [(root, token)]);
+        foreach (var spelling in new[] { root, root.Replace('\\', '/'), root.Contains(':') || root.StartsWith(@"\\") ? root.ToUpperInvariant() : root,
+                     root.Replace('\\', '/').Replace(" ", "%20"), root.Replace("\\", "\\\\") })
+        {
+            foreach (var suffix in new[] { "", "/", @"\runtime\fake.dll" })
+            {
+                var input = $"fatal: runtime not found at {spelling}{suffix}";
+                redactor.Body(input).Should().StartWith($"fatal: runtime not found at {token}");
+                redactor.LocalPath(spelling + suffix).Should().StartWith(token);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("localhost")]
+    [InlineData("[::1]")]
+    [InlineData("0.0.0.0")]
+    [InlineData("[::]")]
+    public void TcpLoopbackAndWildcardEndpointsSurvive(string host) =>
+        Redactor().Endpoint($"tcp://{host}:6005").Should().Be($"tcp://{host}:6005");
+
+    [Fact]
+    public void TcpRemoteEndpointLosesItsHost()
+    {
+        Redactor().Endpoint("tcp://build-07.corp.internal:6005").Should()
+            .StartWith("tcp://").And.EndWith(":6005").And.NotContain("build-07").And.NotContain("corp.internal");
+    }
+
+    [Fact]
+    public void NestedWorkspaceWinsAndIsRemovedInsideAUri()
+    {
+        var redactor = new ConversationRedactor(new Pseudonymiser(), sensitiveRoots:
+            [(@"C:\Fixtures\Jane Doe", "<home>"), (@"C:\Fixtures\Jane Doe\Temp", "<temp>")]);
+        redactor.AddWorkspaceRoot("file:///C:/Fixtures/Jane%20Doe/Temp/My%20Project/");
+
+        redactor.Body("fatal: C:/Fixtures/Jane Doe/Temp/My Project/runtime.dll")
+            .Should().StartWith("fatal: <workspace>/").And.NotContain("Jane").And.NotContain("Project");
+        redactor.Body("file:///C:/Fixtures/Jane%20Doe/Temp/My%20Project/runtime.dll")
+            .Should().StartWith("file:///<workspace>/");
+    }
 
     // ── That nothing real survives ───────────────────────────────────────────
 
@@ -378,6 +441,25 @@ public class ConversationRedactorTests
         var inBody = redactor.Body("""{"uri":"file:///C:/x/Form1.frm"}""");
 
         inBody.Should().Contain(alone);
+    }
+
+    [Theory]
+    [InlineData(@"C:\Fixtures\private-work\runtime\fake.dll")]
+    [InlineData("C:/Fixtures/private-work/runtime/fake.dll")]
+    [InlineData(@"\\build-host\private-work\runtime\fake.dll")]
+    [InlineData("/srv/private-work/runtime/fake.dll")]
+    [InlineData("C:/Fixtures/private work/runtime/fake.dll")]
+    public void PlainPathsInServerProseUseTheLocalPathMapping(string path)
+    {
+        var redactor = Redactor();
+        var expected = redactor.LocalPath(path);
+
+        redactor.Body($"fatal: runtime not found at '{path}'").Should()
+            .Be($"fatal: runtime not found at '{expected}'");
+        if (!path.Contains(' '))
+            redactor.Body($"fatal: runtime not found at {path}").Should()
+                .Be($"fatal: runtime not found at {expected}");
+        expected.Should().NotContain("private");
     }
 
     // ── The opt-out ──────────────────────────────────────────────────────────

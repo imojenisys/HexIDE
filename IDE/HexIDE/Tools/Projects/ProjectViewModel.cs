@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.IDE;
 using CommunityToolkit.Mvvm.ComponentModel;
 using PropertyChanged.SourceGenerator;
 
@@ -31,6 +32,8 @@ public partial class ProjectViewModel : ObservableObject, IDisposable, IProjectT
     private readonly Dictionary<FormDefinition, FormViewModel> formViewModels = new();
     private readonly Dictionary<ModuleDefinition, ModuleViewModel> moduleViewModels = new();
     private readonly Dictionary<RelatedDocumentDefinition, RelatedDocViewModel> relatedDocViewModels = new();
+
+    private List<PreservedItemViewModel> preservedItems = new();
 
     // Session-only memory of directory-node expansion, keyed by project-relative directory path.
     private readonly Dictionary<string, bool> directoryExpansion = new(StringComparer.OrdinalIgnoreCase);
@@ -66,7 +69,7 @@ public partial class ProjectViewModel : ObservableObject, IDisposable, IProjectT
         OnPropertyChanged(nameof(Name));
         OnPropertyChanged(nameof(AccessibleName));
         // Save Project As re-anchors every member's tree placement.
-        if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName == nameof(ProjectDefinition.AbsolutePath))
+        if (string.IsNullOrEmpty(e.PropertyName) || e.PropertyName is nameof(ProjectDefinition.AbsolutePath) or nameof(ProjectDefinition.WorkingDirectory))
             Rebuild();
     }
 
@@ -144,15 +147,20 @@ public partial class ProjectViewModel : ObservableObject, IDisposable, IProjectT
         HarvestExpansion(Elements);
         var selected = parentVm.SelectedItem;
 
+        preservedItems = projectDefinition.PreservedItemLines.Select(line => new PreservedItemViewModel(this, line)).ToList();
         var children = ProjectTreeBuilder.BuildChildren(
             formViewModels.Values.Cast<IProjectFileNode>()
                 .Concat(moduleViewModels.Values)
-                .Concat(relatedDocViewModels.Values),
+                .Concat(relatedDocViewModels.Values)
+                .Concat(preservedItems),
             projectDefinition.AbsolutePath is { } vbpPath ? Path.GetDirectoryName(vbpPath) : null,
             directoryExpansion,
-            this);
+            this,
+            projectDefinition.ListedFolders);
 
         Elements.Clear();
+        if (ProjectFileSource.ChosenPath(projectDefinition) != null)
+            Elements.Add(new ProjectFileViewModel(new ProjectFileSource(projectDefinition)));
         foreach (var child in children)
             Elements.Add(child);
 
@@ -183,6 +191,9 @@ public partial class ProjectViewModel : ObservableObject, IDisposable, IProjectT
                 break;
             case ModuleViewModel module when module.Project == this:
                 parentVm.SelectedItem = moduleViewModels.ContainsValue(module) ? module : null;
+                break;
+            case PreservedItemViewModel item when item.Project == this:
+                parentVm.SelectedItem = preservedItems.FirstOrDefault(n => n.Line == item.Line);
                 break;
             case DirectoryViewModel dir when dir.Project == this:
                 parentVm.SelectedItem = FindDirectoryByKey(Elements, dir.Key);

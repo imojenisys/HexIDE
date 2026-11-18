@@ -1,10 +1,10 @@
 using System.Collections.Generic;
 using Avalonia.Controls;
+using Dock.Model.Core;
 
 namespace HexIDE.IDE;
 
-/// <summary>The four canonical dock regions a built-in tool window can occupy. Floating and pinning
-/// are disabled, so every arrangement resolves to one of these. See
+/// <summary>The four home dock regions a built-in tool window can occupy. See
 /// openspec/specs/ide-state-persistence/spec.md — the tool-window arrangement requirement.</summary>
 public enum DockRegion
 {
@@ -15,11 +15,19 @@ public enum DockRegion
 }
 
 /// <summary>One tool window's persisted placement. <see cref="Proportion"/> is the tool's share within
-/// its region's vertical stack (right/bottom); <c>null</c> lets Dock distribute evenly. Left and document
-/// tools ignore it.</summary>
+/// its containing dock; <c>null</c> lets Dock distribute evenly. Document tools ignore it.</summary>
 public sealed record ToolLayoutState(string Key, bool Open, DockRegion Region, int Order, double? Proportion);
 
-/// <summary>The IDE dock layout, captured as a flat per-tool manifest (the canonical-region model).
+/// <summary>A split, tool tab group or document placeholder in the saved dock tree.</summary>
+public sealed record DockLayoutNode(
+    string Kind, double? Proportion, Orientation Orientation, Alignment Alignment, string? Context,
+    IReadOnlyList<string> Tools, string? ActiveTool, IReadOnlyList<DockLayoutNode> Children);
+
+/// <summary>A floating tool tab group, with its normal bounds in DIP and its window state.</summary>
+public sealed record FloatingLayoutState(IReadOnlyList<string> Tools, string? ActiveTool,
+    double X, double Y, double Width, double Height, WindowState State);
+
+/// <summary>The IDE dock layout, with per-tool fallback placements and an optional split tree.
 /// A present <c>dock-layout.json</c> overrides <see cref="Default"/>; Reset Window Layout restores it.</summary>
 public sealed record LayoutManifest(
     int Version,
@@ -27,6 +35,13 @@ public sealed record LayoutManifest(
     double RightProportion,
     IReadOnlyList<ToolLayoutState> Tools)
 {
+    public static LayoutManifest FullEditor => Default with
+    {
+        Tools = Default.Tools.Select(t => t with { Open = false }).ToArray(),
+    };
+    public DockLayoutNode? Topology { get; init; }
+    public IReadOnlyList<FloatingLayoutState> Floating { get; init; } = [];
+
     public const int CurrentVersion = 2;
     public const double DefaultLeftProportion = 0.06;
     public const double DefaultRightProportion = 0.2155;
@@ -40,7 +55,8 @@ public sealed record LayoutManifest(
             new("toolbox",           true,  DockRegion.Left,     0, null),
             new("project",           true,  DockRegion.Right,    0, null),
             new("properties",        true,  DockRegion.Right,    1, null),
-            new("formLayout",        true,  DockRegion.Right,    2, null),
+            new("outline",           false, DockRegion.Right,    3, null),
+            new("formLayout",        false, DockRegion.Right,    2, null),
             new("immediate",         false, DockRegion.Bottom,   0, 0.3),
             new("locals",            false, DockRegion.Bottom,   1, 0.3),
             new("watches",           false, DockRegion.Bottom,   2, 0.3),
@@ -48,12 +64,17 @@ public sealed record LayoutManifest(
             new("colorPalette",      false, DockRegion.Bottom,   4, 0.3),
             new("objectBrowser",     false, DockRegion.Document, 0, null),
             new("translationEditor", false, DockRegion.Document, 1, null),
+            new("protocolInspector", false, DockRegion.Document, 3, null),
             new("languageServers",   false, DockRegion.Document, 2, null),
         });
 }
 
 public interface IWindowStateService
 {
+    IReadOnlyDictionary<string, LayoutManifest> LoadNamedLayouts();
+    void SaveNamedLayouts(IReadOnlyDictionary<string, LayoutManifest> layouts);
+
+    void TrackWindowState(Window mainWindow);
     void SaveWindowState(Window mainWindow);
     void RestoreWindowState(Window mainWindow);
 

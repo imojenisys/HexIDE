@@ -2,8 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:HexIDE.AIChat.Views"
              x:DataType="local:ChatViewModel"
-             x:Class="HexIDE.AIChat.Views.ChatView"
-             MinWidth="280">
+             x:Class="HexIDE.AIChat.Views.ChatView">
     <Grid RowDefinitions="*,Auto">
 
         <!-- Message history -->
@@ -46,13 +45,39 @@
                                                 Spacing="6"
                                                 Margin="0,6,0,0"
                                                 IsVisible="{Binding IsAwaitingDecision}">
-                                        <Button Content="Approve" Click="OnApproveClicked" />
-                                        <Button Content="Reject" Click="OnRejectClicked" />
+                                        <Button Content="{DynamicResource Str.AIChat.Approve}" Click="OnApproveClicked" />
+                                        <Button Content="{DynamicResource Str.AIChat.Reject}" Click="OnRejectClicked" />
                                     </StackPanel>
                                     <TextBlock Text="{Binding ApprovalOutcome}"
                                                IsVisible="{Binding !IsAwaitingDecision}"
                                                FontStyle="Italic"
                                                Opacity="0.7"
+                                               Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Privacy notice that waits for Send before the first message leaves (#4230) -->
+                            <Border IsVisible="{Binding IsEgressConfirmation}"
+                                    Margin="4,3"
+                                    Padding="8,6"
+                                    CornerRadius="6"
+                                    Background="{DynamicResource WarningBannerBackgroundBrush}"
+                                    BorderBrush="{DynamicResource WarningBannerBorderBrush}"
+                                    BorderThickness="1">
+                                <StackPanel>
+                                    <TextBlock Text="{Binding RawContent}" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource WarningBannerForegroundBrush}" />
+                                    <StackPanel Orientation="Horizontal"
+                                                Spacing="6"
+                                                Margin="0,6,0,0"
+                                                IsVisible="{Binding IsAwaitingDecision}">
+                                        <Button Name="EgressSend" Content="{DynamicResource Str.AIChat.Send}" Click="OnEgressSendClicked" />
+                                        <Button Name="EgressCancel" Content="{DynamicResource Str.AIChat.EgressCancel}" Click="OnEgressCancelClicked" />
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding ApprovalOutcome}"
+                                               IsVisible="{Binding !IsAwaitingDecision}"
+                                               Foreground="{DynamicResource WarningBannerForegroundBrush}"
+                                               FontStyle="Italic"
                                                Margin="0,4,0,0" />
                                 </StackPanel>
                             </Border>
@@ -89,7 +114,7 @@
                                                                        FontFamily="Consolas,Monospace"
                                                                        FontSize="12"
                                                                        TextWrapping="Wrap" />
-                                                            <Button Content="Apply"
+                                                            <Button Content="{DynamicResource Str.AIChat.Apply}"
                                                                     HorizontalAlignment="Right"
                                                                     Margin="0,4,0,0"
                                                                     Tag="{Binding Content}"
@@ -110,23 +135,28 @@
         </ScrollViewer>
 
         <!-- Input row -->
-        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="4">
+        <Grid Name="InputRow" Grid.Row="1" ColumnDefinitions="*,Auto,Auto,Auto" Margin="4">
             <TextBox Grid.Column="0"
                      Text="{Binding InputText}"
-                     PlaceholderText="Ask about your VB6 code…"
+                     PlaceholderText="{DynamicResource Str.AIChat.InputPlaceholder}"
                      AcceptsReturn="False"
                      KeyDown="OnInputKeyDown"
                      IsEnabled="{Binding !IsResponding}"
                      VerticalContentAlignment="Center" />
             <Button Grid.Column="1"
-                    Content="Send"
+                    Content="{DynamicResource Str.AIChat.Send}"
                     Margin="4,0,0,0"
                     IsEnabled="{Binding !IsResponding}"
                     Click="OnSendClicked" />
             <Button Grid.Column="2"
-                    Content="New"
+                    Content="{DynamicResource Str.AIChat.Stop}"
                     Margin="4,0,0,0"
-                    ToolTip.Tip="New chat (history is preserved)"
+                    IsVisible="{CompiledBinding IsResponding}"
+                    Click="OnStopClicked" />
+            <Button Grid.Column="3"
+                    Content="{DynamicResource Str.AIChat.New}"
+                    Margin="4,0,0,0"
+                    ToolTip.Tip="{DynamicResource Str.AIChat.NewTip}"
                     Click="OnNewChatClicked" />
         </Grid>
 

@@ -14,6 +14,7 @@ public class FormComponentClass : ComponentBaseClass
     EnabledProperty,
     ForeColorProperty,
     IconProperty,
+    MousePointerProperty,
     ShowInTaskbarProperty,
     FontProperty,
     StartUpPositionProperty,
@@ -37,9 +38,9 @@ public class FormComponentClass : ComponentBaseClass
     /// The event whose procedure the designer writes when its background is double-clicked: a form's Load (#1532), a
     /// UserControl's Initialize and a PropertyPage's SelectionChanged (measured, #1632).
     /// </summary>
-    public virtual string DesignerDoubleClickEvent => "Load";
+    public override string DesignerDoubleClickEvent => "Load";
 
-    private static readonly EventClass[] RootEvents = [ClickEvent, DblClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent];
+    private static readonly EventClass[] RootEvents = [KeyDownEvent, KeyPressEvent, KeyUpEvent, ClickEvent, DblClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent];
 
     public override string Name => "Form";
     public override string VBTypeName => "VB.Form";
@@ -65,18 +66,24 @@ public class FormComponentClass : ComponentBaseClass
             [AttachedProperties.BackColorProperty] = instance.GetPropertyOrDefault(BackColorProperty),
             [AttachedProperties.ForeColorProperty] = instance.GetPropertyOrDefault(ForeColorProperty),
             [AttachedProperties.FontProperty] = instance.GetPropertyOrDefault(FontProperty),
+            [AttachedProperties.MousePointerProperty] = instance.GetPropertyOrDefault(MousePointerProperty),
+            Cursor = instance.GetPropertyOrDefault(MousePointerProperty).ToCursor(),
             WindowStartupLocation = instance.GetPropertyOrDefault(StartUpPositionProperty).ToAvalonia(),
+            CenterOnShow = instance.GetPropertyOrDefault(StartUpPositionProperty) == VBStartupPosition.StartUpScreen,
             ShowInTaskbar = instance.GetPropertyOrDefault(ShowInTaskbarProperty),
             IsEnabled = instance.GetPropertyOrDefault(EnabledProperty),
             Position = new PixelPoint((int)instance.GetPropertyOrDefault(LeftProperty), (int)instance.GetPropertyOrDefault(TopProperty))
         };
+        AttachedProperties.SetKeyPreview(form, instance.GetPropertyOrDefault(KeyPreviewProperty));
         VBProps.SetName(form, instance.GetPropertyOrDefault(NameProperty));
         // The frame its Width and Height include at run time (#1072).
         // And the window that frame is drawn as: its border, caption bar and buttons (#1575).
         var chrome = AvaloniaInterop.FormChrome.Read(instance, menuBar);
         AvaloniaInterop.FormFrame.Set(form, chrome, menuBar);
+        AvaloniaInterop.FormPosition.FromClient(form, instance.GetPropertyOrDefault(LeftProperty),
+            instance.GetPropertyOrDefault(TopProperty), chrome, menuBar);
         chrome.Apply(form);
-        // And the icon it carries: its own, none, or the default (#1594).
+        // And the icon it carries: its own, none, or the shared neutral default (#1594, #4187).
         AvaloniaInterop.FormIcon.Read(instance).Apply(form);
         // The state the form's file gives it, which it shows in: `WindowState = 2 'Maximized` (#1152, measured). It is kept
         // as the line it was read with, so the designer and the file are unchanged.

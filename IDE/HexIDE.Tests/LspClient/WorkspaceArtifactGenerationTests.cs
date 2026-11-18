@@ -1,0 +1,1131 @@
+using System.Text.Json;
+using HexIDE.Conversations;
+using HexIDE.Lsp;
+using HexIDE.Lsp.Providers;
+using HexIDE.Redaction;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace HexIDE.Tests.LspClient;
+
+public sealed class WorkspaceArtifactGenerationTests : IDisposable
+{
+    private readonly string _root;
+    private readonly Workspace _workspace;
+    private readonly IWorkspaceArtifactConsent _consent = Substitute.For<IWorkspaceArtifactConsent>();
+    private readonly Provider _provider = new();
+    private readonly WorkspaceArtifactService _service;
+    private readonly DebounceClock _clock = new();
+
+    public WorkspaceArtifactGenerationTests()
+    {
+        // Canonical, as the service resolves it: macOS's temporary folder runs through a link (/var is /private/var), and
+        // the service hands consent and the ownership record the resolved path.
+        _root = WorkspaceArtifactService.Resolve(Directory.CreateDirectory(
+            Path.Combine(Path.GetTempPath(), "hexide-artifact-" + Guid.NewGuid().ToString("N"))).FullName);
+        _workspace = new Workspace(_root);
+        _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<WorkspaceArtifactSpec>()).Returns(true);
+        _service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, timeProvider: _clock);
+    }
+
+    private LanguageServerRegistration Server(string path = "generated.json") => new(
+        "probe", "Probe server", [".c"], "c", () => Substitute.For<ILspClient>(),
+        WorkspaceArtifact: new(path, "probe"));
+
+    [Fact]
+    public async Task ImportSeedLeavesAnExistingFileWithoutAskingConsent()
+    {
+        // The ordinary case once a project has been opened: a prompt here would come on every session's first start,
+        // for a file the seed would then refuse to write.
+        var target = Path.Combine(_root, "generated.json");
+        File.WriteAllText(target, "server's file");
+        var server = Server() with { ProjectImport = new("probe.import", JsonDocument.Parse("[]").RootElement.Clone()) };
+        await _service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        File.ReadAllText(target).Should().Be("server's file");
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task ImportSeedWritesEachResolvedFolderWithoutSavingOwnership()
+    {
+        var second = Path.Combine(_root, "second");
+        _workspace.Projects = [_workspace.Projects[0], _workspace.Projects[0] with { WorkspaceRoot = second }];
+        var state = Path.Combine(_root, "ownership.json");
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, stateFile: state);
+        var server = Server() with { ProjectImport = new("probe.import", JsonDocument.Parse("[]").RootElement.Clone()) };
+        await service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("first");
+        File.ReadAllText(Path.Combine(second, "generated.json")).Should().Be("first");
+        File.Exists(state).Should().BeFalse();
+        _provider.Content = "changed";
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("first");
+        File.ReadAllText(Path.Combine(second, "generated.json")).Should().Be("first");
+        _provider.Content = null;
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("first");
+    }
+
+    [Fact]
+    public async Task ImportSeedLosesAnAtomicMoveRaceWithoutOverwritingTheWinner()
+    {
+        var target = Path.Combine(_root, "generated.json");
+        var writes = 0;
+        _service.WriteContent = (stream, bytes) =>
+        {
+            writes++;
+            stream.Write(bytes);
+            File.WriteAllText(target, "winner");
+        };
+        var server = Server() with { ProjectImport = new("probe.import", JsonDocument.Parse("[]").RootElement.Clone()) };
+        await _service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        writes.Should().Be(1);
+        File.ReadAllText(target).Should().Be("winner");
+        Directory.GetFiles(_root, ".hexide-artifact-*").Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SharedFolderKeepsFirstProjectAndReportsBothUntilSeparated(bool importing)
+    {
+        var first = new WorkspaceArtifactContext(_root, new("First", "First.vbp", [], []));
+        var second = new WorkspaceArtifactContext(Path.Combine(_root, "."), new("Second", "Second.vbp", [], []));
+        _workspace.Projects = [first, second];
+        _provider.UseProjectName = true;
+        var server = importing ? Server() with
+        {
+            ProjectImport = new("probe.import", JsonDocument.Parse("[]").RootElement.Clone()),
+        } : Server();
+        await using var registry = new LspClientRegistry(
+            [server, Server() with { Id = "plain", WorkspaceArtifact = null }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        registry.ConfigurationProblems.Should().ContainSingle().Which.Message.Should().Contain("First").And.Contain("Second");
+        var notifications = 0;
+        registry.ConnectionsChanged += (_, _) => notifications++;
+        var imported = new List<string>();
+        if (importing)
+            await _service.ImportAsync(server, (project, _) =>
+            {
+                imported.Add(project.Project.Name);
+                return Task.CompletedTask;
+            }, TestContext.Current.CancellationToken);
+        else
+            await _service.PrepareAsync(server, TestContext.Current.CancellationToken);
+
+        if (importing) imported.Should().Equal("First");
+        else
+        {
+            _provider.Calls.Should().Be(1);
+            File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("First");
+        }
+        var problem = registry.ConfigurationProblems.Should().ContainSingle().Subject;
+        problem.EntryId.Should().Be(server.Id);
+        problem.Message.Should().Contain("First").And.Contain("Second");
+        problem.EntryRejected.Should().BeFalse();
+        notifications.Should().Be(0);
+        _workspace.Projects = [first, second with { WorkspaceRoot = Path.Combine(_root, "separate") }];
+        _workspace.Change();
+        await Debounce();
+        registry.ConfigurationProblems.Should().BeEmpty();
+        notifications.Should().Be(1);
+        if (importing) imported.Should().Equal("First", "First", "Second");
+        else File.ReadAllText(Path.Combine(_root, "separate", "generated.json")).Should().Be("Second");
+    }
+
+    [Fact]
+    public async Task ArtefactWritesReportOnlyCompletedMaterialChangesDirectly()
+    {
+        var changed = new List<(string Path, int Type)>();
+        var signal = typeof(WorkspaceArtifactService).GetEvent("FileChanged");
+        signal.Should().NotBeNull();
+        signal!.AddEventHandler(_service, (Action<string, int>)((path, type) => changed.Add((path, type))));
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        _provider.Content = "replacement";
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        _provider.Content = null;
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        changed.Should().Equal((Path.Combine(_root, "generated.json"), 1), (Path.Combine(_root, "generated.json"), 2),
+            (Path.Combine(_root, "generated.json"), 3));
+    }
+
+    [Fact]
+    public async Task IdenticalRegenerationPreservesWriteTime()
+    {
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        var target = Path.Combine(_root, "generated.json");
+        File.SetLastWriteTimeUtc(target, DateTime.UtcNow.AddDays(-1));
+        var before = File.GetLastWriteTimeUtc(target);
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.GetLastWriteTimeUtc(target).Should().Be(before);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InterruptedWritePreservesTargetAndAllowsRetry(bool existing)
+    {
+        var target = Path.Combine(_root, "generated.json");
+        if (existing) await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        _provider.Content = "replacement";
+        _service.WriteContent = (stream, bytes) =>
+        {
+            stream.Write(bytes.AsSpan(0, 2));
+            throw new IOException("interrupted write");
+        };
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        if (existing) File.ReadAllText(target).Should().Be("first");
+        else File.Exists(target).Should().BeFalse();
+        Directory.GetFiles(_root).Should().HaveCount(existing ? 1 : 0);
+        _service.WriteContent = (stream, bytes) => stream.Write(bytes);
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(target).Should().Be("replacement");
+    }
+
+    [Theory]
+    [InlineData("path", "Refused")]
+    [InlineData("denial", "denied")]
+    [InlineData("provider", "IOException")]
+    [InlineData("write", "not written")]
+    [InlineData("foreign", "Leaving existing")]
+    public async Task ServerOutputRefusalReasonIsRecordedOnTheConnection(string reason, string detail)
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        if (reason == "denial")
+            _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<WorkspaceArtifactSpec>()).Returns(false);
+        if (reason == "provider") _provider.Failure = new IOException("provider failed");
+        if (reason == "write") service.WriteContent = (_, _) => throw new IOException("write failed");
+        if (reason == "foreign") File.WriteAllText(Path.Combine(_root, "generated.json"), "foreign");
+        var launched = false;
+        var server = Server(reason == "path" ? "../escape.json" : "generated.json") with
+        {
+            CreateClient = () => { launched = true; return Substitute.For<ILspClient>(); }
+        };
+        await using var registry = new LspClientRegistry([server], NullLogger<LspClientRegistry>.Instance,
+            _workspace, artifacts: service);
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        launched.Should().BeTrue();
+        capture.Output.Text("probe").Should().Contain(detail);
+        capture.Snapshot("probe").Should().Contain(e => e.Kind == ConversationEntryKind.Note
+            && e.Direction == ConversationDirection.Local && e.Fault && e.Detail!.Contains(detail));
+    }
+
+    [Theory]
+    [InlineData("path", "Refused")]
+    [InlineData("denial", "denied")]
+    [InlineData("provider", "IOException")]
+    [InlineData("write", "IOException")]
+    [InlineData("foreign", "Leaving existing")]
+    public async Task RefusalExportsDoNotExposeWorkspacePaths(string reason, string detail)
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        if (reason == "denial")
+            _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<WorkspaceArtifactSpec>()).Returns(false);
+        if (reason == "provider") _provider.Failure = new IOException($"Provider failed at {_root}");
+        if (reason == "write") service.WriteContent = (_, _) => throw new IOException($"Write failed at {_root}");
+        if (reason == "foreign") File.WriteAllText(Path.Combine(_root, "generated.json"), "foreign");
+        var relative = reason == "path" ? "../escape.json" : "generated.json";
+        await service.PrepareAsync(Server(relative), TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        var export = await ConversationExporter.ExportAsync(capture,
+            new ConversationRedactor(new Pseudonymiser(new Random(21)), true));
+        export.Messages.Should().NotContain(Path.GetFileName(_root));
+        export.Manifest.Should().NotContain(Path.GetFileName(_root));
+        capture.Snapshot("probe").Should().Contain(e => e.Kind == ConversationEntryKind.Note
+            && e.Detail!.Contains(detail) && e.Detail.Contains(relative));
+    }
+
+    [Fact]
+    public async Task WritesBeforeTheClientFactoryRunsAndRegeneratesOwnedContent()
+    {
+        var sawGeneratedFile = false;
+        var server = Server() with { CreateClient = () =>
+        {
+            sawGeneratedFile = File.ReadAllText(Path.Combine(_root, "generated.json")) == "first";
+            return Substitute.For<ILspClient>();
+        }};
+        await using var registry = new LspClientRegistry([server], NullLogger<LspClientRegistry>.Instance,
+            _workspace, artifacts: _service);
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", TestContext.Current.CancellationToken);
+        sawGeneratedFile.Should().BeTrue();
+        _provider.Content = "second";
+        await _service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("second");
+        await _consent.Received().AllowAsync("probe", "Probe server", _root, Path.Combine(_root, "generated.json"), Arg.Any<WorkspaceArtifactSpec>());
+    }
+
+    [Fact(Timeout = 10_000)]
+    public async Task MaterialChangesRegenerateAfterDebounce()
+    {
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        var initial = _provider.Calls;
+        _provider.Content = "changed";
+        _workspace.Change();
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
+        _workspace.Change();
+        _clock.Advance(TimeSpan.FromMilliseconds(200));
+        _workspace.Change();
+        var regeneration = _service.PendingRegeneration;
+        _clock.HasTimer.Should().BeTrue();
+        _clock.Advance(TimeSpan.FromMilliseconds(299));
+        regeneration.IsCompleted.Should().BeFalse();
+        _provider.Calls.Should().Be(initial);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("first");
+        _clock.Advance(TimeSpan.FromMilliseconds(1));
+        await regeneration.WaitAsync(TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("changed");
+        _provider.Calls.Should().Be(initial + 1);
+    }
+
+    [Theory]
+    [InlineData("/tmp/escape.json")]
+    [InlineData("C:escape.json")]
+    [InlineData("C:\\escape.json")]
+    [InlineData("../escape.json")]
+    [InlineData("..\\escape.json")]
+    public async Task UnsafePathNeverWritesOrPrompts(string path)
+    {
+        await _service.PrepareAsync(Server(path), TestContext.Current.CancellationToken);
+        _provider.Calls.Should().Be(0);
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task LinkLeadingOutsideIsRefused()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "hexide-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            Directory.CreateSymbolicLink(Path.Combine(_root, "link"), outside);
+            await _service.PrepareAsync(Server("link/generated.json"), TestContext.Current.CancellationToken);
+            File.Exists(Path.Combine(outside, "generated.json")).Should().BeFalse();
+            _provider.Calls.Should().Be(0);
+            await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+        }
+        finally { Directory.Delete(outside, true); }
+    }
+
+    [Fact]
+    public async Task ConsentIsScopedToTheResolvedWorkspaceRoot()
+    {
+        var real = Path.Combine(_root, "real");
+        var alias = Path.Combine(_root, "alias");
+        Directory.CreateDirectory(real);
+        Directory.CreateSymbolicLink(alias, real);
+        _workspace.Projects = [new(alias, new("project", null, [], []))];
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(real, "generated.json")).Should().Be("first");
+        await _consent.Received().AllowAsync("probe", "Probe server", real, Path.Combine(real, "generated.json"), Arg.Any<WorkspaceArtifactSpec>());
+    }
+
+    [Fact]
+    public async Task ALinkWhoseTargetRunsThroughAnotherLinkResolvesToTheRealFolder()
+    {
+        // macOS's temporary folder is such a path: /var is a link to /private/var, so a link created there names a
+        // target that runs through it. A root resolved only as far as the last link failed its own containment check.
+        var real = Path.Combine(_root, "real");
+        Directory.CreateDirectory(Path.Combine(real, "inner"));
+        var hop = Path.Combine(_root, "hop");
+        Directory.CreateSymbolicLink(hop, real);
+        var workspace = Path.Combine(_root, "workspace");
+        Directory.CreateSymbolicLink(workspace, Path.Combine(hop, "inner"));
+        _workspace.Projects = [new(workspace, new("project", null, [], []))];
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        var inner = Path.Combine(real, "inner");
+        File.ReadAllText(Path.Combine(inner, "generated.json")).Should().Be("first");
+        await _consent.Received().AllowAsync("probe", "Probe server", inner, Path.Combine(inner, "generated.json"),
+            Arg.Any<WorkspaceArtifactSpec>());
+    }
+
+    [Theory]
+    [InlineData(false, "first")]
+    [InlineData(true, "first")]
+    [InlineData(true, null)]
+    public async Task LibrariesAreReadOnlyOnceTheWorkspaceHasConsented(bool allowed, string? content)
+    {
+        // A library's name is read by loading it, from a path the project file names: a project nobody allowed an artefact
+        // for, or one with nothing to describe, never gets that far (#2071's security review).
+        var names = Substitute.For<IWorkspaceLibraryNames>();
+        names.NameOf(Arg.Any<WorkspaceProjectReference>()).Returns("named");
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, libraryNames: names);
+        _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<WorkspaceArtifactSpec>()).Returns(allowed);
+        _provider.Content = content;
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        var target = Path.Combine(_root, "generated.json");
+        if (allowed && content is not null)
+        {
+            names.ReceivedWithAnyArgs(1).NameOf(default!);
+            File.ReadAllText(target).Should().Be("first named");
+        }
+        else
+        {
+            names.DidNotReceiveWithAnyArgs().NameOf(default!);
+            File.Exists(target).Should().BeFalse();
+        }
+    }
+
+    private LanguageServerRegistration Restarting(Func<ILspClient>? create = null) => Server() with
+    {
+        CreateClient = create ?? (() => Substitute.For<ILspClient>()),
+        WorkspaceArtifact = new("generated.json", "probe", RestartOnChange: true)
+    };
+
+    private async Task Debounce()
+    {
+        var regeneration = _service.PendingRegeneration;
+        _clock.Advance(TimeSpan.FromMilliseconds(300));
+        await regeneration.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task AChangedRegenerationAsksOnceToRestartAServerThatOptedIn()
+    {
+        var restarts = new List<string>();
+        _service.RestartRequested += restarted => restarts.Add(restarted.Id);
+        await _service.PrepareAsync(Restarting(), TestContext.Current.CancellationToken);
+        restarts.Should().BeEmpty("the write before a launch is read when the server starts");
+        _provider.Content = "changed";
+        _workspace.Change();
+        _workspace.Change();
+        _workspace.Change();
+        await Debounce();
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("changed");
+        restarts.Should().Equal(["probe"], "the debounce batches restarts as it does regeneration");
+    }
+
+    [Theory]
+    [InlineData("identical")]
+    [InlineData("denied")]
+    [InlineData("not opted in")]
+    public async Task NoRestartIsAskedWhenTheFileDidNotChangeOrTheServerDidNotAsk(string reason)
+    {
+        var restarts = new List<string>();
+        _service.RestartRequested += restarted => restarts.Add(restarted.Id);
+        var server = reason == "not opted in" ? Server() : Restarting();
+        await _service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        if (reason != "identical") _provider.Content = "changed";
+        if (reason == "denied")
+            _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<WorkspaceArtifactSpec>()).Returns(false);
+        _workspace.Change();
+        await Debounce();
+        restarts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task TakingTheFileBackIsAChangeToo()
+    {
+        var restarts = new List<string>();
+        _service.RestartRequested += restarted => restarts.Add(restarted.Id);
+        await _service.PrepareAsync(Restarting(), TestContext.Current.CancellationToken);
+        _provider.Content = null;
+        _workspace.Change();
+        await Debounce();
+        File.Exists(Path.Combine(_root, "generated.json")).Should().BeFalse();
+        restarts.Should().Equal(["probe"]);
+    }
+
+    [Fact]
+    public async Task ARestartRestartsOnlyThatServerAndReopensWhatItHeld()
+    {
+        // The other server claims the same document. It neither reads the file nor should lose its state, and a second
+        // didOpen for a URI is not something a server has to tolerate.
+        var restarted = new List<ILspClient>();
+        var other = new List<ILspClient>();
+        await using var registry = new LspClientRegistry(
+            [Restarting(() => Track(restarted)), Server() with { Id = "other", WorkspaceArtifact = null,
+                CreateClient = () => Track(other) }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        var uri = new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri;
+        await registry.OpenDocumentAsync(uri, "int x;", TestContext.Current.CancellationToken);
+        restarted.Should().ContainSingle();
+        other.Should().ContainSingle();
+
+        _provider.Content = "changed";
+        _workspace.Change();
+        await Debounce();
+        for (var waited = 0; restarted.Count < 2 && waited < 5000; waited += 50)
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        restarted.Should().HaveCount(2);
+        await restarted[0].Received(1).StopAsync();
+        await restarted[1].Received(1).OpenDocumentAsync(uri, "int x;", Arg.Any<CancellationToken>());
+        other.Should().ContainSingle("only the server whose artefact changed is restarted");
+        await other[0].Received(1).OpenDocumentAsync(uri, "int x;", Arg.Any<CancellationToken>());
+        await other[0].DidNotReceive().StopAsync();
+    }
+
+    [Theory]
+    [InlineData(true, "add")]
+    [InlineData(true, "remove")]
+    [InlineData(true, "same folder")]
+    [InlineData(false, "add")]
+    [InlineData(false, "remove")]
+    [InlineData(true, "source")]
+    public async Task ProjectMembershipRestartsOnlyOptedInConnections(bool enabled, string change)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = new WorkspaceArtifactContext(_root, new("First", Path.Combine(_root, "First.vbp"), [], []));
+        var secondRoot = change == "same folder" ? _root : Path.Combine(_root, "second");
+        var second = new WorkspaceArtifactContext(secondRoot,
+            new("Second", Path.Combine(secondRoot, "Second.vbp"), [], []));
+        _workspace.Projects = [first, second];
+        var clients = new List<ILspClient>();
+        var other = new List<ILspClient>();
+        // Exercise the JSON entry through registration, not just a hand-built registration's flag.
+        var entry = JsonSerializer.Deserialize<LanguageServerEntry>(
+            $$"""
+            { "id": "probe", "extensions": [".c"], "languageId": "c", "transport": "stdio", "command": "probe",
+              "restartOnProjectChange": {{(enabled ? "true" : "null")}} }
+            """)!;
+        var registration = new LanguageServerRegistrationFactory(NullLoggerFactory.Instance).Create([entry]).Single()
+            with { CreateClient = () => Track(clients) };
+        await using var registry = new LspClientRegistry(
+            [registration, Server() with { Id = "other", WorkspaceArtifact = null, CreateClient = () => Track(other) }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        var uri = new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri;
+        await registry.OpenDocumentAsync(uri, "int x;", ct);
+        if (change == "remove") _workspace.Projects = [first];
+        else if (change == "source")
+            _workspace.Projects = [first with { Project = first.Project with
+                { Files = [new("outside.c", Path.Combine(_root, "outside.c"), WorkspaceProjectFileKind.Carried)] } }, second];
+        else _workspace.Projects = [first, second,
+            new(secondRoot, new("Third", Path.Combine(secondRoot, "Third.vbp"), [], []))];
+        _workspace.Change();
+        _workspace.Change();
+        await Debounce();
+        var shouldRestart = enabled && change != "source";
+        if (shouldRestart)
+        {
+            for (var waited = 0; clients.Count < 2 && waited < 5000; waited += 25)
+                await Task.Delay(25, ct);
+            clients.Should().HaveCount(2);
+            await clients[0].Received(1).StopAsync();
+            await clients[1].Received(1).OpenDocumentAsync(uri, "int x;", Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            clients.Should().ContainSingle();
+            await clients[0].DidNotReceive().StopAsync();
+            await clients[0].Received(1).UpdateWorkspaceFoldersAsync(Arg.Any<CancellationToken>());
+        }
+        other.Should().ContainSingle();
+        await other[0].DidNotReceive().StopAsync();
+        await other[0].Received(1).UpdateWorkspaceFoldersAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ProjectMembershipRestartsAManuallyStartedConnectionWithoutDocuments()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var clients = new List<ILspClient>();
+        await using var registry = new LspClientRegistry(
+            [Server() with { WorkspaceArtifact = null, RestartOnProjectChange = true,
+                CreateClient = () => Track(clients) }],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        await registry.RestartAsync("probe", ct);
+        clients.Should().ContainSingle();
+        _workspace.Projects = [.. _workspace.Projects,
+            new(Path.Combine(_root, "second"), new("Second", Path.Combine(_root, "Second.vbp"), [], []))];
+        _workspace.Change();
+        await Debounce();
+        for (var waited = 0; clients.Count < 2 && waited < 5000; waited += 25)
+            await Task.Delay(25, ct);
+        clients.Should().HaveCount(2);
+        await clients[0].Received(1).StopAsync();
+        await clients[1].Received(1).StartAsync(Arg.Any<CancellationToken>());
+        await clients[1].DidNotReceiveWithAnyArgs().OpenDocumentAsync(default!, default!, Arg.Any<CancellationToken>());
+    }
+
+    private LanguageServerRegistration Importing(ILspClient client) => Server() with
+    {
+        CreateClient = () => client,
+        WorkspaceArtifact = null,
+        ProjectImport = new("probe.import", JsonDocument.Parse("[]").RootElement.Clone()),
+    };
+
+    [Fact]
+    public async Task AServerTakenOutTakesItsProjectImportProblemsWithIt()
+    {
+        // Jen's probe on #2821: the workspace's project was never saved, so its import fails, and says so.
+        var ct = TestContext.Current.CancellationToken;
+        await using var registry = new LspClientRegistry([], NullLogger<LspClientRegistry>.Instance, _workspace,
+            artifacts: _service);
+        var contribution = registry.Add(Importing(Track([])));
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", ct);
+        await contribution.Opened.WaitAsync(ct);
+        registry.ConfigurationProblems.Should().Contain(p => p.EntryId == "probe" && p.Message.StartsWith("Project import failed"));
+
+        await contribution.DisposeAsync();
+
+        registry.Knows("probe").Should().BeFalse();
+        registry.ConfigurationProblems.Should().NotContain(p => p.EntryId == "probe", "its configuration problems are withdrawn with it");
+    }
+
+    [Fact]
+    public async Task AnImportThatFailsAfterItsServerWasTakenOut_LeavesNoProblemBehind()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        _workspace.Projects = [new(_root, new("project", Path.Combine(_root, "project.vbp"), [], []),
+            ProjectText: _ => Task.FromResult("Name=\"project\"\r\n"))];
+        var importing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refuse = new TaskCompletionSource<JsonElement?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = Track([]);
+        client.ImportProjectAsync(Arg.Any<ProjectImportSpec>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                importing.TrySetResult();
+                return refuse.Task;
+            });
+        await using var registry = new LspClientRegistry([], NullLogger<LspClientRegistry>.Instance, _workspace,
+            artifacts: _service);
+        var contribution = registry.Add(Importing(client));
+        var opening = registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", ct);
+        await importing.Task.WaitAsync(ct);
+
+        var removing = contribution.DisposeAsync().AsTask();
+        refuse.SetException(new InvalidOperationException("Import refused"));
+        await removing.WaitAsync(ct);
+        await opening.WaitAsync(ct);
+
+        registry.ConfigurationProblems.Should().NotContain(p => p.EntryId == "probe",
+            "an import that ends after its server was taken out reports to nobody");
+    }
+
+    [Fact]
+    public async Task AServerTakenOutGeneratesNothingMore_ThoughTheProjectChanges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var clients = new List<ILspClient>();
+        await using var registry = new LspClientRegistry([], NullLogger<LspClientRegistry>.Instance, _workspace,
+            artifacts: _service);
+        var contribution = registry.Add(Server() with { CreateClient = () => Track(clients) });
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", ct);
+        var target = Path.Combine(_root, "generated.json");
+        File.ReadAllText(target).Should().Be("first", "written before the server launched");
+
+        await contribution.DisposeAsync();
+        _provider.Content = "changed";
+        _workspace.Change();
+        await Debounce();
+
+        File.ReadAllText(target).Should().Be("first", "the server it was for is gone");
+    }
+
+    [Fact]
+    public async Task AServerBeingTakenOut_GeneratesNothing_WhileItsStopTakesItsTime()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stopEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clients = new List<ILspClient>();
+        await using var registry = new LspClientRegistry([], NullLogger<LspClientRegistry>.Instance, _workspace,
+            artifacts: _service);
+        var contribution = registry.Add(Server() with
+        {
+            CreateClient = () =>
+            {
+                var client = Track(clients);
+                client.StopAsync().Returns(_ =>
+                {
+                    stopEntered.TrySetResult();
+                    return stopping.Task;
+                });
+                return client;
+            },
+        });
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", ct);
+        var target = Path.Combine(_root, "generated.json");
+
+        var removing = contribution.DisposeAsync().AsTask();
+        await stopEntered.Task.WaitAsync(ct);
+        _provider.Content = "changed";
+        _workspace.Change();
+        await Debounce();
+        stopping.SetResult();
+        await removing.WaitAsync(ct);
+
+        File.ReadAllText(target).Should().Be("first", "the server it was for was going");
+    }
+
+    [Fact]
+    public async Task AnArtefactRestartForAServerTakenOut_LeavesTheOneAddedUnderItsIdSinceAlone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var artifacts = Substitute.For<IWorkspaceArtifactService>();
+        var replacements = new List<ILspClient>();
+        await using var registry = new LspClientRegistry([], NullLogger<LspClientRegistry>.Instance, _workspace,
+            artifacts: artifacts);
+        var old = Restarting(() => Track([]));
+        await (await Added(registry, old)).DisposeAsync();
+        await using var replacement = await Added(registry, Restarting(() => Track(replacements)));
+
+        // A regeneration that wrote the old server's file before it went asks for its restart after.
+        artifacts.RestartRequested += Raise.Event<Action<LanguageServerRegistration>>(old);
+        await registry.WorkspaceChangedAsync(ct);   // serialised behind the restart, so it has run once this returns
+
+        await replacements.Single().DidNotReceive().StopAsync();
+    }
+
+    private async Task<LspClientRegistry.Contribution> Added(LspClientRegistry registry, LanguageServerRegistration server)
+    {
+        var added = registry.Add(server);
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;",
+            TestContext.Current.CancellationToken);
+        await added.Opened.WaitAsync(TestContext.Current.CancellationToken);
+        return added;
+    }
+
+    [Fact]
+    public async Task AServerTakenOutDuringARegeneration_IsNotRegeneratedByIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = Server("a.json") with { Id = "a" };
+        var second = Server("b.json") with { Id = "b" };
+        await _service.PrepareAsync(first, ct);
+        await _service.PrepareAsync(second, ct);
+        _provider.Content = "changed";
+
+        // Taken out while the pass writes the first server's file, after it has listed both: the forget waits for the
+        // pass's hold on the service and is next in line for it, ahead of the second server's write.
+        Task? forgotten = null;
+        _provider.OnProduce = () => { _provider.OnProduce = null; forgotten = _service.ForgetAsync(second); };
+        _workspace.Change();
+        await Debounce();
+        await forgotten!.WaitAsync(ct);
+
+        File.ReadAllText(Path.Combine(_root, "a.json")).Should().Be("changed");
+        File.ReadAllText(Path.Combine(_root, "b.json")).Should().Be("first", "the second server was gone before its turn");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ArtifactAndWorkspaceRestartsAreSerialised(bool workspaceFirst)
+    {
+        var clients = new List<ILspClient>();
+        await using var registry = new LspClientRegistry([Restarting(() => Track(clients))],
+            NullLogger<LspClientRegistry>.Instance, _workspace, artifacts: _service);
+        var ct = TestContext.Current.CancellationToken;
+        var uri = new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri;
+        await registry.OpenDocumentAsync(uri, "int x;", ct);
+        var stopping = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        clients[0].StopAsync().Returns(_ => { stopping.SetResult(); return release.Task; });
+        var moved = Directory.CreateDirectory(Path.Combine(_root, "moved")).FullName;
+        _workspace.Directory = moved;
+        _workspace.Projects = [new(moved, new("project", null, [], []))];
+        _provider.Content = "changed";
+
+        Task move;
+        if (workspaceFirst)
+        {
+            move = registry.WorkspaceChangedAsync(ct);
+            await stopping.Task.WaitAsync(ct);
+            _workspace.Change();
+            await Debounce();
+        }
+        else
+        {
+            _workspace.Change();
+            await Debounce();
+            await stopping.Task.WaitAsync(ct);
+            move = registry.WorkspaceChangedAsync(ct);
+        }
+
+        clients.Should().ContainSingle("the second restart waits for the first stop");
+        var request = registry.RequestHoverAsync(uri, new(0, 0), ct);
+        var requestWaited = !request.IsCompleted;
+        release.TrySetResult();
+        await move.WaitAsync(ct);
+        await request.WaitAsync(ct);
+        for (var waited = 0; clients.Count < 3 && waited < 5000; waited += 50)
+            await Task.Delay(50, ct);
+        requestWaited.Should().BeTrue("requests wait for the replacement's didOpen");
+        clients.Should().HaveCount(3, "each queued reason restarts in turn through the shared path");
+        await clients[0].DidNotReceive().RequestHoverAsync(Arg.Any<string>(), Arg.Any<HexIDE.Lsp.Messages.Position>(), Arg.Any<CancellationToken>());
+        await clients[0].Received(1).StopAsync();
+        await clients[1].Received(1).StopAsync();
+        await clients[2].Received(1).OpenDocumentAsync(uri, "int x;", Arg.Any<CancellationToken>());
+        File.ReadAllText(Path.Combine(moved, "generated.json")).Should().Be("changed");
+    }
+
+    private static ILspClient Track(List<ILspClient> created)
+    {
+        var client = Substitute.For<ILspClient>();
+        client.IsRunning.Returns(true);
+        client.AdvertisedCapabilities.Returns(
+            JsonDocument.Parse("{\"textDocumentSync\":{\"openClose\":true,\"change\":1}}").RootElement.Clone());
+        created.Add(client);
+        return client;
+    }
+
+    [Fact]
+    public async Task ExistingForeignFileIsLeftAloneWithoutPrompt()
+    {
+        var target = Path.Combine(_root, "generated.json");
+        File.WriteAllText(target, "CMake owns this");
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(target).Should().Be("CMake owns this");
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task EditingOwnedFileRelinquishesOwnership()
+    {
+        var target = Path.Combine(_root, "generated.json");
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.WriteAllText(target, "user edit");
+        _consent.ClearReceivedCalls();
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(target).Should().Be("user edit");
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task DenialStillLaunchesServerWithoutWriting()
+    {
+        _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<WorkspaceArtifactSpec>()).Returns(false);
+        var launched = false;
+        var server = Server() with { CreateClient = () => { launched = true; return Substitute.For<ILspClient>(); } };
+        await using var registry = new LspClientRegistry([server], NullLogger<LspClientRegistry>.Instance,
+            _workspace, artifacts: _service);
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", TestContext.Current.CancellationToken);
+        launched.Should().BeTrue();
+        File.Exists(Path.Combine(_root, "generated.json")).Should().BeFalse();
+        await _consent.Received().AllowAsync("probe", "Probe server", _root, Path.Combine(_root, "generated.json"), Arg.Any<WorkspaceArtifactSpec>());
+    }
+
+    [Fact]
+    public void ClangdProviderUsesSettingsAndOnlyCarriedSources()
+    {
+        using var settings = JsonDocument.Parse("""{"arguments":["clang","-DHEXIDE_PROBE","-Ipath with spaces"]}""");
+        var files = new[] { "probe.c", Path.Combine("sub", "other.cpp"), "notes.md", "header.h" }.Select(f =>
+            new WorkspaceProjectFile(f, Path.Combine(_root, f), WorkspaceProjectFileKind.Carried))
+            .Append(new("module.c", Path.Combine(_root, "module.c"), WorkspaceProjectFileKind.Module)).ToArray();
+        var context = new WorkspaceArtifactContext(_root, new("project", null, files, []), settings.RootElement);
+        var output = new ClangdCompilationDatabaseProvider().Produce(context);
+        using var json = JsonDocument.Parse(output!);
+        json.RootElement.GetArrayLength().Should().Be(3);
+        json.RootElement[1].GetProperty("directory").GetString().Should().Be(Path.Combine(_root, "sub"));
+        var command = json.RootElement[0];
+        command.GetProperty("directory").GetString().Should().Be(_root);
+        command.GetProperty("file").GetString().Should().Be(Path.Combine(_root, "probe.c"));
+        command.GetProperty("arguments").EnumerateArray().Select(a => a.GetString()).Should()
+            .Equal("clang", "-DHEXIDE_PROBE", "-Ipath with spaces", Path.Combine(_root, "probe.c"));
+    }
+
+    [Fact]
+    public async Task ClangdWithNoSourcesPromptsForNothingAndWritesNothing()
+    {
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([new ClangdCompilationDatabaseProvider()]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance);
+        var notes = new WorkspaceProjectFile("notes.md", Path.Combine(_root, "notes.md"), WorkspaceProjectFileKind.Carried);
+        _workspace.Projects = [new(_root, new("project", null, [notes], []))];
+        await service.PrepareAsync(Server("compile_commands.json") with { WorkspaceArtifact = new("compile_commands.json", "clangd") },
+            TestContext.Current.CancellationToken);
+        File.Exists(Path.Combine(_root, "compile_commands.json")).Should().BeFalse();
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task RemovingLastSourceDeletesTheOwnedCompilationDatabase()
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([new ClangdCompilationDatabaseProvider()]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        var source = new WorkspaceProjectFile("probe.c", Path.Combine(_root, "probe.c"), WorkspaceProjectFileKind.Carried);
+        _workspace.Projects = [new(_root, new("project", null, [source], []))];
+        var server = Server("compile_commands.json") with { WorkspaceArtifact = new("compile_commands.json", "clangd") };
+        await service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        using (var initial = JsonDocument.Parse(File.ReadAllText(Path.Combine(_root, "compile_commands.json"))))
+            initial.RootElement.GetArrayLength().Should().Be(1);
+        _workspace.Projects = [new(_root, new("project", null, [], []))];
+        _consent.ClearReceivedCalls();
+        await service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        File.Exists(Path.Combine(_root, "compile_commands.json")).Should().BeFalse();
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+        await capture.DrainAsync();
+        capture.Snapshot("probe").Should().Contain(e => e.Kind == ConversationEntryKind.Note && !e.Fault
+            && e.Detail!.Contains("Removed workspace artefact compile_commands.json"));
+    }
+
+    [Fact]
+    public async Task NothingToDescribeLeavesAnEditedFileWithItsReason()
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        var target = Path.Combine(_root, "generated.json");
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.WriteAllText(target, "user edit");
+        _provider.Content = null;
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(target).Should().Be("user edit");
+        await capture.DrainAsync();
+        capture.Snapshot("probe").Should().Contain(e => e.Kind == ConversationEntryKind.Note && e.Fault
+            && e.Detail!.Contains("Leaving existing workspace artefact generated.json alone"));
+    }
+
+    [Fact]
+    public async Task NothingToDescribeRefusesALinkLeadingOutsideBeforeDeleting()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), "hexide-outside-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outside);
+        try
+        {
+            var inside = Path.Combine(_root, "link");
+            Directory.CreateDirectory(inside);
+            await _service.PrepareAsync(Server("link/generated.json"), TestContext.Current.CancellationToken);
+            File.Copy(Path.Combine(inside, "generated.json"), Path.Combine(outside, "generated.json"));
+            Directory.Delete(inside, true);
+            Directory.CreateSymbolicLink(inside, outside);
+            _provider.Content = null;
+            await _service.PrepareAsync(Server("link/generated.json"), TestContext.Current.CancellationToken);
+            File.ReadAllText(Path.Combine(outside, "generated.json")).Should().Be("first");
+        }
+        finally { Directory.Delete(outside, true); }
+    }
+
+    [Fact]
+    public async Task NothingToDescribeWithNoFileDoesNothing()
+    {
+        _provider.Content = null;
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.Exists(Path.Combine(_root, "generated.json")).Should().BeFalse();
+        _provider.Calls.Should().Be(1);
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task DirectoryAtTheTargetIsLeftAloneAndTheServerStillLaunches()
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        Directory.CreateDirectory(Path.Combine(_root, "generated.json"));
+        var launched = false;
+        var server = Server() with { CreateClient = () => { launched = true; return Substitute.For<ILspClient>(); } };
+        await using var registry = new LspClientRegistry([server], NullLogger<LspClientRegistry>.Instance,
+            _workspace, artifacts: service);
+        await registry.OpenDocumentAsync(new Uri(Path.Combine(_root, "probe.c")).AbsoluteUri, "int x;", TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        launched.Should().BeTrue();
+        Directory.Exists(Path.Combine(_root, "generated.json")).Should().BeTrue();
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+        capture.Snapshot("probe").Should().Contain(e => e.Kind == ConversationEntryKind.Note && e.Fault
+            && e.Detail!.Contains("Leaving existing workspace artefact generated.json alone"));
+    }
+
+    [Fact]
+    public async Task OversizedFileIsNeverOwnedEvenWhenItsHashIsRecorded()
+    {
+        var target = Path.Combine(_root, "generated.json");
+        using (var file = new FileStream(target, FileMode.CreateNew))
+            file.SetLength(WorkspaceArtifactService.MaxArtifactLength + 1);
+        string hash;
+        using (var file = File.OpenRead(target))
+            hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(file));
+        var state = Path.Combine(_root, "state.json");
+        File.WriteAllText(state, JsonSerializer.Serialize(new Dictionary<string, string> { [target] = hash }));
+        using var service = new WorkspaceArtifactService(_workspace, new WorkspaceArtifactProviderRegistry([_provider]),
+            _consent, NullLogger<WorkspaceArtifactService>.Instance, state);
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        new FileInfo(target).Length.Should().Be(WorkspaceArtifactService.MaxArtifactLength + 1);
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task OversizedContentIsNotWritten()
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        _provider.Content = new string('x', (int)WorkspaceArtifactService.MaxArtifactLength + 1);
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        File.Exists(Path.Combine(_root, "generated.json")).Should().BeFalse();
+        capture.Snapshot("probe").Should().Contain(e => e.Kind == ConversationEntryKind.Note && e.Fault
+            && e.Detail!.Contains("larger than any artefact"));
+    }
+
+    [Fact]
+    public async Task EmptyContentIsNothingToDescribe()
+    {
+        _provider.Content = "";
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.Exists(Path.Combine(_root, "generated.json")).Should().BeFalse();
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    public static bool OnUnix => !OperatingSystem.IsWindows();
+
+    [Fact(Skip = "FIFOs are a Unix filesystem object.", SkipUnless = nameof(OnUnix), Timeout = 10_000)]
+    public async Task FifoAtTheTargetIsLeftAloneWithoutBeingOpened()
+    {
+        var target = Path.Combine(_root, "generated.json");
+        using (var mkfifo = System.Diagnostics.Process.Start("mkfifo", [target])!)
+            await mkfifo.WaitForExitAsync(TestContext.Current.CancellationToken);
+        var state = Path.Combine(_root, "state.json");
+        File.WriteAllText(state, JsonSerializer.Serialize(new Dictionary<string, string> { [target] = "00" }));
+        using var service = new WorkspaceArtifactService(_workspace, new WorkspaceArtifactProviderRegistry([_provider]),
+            _consent, NullLogger<WorkspaceArtifactService>.Instance, state);
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task TheSameReasonIsRecordedOnceUntilSomethingIsWritten()
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<WorkspaceArtifactSpec>())
+            .Returns(false, false, true, false);
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        capture.Snapshot("probe").Count(e => e.Detail?.Contains("denied") == true).Should().Be(1);
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.Delete(Path.Combine(_root, "generated.json"));
+        await service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        capture.Snapshot("probe").Count(e => e.Detail?.Contains("denied") == true)
+            .Should().Be(2, "a write came between the two denials, so the second is news");
+    }
+
+    [Fact]
+    public async Task ARefusedDeclarationIsNotedOnTheConnection()
+    {
+        await using var capture = new ConversationLog();
+        using var service = new WorkspaceArtifactService(_workspace,
+            new WorkspaceArtifactProviderRegistry([_provider]), _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, capture: capture);
+        var server = Server() with { WorkspaceArtifact = null, WorkspaceArtifactRefused = true };
+        await service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        await service.PrepareAsync(server, TestContext.Current.CancellationToken);
+        await capture.DrainAsync();
+        capture.Snapshot("probe").Should().ContainSingle(e => e.Kind == ConversationEntryKind.Note && e.Fault
+            && e.Detail!.Contains("declaration refused") && e.Detail.Contains("Tools > Language Servers"));
+        _provider.Calls.Should().Be(0);
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    [Fact]
+    public async Task FileCreatedDuringConsentIsNotClobbered()
+    {
+        var target = Path.Combine(_root, "generated.json");
+        _consent.AllowAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<WorkspaceArtifactSpec>())
+            .Returns(_ => { File.WriteAllText(target, "another writer"); return true; });
+        await _service.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(target).Should().Be("another writer");
+        await _consent.Received().AllowAsync("probe", "Probe server", _root, target, Arg.Any<WorkspaceArtifactSpec>());
+    }
+
+    [Fact]
+    public async Task OwnershipSurvivesRestart()
+    {
+        var state = Path.Combine(_root, "state.json");
+        var providers = new WorkspaceArtifactProviderRegistry([_provider]);
+        using (var first = new WorkspaceArtifactService(_workspace, providers, _consent,
+                   NullLogger<WorkspaceArtifactService>.Instance, state))
+            await first.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        _provider.Content = "after restart";
+        using var next = new WorkspaceArtifactService(_workspace, providers, _consent,
+            NullLogger<WorkspaceArtifactService>.Instance, state);
+        await next.PrepareAsync(Server(), TestContext.Current.CancellationToken);
+        File.ReadAllText(Path.Combine(_root, "generated.json")).Should().Be("after restart");
+    }
+
+    [Fact]
+    public async Task NoDeclarationProducesNothing()
+    {
+        await _service.PrepareAsync(Server() with { WorkspaceArtifact = null }, TestContext.Current.CancellationToken);
+        _provider.Calls.Should().Be(0);
+        await _consent.DidNotReceiveWithAnyArgs().AllowAsync(default!, default!, default!, default!, default!);
+    }
+
+    public void Dispose()
+    {
+        _service.Dispose();
+        Directory.Delete(_root, true);
+    }
+
+    // Each change cancels its predecessor's one-shot delay before creating the next.
+    private sealed class DebounceClock : TimeProvider
+    {
+        private long _ticks;
+        private long _due;
+        private Action? _fire;
+        public bool HasTimer => _fire is not null;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state,
+            TimeSpan dueTime, TimeSpan period)
+        {
+            period.Should().Be(Timeout.InfiniteTimeSpan);
+            _due = _ticks + dueTime.Ticks;
+            _fire = () => callback(state);
+            var timer = Substitute.For<ITimer>();
+            timer.When(t => t.Dispose()).Do(_ => _fire = null);
+            return timer;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            _ticks += elapsed.Ticks;
+            if (_ticks < _due) return;
+            var fire = _fire;
+            _fire = null;
+            fire?.Invoke();
+        }
+    }
+
+    private sealed class Provider : IWorkspaceArtifactProvider
+    {
+        public string Name => "probe";
+        public bool UseProjectName { get; set; }
+        public string? Content { get; set; } = "first";
+        public int Calls { get; private set; }
+        public Exception? Failure { get; set; }
+        public Action? OnProduce { get; set; }
+        public string? Produce(WorkspaceArtifactContext context)
+        {
+            Calls++;
+            OnProduce?.Invoke();
+            if (Failure is not null) throw Failure;
+            if (UseProjectName) return context.Project.Name;
+            return Content is null || context.LibraryNames is not { } names ? Content
+                : Content + " " + names.NameOf(new WorkspaceProjectReference("library"));
+        }
+    }
+
+    internal sealed class Workspace(string root) : IWorkspaceArtifactWorkspace
+    {
+        public string Directory { get; set; } = root;
+        public IReadOnlyList<LspWorkspaceFolder> Folders => [new("project", Directory)];
+        public IReadOnlyList<WorkspaceArtifactContext> Projects { get; set; } = [new(root, new("project", null, [], []))];
+        public event Action? ProjectChanged;
+        public void Change() => ProjectChanged?.Invoke();
+    }
+}

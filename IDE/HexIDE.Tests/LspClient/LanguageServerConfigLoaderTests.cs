@@ -37,6 +37,49 @@ public class LanguageServerConfigLoaderTests : IDisposable
         return new LanguageServerConfigLoader(path, _logger);
     }
 
+    [Fact]
+    public void SettingsRoundTripAndRegistrationRetainServerOwnedJson()
+    {
+        var result = LoaderFor("""
+            {"version":1,"servers":[{"id":"configured","extensions":[".bas"],"languageId":"vb6",
+              "transport":"stdio","command":"example","settings":{"rdcore":{"Analysis":{"DisabledDiagnostics":["example"]}}}}]}
+            """).Load([]);
+        var entry = result.Entries.Single();
+        entry.Unrecognized.Should().BeNullOrEmpty();
+        var json = System.Text.Json.JsonSerializer.Serialize(entry, LanguageServerConfigJsonContext.Default.LanguageServerEntry);
+        var copy = System.Text.Json.JsonSerializer.Deserialize(json, LanguageServerConfigJsonContext.Default.LanguageServerEntry)!;
+        copy.Settings!.Value.GetProperty("rdcore").GetProperty("Analysis").GetProperty("DisabledDiagnostics")[0]
+            .GetString().Should().Be("example");
+        using var logs = LoggerFactory.Create(_ => { });
+        var registration = new LanguageServerRegistrationFactory(logs).Create([copy]).Single();
+        System.Text.Json.JsonElement.DeepEquals(registration.Settings!.Value, entry.Settings!.Value).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("demo-lsp", 24)]
+    [InlineData("démo-lsp", 24)]
+    [InlineData("服务-lsp", 22)]
+    public void JsonSyntaxErrorReportsEditorLineAndCharacterColumn(string id, int column)
+    {
+        // #3065: the missing comma is on line four; UTF-8 bytes are not editor columns.
+        var json = """
+            {
+              "servers": [
+                { "id": "hexide.vb6", "enabled": false },
+                { "id": "ID" "extensions": [".demo"] }
+              ]
+            }
+            """.Replace("ID", id);
+        var result = LoaderFor(json).Load([BundledVb6()]);
+
+        var problem = result.Problems.Should().ContainSingle().Which;
+        problem.Code.Should().Be("JsonSyntax");
+        problem.Arguments.Should().Equal(Path.Combine(_dir, "lsp-servers.json"), 4L, column, "$.servers[1]");
+        problem.Message.Should().Contain($"line 4, column {column}").And.Contain("$.servers[1]")
+            .And.NotContain("LineNumber").And.NotContain("BytePositionInLine");
+        result.Entries.Should().ContainSingle().Which.Id.Should().Be("hexide.vb6");
+    }
+
     /// <summary>The bundled row, in the shape a default is contributed in.</summary>
     private static LanguageServerEntry BundledVb6() => new()
     {
@@ -139,6 +182,96 @@ public class LanguageServerConfigLoaderTests : IDisposable
         var entry = result.Entries.Should().ContainSingle().Subject;
         entry.Command.Should().Be("my-server");
         entry.Priority.Should().BeNull("the default's priority is replaced, not inherited");
+    }
+
+    [Theory]
+    [InlineData("stdio", "command", "my-server")]
+    [InlineData("pipe", "pipeName", "my-pipe")]
+    [InlineData("websocket", "endpoint", "ws://localhost:1234")]
+    public void ACompleteEntryInheritsNoOptionalFields(string transport, string destination, string value)
+    {
+        var bundled = BundledVb6();
+        bundled.Arguments = new ServerArguments("--default", null);
+        bundled.Environment = new() { ["DEFAULT"] = "value" };
+        bundled.Trace = "verbose";
+        var result = LoaderFor($$"""
+            { "servers": [{ "id": "hexide.vb6", "extensions": [".bas"],
+              "languageId": "vb6", "transport": "{{transport}}", "{{destination}}": "{{value}}" }] }
+            """).Load([bundled]);
+
+        var entry = result.Entries.Should().ContainSingle().Which;
+        entry.Arguments.Should().BeNull();
+        entry.Environment.Should().BeNull();
+        entry.Trace.Should().BeNull();
+        entry.Priority.Should().BeNull();
+    }
+
+    [Fact]
+    public void AnAdjustmentChangingArgumentsAnnouncesTheChangedCommand()
+    {
+        var seen = new LanguageServerCommandStore(Path.Combine(_dir, "seen.json"));
+        var loader = LoaderFor("""
+            { "servers": [{ "id": "hexide.vb6", "arguments": ["--changed"] }] }
+            """);
+        seen.Record("hexide.vb6", BundledVb6().Command!);
+
+        var result = loader.Load([BundledVb6()], seen);
+
+        result.Problems.Should().ContainSingle(p => p.Kind == LanguageServerConfigProblemKind.UnseenCommand)
+            .Which.Message.Should().Contain("--changed");
+        loader.Load([BundledVb6()], seen).Problems.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void APartialCustomisationKeepsTheResolvedBundledCommand()
+    {
+        var bundled = BundledVb6();
+        var result = LoaderFor("""
+            { "servers": [{ "id": "hexide.vb6", "trace": "verbose", "priority": 0 }] }
+            """).Load([bundled]);
+
+        var entry = result.Entries.Should().ContainSingle().Which;
+        entry.Command.Should().Be(bundled.Command);
+        entry.Extensions.Should().Equal(bundled.Extensions!);
+        entry.Trace.Should().Be("verbose");
+        entry.Priority.Should().Be(0);
+        bundled.Trace.Should().BeNull();
+        bundled.Priority.Should().Be(-100);
+        result.Problems.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AnExplicitNullRemovesAnInheritedOptionalField()
+    {
+        var bundled = BundledVb6();
+        bundled.Arguments = new ServerArguments("--default", null);
+        var result = LoaderFor("""
+            { "servers": [{ "id": "hexide.vb6", "arguments": null }] }
+            """).Load([bundled]);
+
+        var entry = result.Entries.Should().ContainSingle().Which;
+        entry.Arguments.Should().BeNull();
+        entry.Command.Should().Be(bundled.Command);
+        bundled.Arguments!.Text.Should().Be("--default");
+        result.Problems.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void WrittenObjectsAndArraysReplaceTheirInheritedFieldAsAWhole()
+    {
+        var bundled = BundledVb6();
+        bundled.Environment = new() { ["OLD"] = "old" };
+        var result = LoaderFor("""
+            { "servers": [{ "id": "hexide.vb6", "environment": { "NEW": "new" },
+                            "extensions": [".bas"] }] }
+            """).Load([bundled]);
+
+        var entry = result.Entries.Should().ContainSingle().Which;
+        entry.Environment.Should().BeEquivalentTo(new Dictionary<string, string> { ["NEW"] = "new" });
+        entry.Extensions.Should().Equal(".bas");
+        entry.Command.Should().Be(bundled.Command);
+        bundled.Environment.Should().ContainKey("OLD");
+        result.Problems.Should().BeEmpty();
     }
 
     [Fact]
@@ -286,6 +419,96 @@ public class LanguageServerConfigLoaderTests : IDisposable
         var problem = result.Problems.Should().ContainSingle().Subject;
         problem.EntryRejected.Should().BeFalse("an unrecognised field is not grounds to discard the rest");
         problem.Message.Should().Contain("futureThing");
+    }
+
+    [Theory]
+    [InlineData(@"C:\Utilities\server.exe")]
+    [InlineData(@"C:\updates\server.exe")]
+    public void InvalidEscapeExplainsWindowsPathSyntaxAndKeepsTheParseLocation(string path)
+    {
+        var result = LoaderFor($$"""
+            {"version":1,"servers":[{"id":"paths","command":"{{path}}"}]}
+            """).Load([BundledVb6()]);
+
+        result.Entries.Should().ContainSingle().Which.Id.Should().Be("hexide.vb6");
+        var problem = result.Problems.Should().ContainSingle().Which;
+        problem.EntryRejected.Should().BeTrue();
+        problem.Code.Should().Be("JsonSyntaxEscape");
+        problem.Message.Should().Contain("lsp-servers.json").And.Contain("C:/tools/new/...")
+            .And.Contain("doubled backslashes").And.Contain(@"C:\\tools\\new\\...")
+            .And.Contain("$.servers[0].command").And.Contain("line 1").And.Contain("column ");
+    }
+
+    [Theory]
+    [InlineData("command")]
+    [InlineData("arguments")]
+    [InlineData("workingDirectory")]
+    [InlineData("workspaceArtifact.path")]
+    public void EscapedControlsInPathFieldsWarnWithoutChangingTheValue(string field)
+    {
+        var pathJson = System.Text.Json.JsonSerializer.Serialize("C:\tools\new\repo\bin\file");
+        var property = field == "workspaceArtifact.path"
+            ? "\"workspaceArtifact\":{\"provider\":\"vb6-project\",\"path\":" + pathJson + "}"
+            : "\"" + field + "\":" + pathJson;
+        var command = field == "command" ? "" : "\"command\":\"server\",";
+        var result = LoaderFor("{\"version\":1,\"servers\":[{\"id\":\"paths\",\"extensions\":[\".x\"],"
+            + "\"languageId\":\"x\",\"transport\":\"stdio\"," + command + property + "}]}").Load([]);
+
+        var warning = result.Problems.Should().ContainSingle(p =>
+            p.Message.Contains("likely intended")).Which;
+        warning.Code.Should().Be("PathControlWarning");
+        warning.EntryId.Should().Be("paths");
+        warning.EntryRejected.Should().BeFalse();
+        warning.Message.Should().Contain(field).And.Contain(@"C:\tools\new\repo\bin\file");
+        var entry = result.Entries.Should().ContainSingle().Which;
+        var value = field switch
+        {
+            "command" => entry.Command,
+            "arguments" => entry.Arguments?.Text,
+            "workingDirectory" => entry.WorkingDirectory,
+            _ => entry.WorkspaceArtifact?.Path,
+        };
+        value.Should().Be("C:\tools\new\repo\bin\file");
+    }
+
+    [Theory]
+    [InlineData("arguments", "arguments[1]")]
+    [InlineData("environment", "environment.SERVER_PATH")]
+    public void EscapedControlsInArgumentElementsAndEnvironmentValuesWarnWithoutChangingTheValue(
+        string field, string expectedField)
+    {
+        var property = field == "arguments"
+            ? """
+              "arguments":["safe","C:\tools\new\repo\bin\file","D:\new"]
+              """
+            : """
+              "environment":{"SAFE":"safe","SERVER_PATH":"C:\tools\new\repo\bin\file","OTHER_PATH":"D:\new"}
+              """;
+        var result = LoaderFor($$"""
+            {"version":1,"servers":[{"id":"paths","extensions":[".x"],"languageId":"x",
+             "transport":"stdio","command":"server",{{property}}}]}
+            """).Load([]);
+
+        var warnings = result.Problems.Where(p => p.Message.Contains("likely intended")).ToArray();
+        warnings.Should().HaveCount(2);
+        var warning = warnings.Should().ContainSingle(p => p.Message.Contains(expectedField)).Which;
+        warning.Code.Should().Be("PathControlWarning");
+        warning.EntryId.Should().Be("paths");
+        warnings.Should().OnlyContain(p => !p.EntryRejected);
+        warning.Message.Should().Contain(@"C:\tools\new\repo\bin\file");
+        warnings.Should().ContainSingle(p => p.Message.Contains(
+            field == "arguments" ? "arguments[2]" : "environment.OTHER_PATH"))
+            .Which.Message.Should().Contain(@"D:\new");
+        var entry = result.Entries.Should().ContainSingle().Which;
+        if (field == "arguments")
+            entry.Arguments!.List.Should().Equal("safe", "C:\tools\new\repo\bin\file", "D:\new");
+        else
+        {
+            entry.Environment.Should().HaveCount(3);
+            entry.Environment!["SAFE"].Should().Be("safe");
+            entry.Environment["SERVER_PATH"].Should().Be("C:\tools\new\repo\bin\file");
+            entry.Environment["OTHER_PATH"].Should().Be("D:\new");
+        }
     }
 
     // ── Whole-file failures ───────────────────────────────────────────────────────────────────────────

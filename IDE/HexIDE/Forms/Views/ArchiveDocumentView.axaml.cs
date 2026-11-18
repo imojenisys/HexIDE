@@ -1,9 +1,13 @@
 using System;
 using System.ComponentModel;
+using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
+using Avalonia.Media;
+using Avalonia.Reactive;
 using AvaloniaEdit;
+using HexIDE.Controls;
 using HexIDE.Forms.ViewModels;
 
 namespace HexIDE.Forms.Views;
@@ -12,40 +16,101 @@ public partial class ArchiveDocumentView : UserControl
 {
     private ArchiveDocumentViewModel? model;
     private bool syncing;
+    private LspTextMarkerService? markers;
+    private readonly InactiveCodeColorizer inactive;
+    private IDisposable? inactiveBrush;
     public ArchiveDocumentView()
     {
         AvaloniaXamlLoader.Load(this);
         DataContextChanged += (_, _) => BindModel();
-        this.FindControl<TextEditor>("Editor")!.TextArea.Caret.PositionChanged += (_, _) =>
+        var editor = this.FindControl<TextEditor>("Editor")!;
+        editor.TextArea.Caret.PositionChanged += (_, _) =>
         {
-            if (!syncing && model != null) model.CaretOffset = this.FindControl<TextEditor>("Editor")!.CaretOffset;
+            if (!syncing && model != null) model.CaretOffset = editor.CaretOffset;
         };
+        // A .twin entry's inactive #If branches, greyed as the code window greys them (#1691).
+        inactive = new InactiveCodeColorizer(() => model?.InactiveLines ?? []);
+        editor.TextArea.TextView.LineTransformers.Add(inactive);
     }
 
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
         base.OnAttachedToVisualTree(e);
         BindModel();
+        var view = this.FindControl<TextEditor>("Editor")!.TextArea.TextView;
+        inactiveBrush = this.GetResourceObservable("InactiveCodeTextBrush").Subscribe(new AnonymousObserver<object?>(value =>
+        {
+            inactive.Brush = value as IBrush;
+            view.Redraw();
+        }));
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        if (model != null) model.PropertyChanged -= SyncSelection;
+        inactiveBrush?.Dispose();
+        inactiveBrush = null;
+        if (model != null)
+        {
+            model.PropertyChanged -= SyncSelection;
+            model.MarkersChanged -= OnMarkersChanged;
+        }
+        ClearMarkers();
         model = null;
         base.OnDetachedFromVisualTree(e);
     }
 
     private void BindModel()
     {
-        if (model != null) model.PropertyChanged -= SyncSelection;
+        if (model != null)
+        {
+            model.PropertyChanged -= SyncSelection;
+            model.MarkersChanged -= OnMarkersChanged;
+        }
+        ClearMarkers();
         model = DataContext as ArchiveDocumentViewModel;
-        if (model != null) model.PropertyChanged += SyncSelection;
+        if (model != null)
+        {
+            model.PropertyChanged += SyncSelection;
+            model.MarkersChanged += OnMarkersChanged;
+            ResetMarkers();
+            SyncSelection(model, new PropertyChangedEventArgs(model.SelectionLength > 0
+                ? nameof(model.SelectionStart) : nameof(model.CaretOffset)));
+        }
     }
+
+    private void ClearMarkers()
+    {
+        if (markers == null) return;
+        var view = this.FindControl<TextEditor>("Editor")!.TextArea.TextView;
+        view.BackgroundRenderers.Remove(markers);
+        markers = null;
+    }
+
+    private void ResetMarkers()
+    {
+        ClearMarkers();
+        var editor = this.FindControl<TextEditor>("Editor")!;
+        markers = new LspTextMarkerService(editor);
+        editor.TextArea.TextView.BackgroundRenderers.Add(markers);
+        OnMarkersChanged(model?.Markers ?? []);
+    }
+
+    private void OnMarkersChanged(IReadOnlyList<LspMarker> values) => markers?.SetMarkers(values);
 
     private void SyncSelection(object? sender, PropertyChangedEventArgs e)
     {
         if (model == null || syncing) return;
         var editor = this.FindControl<TextEditor>("Editor")!;
+        if (e.PropertyName == nameof(model.Document))
+        {
+            ResetMarkers();
+            return;
+        }
+        if (e.PropertyName == nameof(model.InactiveLines))
+        {
+            editor.TextArea.TextView.Redraw();
+            return;
+        }
         syncing = true;
         try
         {

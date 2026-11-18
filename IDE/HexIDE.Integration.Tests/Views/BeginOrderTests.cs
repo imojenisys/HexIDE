@@ -75,8 +75,8 @@ public class BeginOrderTests
     [
         ("Picture", "VB.PictureBox"), ("Frame", "VB.Frame"), ("Command", "VB.CommandButton"), ("Label", "VB.Label"),
         ("Line", "VB.Line"), ("Timer", "VB.Timer"), ("mnu", "VB.Menu"),
-        // Classes HexIDE does not model, so it carries their blocks as text: Web Browser.frm's (#1498).
-        ("tb", "MSComctlLib.Toolbar"), ("brw", "SHDocVwCtl.WebBrowser"), ("iml", "MSComctlLib.ImageList"),
+        // Carried classes (#1498), using an unregistered ImageList stand-in since #1083 models MSComctlLib.ImageList.
+        ("tb", "MSComctlLib.Toolbar"), ("brw", "SHDocVwCtl.WebBrowser"), ("iml", "NoSuchLib.ImageList"),
     ];
 
     // Every control at its own place, so a copy can be told from its source's sibling by where it is.
@@ -127,7 +127,7 @@ public class BeginOrderTests
         var form = new FormDeserializer().Deserialize(project, Frm(spec), new NullSink())!;
         project.AddForm(form);
         var toolbox = new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(),
-            Substitute.For<IComponentRegistry>(), Substitute.For<ILocalizationService>());
+            new ComponentRegistry(), Substitute.For<ILocalizationService>());
         var vm = new FormEditViewModel(toolbox, Substitute.For<IEventBus>(), Substitute.For<IProjectService>(), null!,
             windows!, Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>()).Initialize(form);
         return (vm, form);

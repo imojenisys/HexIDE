@@ -12,16 +12,23 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        HexIDE.IDE.BrandAssets.ApplyWindowIcon(this);
+
         // this is required to make commands work without focusing the MainView first
         CommandManager.SetCommandBindings(this, CommandManager.GetCommandBindings(MainView));
         CommandManager.InvalidateRequerySuggested();
 
+        Opened += OnOpened;
         Activated += OnActivated;
     }
 
     private void OnActivated(object? sender, EventArgs e)
     {
         CommandManager.InvalidateRequerySuggested();
+    }
+
+    private void OnOpened(object? sender, EventArgs e)
+    {
         if (once)
             return;
         once = true;

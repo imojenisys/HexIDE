@@ -31,6 +31,7 @@ public partial class WatchesToolViewModel : Tool
     private readonly IDebugController _debug;
     private readonly IWindowManager _windowManager;
     private readonly ExternalDebugService? externalDebugger;
+    public WatchDialogContextSource? DialogContextSource { get; init; }
     private bool showingExternal;
     private long generation;
     private bool refreshing;
@@ -65,6 +66,14 @@ public partial class WatchesToolViewModel : Tool
         DeleteWatchCommand = new RelayCommand(DeleteSelected);
 
         RebuildRows();
+        localization.LanguageChanged += () =>
+        {
+            foreach (var row in Rows)
+            {
+                row.RefreshContext();
+                row.RefreshLocalization();
+            }
+        };
         // The controller raises Stopped/Continued on the interpreter's own (UI-thread) execution, so we are on the UI
         // thread and the walk is frozen — the async watch eval completes synchronously against the paused frame.
         watchService.Watches.CollectionChanged += (_, _) =>
@@ -90,6 +99,8 @@ public partial class WatchesToolViewModel : Tool
         SelectedItem = null;
         Rows = new ObservableCollection<WatchRowViewModel>(
             ActiveService.Watches.Select(w => new WatchRowViewModel(w, _localization)));
+        foreach (var row in Rows)
+            row.Update(null, inactive: !showingExternal && !_debug.IsSessionActive);
     }
 
     private void RefreshExternal(bool force = false)
@@ -140,31 +151,40 @@ public partial class WatchesToolViewModel : Tool
     {
         if (showingExternal) return;
         foreach (var row in Rows)
-            row.Update(await _debug.EvaluateWatchAsync(row.Watch.Expression));
+            row.Update(await _debug.EvaluateScopedWatchAsync(row.Watch.Expression, row.Watch.Context));
     }
 
     private void Blank()
     {
         foreach (var row in Rows)
-            row.Update(null);
+            row.Update(null, inactive: !showingExternal && _debug.State == DebugState.Stopped);
     }
 
-    // The context a new watch records: the paused Module.Procedure, else the "(All Procedures)" placeholder.
+    // The paused frame context; the interpreter dialog source supplies the active code window defaults.
     private string CurrentContext()
-        => (showingExternal ? externalDebugger?.SelectedFrame?.GetProperty("name").GetString() : _debug.GetLocals()?.Context)
-            ?? _localization.GetString("Str.Dialog.AddWatch.AllContext");
+        => (showingExternal ? externalDebugger?.SelectedFrame?.GetProperty("name").GetString() : _debug.GetLocals()?.WatchContext)
+            ?? WatchExpression.AllProceduresContext;
 
     /// <summary>Open the Add Watch dialog (optionally pre-filled — QuickWatch passes the caret/selected expression).</summary>
-    public Task OpenAddWatchDialog(string? presetExpression = null)
-        => _windowManager.ShowDialog(new AddWatchDialogViewModel(
-            _localization, ActiveService, CurrentContext(), presetExpression, editing: null, expressionOnly: showingExternal));
+    public async Task OpenAddWatchDialog(string? presetExpression = null)
+    {
+        var context = CurrentContext();
+        WatchContextModule[] modules = [];
+        if (!showingExternal && DialogContextSource is { } source)
+            (modules, context) = await source.ReadAsync(context);
+        await _windowManager.ShowDialog(new AddWatchDialogViewModel(
+            _localization, ActiveService, context, presetExpression, expressionOnly: showingExternal, modules: modules));
+    }
 
-    /// <summary>Open the Edit Watch dialog for the selected row (VB6 Ctrl+W); no-op if nothing is selected.</summary>
-    public Task EditSelected()
-        => SelectedRow is { } row
-            ? _windowManager.ShowDialog(new AddWatchDialogViewModel(
-                _localization, ActiveService, row.Watch.Context, presetExpression: null, editing: row.Watch, expressionOnly: showingExternal))
-            : Task.CompletedTask;
+    /// <summary>Open the Edit Watch dialog for the selected row.</summary>
+    public async Task EditSelected()
+    {
+        if (SelectedRow is not { } row) return;
+        var modules = !showingExternal && DialogContextSource is { } source
+            ? (await source.ReadAsync(CurrentContext())).Modules : [];
+        await _windowManager.ShowDialog(new AddWatchDialogViewModel(
+            _localization, ActiveService, row.Watch.Context, editing: row.Watch, expressionOnly: showingExternal, modules: modules));
+    }
 
     /// <summary>Remove the selected watch from the store (the row disappears via CollectionChanged).</summary>
     public void DeleteSelected()

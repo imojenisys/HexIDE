@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using AvaloniaEdit;
@@ -28,14 +30,15 @@ namespace HexIDE.Integration.Tests.Automation;
 
 /// <summary>
 /// type_text's keyboard mode types as a person does, a key at a time (#943). The document mode inserts through the
-/// document, by design, and press_key raises only KeyDown and KeyUp, which AvaloniaEdit writes no text for, so nothing
-/// on the surface raised TextInput: the completion list that opens as you type, parameter info, and the block a line
+/// document, by design, and press_key raised only KeyDown and KeyUp until #2428, which AvaloniaEdit writes no text for,
+/// so nothing on the surface raised TextInput: the completion list that opens as you type, parameter info, and the block a line
 /// break closes were out of reach.
 /// </summary>
 public class TypeKeysTests : IDisposable
 {
     private readonly List<Window> windows = [];
     private readonly List<CodeEditorViewModel> made = [];
+    private readonly IStatusBarService status = Substitute.For<IStatusBarService>();
     private readonly ILspClient lsp = Substitute.For<ILspClient>();
 
     public TypeKeysTests()
@@ -54,7 +57,7 @@ public class TypeKeysTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private TextEditor Show(string code)
+    private TextEditor Show(string code, ModuleKind kind = ModuleKind.StandardModule, string? header = null, bool form = false, IStatusBarService? statusBar = null)
     {
         var eventBus = Substitute.For<IEventBus>();
         eventBus.Subscribe<CreateOrNavigateToSubEvent>(Arg.Any<Action<CreateOrNavigateToSubEvent>>()).Returns(Substitute.For<IDisposable>());
@@ -65,14 +68,24 @@ public class TypeKeysTests : IDisposable
         settings.TabWidth.Returns(4);
         settings.AutoListMembers.Returns(true);
 
+        var localization = Substitute.For<ILocalizationService>();
+        localization.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         var vm = new CodeEditorViewModel(
             Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(), Substitute.For<IProjectService>(),
-            eventBus, lsp, settings, Substitute.For<IStatusBarService>(), new BookmarkService(), new BreakpointService(),
-            Substitute.For<IDebugController>(), new RunScope(), Substitute.For<ILocalizationService>());
+            eventBus, lsp, settings, statusBar ?? status, new BookmarkService(), new BreakpointService(),
+            Substitute.For<IDebugController>(), new RunScope(), localization);
         made.Add(vm);
-        var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "Module1", ModuleKind.StandardModule);
+        var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "Module1", kind);
+        if (header is not null) module.RecordOriginalHeader(header);
         module.UpdateCode(code);
-        vm.Initialize(module);
+        if (form)
+        {
+            var definition = new FormDefinition(module.Owner, HexIDE.Runtime.Components.FormComponentClass.Instance, "Form1");
+            definition.UpdateCode(code);
+            vm.Initialize(definition);
+        }
+        else
+            vm.Initialize(module);
 
         var window = new Window { Width = 1200, Height = 800 };
         windows.Add(window);
@@ -83,6 +96,209 @@ public class TypeKeysTests : IDisposable
         return view.FindControl<TextEditor>("TextEditor")!;
     }
 
+    [AvaloniaTheory]
+    [InlineData(ModuleKind.StandardModule, false)]
+    [InlineData(ModuleKind.StandardModule, true)]
+    [InlineData(ModuleKind.ClassModule, false)]
+    [InlineData(ModuleKind.ClassModule, true)]
+    public void TypedLeadingAttributeStaysEditable(ModuleKind kind, bool headed)
+    {
+        var header = headed
+            ? (kind == ModuleKind.ClassModule ? "VERSION 1.0 CLASS\r\nBEGIN\r\nEND\r\n" : "")
+                + "Attribute VB_Name = \"Module1\"\r\n"
+            : "";
+        var editor = Show("\r\nPublic Function OddW() As Long\r\n    OddW = 7\r\nEnd Function\r\n", kind, header);
+        var start = header.Length;
+        editor.CaretOffset = start;
+        const string typed = "Attribute VB_Name = \"WName\"";
+        foreach (var ch in typed)
+        {
+            editor.TextArea.RaiseEvent(new TextInputEventArgs
+            {
+                RoutedEvent = InputElement.TextInputEvent, Text = ch.ToString(),
+            });
+        }
+        editor.Text.Substring(start, typed.Length).Should().Be(typed);
+        editor.Select(start, typed.Length + 2);
+        UiAutomationDriver.PressKey(editor, "Delete", null).Success.Should().BeTrue();
+        editor.Text.Should().Be(header + "Public Function OddW() As Long\r\n    OddW = 7\r\nEnd Function\r\n");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("header", false)]
+    [InlineData("header", true)]
+    [InlineData("member", false)]
+    [InlineData("member", true)]
+    [InlineData("hanging", false)]
+    [InlineData("hanging", true)]
+    public async Task RefusedKeysReachTheCodeWindow(string region, bool keyboard)
+    {
+        var message = "Ready";
+        long version = 0;
+        status.MessageVersion.Returns(_ => version);
+        status.Message.Returns(_ => message);
+        status.When(s => s.SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>()))
+            .Do(call => { message = call.Arg<string>(); version++; });
+        var editor = region == "header"
+            ? Show("Attribute VB_Name = \"Form1\"\r\nOption Explicit\r\n", form: true)
+            : Show(region == "member" ? WithRun : "Option Explicit\r\nAttribute Lost.VB_Description = \"lost\"\r\n");
+        editor.CaretOffset = region == "header" ? 12 : editor.Text.IndexOf("Attribute ", StringComparison.Ordinal) + 12;
+        var before = editor.Text;
+        var caret = editor.CaretOffset;
+
+        var result = keyboard ? await UiAutomationDriver.TypeKeysAsync(editor, "x")
+            : UiAutomationDriver.PressKey(editor, "X", null);
+
+        editor.Text.Should().Be(before);
+        editor.CaretOffset.Should().Be(caret);
+        status.Received().SetTemporaryMessage("Str.CodeEditor.Msg.TypingChangesReadOnlyText", Arg.Any<TimeSpan>());
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotContain("  ");
+        result.Error!.Split("Nothing was written").Length.Should().Be(2);
+        result.Error.Should().Contain("refused by the code window: \"Str.CodeEditor.Msg.TypingChangesReadOnlyText\"")
+            .And.Contain("Nothing was written.").And.Contain($"caret is at offset {caret}");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RefusedKeyQuotesItsMessageWithProgressArrivingDuringTheKey(bool keyboard)
+    {
+        var localization = new LocalizationService();
+        var realStatus = new StatusBarService(localization);
+        using var reporter = new LanguageServerMessageReporter(lsp, realStatus, localization);
+        var editor = Show(WithRun, statusBar: realStatus);
+        editor.CaretOffset = editor.Text.IndexOf("Attribute ", StringComparison.Ordinal) + 12;
+        var sent = false;
+        realStatus.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName != nameof(StatusBarService.Message) || sent) return;
+            sent = true;
+            foreach (var kind in new[] { "begin", "report" })
+                lsp.ProgressReceived += Raise.Event<EventHandler<ProgressParams>>(lsp,
+                    new ProgressParams(System.Text.Json.JsonSerializer.SerializeToElement("one"),
+                        new WorkDoneProgressValue(kind, "indexing")));
+        };
+        var result = keyboard ? await UiAutomationDriver.TypeKeysAsync(editor, "x")
+            : UiAutomationDriver.PressKey(editor, "X", null);
+        sent.Should().BeTrue();
+        result.Success.Should().BeFalse();
+        realStatus.Message.Should().Be("Str.CodeEditor.Msg.TypingChangesReadOnlyText");
+        result.Error.Should().Contain("refused by the code window: \"" + realStatus.Message + "\"");
+        realStatus.ClearMessage();
+    }
+
+    [AvaloniaFact]
+    public void RefusedBackspaceWithoutAMessageDoesNotQuoteReady()
+    {
+        status.Message.Returns("Ready");
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "Attribute Total.VB_UserMemId = 0\r\n");
+        status.ClearReceivedCalls();
+        var before = editor.Text;
+
+        var result = UiAutomationDriver.PressKey(editor, "Back", null);
+
+        editor.Text.Should().Be(before);
+        status.DidNotReceive().SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>());
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("refused by the code window, which gave no message")
+            .And.NotContain("Ready");
+        result.Error.Should().NotContain("  ");
+        result.Error!.Split("Nothing was written").Length.Should().Be(2);
+    }
+
+    [AvaloniaFact]
+    public void SilentRefusalDoesNotQuoteThePreviousKeysMessage()
+    {
+        var message = "Ready";
+        long version = 0;
+        status.MessageVersion.Returns(_ => version);
+        status.Message.Returns(_ => message);
+        status.When(s => s.SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>()))
+            .Do(call => { message = call.Arg<string>(); version++; });
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "Attribute Total.VB_");
+        var before = editor.Text;
+
+        var first = UiAutomationDriver.PressKey(editor, "X", null);
+        first.Error.Should().Contain("refused by the code window: \"Str.CodeEditor.Msg.TypingChangesReadOnlyText\"");
+        status.ClearReceivedCalls();
+        PutCaretAfter(editor, "Attribute Total.VB_UserMemId = 0\r\n");
+        var second = UiAutomationDriver.PressKey(editor, "Back", null);
+
+        editor.Text.Should().Be(before);
+        status.DidNotReceive().SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>());
+        second.Error.Should().Contain("refused by the code window, which gave no message")
+            .And.NotContain("Str.CodeEditor.Msg.TypingChangesReadOnlyText");
+    }
+
+    [AvaloniaFact]
+    public async Task KeyboardTypingReportsTheSentKeyAndKeepsTheEarlierText()
+    {
+        var message = "Ready";
+        long version = 0;
+        status.MessageVersion.Returns(_ => version);
+        status.Message.Returns(_ => message);
+        status.When(s => s.SetTemporaryMessage(Arg.Any<string>(), Arg.Any<TimeSpan>()))
+            .Do(call => { message = call.Arg<string>(); version++; });
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "    Total = 1");
+        (await UiAutomationDriver.TypeKeysAsync(editor, " + 2")).Success.Should().BeTrue();
+        var before = editor.Text;
+        PutCaretAfter(editor, "Attribute Total.VB_");
+
+        var result = await UiAutomationDriver.TypeKeysAsync(editor, "Description");
+
+        editor.Text.Should().Be(before);
+        editor.Text.Should().Contain("    Total = 1 + 2");
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("refused by the code window: \"Str.CodeEditor.Msg.TypingChangesReadOnlyText\"")
+            .And.Contain("was sent;").And.Contain("nothing after it was sent")
+            .And.Contain($"caret is at offset {editor.CaretOffset}");
+    }
+
+    [AvaloniaFact]
+    public void RefusedTextInputExplainsWhyInTheStatusBar()
+    {
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "Attribute Total.VB_");
+        var before = editor.Text;
+        editor.TextArea.RaiseEvent(new TextInputEventArgs
+        {
+            RoutedEvent = InputElement.TextInputEvent, Text = "x",
+        });
+        editor.Text.Should().Be(before);
+        status.Received().SetTemporaryMessage("Str.CodeEditor.Msg.TypingChangesReadOnlyText", Arg.Any<TimeSpan>());
+    }
+
+    [AvaloniaFact]
+    public void FormAttributeRunStillRefusesTextInput()
+    {
+        var editor = Show("Attribute VB_Name = \"Form1\"\r\nOption Explicit\r\n", form: true);
+        editor.CaretOffset = 12;
+        var before = editor.Text;
+        editor.TextArea.RaiseEvent(new TextInputEventArgs
+        {
+            RoutedEvent = InputElement.TextInputEvent, Text = "x",
+        });
+        editor.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public void TypedMemberAttributeStaysEditableWhileItsLineIsBeingTyped()
+    {
+        var editor = Show("Public Sub Foo()\r\n\r\nEnd Sub\r\n", header: "");
+        editor.CaretOffset = "Public Sub Foo()\r\n".Length;
+        foreach (var ch in "Attribute Foo.VB_Description = \"description\"")
+            editor.TextArea.RaiseEvent(new TextInputEventArgs
+            {
+                RoutedEvent = InputElement.TextInputEvent, Text = ch.ToString(),
+            });
+        // A line a person is typing is theirs until the caret leaves it (#3819), so every key writes.
+        editor.Text.Should().Be("Public Sub Foo()\r\nAttribute Foo.VB_Description = \"description\"\r\nEnd Sub\r\n");
+    }
+
     private static void PutCaretAfter(TextEditor editor, string text) =>
         editor.TextArea.Caret.Offset = editor.Document.Text.IndexOf(text, StringComparison.Ordinal) + text.Length;
 
@@ -90,6 +306,165 @@ public class TypeKeysTests : IDisposable
 
     private const string WithRun = "Option Explicit\r\n\r\nPublic Function Total()\r\n"
         + "Attribute Total.VB_UserMemId = 0\r\n    Total = 1\r\nEnd Function\r\n";
+
+    [AvaloniaFact]
+    public void TypingOverTwoMembersRunsNamesThemTogether()
+    {
+        var editor = Show("Public Sub A()\r\nAttribute A.VB_Description = \"a\"\r\nEnd Sub\r\n"
+            + "Public Sub B()\r\nAttribute B.VB_Description = \"b\"\r\nEnd Sub\r\n");
+        var start = editor.Text.IndexOf("Attribute A", StringComparison.Ordinal);
+        var end = editor.Text.LastIndexOf("End Sub", StringComparison.Ordinal);
+        editor.Select(start, end - start);
+        var before = editor.Text;
+
+        var result = UiAutomationDriver.PressKey(editor, "Enter", null);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("the Attribute lines describing A and B, which only the IDE changes");
+        editor.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public async Task PasteReportsTheProtectedPartOfASelection()
+    {
+        var editor = Show(WithRun);
+        var start = editor.Text.IndexOf("Total()", StringComparison.Ordinal);
+        var end = editor.Text.IndexOf("VB_UserMemId", StringComparison.Ordinal);
+        var before = editor.Text;
+        var removed = editor.Document.GetLineByOffset(start).EndOffset - start;
+        editor.Select(start, end - start);
+        await TopLevel.GetTopLevel(editor)!.Clipboard!.SetTextAsync("Other()");
+
+        var result = UiAutomationDriver.PressKey(editor, "V", ApplicationCommands.PasteCommand.Gestures[0].KeyModifiers.ToString());
+
+        editor.Text.Should().Be(before.Remove(start, removed).Insert(start, "Other()"));
+        result.Success.Should().BeTrue(result.Error);
+        result.Detail.Should().Contain("left").And.Contain("the Attribute lines describing Total")
+            .And.Contain("caret is now at offset");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("X", true)]
+    [InlineData("Tab", false)]
+    [InlineData("Tab", true)]
+    [InlineData("Indent", true)]
+    public void OtherEditingChordsReportTheProtectedPart(string key, bool command)
+    {
+        var editor = Show(WithRun.Replace("Public Function", "    Public Function", StringComparison.Ordinal));
+        var start = editor.Text.IndexOf("Total()", StringComparison.Ordinal);
+        var end = editor.Text.IndexOf("VB_UserMemId", StringComparison.Ordinal);
+        editor.Select(start, end - start);
+        var modifiers = key == "X" ? ApplicationCommands.CutCommand.Gestures[0].KeyModifiers.ToString()
+            : key == "Indent" ? ApplicationCommands.IndentCommand.Gestures[0].KeyModifiers.ToString()
+            : command ? "Shift" : null;
+        if (key == "Indent") key = "Tab";
+
+        var result = UiAutomationDriver.PressKey(editor, key, modifiers);
+
+        result.Success.Should().BeTrue(result.Error);
+        editor.Text.Should().Contain("Attribute Total.VB_UserMemId = 0");
+        result.Detail.Should().Contain("left").And.Contain("the Attribute lines describing Total");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Tab")]
+    [InlineData("BackTab")]
+    [InlineData("Indent")]
+    public async Task WholeLineIndentationReportsProtectedLines(string chord)
+    {
+        var editor = Show(WithRun.Replace("Public Function", "    Public Function", StringComparison.Ordinal));
+        var start = editor.Text.IndexOf("    Public Function", StringComparison.Ordinal);
+        var end = editor.Text.IndexOf("End Function", StringComparison.Ordinal);
+        var protectedLine = editor.Document.GetLineByOffset(editor.Text.IndexOf("Attribute Total", StringComparison.Ordinal)).LineNumber;
+        editor.Select(start, end - start);
+        var gesture = ApplicationCommands.IndentCommand.Gestures[0];
+        var key = chord == "Indent" ? gesture.Key.ToString() : "Tab";
+        var modifiers = chord == "Indent" ? gesture.KeyModifiers.ToString() : chord == "BackTab" ? "Shift" : null;
+
+        var result = await UiAutomationDriver.PressKeyAsync(editor, key, modifiers);
+
+        result.Success.Should().BeTrue(result.Error);
+        editor.Text.Should().Contain("\r\nAttribute Total.VB_UserMemId = 0\r\n");
+        editor.Text.Should().Contain(chord == "BackTab" ? "\r\nPublic Function Total()" : "        Public Function Total()");
+        result.Detail.Should().Contain($"left line {protectedLine} (the Attribute lines describing Total) as it was")
+            .And.NotContain("no protected text");
+        CleanPartialReply(result.Detail!);
+    }
+
+    [AvaloniaFact]
+    public async Task DeleteLineReportsTheProtectedPartOfASelection()
+    {
+        var editor = Show(WithRun);
+        var start = editor.Text.IndexOf("Attribute Total", StringComparison.Ordinal);
+        var end = editor.Text.IndexOf("End Function", StringComparison.Ordinal) - 2;
+        var before = editor.Text;
+        editor.Select(start, end - start);
+        var removed = "    Total = 1\r\n";
+        var gesture = ApplicationCommands.DeleteLineCommand.Gestures[0];
+
+        var result = await UiAutomationDriver.PressKeyAsync(editor, gesture.Key.ToString(), gesture.KeyModifiers.ToString());
+
+        result.Success.Should().BeTrue(result.Error);
+        editor.Text.Should().Be(before.Replace(removed, "", StringComparison.Ordinal));
+        result.Detail.Should().Contain($"deleted {removed.Length} char(s) from the selection")
+            .And.Contain("left").And.Contain("the Attribute lines describing Total");
+        CleanPartialReply(result.Detail!);
+    }
+
+    [AvaloniaFact]
+    public async Task PastePartialReplyGivesTheCaretOnceWithCleanPunctuation()
+    {
+        foreach (var writtenChord in new[] { false, true })
+        {
+            var editor = Show(WithRun);
+            var start = editor.Text.IndexOf("Total()", StringComparison.Ordinal);
+            var end = editor.Text.IndexOf("VB_UserMemId", StringComparison.Ordinal);
+            editor.Select(start, end - start);
+            await TopLevel.GetTopLevel(editor)!.Clipboard!.SetTextAsync("Other()");
+            var gesture = ApplicationCommands.PasteCommand.Gestures[0];
+
+            var result = await UiAutomationDriver.PressKeyAsync(editor,
+                writtenChord ? $"{gesture.KeyModifiers}+{gesture.Key}" : gesture.Key.ToString(),
+                writtenChord ? null : gesture.KeyModifiers.ToString());
+
+            result.Success.Should().BeTrue(result.Error);
+            CleanPartialReply(result.Detail!);
+        }
+    }
+
+    private static void CleanPartialReply(string detail)
+    {
+        detail.Should().NotContain("  ").And.NotContain(".;");
+        detail.Split("caret", StringSplitOptions.None).Length.Should().Be(2);
+    }
+
+    [AvaloniaFact]
+    public void KeymapDeleteLineReportsAProtectedLineRefusal()
+    {
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "Attribute Total.VB_");
+        var before = editor.Text;
+
+        var result = UiAutomationDriver.PressKey(editor, "Y", ApplicationCommands.PasteCommand.Gestures[0].KeyModifiers.ToString());
+
+        editor.Text.Should().Be(before);
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("refused by the code window").And.Contain("Nothing was written");
+    }
+
+    [AvaloniaFact]
+    public void PartialSelectionReachingHeaderAndMemberNamesOnlyTheHeader()
+    {
+        var editor = Show(WithRun);
+        var end = editor.Text.IndexOf("    Total = 1", StringComparison.Ordinal) + 4;
+        editor.Select(3, end - 3);
+
+        var result = UiAutomationDriver.TypeText(editor, "x");
+
+        result.Success.Should().BeTrue(result.Error);
+        result.Detail.Should().Contain("in the document's header (its designer block, class header or leading Attribute lines), which only the IDE changes")
+            .And.NotContain("describing Total");
+    }
 
     [AvaloniaFact]
     public void Delete1055_Partial_run_selection_deletes_code_and_names_what_stays()
@@ -125,7 +500,7 @@ public class TypeKeysTests : IDisposable
 
         result.Success.Should().BeTrue(result.Error);
         editor.Text.Should().Be(before.Remove(code, end - code));
-        result.Detail.Should().Contain("deleted 6 char(s)").And.Contain("the file's header")
+        result.Detail.Should().Contain("deleted 6 char(s)").And.Contain("the document's header (its designer block, class header or leading Attribute lines)")
             .And.Contain("which only the IDE changes").And.Contain($"caret is now at offset {editor.CaretOffset}")
             .And.Contain("no selection remains");
         editor.SelectionLength.Should().Be(0);
@@ -171,7 +546,7 @@ public class TypeKeysTests : IDisposable
             editor.Text.Should().Be(person.Text);
             editor.CaretOffset.Should().Be(person.CaretOffset);
             editor.SelectionLength.Should().Be(person.SelectionLength).And.Be(0);
-            typed.Detail.Should().Contain(header ? "the file's header" : "the Attribute lines describing Total");
+            typed.Detail.Should().Contain(header ? "the document's header (its designer block, class header or leading Attribute lines)" : "the Attribute lines describing Total");
 
             var keyboard = Show(WithRun);
             keyboard.Select(start, end - start);
@@ -193,7 +568,7 @@ public class TypeKeysTests : IDisposable
 
         refused.Success.Should().BeFalse();
         refused.Error.Should().Contain("text before the caret belongs to the Attribute lines describing Total")
-            .And.Contain("Deleting the member's whole declaration")
+            .And.Contain("Deleting the whole of the line above that read-only text")
             .And.NotContain($"CaretOffset={caret}").And.NotContain("nearest place");
         editor.Text.Should().Be(before);
 
@@ -214,9 +589,49 @@ public class TypeKeysTests : IDisposable
         var refused = UiAutomationDriver.PressKey(editor, "Delete", null);
 
         refused.Success.Should().BeFalse();
-        refused.Error.Should().Contain("is in the file's header, which only the IDE changes")
+        refused.Error.Should().Contain("is in the document's header (its designer block, class header or leading Attribute lines), which only the IDE changes")
             .And.NotContain("or a member");
         editor.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public void A_character_key_pressed_types_its_character_in_the_code_window()
+    {
+        // As a person's press does (#2428): the key's text after its KeyDown, which AvaloniaEdit writes.
+        var editor = Show(Body);
+        PutCaretAfter(editor, "Foo()\r\n    ");
+
+        var pressed = UiAutomationDriver.PressKey(editor, "M", "Shift");
+        Dispatcher.UIThread.RunJobs();
+
+        pressed.Success.Should().BeTrue(pressed.Error);
+        pressed.Detail.Should().Contain("; it typed \"M\", as the key does");
+        editor.Document.Text.Should().Contain("    M\r\nEnd Sub");
+    }
+
+    [AvaloniaFact]
+    public void A_character_key_pressed_in_Attribute_lines_is_refused_and_types_nothing()
+    {
+        // Judged as typing is, now that it types (#2428); it went unjudged, typing nothing, before.
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "Attribute Total.");
+        var before = editor.Text;
+
+        var refused = UiAutomationDriver.PressKey(editor, "X", null);
+
+        refused.Success.Should().BeFalse();
+        refused.Error.Should().Contain("is in the Attribute lines describing Total, which only the IDE changes");
+        editor.Text.Should().Be(before);
+    }
+
+    [AvaloniaFact]
+    public void A_navigation_key_in_Attribute_lines_is_still_never_refused()
+    {
+        var editor = Show(WithRun);
+        PutCaretAfter(editor, "Attribute Total.");
+
+        UiAutomationDriver.PressKey(editor, "Right", null).Success.Should().BeTrue();
+        UiAutomationDriver.PressKey(editor, "Right", "Shift").Success.Should().BeTrue();
     }
 
     [AvaloniaFact]
@@ -254,8 +669,28 @@ public class TypeKeysTests : IDisposable
         entered.Should().Equal("M", "s");
         editor.Document.Text.Should().Contain("    Ms\r\nEnd Sub");
         // Line 4, counted from 0: the module's Attribute VB_Name header is its first line.
-        await lsp.Received().RequestCompletionAsync(Arg.Any<string>(), new Position(4, 5), Arg.Any<CancellationToken>());
-        await lsp.Received().RequestCompletionAsync(Arg.Any<string>(), new Position(4, 6), Arg.Any<CancellationToken>());
+        await lsp.Received(2).RequestCompletionAsync(Arg.Any<string>(), new Position(4, 4), Arg.Any<CancellationToken>());
+    }
+
+    [AvaloniaTheory]
+    [InlineData(".")]
+    [InlineData("!")]
+    public async Task Advertised_punctuation_asks_for_completion(string trigger)
+    {
+        lsp.CompletionTriggerCharacters(Arg.Any<string>()).Returns(new[] { ".", "!" });
+        lsp.RequestCompletionForTriggerAsync(Arg.Any<string>(), Arg.Any<Position>(), trigger,
+            Arg.Any<CancellationToken>()).Returns(Array.Empty<CompletionItem>());
+        var editor = Show(Body);
+        PutCaretAfter(editor, "Foo()\r\n    ");
+
+        var typed = await UiAutomationDriver.TypeKeysAsync(editor, trigger);
+        Dispatcher.UIThread.RunJobs();
+
+        typed.Success.Should().BeTrue(typed.Error);
+        await lsp.Received(1).RequestCompletionForTriggerAsync(Arg.Any<string>(), new Position(4, 5),
+            trigger, Arg.Any<CancellationToken>());
+        await lsp.DidNotReceive().RequestCompletionAsync(Arg.Any<string>(), Arg.Any<Position>(),
+            Arg.Any<CancellationToken>());
     }
 
     [AvaloniaFact]
@@ -348,13 +783,13 @@ public class TypeKeysTests : IDisposable
         var typed = await UiAutomationDriver.TypeKeysAsync(editor, "MsgBox(");
 
         typed.Success.Should().BeTrue(typed.Error);
-        await lsp.Received(1).RequestSignatureHelpAsync(Arg.Any<string>(), new Position(4, 11), Arg.Any<CancellationToken>());
+        await lsp.Received(1).RequestSignatureHelpAsync(Arg.Any<string>(), new Position(4, 11), Arg.Any<CancellationToken>(), "(");
     }
 
     [AvaloniaFact]
     public async Task The_parameter_info_a_parenthesis_asks_for_is_open_before_the_reply()
     {
-        lsp.RequestSignatureHelpAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>()).Returns(async _ =>
+        lsp.RequestSignatureHelpAsync(Arg.Any<string>(), Arg.Any<Position>(), Arg.Any<CancellationToken>(), Arg.Any<string?>()).Returns(async _ =>
         {
             await Task.Delay(150);
             return (SignatureHelp?)new SignatureHelp([new SignatureInformation("MsgBox(Prompt)", null,
@@ -384,8 +819,8 @@ public class TypeKeysTests : IDisposable
         {
             var typed = await UiAutomationDriver.TypeKeysAsync(editor, "M");
 
-            typed.Detail.Should().EndWith("; the language server had not answered 1 key(s)' completion or parameter-info "
-                                          + "request within 100 ms, so a list may still open");
+            typed.Detail.Should().EndWith("; the language server had not answered 1 key(s)' completion, parameter-info or on-type formatting "
+                                          + "request within 100 ms, so a popup or formatting edit may still arrive");
         }
         finally
         {
@@ -457,7 +892,9 @@ public class TypeKeysTests : IDisposable
             var typed = await UiAutomationDriver.TypeKeysAsync(box, "abc");
 
             typed.Success.Should().BeFalse();
-            typed.Error.Should().StartWith("typed 1 of 3 key(s) into TextBox, then stopped: 'Reset?' opened over the window");
+            typed.Error.Should().Be("key 1 of 3 was sent to TextBox and raised 'Reset?' over the window; "
+                                   + "that key may not have landed. Nothing after it was sent. "
+                                   + "Answer the dialog, then check the text before deciding what to send next");
             box.Text.Should().Be("a", "the rest would have gone to the dialog");
         }
         finally { prompt?.Close(); }
@@ -485,8 +922,9 @@ public class TypeKeysTests : IDisposable
             var typed = await UiAutomationDriver.TypeKeysAsync(box, "abc");
 
             typed.Success.Should().BeFalse();
-            typed.Error.Should().StartWith("typed 1 of 3 key(s) into TextBox, then stopped: 'Reset?' opened over 'Form1', "
-                                           + "and a person's next key would go to it");
+            typed.Error.Should().Be("key 1 of 3 was sent to TextBox and raised 'Reset?' over 'Form1'; "
+                                   + "that key may not have landed. Nothing after it was sent. "
+                                   + "Answer the dialog, then check the text before deciding what to send next");
             box.Text.Should().Be("a", "the rest would have gone to the dialog");
         }
         finally
@@ -524,6 +962,56 @@ public class TypeKeysTests : IDisposable
             pressed.Error.Should().StartWith("'Reset?', a modal dialog over 'Project1 - HexIDE', is open and waits for an "
                                              + "answer, so a person's keys would go to it, not to TextBox; nothing was pressed.");
             box.Text.Should().BeNullOrEmpty();
+        }
+        finally { open.Close(); }
+    }
+
+    // The reset prompt and the run-time error dialog are both titled 'HexIDE', so the refusal says what the dialog on top
+    // is, as the note does: its kind, its first line and its buttons (#1975).
+    [AvaloniaFact]
+    public async Task The_refusal_says_what_the_dialog_is_not_only_its_title()
+    {
+        var box = new TextBox { Width = 200 };
+        var window = ShowBoxes(box);
+        window.Title = "Project1 - HexIDE";
+        var open = new Window
+        {
+            Title = "HexIDE",
+            Content = new HexIDE.Dialogs.MessageBox { Text = "Reset?", Buttons = HexIDE.IDE.MessageBoxButtons.OkCancel },
+        };
+        _ = open.ShowDialog(window);
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var typed = await UiAutomationDriver.TypeKeysAsync(box, "abc");
+            typed.Error.Should().StartWith("'HexIDE' (a message box: \"Reset?\", OK/Cancel), a modal dialog over 'Project1 - HexIDE'");
+
+            var pressed = UiAutomationDriver.PressKey(box, "A", null);
+            pressed.Error.Should().StartWith("'HexIDE' (a message box: \"Reset?\", OK/Cancel), a modal dialog over 'Project1 - HexIDE'");
+            box.Text.Should().BeNullOrEmpty();
+        }
+        finally { open.Close(); }
+    }
+
+    // A program's MsgBox given an empty title has none, and that is when what it is matters most: it is described all
+    // the same, and said to have no title, as every text that names a dialog says it (#1975 review).
+    [AvaloniaFact]
+    public async Task A_dialog_with_no_title_is_described_and_said_to_have_none()
+    {
+        var box = new TextBox { Width = 200 };
+        var window = ShowBoxes(box);
+        window.Title = "Project1 - HexIDE";
+        var open = new Window
+        {
+            Title = "",
+            Content = new HexIDE.Dialogs.MessageBox { Text = "Reset?", Buttons = HexIDE.IDE.MessageBoxButtons.OkCancel },
+        };
+        _ = open.ShowDialog(window);
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var typed = await UiAutomationDriver.TypeKeysAsync(box, "abc");
+            typed.Error.Should().StartWith("one with no title (a message box: \"Reset?\", OK/Cancel), a modal dialog over");
         }
         finally { open.Close(); }
     }
@@ -661,7 +1149,7 @@ public class TypeKeysTests : IDisposable
 
             var typed = await UiAutomationDriver.TypeKeysAsync(box, "abc");
 
-            typed.Error.Should().Contain("'Reset?' opened over 'Form1'");
+            typed.Error.Should().Contain("'Reset?'").And.Contain("over 'Form1'");
             OpenDialogs.Note(watch, [window, form, prompt!]).Should().BeNull();
         }
         finally
@@ -688,8 +1176,10 @@ public class TypeKeysTests : IDisposable
         {
             var typed = await UiAutomationDriver.TypeKeysAsync(box, "abc");
 
-            typed.Error.Should().StartWith("typed 1 of 3 key(s) into TextBox, then stopped: 'Project1' opened in a window "
-                                           + "of its own, and a person's next key would go to it");
+            // Said what it is, not only its title, which a program's box shares with its project (#1975).
+            typed.Error.Should().StartWith("key 1 of 3 was sent to TextBox and raised 'Project1' (a message box")
+                .And.EndWith(") in a window of its own; that key may not have landed. Nothing after it was sent. "
+                             + "Answer the dialog, then check the text before deciding what to send next");
         }
         finally { shown?.Close(); }
     }

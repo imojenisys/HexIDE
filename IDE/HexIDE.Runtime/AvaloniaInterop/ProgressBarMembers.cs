@@ -28,15 +28,14 @@ internal static class ProgressBarMembers
     // The extender's members every control has, which the shared bindings and members answer.
     private static readonly HashSet<string> Shared = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Name", "Index", "Left", "Top", "Width", "Height", "Visible", "Tag", "ToolTipText", "Container", "Parent",
+        "Name", "Index", "Left", "Top", "Width", "Height", "Visible", "Tag", "ToolTipText", "TabIndex", "Container", "Parent",
         "Object", "Move", "ZOrder", "Drag", "ShowWhatsThis",
     };
 
-    // The extender's members a ProgressBar has in VB6 that HexIDE doesn't implement yet. TabIndex is no control's at run
-    // time yet (#1974).
+    // The extender's members a ProgressBar has in VB6 that HexIDE doesn't implement yet.
     private static readonly HashSet<string> ExtenderNotImplemented = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Align", "DragIcon", "DragMode", "WhatsThisHelpID", "TabIndex",
+        "Align", "DragIcon", "DragMode", "WhatsThisHelpID",
     };
 
     /// <summary>A member read.</summary>
@@ -64,7 +63,7 @@ internal static class ProgressBarMembers
             "BorderStyle" => new Vb6Value((long)bar.BorderStyle),
             "OLEDropMode" => new Vb6Value((long)bar.OLEDropMode),
             "MousePointer" => new Vb6Value((long)AttachedProperties.GetMousePointer(bar)),
-            "Enabled" => new Vb6Value(bar.IsEnabled),
+            "Enabled" => new Vb6Value(bar.IsEffectivelyEnabled),
             _ => throw new NotImplementedException($"Reading a ProgressBar's {member.Name} is not implemented"),
         };
         return true;
@@ -132,7 +131,7 @@ internal static class ProgressBarMembers
     }
 
     /// <summary>A method called.</summary>
-    public static bool? TryCall(Avalonia.Controls.Control control, string name)
+    public static bool? TryCall(Avalonia.Controls.Control control, string name, IReadOnlyList<Vb6Value> args)
     {
         if (control is not VBProgressBar bar)
             return null;
@@ -142,6 +141,14 @@ internal static class ProgressBarMembers
         var member = Own(bar, name);
         if (member is not { Kind: MemberKind.Method })
             return false;
+        if (member.Name == "Increment")
+        {
+            if (args.Count == 0)
+                throw new VBRunTimeException(VBStandardError.ArgumentNotOptionalOrInvalidPropertyAssignment);
+            var increment = Single(args[0]);
+            bar.VbValue = (float)Math.Clamp((double)bar.VbValue + increment, bar.VbMin, bar.VbMax);
+            return true;
+        }
         // Refresh repaints the bar, which keeps its Value (measured).
         bar.InvalidateVisual();
         return true;

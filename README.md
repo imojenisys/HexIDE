@@ -9,15 +9,15 @@ LSP-backed editor — IntelliSense, diagnostics, code folding, rename, and forma
 form designer and project manager. It runs on Windows, macOS, and Linux. No COM, no registry,
 no Visual Studio required.
 
-> **Status: Pre-alpha — early developer preview.** HexIDE is a working cross-platform VB6
+> **Status: Alpha — early developer preview.** HexIDE is a working cross-platform VB6
 > *editor and form designer*. It is **not a compiler** — the built-in interpreter runs only a
-> subset of VB6, and producing a real `.exe` currently shells out to an installed copy of the
-> original VB6 (Windows only). Treat it as an early preview, not a finished product.
+> subset of VB6. **File → Make** packages a project with that interpreter as a standalone program;
+> a native `.exe` still needs an installed copy of the original VB6 (Windows only). Treat it as an
+> early preview, not a finished product.
 > Contributions and feedback are very welcome.
 >
-> **Work on a copy.** The file-format work has come a long way — 21 of VB6's own 22 template forms now
-> survive a save byte-for-byte, and the one that does not is refused rather than damaged — but that
-> corpus is Microsoft's templates, not your project. Anything hosting a third-party OCX is the known
+> **Work on a copy.** The file-format work has come a long way — all 22 of VB6's own template forms now
+> survive a save byte-for-byte — but that corpus is Microsoft's templates, not your project. Anything hosting a third-party OCX is the known
 > weak edge. See [Opening real VB6 projects](#real-projects) for exactly what it does and does not
 > preserve.
 
@@ -36,17 +36,17 @@ itself. If HexIDE cannot re-emit those unchanged, it cannot re-emit yours.
 | Against VB6's own 22 template forms | Today |
 |---|---|
 | Open, edit code, and run | **all 22** |
-| Survive open-then-save **byte-for-byte** | **21** |
-| Open **read-only** — HexIDE refuses to save rather than damage them | **1** |
+| Survive open-then-save **byte-for-byte** | **all 22** |
+| Open **read-only** — HexIDE refuses to save rather than damage them | **0** |
 | Will save, but will not reproduce the original file | **0** |
 
 The last three rows are two views of one thing, and that is the point: **every VB6-authored form HexIDE is
-willing to save round-trips byte-for-byte, and the one it cannot reproduce it refuses outright.** There is
-no longer a middle category — nothing saves lossily.
+willing to save round-trips byte-for-byte, and a form it could not reproduce it would refuse outright.**
+There is no longer a middle category — nothing saves lossily.
 
-The holdout is `Web Browser.frm`, and it is the floor rather than a waypoint. Its six pictures sit on an
-`MSComctlLib.ImageList` — an OCX, and hosting third-party controls is the project's largest declared gap.
-It *should* stay refused until that lands, which makes 21 of 22 the ceiling for this corpus.
+The last holdout was `Web Browser.frm`, whose six pictures sit on an `MSComctlLib.ImageList`, an OCX. Since
+[#60](https://github.com/hexide-io/HexIDE/issues/60) those pictures are carried through a save with the block
+that cites them, and the form round-trips byte-for-byte, its companion file included.
 
 VB6's own project files (`.vbp`) round-trip byte-for-byte as well. So do standard and class modules
 (`.bas`, `.cls`) — all three are covered by regression gates that fail the build if that stops being true.
@@ -80,12 +80,15 @@ build regenerated them, which truncated one template's `.frx` from 790 bytes to 
 another outright. Note the limit of that guarantee: the bytes are safe, but as above, the property
 line in the `.frm` that *points* at them can still be dropped.
 
-**There is no autosave and no crash recovery.** If HexIDE crashes, unsaved work is gone. VB6 was no
-better, but that is worth knowing in advance rather than discovering.
+**There is no autosave to your project files.** Nothing is written to them until you save. HexIDE does
+keep a private copy of unsaved work every five seconds, and the next start offers it back after a crash
+([docs/crash-recovery.md](docs/crash-recovery.md)). VB6 had no such safety net.
 
 **It is not a compiler.** The built-in interpreter covers a subset of the language — enough to run
-simple projects and demos, not enough to run a real application. Producing an actual `.exe` shells
-out to an installed copy of VB6 and is therefore Windows-only.
+simple projects and demos, not enough to run a real application. **File → Make** writes a program
+that runs on that same interpreter (see [Making a program](#making-a-program)), so it runs what the
+interpreter runs and no more. A native `.exe` comes from **File → Make with VB6**, which hands the
+project to an installed copy of VB6 and is therefore Windows-only.
 
 None of this is permanent. It is where a from-scratch reimplementation of a 1998 file format
 honestly sits today, and the gap is tracked file-by-file in
@@ -105,7 +108,7 @@ never at the cost of familiarity. See **[PHILOSOPHY.md](PHILOSOPHY.md)** for the
 
 ### Form designer & project
 - 🎨 **Visual form designer** — drag-and-drop controls on a Win98-style canvas
-- 📦 **14 built-in controls** — CommandButton, TextBox, Label, CheckBox, OptionButton, ComboBox, ListBox, Frame, PictureBox, Timer, Shape, Menu, HScrollBar, VScrollBar
+- 📦 **Built-in controls** — CommandButton, TextBox, Label, CheckBox, OptionButton, ComboBox, ListBox, Frame, PictureBox, Timer, Shape, Menu, HScrollBar, VScrollBar, and Image, which loads and runs but is not yet in the toolbox ([#860](https://github.com/hexide-io/HexIDE/issues/860)); a project that references an in-box OCX library adds its implemented controls to the toolbox
 - 💾 **Native VB6 project format** — reads `.vbp`, `.frm`, `.frx`, `.bas`, `.cls`; writes `.vbp`,
   `.frm`, `.bas`, `.cls` (`.frx` companions are preserved as-is, not regenerated — see
   [Opening real VB6 projects](#real-projects))
@@ -113,7 +116,7 @@ never at the cost of familiarity. See **[PHILOSOPHY.md](PHILOSOPHY.md)** for the
 
 ### Code editor
 - 💡 **IntelliSense** — keyword and declared-name completion as you type
-- 📐 **Code folding** — Sub/Function/Property/If/For/Select and 11 other block types
+- 📐 **Code folding** — Sub, Function, Property, If, For, Do, While, With, Select Case, Enum, Type and `#If` blocks
 - 🔍 **Find & Replace** — modeless, with regex, whole word, match case, and scope options
 - 🖌️ **Format code (Shift+Alt+F)** — keyword casing + auto-indentation, with format-on-save
 - ⌨️ **Auto-close blocks** — type `Sub Foo()`, press Enter, and `End Sub` appears
@@ -122,7 +125,6 @@ never at the cost of familiarity. See **[PHILOSOPHY.md](PHILOSOPHY.md)** for the
 
 ### Language intelligence (LSP)
 - 🚨 **Live diagnostics** — syntax errors as red squiggles with hover tooltips
-- ⚠️ **`Option Explicit` enforcement** — undeclared variables flagged as warnings
 - 📝 **Document symbols** — two-combo procedure navigation (object + member)
 - ✏️ **Rename symbol (F2)** — lexical rename across the current file
 - 🎯 **Go to Definition (F12)** — jump to a declaration in the current file
@@ -134,17 +136,18 @@ never at the cost of familiarity. See **[PHILOSOPHY.md](PHILOSOPHY.md)** for the
 ### Download and run
 
 Download from [Releases](https://github.com/hexide-io/HexIDE/releases). On **Windows x64**, start with
-`HexIDE-Setup-<version>.exe`: it includes .NET, installs for all users into Program Files
+`hexide-windows-amd64-setup.exe`: it includes .NET, installs for all users into Program Files
 (requires administrator approval), and adds a Start-menu shortcut and an uninstaller.
 
 Portable archives remain available for every platform and processor.
 Start with `hexide-<platform>-selfcontained.*`, which includes .NET. The smaller
-`hexide-<platform>.*` build needs the plain [.NET 10 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
+`hexide-<platform>.*` build needs the plain [.NET 11 Runtime](https://dotnet.microsoft.com/download/dotnet/11.0)
 (`Microsoft.NETCore.App`) installed on every platform.
 
-**Linux:** choose `amd64` if `uname -m` prints `x86_64`, or `arm64` if it prints `aarch64`.
+**Linux:** choose `amd64` if `uname -m` prints `x86_64`, `arm64` if it prints `aarch64`,
+or `arm` for 32-bit Arm (`armv7l`), whose self-contained archive is `hexide-linux-arm-selfcontained.tar.gz`.
 The archives have no top-level folder, so extract into a folder of their own. From the directory
-containing your download (substitute `arm64` in the filename if needed):
+containing your download (substitute `arm64` or `arm` in the filename if needed):
 
 ```sh
 mkdir -p ~/hexide
@@ -154,7 +157,7 @@ tar -xzf hexide-linux-amd64-selfcontained.tar.gz -C ~/hexide
 
 Self-contained builds still need native libraries, including the distro's `libX11`, `libICE`, `libSM`,
 `fontconfig` and ICU. The v0.2.0 amd64 self-contained build started and showed the New Project dialog on
-openSUSE Leap 16.0 with GNOME without adding any libraries; other distros, desktops and the arm64 build
+openSUSE Leap 16.0 with GNOME without adding any libraries; other distros, desktops and the Arm builds
 were not checked.
 
 That openSUSE install had no `tar`. If yours has none, these are alternatives:
@@ -176,7 +179,7 @@ The builds are not notarised; Finder extraction applies a quarantine flag that t
 
 ### Build requirements
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
+- [.NET 11 SDK](https://dotnet.microsoft.com/download/dotnet/11.0) or later
 - No Java required — the ANTLR4 grammar compiles via MSBuild
 
 ### Build and run
@@ -186,37 +189,42 @@ git clone https://github.com/hexide-io/HexIDE.git
 cd HexIDE
 
 # Build & run the desktop app
-cd IDE && dotnet build HexIDE.Desktop/
+cd IDE
+dotnet build HexIDE.Desktop/
 dotnet run --project HexIDE.Desktop/
 
-# Run the test suites
-cd IDE       && dotnet test --project HexIDE.Runtime.Tests/HexIDE.Runtime.Tests.csproj       # VB6 interpreter
-cd IDE       && dotnet test --project HexIDE.Tests/HexIDE.Tests.csproj               # IDE view-models
-cd LspServer && dotnet test --project HexIDE.VbLspServer.Tests/HexIDE.VbLspServer.Tests.csproj   # LSP server
+# Run the test suites, from IDE/ as above
+dotnet test HexIDE.Runtime.Tests/                     # VB6 interpreter
+dotnet test HexIDE.Tests/                             # IDE view-models
+cd ../LspServer && dotnet test HexIDE.VbLspServer.Tests/   # LSP server
 ```
 
 ### Making a program
 
-**File → Make** writes your project out as a program that runs without HexIDE. It needs HexIDE's standalone runtime,
-the runner a program is made from.
+**File → Make** writes your project out as a program that runs without HexIDE, and without .NET. The program is
+HexIDE's standalone runner, one self-contained file, renamed and placed beside your project's archive. Make needs that
+runner.
 
 - **A download from Releases** already has it, in the `standalone` folder beside the IDE.
 - **A build from source** doesn't. Publish the runner into a `standalone` folder beside the IDE you run. For the IDE
   that `dotnet run --project HexIDE.Desktop/` starts, from `IDE/`:
 
   ```sh
-  dotnet publish HexIDE.Standalone -f net10.0 -o HexIDE.Desktop/bin/Debug/net10.0/standalone/
+  dotnet publish HexIDE.Standalone -f net11.0 -o HexIDE.Desktop/bin/Debug/net11.0/standalone/
   ```
 
-If Make still says the runtime is missing, its message names the folder it looked in and the files it didn't find.
+  The runner's project file publishes it single-file and self-contained, for the platform you publish on, so the
+  command needs no other options.
 
-**Known issue:** a made program doesn't start yet, because Make copies the runner but not the library it loads
-([#1971](https://github.com/hexide-io/HexIDE/issues/1971)).
+If Make still says the runtime is missing, its message names the folder it looked in and the file it didn't find.
+
+Programs made with v0.2.0 don't start, because that release's runner wasn't a single file
+([#1971](https://github.com/hexide-io/HexIDE/issues/1971)). Make them again with v0.3.0 or later.
 
 ### Open in Visual Studio
 
-Open `HexIDE.slnx` at the repo root — all projects, in two solution folders (`IDE` and
-`LspServer`). Requires Visual Studio 2022 17.10+ for `.slnx` support.
+Open `HexIDE.slnx` at the repo root — the IDE and server projects and their tests, in two solution folders
+(`IDE` and `LspServer`). Requires Visual Studio 2022 17.10+ for `.slnx` support.
 
 ---
 
@@ -249,19 +257,19 @@ any change to the IDE.
 
 Under the hood, **`HexIDE.Core`** is a zero-dependency abstraction layer with no Avalonia
 imports; **Pure.DI** provides source-generated, AOT-safe dependency injection; and theming is
-driven by switchable theme packs (a Win98-style Classic theme ships today).
+driven by switchable theme packs (Classic, a Win98 style, ships with Dark and Abyss).
 
 The server currently handles: `initialize`, `didOpen`/`didChange`/`didClose`, `hover`,
 `completion`, `signatureHelp`, `definition`, `documentHighlight`, `documentSymbol`,
-`foldingRange`, `formatting`, `rename`, and `publishDiagnostics`.
+`foldingRange`, `formatting`, `inlayHint`, `rename`, and `publishDiagnostics`, plus HexIDE's own
+`vb/builtinSymbols`.
 
 ---
 
 ## 🗺️ Roadmap
 
 HexIDE is under active development. Near-term work is client-side editor polish: richer hover
-and completion (docs + icons), inline rename, signature help, more themes, and editor context
-menus.
+and completion (docs + icons), inline rename and more themes.
 
 Cross-file semantic analysis, project-wide navigation, and rename remain future work and need a
 dedicated language backend. The native interpreter debugger is available now, with breakpoints,
@@ -293,6 +301,9 @@ independent, community-built project — **not affiliated with, endorsed by, or 
 Microsoft** — and uses these names only descriptively to indicate VB6 file-format and workflow
 compatibility. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for bundled-component
 attributions.
+
+twinBASIC and RDCore are independent projects, each belonging to its own authors. HexIDE names them
+only to describe how it works with them, and is **not affiliated with, endorsed by, or sponsored by** either.
 
 ---
 

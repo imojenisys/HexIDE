@@ -37,7 +37,7 @@ namespace HexIDE.Lsp;
 /// </para>
 ///
 /// <para>
-/// <b>Both deserialize overloads, because HexIDE has three transports and they disagree.</b> Standard
+/// <b>Both deserialize overloads, because the transports disagree.</b> Standard
 /// input and named pipes call the two-argument overload exclusively; a web socket calls the one-argument
 /// overload exclusively and does not require the text interface at all. Implementing one of them leaves the
 /// tap blind on a transport rather than broken, which is the harder kind of gap to notice.
@@ -89,6 +89,8 @@ internal sealed class CapturingFormatter(
         // Tee rather than serialize twice. The bytes the inner formatter writes are exactly the bytes the
         // handler will frame, so watching them go past costs one copy when armed and one addition when not.
         var tee = new TeeWriter(bufferWriter, ShouldKeepBody());
+        if (message is JsonRpcRequest { IsResponseExpected: true } request)
+            RequestCancellation.Current.Value?.Observe(request.RequestId);
 
         try
         {
@@ -212,6 +214,9 @@ internal sealed class CapturingFormatter(
     /// invalid and the reader is right to reject it — and the specification's own reading of
     /// <c>workspace/diagnostic/refresh</c> is that it takes no parameters at all, which is what "absent"
     /// means. So dropping the member yields exactly the message the server meant to send.
+    /// Rechecked with rumdl 0.2.79 on 2026-11-16 (#4144): the raw frame still carries null.
+    /// The repair stays even if a later version fixes it, to tolerate this malformed frame from
+    /// servers we did not write without losing the connection.
     /// </para>
     ///
     /// <para>

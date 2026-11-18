@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Avalonia.Controls;
-using HexIDE.Runtime.BuiltinControls;
 
 namespace HexIDE.IDE;
 
@@ -10,7 +9,7 @@ namespace HexIDE.IDE;
 /// Which top-level window is the user actually looking at?
 ///
 /// "The first visible window that isn't the main one" is the obvious answer and it is wrong as soon as
-/// two are open at once. A running VB6 program puts a <c>VBFormRuntime</c> window on screen; a
+/// two are open at once. A running VB6 program puts a running form window on screen; a
 /// <c>MsgBox</c> from that program puts a second window on top of it. Both are visible, both are
 /// non-main, and the form was created first — so first-wins reports the form and the dialog on top of it
 /// is invisible to anything asking this question.
@@ -50,8 +49,12 @@ public static class ForegroundWindow
     /// picks the IDE's own window; a window's title or a running form's name picks that window. A program
     /// of several forms (#822) needs a name to reach a form the default does not pick.
     /// </param>
+    /// <param name="ideByDefault">
+    /// Whether the caller's own default is the IDE's window rather than <c>"auto"</c>, as get_window_state's and
+    /// set_window_state's is (#2357). It changes only how an unknown name's refusal describes the choices.
+    /// </param>
     public static (Window? Window, string? Error) Pick(
-        string? scope, Window mainWindow, IReadOnlyList<Window> windows)
+        string? scope, Window mainWindow, IReadOnlyList<Window> windows, bool ideByDefault = false)
     {
         if (string.IsNullOrWhiteSpace(scope) || scope.Equals("auto", StringComparison.OrdinalIgnoreCase))
             return (Pick(mainWindow, windows), null);
@@ -63,13 +66,27 @@ public static class ForegroundWindow
         // A window by its title, or a running form by its name, which outlives a caption the program changes.
         var named = windows.Where(w => w != mainWindow
             && (string.Equals(w.Title, scope, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(VBProps.GetName(w), scope, StringComparison.OrdinalIgnoreCase))).ToList();
+                || string.Equals(RunningProgram.Current.Form(w)?.Name, scope, StringComparison.OrdinalIgnoreCase)
+                || MainViewViewModel.DockFactory.FloatingTools(w).Any(t => string.Equals(t.Key, scope, StringComparison.OrdinalIgnoreCase)))).ToList();
         var shown = named.Where(w => w.IsVisible).ToList();
         if (shown.Count == 1)
             return (shown[0], null);
+        // Windows of one name stacked on one another, as a dialog and the message box it raised share a title: the one on
+        // top is the one a person can use, so the name reaches it, as "auto" would, and the others once it closes (#2712).
+        if (OnTop(shown) is { } top)
+            return (top, null);
         if (shown.Count > 1)
+        {
+            // Side by side, as two instances of one form are. No name tells them apart while both are open, so say what does
+            // reach one, rather than to name one by a title only it has, which may not exist.
+            var auto = Pick(mainWindow, windows);
             return (null, $"{shown.Count} open windows answer to '{scope}', as two instances of one form do: "
-                          + $"{Titles(shown)}. Name one by a title only it has.");
+                          + $"{Titles(shown)}. "
+                          + (shown.Contains(auto)
+                              ? $"\"auto\" reaches one of them, {Titles([auto])}, the one {AutoReason(auto)}; "
+                                + "a name reaches one only once it is the only window of that name or title."
+                              : "A name reaches one only once it is the only window of that name or title."));
+        }
         if (named.Count > 0)
             return (null, $"'{scope}' is hidden, as a form after Hide is, and a hidden window can't be reached: a "
                           + "person can't click it either.");
@@ -78,25 +95,67 @@ public static class ForegroundWindow
         // window the default would not have given them, so falling back would answer a different question
         // than the one asked and look like it worked.
         var open = windows.Where(w => w != mainWindow && w.IsVisible).ToList();
-        return (null, $"Unknown window '{scope}'. Use \"auto\" (the default: any visible window other than the IDE's own, a dialog first), "
-                    + "\"ide\" (the IDE window, even while a program is running), or the name or title of an open "
+        return (null, $"Unknown window '{scope}'. Use "
+                    + (ideByDefault
+                        ? "\"ide\" (the default here: the IDE window, even while a program is running), \"auto\" (any visible "
+                          + "window other than the IDE's own, a dialog first, a floating IDE tool never), "
+                        : "\"auto\" (the default: any visible window other than the IDE's own, a dialog first, a floating IDE tool never), \"ide\" (the "
+                          + "IDE window, even while a program is running), ")
+                    + "or the name or title of an open "
                     + (open.Count == 0
                         ? "window, and none is open beside the IDE."
                         : $"window: {Titles(open)}. A form's name is the stable handle: its caption can be empty, or change "
                           + "as the program runs."));
     }
 
+    // The one of these windows that sits over all the others, through the windows that own it, or null when they are not
+    // stacked so. A modal window's Owner is the window it was shown over.
+    private static Window? OnTop(IReadOnlyList<Window> stacked)
+    {
+        var top = stacked.Where(w => !stacked.Any(o => o != w && o.Owner == w)).ToList();
+        if (top.Count != 1)
+            return null;
+        var below = new HashSet<Window>();
+        for (var owner = top[0].Owner as Window; owner is not null && below.Add(owner); owner = owner.Owner as Window)
+        {
+        }
+        return stacked.All(w => w == top[0] || below.Contains(w)) ? top[0] : null;
+    }
+
+    // Why "auto" picked a window, in the words of its rule.
+    private static string AutoReason(Window picked) =>
+        picked.Owner is Window ? "that is a dialog" : picked.IsActive ? "with focus" : "opened last";
+
+    /// <summary>
+    /// The window a name reached is on top of another window of the same name, and so stands for it until it closes, or
+    /// null when it doesn't. Said where a path fails, since the path may have come from the window underneath (#2712).
+    /// </summary>
+    public static string? StackedNote(Window picked, string? scope) =>
+        string.IsNullOrWhiteSpace(scope) || picked.Owner is not Window under
+        || !(string.Equals(under.Title, scope, StringComparison.OrdinalIgnoreCase)
+             || string.Equals(RunningProgram.Current.Form(under)?.Name, scope, StringComparison.OrdinalIgnoreCase))
+            ? null
+            : $"'{scope}' reached the window on top, \"{picked.Title}\", which sits over another window of that name: that one "
+              + "is reached again once the window on top closes, as a person can't use it before then either";
+
     // Each window as a caller can name it: a running form by its name, then its title in quotes, and any other window
     // by its title alone.
     private static string Titles(IEnumerable<Window> windows) =>
-        string.Join(", ", windows.Select(w => VBProps.GetName(w) is { Length: > 0 } name
+        string.Join(", ", windows.Select(w => RunningProgram.Current.Form(w)?.Name is { Length: > 0 } name
             ? $"{name} (\"{w.Title}\")"
-            : $"\"{w.Title}\""));
+            : $"\"{w.Title}\"" + FloatingKeys(w)));
+
+    private static string FloatingKeys(Window window)
+    {
+        var keys = MainViewViewModel.DockFactory.FloatingTools(window).Select(t => t.Key).ToArray();
+        return keys.Length == 0 ? "" : " (tool keys: " + string.Join(", ", keys) + ")";
+    }
 
     /// <summary>
     /// Prefers a visible window other than <paramref name="mainWindow"/>: a dialog first, then the one
     /// with focus, then the one opened last, excluding windows that own another visible window. Falls
     /// back to <paramref name="mainWindow"/> when no candidate remains; does not read z-order.
+    /// Floating IDE tool hosts are excluded, both as candidates and as windows covering their owners.
     /// </summary>
     /// <param name="mainWindow">The application's main window; returned when no other candidate exists.</param>
     /// <param name="windows">All top-level windows, in creation order (as the lifetime reports them).</param>
@@ -106,7 +165,7 @@ public static class ForegroundWindow
         var covered = new HashSet<Window>();
         foreach (var w in windows)
         {
-            if (w.IsVisible && w.Owner is Window owner)
+            if (w.IsVisible && !MainViewViewModel.DockFactory.IsToolHostWindow(w) && w.Owner is Window owner)
                 covered.Add(owner);
         }
 
@@ -121,7 +180,7 @@ public static class ForegroundWindow
         var bestScore = -1;
         foreach (var w in windows)
         {
-            if (w == mainWindow || !w.IsVisible || covered.Contains(w))
+            if (w == mainWindow || !w.IsVisible || MainViewViewModel.DockFactory.IsToolHostWindow(w) || covered.Contains(w))
                 continue;
 
             var score = (w.Owner is Window ? 2 : 0) + (w.IsActive ? 1 : 0);
@@ -135,6 +194,15 @@ public static class ForegroundWindow
         }
 
         return best ?? mainWindow;
+    }
+
+    private static bool FailedTool(string error, string key, string? title)
+    {
+        var end = error.IndexOf("' under '", StringComparison.Ordinal);
+        if (!error.StartsWith("no child matching '", StringComparison.Ordinal) || end < 0) return false;
+        var segment = error["no child matching '".Length..end];
+        return segment == "#Tool." + key || segment.EndsWith("[Tool." + key + "]", StringComparison.Ordinal)
+            || title is { Length: > 0 } && segment.EndsWith("[" + title + "]", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -153,12 +221,35 @@ public static class ForegroundWindow
         string path, string? scope, Window picked, Window mainWindow, string pickedName)
     {
         var (control, error) = HexIDE.Automation.UiAutomationDriver.Resolve(picked, path);
+        if (control is null && error is not null && error.StartsWith("no child matching", StringComparison.Ordinal)
+            && Avalonia.Application.Current?.TryGetResource("Ide.Language", null, out var language) == true
+            && language is string id && id is not ("en" or "en-GB")
+            // A segment already naming a stable id did not fail for want of one (#3825).
+            && !error.Contains("[Tool.", StringComparison.Ordinal))
+            error += ". Names follow the IDE language (" + id + "); use stable AutomationIds such as TitleBar[Tool.locals]/Pane[Tool.locals], Tool.properties, Tool.project or TabItem[Tool.languageServers]. Discover paths with dump_visual_tree";
+        if (control is null && error is not null && picked == mainWindow
+            && !error.StartsWith(HexIDE.Automation.UiAutomationDriver.EmptyPath, StringComparison.Ordinal)
+            && !error.StartsWith(HexIDE.Automation.UiAutomationDriver.NotFromWindow, StringComparison.Ordinal)
+            && Avalonia.Application.Current?.ApplicationLifetime is
+                Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime lifetime)
+        {
+            var floating = lifetime.Windows.Where(w => w.IsVisible && MainViewViewModel.DockFactory.IsToolHostWindow(w)
+                && MainViewViewModel.DockFactory.FloatingTools(w).Any(t => FailedTool(error, t.Key, t.Title)));
+            var hints = floating.Select(w => $"window: \"{w.Title}\"" + FloatingKeys(w)).ToList();
+            if (hints.Count > 0)
+                return (null, $"{error}. Tools are floating in separate IDE windows: {string.Join(", ", hints)}. "
+                              + "If this path came from a tool that has since floated, pass that window (its title, or the tool's key such as "
+                              + "window: \"immediate\") to dump_visual_tree for fresh paths; its old IDE path no longer reaches it.");
+        }
+        if (control is null && error is not null && StackedNote(picked, scope) is { } stacked)
+            return (null, $"{error}. {stacked}");
         if (control is not null || error is null || picked == mainWindow
             || !(string.IsNullOrWhiteSpace(scope) || scope.Equals("auto", StringComparison.OrdinalIgnoreCase)))
             return (control, error);
         // A path that is not one fails alike in every window, before any is looked in, so which window it was is no part
         // of why. These are the two such refusals Resolve makes.
-        if (error == "empty target path" || error.StartsWith("path must start with", StringComparison.Ordinal))
+        if (error.StartsWith(HexIDE.Automation.UiAutomationDriver.EmptyPath, StringComparison.Ordinal)
+            || error.StartsWith(HexIDE.Automation.UiAutomationDriver.NotFromWindow, StringComparison.Ordinal))
             return (null, error);
         // Probed against the IDE's own only on failure, and only read: it says whether "ide" would have reached it.
         var inMain = HexIDE.Automation.UiAutomationDriver.Resolve(mainWindow, path).control is not null;

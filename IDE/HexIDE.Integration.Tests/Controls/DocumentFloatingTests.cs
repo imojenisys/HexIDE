@@ -1,3 +1,4 @@
+using HexIDE.Runtime.Serialization;
 using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Threading;

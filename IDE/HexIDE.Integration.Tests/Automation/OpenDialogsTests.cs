@@ -34,8 +34,30 @@ public class OpenDialogsTests
     {
         var dialog = new Window { Title = title };
         _ = dialog.ShowDialog(owner);
-        Dispatcher.UIThread.RunJobs();
+        RunJobsKeepingContext();
         return dialog;
+    }
+
+    // Avalonia 12.0.4 ran each job by restoring the context it was posted from, ExecutionContext.Restore and not Run, and
+    // left that context on the thread. So a job posted before this test's OpenDialogs.During, and run here, put back the
+    // watch of whatever posted it, and the test's NamedInReply went to that watch instead: a flake that needed the job to
+    // still be queued, so it showed under load (#2029). From 12.0.5 a job runs under its context and the thread's own comes
+    // back after it (AvaloniaUI/Avalonia#21627), so this helper no longer has anything to undo; it stays as the record of
+    // why the test pumps jobs this way. The tools were never exposed to this: HexIDE's own code never pumps the dispatcher
+    // inline, and the tool's flow reaches NamedInReply through jobs it posted or awaits it took. OpenDialogNoteTests keeps
+    // the same helper for HexIDE.Tests.
+    private static void RunJobsKeepingContext()
+    {
+        var context = ExecutionContext.Capture();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            if (context is not null)
+                ExecutionContext.Restore(context);
+        }
     }
 
     [AvaloniaFact]
@@ -43,7 +65,7 @@ public class OpenDialogsTests
     {
         var ide = Shown(new Window(), "IDE");
         var watch = OpenDialogs.Watch([ide], ide);
-        var message = new Window { Title = "HexIDE", Content = new HexIDE.Runtime.Dialogs.MessageBox
+        var message = new Window { Title = "HexIDE", Content = new HexIDE.Dialogs.MessageBox
         {
             Text = "This action will reset your project…",
             Buttons = HexIDE.IDE.MessageBoxButtons.YesNo
@@ -71,6 +93,37 @@ public class OpenDialogsTests
         finally { error.Close(); message.Close(); ide.Close(); }
     }
 
+    // A trust prompt's answer is the person's: the note describes it and never says how to answer it (#1121 review).
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_security_prompt_is_described_as_the_person_s_decision_and_its_answer_is_not_coached(bool beside)
+    {
+        var ide = Shown(new Window(), "IDE");
+        var watch = OpenDialogs.Watch([ide], ide);
+        var prompt = new Window { Title = "Code from outside this computer", Content = new HexIDE.Dialogs.MessageBox
+        {
+            Text = "Code that came from the internet or another computer is about to run.",
+            Buttons = HexIDE.IDE.MessageBoxButtons.YesNo,
+            IsSecurityPrompt = true,
+        } };
+        _ = prompt.ShowDialog(ide);
+        var other = beside ? Dialog("Settings", ide) : null;
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var note = OpenDialogs.Note(watch, other is null ? [ide, prompt] : [ide, prompt, other]);
+            note.Should().Contain(OpenDialogs.SecurityPromptNote);
+            if (other is null)
+                note.Should().NotContain("interact").And.EndWith(".");
+            else
+                note.Should().EndWith("shows any other, and interact answers it.");
+            OpenDialogs.HowToAnswer(prompt, "Answer it first").Should().NotContain("interact").And.Contain("their decision");
+            OpenDialogs.HowToAnswer(ide, "Answer it first").Should().StartWith("Answer it first: dump_visual_tree");
+        }
+        finally { other?.Close(); prompt.Close(); ide.Close(); }
+    }
+
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
@@ -79,7 +132,7 @@ public class OpenDialogsTests
         var ide = Shown(new Window(), "IDE");
         var watch = OpenDialogs.Watch([ide], ide);
         var text = multiline ? "First line" + Environment.NewLine + "Second line" : new string('x', 140);
-        var dialog = new Window { Title = "HexIDE", Content = new HexIDE.Runtime.Dialogs.MessageBox
+        var dialog = new Window { Title = "HexIDE", Content = new HexIDE.Dialogs.MessageBox
         {
             Text = text,
             Icon = HexIDE.IDE.MessageBoxIcon.Question
@@ -107,6 +160,29 @@ public class OpenDialogsTests
         try
         {
             OpenDialogs.Note(watch, [ide, dialog]).Should().Contain("'Unfamiliar' (Proceed), a modal dialog");
+        }
+        finally { dialog.Close(); ide.Close(); }
+    }
+
+    // A check box, a radio button and a toggle button are buttons to Avalonia, but none answers the dialog (#2079).
+    [AvaloniaFact]
+    public void A_dialogs_toggles_are_not_listed_among_its_buttons()
+    {
+        var ide = Shown(new Window(), "IDE");
+        var watch = OpenDialogs.Watch([ide], ide);
+        var dialog = new Window { Title = "Options", Content = new StackPanel { Children =
+        {
+            new CheckBox { Content = "Prompt for project" },
+            new RadioButton { Content = "Public" },
+            new Avalonia.Controls.Primitives.ToggleButton { Content = "Advanced" },
+            new Button { Content = "OK" },
+            new Button { Content = "Cancel" },
+        } } };
+        _ = dialog.ShowDialog(ide);
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            OpenDialogs.Note(watch, [ide, dialog]).Should().StartWith("'Options' (OK/Cancel), a modal dialog");
         }
         finally { dialog.Close(); ide.Close(); }
     }
@@ -200,6 +276,35 @@ public class OpenDialogsTests
         finally { earlier.Close(); form.Close(); }
     }
 
+    // The flake in #2029, made certain: a job posted under another watch is still queued when the dialog opens, and running
+    // it must not take this test's watch away before NamedInReply records the box against it.
+    [AvaloniaFact]
+    public void A_job_posted_under_another_watch_does_not_take_this_one_away()
+    {
+        var form = Shown(new FormWindow(), "Ask");
+        RunJobsKeepingContext();
+        try
+        {
+            // Posted under another watch, and at the lowest priority a pump runs, so it runs last and its context is the one
+            // left on the thread.
+            var ran = false;
+            OpenDialogs.During(OpenDialogs.Watch([form], form));
+            Dispatcher.UIThread.Post(() => ran = true, DispatcherPriority.SystemIdle);
+            var waited = OpenDialogs.Watch([form], form);
+            OpenDialogs.During(waited);
+            var box = Dialog("Question", form);
+            try
+            {
+                ran.Should().BeTrue("the job posted under the other watch must have run for this to test anything");
+                OpenDialogs.NamedInReply(box);
+
+                OpenDialogs.Note(waited, [form, box]).Should().BeNull("the box was named in the reply, so the note leaves it out");
+            }
+            finally { box.Close(); }
+        }
+        finally { form.Close(); }
+    }
+
     // A compile error reached from a click shows its dialog over the form without holding the program, so the wait,
     // which returns at idle naming only forms, never named it, and the reply came back clean (#1253). Whether the program
     // is busy by the time the note looks, as a Timer's tick makes it, is no part of it: only what the wait named counts.
@@ -246,7 +351,7 @@ public class OpenDialogsTests
     [AvaloniaFact]
     public void A_programs_box_shown_in_a_window_of_its_own_counts()
     {
-        var box = Shown(new Window { Content = new HexIDE.Runtime.Dialogs.MessageBox() }, "Ask");
+        var box = Shown(new Window { Content = new HexIDE.Dialogs.MessageBox() }, "Ask");
         try
         {
             OpenDialogs.Among([box]).Should().Equal(box);

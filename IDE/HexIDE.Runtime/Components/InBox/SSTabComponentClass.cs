@@ -1,0 +1,103 @@
+using System.Diagnostics.CodeAnalysis;
+using Avalonia;
+using Avalonia.Controls;
+using HexIDE.Runtime.BuiltinControls;
+using static HexIDE.Runtime.Components.VBProperties;
+
+namespace HexIDE.Runtime.Components.InBox;
+
+public sealed class SSTabComponentClass : InBoxComponentClass
+{
+    private SSTabComponentClass() : base(
+        [EnabledProperty, TabIndexProperty, TabStopProperty, ToolTipTextProperty], [],
+        [new EventClass("Click", new EventClassArgument("PreviousTab", "Integer")),
+            MouseDownEvent, MouseUpEvent, MouseMoveEvent, DblClickEvent, GotFocusEvent, LostFocusEvent]) { }
+
+    public static SSTabComponentClass Instance { get; } = new();
+    public override string Name => "SSTab";
+    public override string ControlClassName => "SSTab";
+    public override RuntimeLibrary Library => ControlLibraries.TabDlg;
+    public override (int Width, int Height) AddedSize => (1845, 750);
+    public override (int X, int Y) DefaultExtent =>
+        throw new NotImplementedException("SSTab extents without a saved basis are not measured");
+    public override IReadOnlyList<InBoxMember> Members { get; } =
+        new[] { "Tab", "Tabs", "TabsPerRow", "Rows", "Caption", "TabCaption", "TabEnabled", "TabVisible",
+                "Style", "TabOrientation", "TabHeight", "TabMaxWidth", "WordWrap", "ShowFocusRect", "Enabled", "Picture", "TabPicture" }
+            .Select(n => new InBoxMember(n, MemberKind.Property, MemberOrigin.Version6, false, true))
+            .Concat(new[] { "BackColor", "ForeColor", "Font", "hWnd", "MousePointer", "MouseIcon", "OLEDropMode" }
+                .Select(n => new InBoxMember(n, MemberKind.Property, MemberOrigin.Version6, false, false)))
+            .Concat(new[] { "OLEDrag", "AboutBox" }
+                .Select(n => new InBoxMember(n, MemberKind.Method, MemberOrigin.Version6, false, false)))
+            .Concat(new[] { "Click", "MouseDown", "MouseUp", "MouseMove", "DblClick", "GotFocus", "LostFocus" }
+                .Select(n => new InBoxMember(n, MemberKind.Event, MemberOrigin.Version6, false, true))).ToArray();
+
+    protected override Control InstantiateInternal(ComponentInstance instance)
+    {
+        var tab = new VBSSTab(CreateChildHost());
+        instance.GetPropertyOrDefault(SSTabSavedState.Property)?.Apply(tab);
+        return tab;
+    }
+
+    public void InitializeDesignerPages(ComponentInstance instance) => SSTabDesignerPages.For(instance);
+
+    public bool SelectDesignerPage(ComponentInstance instance, Point point, Size size,
+        IReadOnlyList<ComponentInstance> children) => SSTabDesignerPages.For(instance).Select(point, size, children);
+
+    public void SynchronizeDesignerPages(ComponentInstance instance, IReadOnlyList<ComponentInstance> children) =>
+        SSTabDesignerPages.For(instance).Synchronize(children);
+
+    public int DesignerTab(ComponentInstance instance) => instance.GetPropertyOrDefault(SSTabSavedState.Property)?.Number("Tab", 0) ?? 0;
+
+    public int DesignerTabs(ComponentInstance instance) => instance.GetPropertyOrDefault(SSTabSavedState.Property)?.Number("Tabs", 3) ?? 3;
+
+    public int? DesignerTabOf(ComponentInstance instance, string childName)
+    {
+        var saved = instance.GetPropertyOrDefault(SSTabSavedState.Property);
+        for (var page = 0; page < DesignerTabs(instance); page++)
+            for (var index = 0; index < (saved?.Number($"Tab({page}).ControlCount", 0) ?? 0); index++)
+                if (string.Equals(saved?.Value($"Tab({page}).Control({index})") as string, childName,
+                        StringComparison.OrdinalIgnoreCase))
+                    return page;
+        return null;
+    }
+
+    public string? DesignerPageSwitchRefusal(ComponentInstance instance)
+    {
+        var saved = instance.GetPropertyOrDefault(SSTabSavedState.Property);
+        for (var page = 0; page < DesignerTabs(instance); page++)
+            for (var index = 0; index < (saved?.Number($"Tab({page}).ControlCount", 0) ?? 0); index++)
+            {
+                var name = saved?.Value($"Tab({page}).Control({index})") as string;
+                var matches = instance.ContainedControls.Where(c => string.Equals(c.GetPropertyOrDefault(NameProperty),
+                    name, StringComparison.OrdinalIgnoreCase)).ToArray();
+                string? reason = PropertyText.Named(instance.ContainedControls, name ?? "")
+                    .Any(c => PropertyText.ArrayIndexOf(c) is not null)
+                    ? "a control array reference whose page membership HexIDE does not model"
+                    : matches.Length != 1
+                        ? instance.PreservedChildSubtrees.Any(b => string.Equals(
+                            HexIDE.Runtime.Serialization.UnmodelledControl.Read(b.Text)?.Name, name, StringComparison.OrdinalIgnoreCase))
+                            ? "a carried control HexIDE does not model"
+                            : "a saved control reference HexIDE cannot resolve to one modelled child"
+                        : null;
+                if (reason is not null)
+                    return $"{instance.GetPropertyOrDefault(NameProperty)}'s page {page} names {name ?? "(unnamed entry)"}, {reason}, so its pages can't be switched here. Nothing was changed.";
+            }
+        return null;
+    }
+
+    public void SelectDesignerPage(ComponentInstance instance, int page, IReadOnlyList<ComponentInstance> children) =>
+        SSTabDesignerPages.For(instance).Select(page, children);
+
+    public override Control InstantiateForDesigner(ComponentInstance instance)
+    {
+        var tab = new VBSSTab(CreateChildHost());
+        instance.GetPropertyOrDefault(SSTabSavedState.Property)?.Apply(tab, forDesigner: true);
+        return tab;
+    }
+
+    public override bool TryGetChildHost(Control control, [NotNullWhen(true)] out Canvas? host)
+    {
+        host = (control as VBSSTab)?.ChildHost;
+        return host is not null;
+    }
+}

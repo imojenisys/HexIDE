@@ -79,7 +79,7 @@ public class NewControlNameTests
         project.AddForm(form);
         // A toolbox, because adding a control puts the pointer tool back.
         var toolbox = new ToolBoxToolViewModel(Substitute.For<IDocumentDockService>(),
-            Substitute.For<IComponentRegistry>(), Substitute.For<ILocalizationService>());
+            new ComponentRegistry(), Substitute.For<ILocalizationService>());
         return new FormEditViewModel(toolbox, Substitute.For<IEventBus>(), Substitute.For<IProjectService>(), null!, null!,
             Substitute.For<ISettingsService>(), Substitute.For<ILocalizationService>()).Initialize(form);
     }
@@ -115,6 +115,16 @@ public class NewControlNameTests
         vm.SpawnControlAt(type, new Rect(10, 10, 80, 25));
 
         vm.SelectedComponent!.Name.Should().Be(expected);
+    }
+
+    [AvaloniaFact]
+    public void A_new_Timer_starts_with_zero_Interval()
+    {
+        var vm = Designer(EmptyForm);
+
+        vm.SpawnControlAt(TimerComponentClass.Instance, new Rect(10, 10, 28, 28));
+
+        vm.SelectedComponent!.Instance.GetPropertyOrDefault(VBProperties.IntervalProperty).Should().Be(0);
     }
 
     [AvaloniaFact]

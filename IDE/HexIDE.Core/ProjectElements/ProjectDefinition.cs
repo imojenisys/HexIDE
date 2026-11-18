@@ -13,6 +13,9 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     /// <summary>Source encoding retained through saves and path changes.</summary>
     public Vb6TextEncoding TextEncoding { get; set; } = Vb6TextEncoding.Ansi;
 
+    /// <summary>The project's VBA7 target, independent of the engine or IDE profile (#4245).</summary>
+    public VbaBitness VbaBitness { get; set; }
+
     private FormDefinition? startupForm;
     private bool startsAtSubMain;
     private string? absolutePath;
@@ -75,6 +78,48 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// The manifest id of the add-in whose project type opened this project, VB6's own (<c>hexide.vb6</c>) included since
+    /// #3411's slice 10b; null only for a project nothing opened, such as a test's. It says who the project belongs to, for
+    /// messages, logs and selecting that add-in's default launch, and is never a question of whether HexIDE may change it:
+    /// that's <see cref="Offers"/>.
+    /// </summary>
+    public string? ContributedBy { get; set; }
+
+    /// <summary>
+    /// What this project's type lets the IDE do with it. A project the IDE read itself offers everything. Set again when the
+    /// type that opened it is withdrawn, which leaves it offering nothing.
+    /// </summary>
+    public ProjectOffers Offers { get; set; } = ProjectOffers.Everything;
+
+    /// <summary>
+    /// What reads and renders this project's forms, where that isn't the IDE's own format. Every read and render of one of
+    /// its forms goes through this, so a project an add-in opened never has a form read or written as a VB6 file.
+    /// </summary>
+    public HexIDE.IDE.IFormFileFormat? FormFormat { get; init; }
+
+    /// <summary>
+    /// The format this project's file and its members are read and written with, set by whatever opened or made the project
+    /// (#4053, #3411 slice 10). <see cref="FormFormat"/>, where set, still decides its forms. Null only for a project nothing
+    /// opened, such as a test's, which the IDE's own format serves until #3411's slice 10b gives every project a format.
+    /// </summary>
+    public HexIDE.IDE.IProjectFileFormat? Format { get; set; }
+
+    /// <summary>
+    /// What renders this project's own file, where that isn't the IDE's own format. Every render of the project file goes
+    /// through this, so a project an add-in opened never has its file written as a <c>.vbp</c>.
+    /// </summary>
+    public HexIDE.IDE.IProjectFileWriter? ProjectFileWriter { get; init; }
+
+    /// <summary>The title of the add-in that opened this project, for display; null when <see cref="ContributedBy"/> is.</summary>
+    public string? ContributorTitle { get; set; }
+
+    /// <summary>
+    /// The folders a contributed project lists, relative to its file's folder, which the Project Explorer shows even when
+    /// they hold nothing. Empty for a .vbp, whose folders are those of its members.
+    /// </summary>
+    public IReadOnlyList<string> ListedFolders { get; set; } = [];
+
+    /// <summary>
     /// Where a never-saved project's files actually live, unique to this project instance.
     ///
     /// <para>
@@ -130,12 +175,80 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     public IReadOnlyList<RelatedDocumentDefinition> RelatedDocuments => relatedDocuments;
     public IReadOnlyList<VbReference> References => references;
 
+    // Session state: References OK regroups saves even when its selection is unchanged (#2274).
+    public bool ReferencesDialogAccepted { get; set; }
+
     // Recognised .vbp keys in read order. Empty for a new project, which uses the writer's default order.
     public List<string> KnownLineKeys { get; } = new();
 
     // Unknown key=value lines from the .vbp file (before any [Section] header), preserved verbatim.
     // PositionHint = count of recognised keys seen before each unknown line.
     public List<(int PositionHint, string RawLine)> UnknownPreSectionLines { get; } = new();
+
+    /// <summary>
+    /// Read a <c>key=value</c> line the project loader kept verbatim.
+    /// </summary>
+    /// <remarks>
+    /// These keys are deliberately read from the preserved lines rather than promoted into the project
+    /// model. Modelling a key means the writer owns emitting it, and the <c>.vbp</c> currently round-trips
+    /// byte-for-byte against VB6's own files — not worth risking that gate to read a caption.
+    /// </remarks>
+    public string? PreSectionValue(string key)
+    {
+        foreach (var (_, raw) in UnknownPreSectionLines)
+        {
+            var line = raw.TrimStart();
+            if (!line.StartsWith(key + "=", System.StringComparison.OrdinalIgnoreCase)) continue;
+
+            var value = line[(key.Length + 1)..].Trim();
+
+            // Quoted titles read back without either quote under F5 and compiled p-code (#2413).
+            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+                value = value[1..^1];
+            else if (value.Length >= 1 && value[0] == '"')
+                value = value[1..];
+
+            return value;
+        }
+        return null;
+    }
+
+    /// <summary>The key of a project's Conditional Compilation Arguments in its <c>.vbp</c>.</summary>
+    public const string ConditionalArgumentsKey = "CondComp";
+
+    /// <summary>
+    /// The project's Conditional Compilation Arguments, by name in any case, or null where vb6.exe refuses its
+    /// <c>CondComp</c> line. No line, or an empty one, is no arguments.
+    /// </summary>
+    public IReadOnlyDictionary<string, short>? ConditionalArguments() =>
+        HexIDE.Language.ConditionalCompilation.TryParseArguments(PreSectionValue(ConditionalArgumentsKey), out var arguments)
+            ? arguments
+            : null;
+
+    /// <summary>
+    /// The position hint of an <c>Object=</c> line the Components dialog added, which the writer resolves to just after the
+    /// last <c>Form=</c> line: where VB6's Save Project put one (measured, #1103).
+    /// </summary>
+    public const int AfterFormsHint = -1;
+
+    /// <summary>Reference a control library by its <c>.vbp</c> line, as the Components dialog does (#1103).</summary>
+    public void AddObjectLine(string line)
+    {
+        UnknownPreSectionLines.Add((AfterFormsHint, line));
+        ObjectReferencesChanged?.Invoke(this);
+    }
+
+    /// <summary>Drop every <c>Object=</c> line naming <paramref name="guid"/>. True where there was one.</summary>
+    public bool RemoveObjectReference(string guid)
+    {
+        if (UnknownPreSectionLines.RemoveAll(l => ObjectReference.TryParse(l.RawLine, out var r) && r.Names(guid)) == 0)
+            return false;
+        ObjectReferencesChanged?.Invoke(this);
+        return true;
+    }
+
+    /// <summary>Raised when the Components dialog adds or drops an <c>Object=</c> line, which the toolbox follows (#1103).</summary>
+    public event Action<ProjectDefinition>? ObjectReferencesChanged;
 
     /// <summary>The control libraries the project's <c>Object=</c> lines name, in the order it lists them (#1082).</summary>
     public IEnumerable<ObjectReference> ObjectReferences =>
@@ -145,8 +258,7 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     // Verbatim .vbp item lines (Form=/UserDocument=/...) for project items that were parsed but not
     // loaded into the live model — e.g. a UserDocument (.dob, unsupported) or a Form whose .frm file is
     // missing on disk. Carried so an open->save round-trip never drops the node, even on a host that
-    // lacks the file or a non-Windows machine. (A future spec may surface these in the project explorer
-    // with a "missing"/"unsupported" glyph; for now they are preserved opaquely.)
+    // lacks the file or a non-Windows machine. Project Explorer surfaces these with missing/unsupported markers.
     public List<string> PreservedItemLines { get; } = new();
 
     // Indexed by the kept line's position in PreservedItemLines, never by its text or rebased path.
@@ -174,15 +286,22 @@ public partial class ProjectDefinition : INotifyPropertyChanged
     public void AddReference(VbReference r)
     {
         if (!references.Contains(r))
+            {
             references.Add(r);
+            OnPropertyChanged(nameof(References));
+        }
     }
 
-    public void RemoveReference(VbReference r) => references.Remove(r);
+    public void RemoveReference(VbReference r)
+    {
+        if (references.Remove(r)) OnPropertyChanged(nameof(References));
+    }
 
     public void SetReferences(IEnumerable<VbReference> newReferences)
     {
         references.Clear();
         references.AddRange(newReferences);
+        OnPropertyChanged(nameof(References));
     }
 
     public event Action<ProjectDefinition, FormDefinition>? FormAdded;

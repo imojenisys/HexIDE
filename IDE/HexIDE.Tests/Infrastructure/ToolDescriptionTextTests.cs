@@ -12,6 +12,7 @@ namespace HexIDE.Tests.Infrastructure;
 /// as Tab". <see cref="ToolSource"/> decodes each literal as the compiler does, so a description here is the text a
 /// client is sent. A blank line, <c>\n\n</c>, is how five descriptions break a paragraph, and is the one use allowed.
 /// </remarks>
+[ToolDescription]
 public class ToolDescriptionTextTests
 {
     private static IEnumerable<(string Where, string Text)> Descriptions() =>
@@ -60,12 +61,30 @@ public class ToolDescriptionTextTests
     }
 
     [Fact]
+    public void External_evaluate_describes_printed_output_response_text_and_adapter_refusals()
+    {
+        ToolSource.Tools.Single(t => t.Name == "evaluate").Description.Should()
+            .Contain("printed output followed by response text")
+            .And.Contain("success: false").And.Contain("message as error");
+    }
+
+    [Fact]
     public void A_description_is_read_past_a_constant_it_appends()
     {
         // interact, type_text and press_key end with + ProgramWaitNote, which was neither measured nor checked.
         ToolSource.Tools.Where(t => t.Name is "interact" or "type_text" or "press_key")
-            .Should().HaveCount(3).And.OnlyContain(t => t.Description.EndsWith("A form the program opened is named.", StringComparison.Ordinal));
+            .Should().HaveCount(3).And.OnlyContain(t => t.Description.EndsWith("A note says why when it stops sooner.", StringComparison.Ordinal));
         ToolSource.Unparsed.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("type_text")]
+    [InlineData("press_key")]
+    public void Keyboard_tools_explain_observed_code_window_refusals(string tool)
+    {
+        ToolSource.Tools.Single(t => t.Name == tool).Description
+            .Should().Contain("refused by the code window")
+            .And.Contain("status bar").And.Contain("caret");
     }
 
     [Fact]
@@ -73,6 +92,14 @@ public class ToolDescriptionTextTests
     {
         ToolSource.Tools.Single(t => t.Name == "type_text").Parameters.Single(p => p.Name == "mode").Description
             .Should().Contain(@"per character, \n as Enter and \t as Tab");
+    }
+
+    [Theory]
+    [InlineData("type_text")]
+    [InlineData("press_key")]
+    public void Typing_names_the_editor_work_it_waits_for(string tool)
+    {
+        ToolSource.Tools.Single(t => t.Name == tool).AllText.Should().Contain("on-type formatting");
     }
 
     [Fact]
@@ -88,7 +115,7 @@ public class ToolDescriptionTextTests
     public void Interact_explains_the_primary_and_how_to_choose_it()
     {
         ToolSource.Tools.Single(t => t.Name == "interact").Parameters.Single(p => p.Name == "action").Description
-            .Should().Contain("names the primary").And.Contain("The primary is the last control added");
+            .Should().Contain("names the primary, on a designer the last control added");
     }
 
     [Fact]

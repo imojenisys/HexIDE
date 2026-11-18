@@ -90,9 +90,9 @@ public class DesignerRootRoundTripTests
         Root(file).UnknownRawProperties.Select(p => p.Name).Should().Contain(["CanGetFocus", "ForwardFocus", "Public", "Windowless"]);
     }
 
-    // A PropertyPage keeps its Caption as a property it models, and its own lines as written.
+    // #1631, issuecomment-6426450412: a PropertyPage keeps its dimensions but never stores StandardSize.
     [Fact]
-    public void A_PropertyPages_Caption_is_modelled_and_its_own_lines_kept()
+    public void A_PropertyPages_Caption_and_dimensions_survive_but_StandardSize_is_not_saved()
     {
         var source =
             "VERSION 5.00\r\n"
@@ -111,10 +111,28 @@ public class DesignerRootRoundTripTests
 
         var (file, saved, sink) = RoundTrip(source, "General.pag");
 
-        saved.Should().Be(source);
+        // #1631, issuecomment-6426450412: VB6 drops the invalid StandardSize file line.
+        saved.Should().Be(source.Replace("   StandardSize    =   1  'Small\r\n", ""));
         sink.Errors.Should().BeEmpty();
         Root(file).GetPropertyOrDefault(VBProperties.CaptionProperty).Should().Be("General");
-        Root(file).UnknownRawProperties.Select(p => p.Name).Should().Contain(["PaletteMode", "StandardSize"]);
+        Root(file).UnknownRawProperties.Select(p => p.Name).Should().Contain("PaletteMode");
+    }
+
+    // #1631, issuecomment-6426450412: HelpContextID = 7 survives VB6's .pag save.
+    [Fact]
+    public void A_PropertyPages_HelpContextID_is_editable_and_saved()
+    {
+        var source = "VERSION 5.00\nBegin VB.PropertyPage General\nEnd\n";
+        var (file, _, _) = RoundTrip(source, "General.pag");
+        var root = Root(file);
+        var property = root.BaseClass.Properties.Single(p => p.Name == "HelpContextID");
+        // Default 0: oracle, "What VB6's Properties window lists for a UserControl and a PropertyPage".
+        root.GetBoxedPropertyOrDefault(property).Should().Be(0);
+        root.SetUntypedProperty(property, 7);
+        var saved = new FormSerializer().Serialize(file, "General.pag").frmText;
+        var reloaded = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "Project1"), saved, new Sink())!;
+        Root(reloaded).TryGetBoxedProperty(property, out var value).Should().BeTrue();
+        value.Should().Be(7);
     }
 
     // The root of a UserControl or PropertyPage HexIDE creates is its kind's, and the file it writes is unchanged: VB6's
@@ -129,5 +147,31 @@ public class DesignerRootRoundTripTests
 
         Root(module.FormPart!).BaseClass.VBTypeName.Should().Be(typeName).And.Be(module.FormPart!.RootVBTypeName);
         module.FormPart!.Name.Should().Be(name);
+    }
+
+    // Found by fuzzing the .frm (#1222): a stray minus read as negative zero, the first save wrote -0, and -0 read back
+    // as 0, so a second save changed the file again.
+    [Fact]
+    public void A_measurement_read_as_negative_zero_is_written_as_zero_and_saves_stably()
+    {
+        var source =
+            "VERSION 5.00\r\n"
+          + "Begin VB.Form Form1 \r\n"
+          + "   Caption         =   \"Form1\"\r\n"
+          + "   ClientHeight    =   0-\r\n"
+          + "   ClientLeft      =   60\r\n"
+          + "   ClientTop       =   345\r\n"
+          + "   ClientWidth     =   4680\r\n"
+          + "   LinkTopic       =   \"Form1\"\r\n"
+          + "   ScaleHeight     =   0-\r\n"
+          + "   ScaleWidth      =   4680\r\n"
+          + "End\r\n"
+          + string.Format(Attributes, "Form1", "False");
+
+        var (_, first, _) = RoundTrip(source, "Form1.frm");
+        var (_, second, _) = RoundTrip(first, "Form1.frm");
+
+        first.Should().NotContain("-0").And.Contain("   ClientHeight    =   0\r\n");
+        second.Should().Be(first);
     }
 }

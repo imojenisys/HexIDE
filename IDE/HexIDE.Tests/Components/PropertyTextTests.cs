@@ -111,7 +111,7 @@ public class PropertyTextTests
 
         var rows = PropertyText.Rows(label);
 
-        rows.Select(r => r.Name).Should().Equal(LabelComponentClass.Instance.Properties.Select(p => p.Name).OrderBy(n => n));
+        rows.Select(r => r.Name).Should().Equal(LabelComponentClass.Instance.Properties.Select(p => p.Name).Append("Index").OrderBy(n => n));
         // What get_form_controls left out, and the gap had to infer from a caption.
         rows.Select(r => r.Name).Should().Contain(["Alignment", "AutoSize", "WordWrap", "BorderStyle", "UseMnemonic", "Font"]);
     }
@@ -152,7 +152,30 @@ public class PropertyTextTests
     {
         PropertyText.Shown(VBProperties.PictureProperty, null).Should().Be("(None)");
         PropertyText.Shown(VBProperties.PictureProperty, new byte[] { 1, 2, 3 }).Should().Be("(3 bytes)");
-        PropertyText.TryParse(VBProperties.PictureProperty, "(None)", out _).Should().BeFalse("a picture is loaded through a dialog");
+    }
+
+    // The text a picture with none is shown as clears one, on all four picture rows, and is the only text one takes (#2872).
+    [Theory]
+    [InlineData("Picture")]
+    [InlineData("Icon")]
+    [InlineData("MouseIcon")]
+    [InlineData("DragIcon")]
+    public void None_clears_a_picture_and_no_other_text_reads_as_one(string name)
+    {
+        var property = name switch
+        {
+            "Picture" => VBProperties.PictureProperty,
+            "Icon" => VBProperties.IconProperty,
+            "MouseIcon" => VBProperties.MouseIconProperty,
+            _ => VBProperties.DragIconProperty,
+        };
+
+        PropertyText.TryParse(property, "(None)", out var cleared, current: new byte[] { 1, 2, 3 }).Should().BeTrue();
+        cleared.Should().BeNull();
+        PropertyText.TryParse(property, " (none) ", out _).Should().BeTrue("case and spaces make no difference to it");
+        PropertyText.TryParse(property, "", out _).Should().BeFalse("empty is not what a row with no picture shows");
+        PropertyText.TryParse(property, "pic.bmp", out _).Should().BeFalse("a picture is loaded through a dialog");
+        PropertyText.Accepted(property).Should().StartWith("(None), which clears it");
     }
 
     [Fact]
@@ -182,7 +205,7 @@ public class PropertyTextTests
 
         foreach (var row in PropertyText.Rows(control).Where(r => r.Settable))
         {
-            var property = type.Properties.Single(p => p.Name == row.Name);
+            var property = PropertyText.InWindowOrder(type).Single(p => p.Name == row.Name);
             PropertyText.TryParse(property, row.Value, out var back).Should().BeTrue(row.Name);
             // A string or Tag never set reads as "" and sets "", which the window does too; nothing else may differ.
             var held = control.GetBoxedPropertyOrDefault(property);
@@ -512,7 +535,8 @@ public class PropertyTextTests
     public void A_refusal_names_the_text_a_font_and_a_picture_take()
     {
         PropertyText.Accepted(VBProperties.FontProperty).Should().Contain("\"Tahoma, 9.75 pt, bold, italic, charset 0\"").And.Contain("regular");
-        PropertyText.Accepted(VBProperties.PictureProperty).Should().StartWith("no text").And.Contain("no automation route");
+        PropertyText.Accepted(VBProperties.PictureProperty).Should().StartWith("(None)").And.Contain("... button").And.Contain("answer_next_file_dialog");
+        PropertyText.Accepted(VBProperties.OleObjectBlobProperty).Should().Contain("no automation route");
     }
 
     [Theory]

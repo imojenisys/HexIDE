@@ -1,5 +1,7 @@
 using System.Collections.Generic;
+using Avalonia.Media;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Utils;
 using PropertyChanged.SourceGenerator;
 
 namespace HexIDE.Tools.ObjectBrowser;
@@ -12,6 +14,7 @@ public partial class OBClassViewModel
     public override string ToString() => Name;
     public OBClassKind Kind { get; }
     [Notify] private string libraryName;
+    internal string? NameKey { get; init; }
     public bool IsStatus { get; init; }
 
     public ModuleDefinition? ModuleDefinition { get; }
@@ -21,7 +24,21 @@ public partial class OBClassViewModel
 
     public List<OBMemberViewModel> Members { get; } = new();
 
-    public string KindGlyph => Kind switch
+    private static IImage? formIcon, moduleIcon, classIcon, enumIcon, genericIcon;
+
+    public IImage KindIcon => IconFor(Kind);
+
+    public static IImage IconFor(OBClassKind kind) => kind switch
+    {
+        OBClassKind.Form        => formIcon ??= IconFactory.Themed("Geo.Form"),
+        OBClassKind.Module      => moduleIcon ??= IconFactory.Themed("Geo.Addmodule"),
+        OBClassKind.ClassModule => classIcon ??= IconFactory.Themed("Geo.Addclassmodule"),
+        OBClassKind.Enum        => enumIcon ??= IconFactory.Themed("Geo.Listconstants"),
+        _                       => genericIcon ??= IconFactory.Themed("Geo.Generic")
+    };
+
+    // Text form retained for completion lists.
+    public static string GlyphFor(OBClassKind kind) => kind switch
     {
         OBClassKind.Form        => "▣",
         OBClassKind.ClassModule => "◉",

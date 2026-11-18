@@ -9,7 +9,7 @@ public class WindowsInstallerTests
     public void InstallerUsesProtectedPerMachineDirectory()
     {
         Script.Should().Contain("PrivilegesRequired=admin\n");
-        Script.Should().Contain("DefaultDirName={autopf}\\HexIDE\n");
+        Script.Should().Contain("DefaultDirName={autopf}\\{#AppName}\n");
         Script.Should().Contain("ArchitecturesInstallIn64BitMode=x64compatible\n");
         Script.Should().NotContain("PrivilegesRequiredOverridesAllowed");
         Script.Should().NotContain("Permissions:");
@@ -20,22 +20,25 @@ public class WindowsInstallerTests
     {
         Script.Should().Contain("Source: \"{#PublishDir}\\*\"; DestDir: \"{app}\"; Flags: ignoreversion recursesubdirs createallsubdirs");
         Script.Should().Contain("Name: \"{app}\\addins\"");
-        Script.Should().Contain("Name: \"{group}\\HexIDE\"; Filename: \"{app}\\HexIDE.exe\"");
+        Script.Should().Contain("Name: \"{group}\\{#AppName}\"; Filename: \"{app}\\{#AppExe}\"");
         Script.Should().Contain("Uninstallable=yes\n");
         Script.Should().NotContain("[Registry]");
     }
 
     [Fact]
-    public void WindowsX64BuildPublishesVersionedSelfContainedInstaller()
+    public void WindowsX64BuildPublishesSelfContainedInstallerUnderAFixedName()
     {
         var workflow = File.ReadAllText(Path.Combine(RepoTree.Root(), ".github", "workflows", "publish.yml"))
             .ReplaceLineEndings("\n");
         workflow.Should().Contain("- name: Build Windows installer\n        if: matrix.rid == 'win-x64'");
         workflow.Should().Contain("/DAppVersion=$version");
         workflow.Should().Contain("/DPublishDir=$((Resolve-Path 'bin/sc').Path)");
-        workflow.Should().Contain("./IDE/bin/HexIDE-Setup-*.exe");
+        workflow.Should().Contain("./IDE/bin/hexide-windows-amd64-setup.exe");
         Script.Should().Contain("AppVersion={#AppVersion}\n");
-        Script.Should().Contain("OutputBaseFilename=HexIDE-Setup-{#AppVersion}\n");
+        // Fixed, like every other asset: hexide.io links downloads through releases/latest/download/<name>,
+        // which cannot reach a name with the version in it.
+        Script.Should().Contain("OutputBaseFilename={#SetupBaseName}\n");
+        Script.Should().Contain("#define SetupBaseName \"hexide-windows-amd64-setup\"\n");
     }
 
     [Fact]

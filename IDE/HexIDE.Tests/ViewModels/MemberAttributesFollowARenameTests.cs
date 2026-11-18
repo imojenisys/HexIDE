@@ -67,6 +67,8 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
 
     private ProjectService MakeService()
     {
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning)
+            .Returns(MessageBoxResult.Yes);
         var projectManager = Substitute.For<IProjectManager>();
         projectManager.LoadedProjects.Returns(_ => loaded);
         projectManager.When(m => m.AddProject(Arg.Any<ProjectDefinition>()))
@@ -76,8 +78,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
         sidecar.LoadAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
         sidecar.SaveAsync(Arg.Any<ProjectDefinition>()).Returns(Task.CompletedTask);
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windows,
             bus,
             projectManager,
@@ -86,7 +87,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<ILocalizationService>(),
-            refresher);
+            refresher, new ComponentRegistry());
     }
 
     /// <summary>A code window on the document, on the same bus as the save, and open as far as the dock knows.</summary>
@@ -262,7 +263,7 @@ public sealed class MemberAttributesFollowARenameTests : IDisposable
             await client.OpenDocumentAsync(uri, text, TestContext.Current.CancellationToken);
             var edit = await client.RequestRenameAsync(uri, new Position(at.Line - 1, at.Column - 1), newName,
                 TestContext.Current.CancellationToken);
-            return edit!.Changes![uri];
+            return edit!.Edit!.Changes![uri];
         }
         finally
         {

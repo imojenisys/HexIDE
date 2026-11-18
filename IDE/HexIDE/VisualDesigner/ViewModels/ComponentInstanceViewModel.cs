@@ -27,8 +27,28 @@ public partial class ComponentInstanceViewModel : ObservableObject
         this.Instance.OnComponentPropertyChanging += InstancePropertyChanging;
     }
 
+    private string? previewFailure;
+    public string? PreviewFailure
+    {
+        get => previewFailure;
+        internal set
+        {
+            if (SetProperty(ref previewFailure, value))
+            {
+                OnPropertyChanged(nameof(HasDesignerPreview));
+                parentViewModel.RefreshPreviewSelection();
+            }
+        }
+    }
+
+    public bool HasDesignerPreview => PreviewFailure is null;
+
     private void InstancePropertyChanging(ComponentInstance _, PropertyClass propertyClass, object? oldvalue, object? newValue)
     {
+        if (propertyClass == VBProperties.DesignIndexProperty
+            && ControlArrayIndex.RefusalFor(instance, newValue as string ?? "",
+                parentViewModel.AllComponents.Select(c => c.Instance)) is { } indexRefusal)
+            throw new DataValidationException(indexRefusal.Localized(parentViewModel.Localization));
         if (propertyClass == VBProperties.NameProperty
             && ComponentNaming.RefusalFor(instance, oldvalue as string, newValue as string,
                 parentViewModel.AllComponents.Select(c => c.Instance), parentViewModel.FormDefinition,
@@ -78,6 +98,14 @@ public partial class ComponentInstanceViewModel : ObservableObject
             OnPropertyChanged(nameof(Name));
             OnPropertyChanged(nameof(AddressedName));
         }
+        else if (propertyClass == VBProperties.DesignIndexProperty)
+            OnPropertyChanged(nameof(AddressedName));
+        else if (propertyClass == VBProperties.TabIndexProperty)
+            OnPropertyChanged(nameof(TabIndex));
+        else if (propertyClass == VBProperties.TabStopProperty)
+            OnPropertyChanged(nameof(IsTabStopOff));
+        else if (propertyClass == VBProperties.VisibleProperty)
+            NotifyVisibility();
         else if (propertyClass == VBProperties.CaptionProperty)
             OnPropertyChanged(nameof(Caption));
         else if (propertyClass == VBProperties.BackColorProperty)
@@ -107,6 +135,16 @@ public partial class ComponentInstanceViewModel : ObservableObject
                 childVm.OnPropertyChanged(nameof(ContainerBounds));
                 childVm.NotifyDescendantGeometry();
             }
+        }
+    }
+
+    private void NotifyVisibility()
+    {
+        OnPropertyChanged(nameof(IsRuntimeVisible));
+        foreach (var child in instance.ContainedControls)
+        {
+            if (parentViewModel.TryGetViewModel(child, out var childVm))
+                childVm.NotifyVisibility();
         }
     }
 
@@ -183,7 +221,7 @@ public partial class ComponentInstanceViewModel : ObservableObject
 
     /// <summary>How far inside its own bounds this component measures its contents from.</summary>
     private Thickness ClientInset =>
-        instance.BaseClass is ComponentBaseClass baseClass ? baseClass.ClientInset(instance) : default;
+        instance.BaseClass is IDesignerComponentClass baseClass ? baseClass.ClientInset(instance) : default;
 
     /// <summary>
     /// The canvas position, which is NOT what the model stores. The model stores the VB6 value — relative to
@@ -331,7 +369,18 @@ public partial class ComponentInstanceViewModel : ObservableObject
         }
     }
 
+    public bool HasTabIndex => instance.BaseClass.Properties.Contains(VBProperties.TabIndexProperty);
+
+    public int TabIndex => instance.GetPropertyOrDefault(VBProperties.TabIndexProperty);
+
+    public bool IsTabStopOff =>
+        instance.BaseClass.Properties.Contains(VBProperties.TabStopProperty)
+        && !instance.GetPropertyOrDefault(VBProperties.TabStopProperty);
+
     public string Name => instance.GetPropertyOrDefault(VBProperties.NameProperty) ?? "";
+
+    public bool IsRuntimeVisible => instance.GetPropertyOrDefault(VBProperties.VisibleProperty)
+                                    && (ContainerViewModel?.IsRuntimeVisible ?? true);
 
     public string? Caption => instance.GetPropertyOrDefault(VBProperties.CaptionProperty);
 

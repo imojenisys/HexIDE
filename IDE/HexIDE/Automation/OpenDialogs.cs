@@ -22,7 +22,11 @@ public static class OpenDialogs
     /// </summary>
     public static List<Window> Among(IEnumerable<Window> windows) =>
         [.. windows.Where(w => w.IsVisible
-            && (w.IsDialog || w.Content is HexIDE.Runtime.Dialogs.MessageBox or HexIDE.Runtime.Dialogs.InputBox))];
+            && (w.IsDialog || IsBox(w.Content)))];
+
+    internal static bool IsBox(object? content) =>
+        content is HexIDE.Dialogs.MessageBox or HexIDE.Dialogs.InputBox
+        || HexIDE.IDE.ProgramDialogs.IsRuntimeBox(content);
 
     // The watch of the call under way, for the wait for a program to record the dialog it named.
     private static readonly AsyncLocal<DialogWatch?> Current = new();
@@ -64,25 +68,55 @@ public static class OpenDialogs
             + (!watch.Before.Contains(d) ? "opened during this call and waits for an answer"
                 : Blocks(d, watch.Target) ? "is still open and waits for an answer"
                     + (acted ? "; this call reached past it, as a person could not" : "")
-                : "is open and waits for an answer"));
-        return string.Join("; ", parts) + "; dump_visual_tree with 'window' set to its title shows it, and interact answers it.";
+                : "is open and waits for an answer")
+            + (IsSecurityPrompt(d) ? "; " + SecurityPromptNote : ""));
+        // A security prompt's answer is the person's, so the note never says how to give it (#1121 review).
+        return string.Join("; ", parts) + (named.All(IsSecurityPrompt) ? "."
+            : named.Any(IsSecurityPrompt) ? "; dump_visual_tree with 'window' set to its title shows any other, and interact answers it."
+            : "; dump_visual_tree with 'window' set to its title shows it, and interact answers it.");
     }
 
-    // Read the same live controls and automation names a tree dump exposes, including disabled choices.
-    private static string DescriptionOf(Window dialog)
+    /// <summary>
+    /// What a tool says of a security prompt in place of how to answer it: that it asks the person, and that the answer is
+    /// theirs. A consent prompt must never coach an automated caller towards approving on the person's behalf (#1121).
+    /// </summary>
+    public const string SecurityPromptNote =
+        "it is a security prompt asking the person whether to run code from outside this computer, and the answer is their decision";
+
+    /// <summary>Whether <paramref name="dialog"/> asks the person a security question (#1121).</summary>
+    public static bool IsSecurityPrompt(Window dialog) => dialog.Content is HexIDE.Dialogs.MessageBox { IsSecurityPrompt: true };
+
+    /// <summary>
+    /// How a refusal tells its caller to deal with <paramref name="dialog"/> before trying again: where to find it and that
+    /// interact answers it, or, for a security prompt, that the answer is the person's (#1121).
+    /// </summary>
+    public static string HowToAnswer(Window dialog, string answerFirst) => IsSecurityPrompt(dialog)
+        ? char.ToUpperInvariant(SecurityPromptNote[0]) + SecurityPromptNote[1..]
+        : answerFirst + ": dump_visual_tree with 'window' set to its title shows it, and interact answers it";
+
+    // Read the same live controls and automation names a tree dump exposes, including disabled choices. The note, the
+    // program wait, keyboard typing's stop, the key refusal and close's refusal name a waiting dialog through this, since
+    // its title alone does not tell the reset prompt from the run-time error dialog: both are 'HexIDE' (#1365, #1975).
+    // The buttons listed are the ways to answer it, so a toggle is not one: a check box and a radio button are buttons to
+    // Avalonia, and Options listed "Prompt for project" beside OK and Cancel (#2079).
+    // Repeat buttons and other template parts operate their owning control rather than answer the dialog (#3671).
+    internal static string DescriptionOf(Window dialog)
     {
         var controls = dialog.GetVisualDescendants().OfType<Control>().ToList();
         var content = dialog.Content;
         var kind = content switch
         {
-            HexIDE.Runtime.Dialogs.MessageBox => "a message box",
+            HexIDE.Dialogs.MessageBox => "a message box",
+            _ when HexIDE.IDE.ProgramDialogs.IsRuntimeMessageBox(content) => "a message box",
             HexIDE.Forms.Views.RuntimeErrorView => "the run-time error dialog",
             Control { DataContext: HexIDE.Forms.ViewModels.RuntimeErrorViewModel } => "the run-time error dialog",
             HexIDE.Forms.ViewModels.RuntimeErrorViewModel => "the run-time error dialog",
             _ => null,
         };
         var buttons = string.Join("/", controls.OfType<Button>()
-            .Where(b => b.IsEffectivelyVisible)
+            .Where(b => b is not Avalonia.Controls.Primitives.ToggleButton
+                && b is not RepeatButton
+                && b.TemplatedParent is null && b.IsEffectivelyVisible)
             .Select(b => ControlAutomationPeer.CreatePeerForElement(b)?.GetName()?.Replace("_", ""))
             .Where(name => !string.IsNullOrWhiteSpace(name)));
         var details = new List<string>();
@@ -97,7 +131,8 @@ public static class OpenDialogs
         }
         if (buttons.Length > 0)
             details.Add(buttons);
-        return $"'{dialog.Title}'" + (details.Count == 0 ? "" : $" ({string.Join(", ", details)})");
+        var named = string.IsNullOrEmpty(dialog.Title) ? "one with no title" : $"'{dialog.Title}'";
+        return named + (details.Count == 0 ? "" : $" ({string.Join(", ", details)})");
     }
 
     private static string FirstLine(string text)
@@ -121,7 +156,7 @@ public static class OpenDialogs
 
     internal static string OwnerOf(Window dialog) => dialog.Owner switch
     {
-        HexIDE.Runtime.IModuleExecutionRoot and Window form => $"the running form '{form.Title}'",
+        Window form when RunningProgram.Current.Form(form) is { IsRunning: true } => $"the running form '{form.Title}'",
         Window owner => $"'{owner.Title}'",
         _ => "no window",
     };

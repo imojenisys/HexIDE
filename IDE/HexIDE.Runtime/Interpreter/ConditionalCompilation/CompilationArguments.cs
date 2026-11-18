@@ -10,16 +10,13 @@ namespace HexIDE.Runtime.Interpreter.ConditionalCompilation;
 /// </summary>
 public sealed class CompilationArguments
 {
-    /// <summary>The <c>.vbp</c> key.</summary>
-    public const string ProjectKey = "CondComp";
-
     /// <summary>vb6.exe's message for a line it refuses.</summary>
     public const string InvalidSyntax = "Invalid syntax for constant declarations";
 
     /// <summary>A project with no arguments.</summary>
     public static readonly CompilationArguments None = new(new Dictionary<string, short>(StringComparer.OrdinalIgnoreCase));
 
-    private CompilationArguments(IReadOnlyDictionary<string, short> values) => Values = values;
+    internal CompilationArguments(IReadOnlyDictionary<string, short> values) => Values = values;
 
     /// <summary>Each argument's value, by its name in any case.</summary>
     public IReadOnlyDictionary<string, short> Values { get; }
@@ -38,9 +35,9 @@ public sealed class CompilationArguments
     /// </summary>
     public static CompilationArguments ForProject(ProjectDefinition project)
     {
-        var text = AppInfo.PreSectionValue(project, ProjectKey);
+        var text = project.PreSectionValue(ProjectDefinition.ConditionalArgumentsKey);
         return TryParse(text, out var arguments)
             ? arguments
-            : throw new VBCompileErrorException($"{InvalidSyntax}: the project's Conditional Compilation Arguments, {ProjectKey}=\"{text}\"");
+            : throw new VBCompileErrorException($"{InvalidSyntax}: the project's Conditional Compilation Arguments, {ProjectDefinition.ConditionalArgumentsKey}=\"{text}\"");
     }
 }

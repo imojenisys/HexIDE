@@ -13,13 +13,22 @@ namespace HexIDE.IDE;
 public static class SettingsDefaults
 {
     // ── Editor ──────────────────────────────────────────────────
+    public const string EditorFontFamily = "Courier New,Monospace";
+    public const double EditorFontSize = 13;
     public const bool RequireVariableDeclaration = false;
     public const bool AutoListMembers = true;
     public const bool AutoQuickInfo = true;
     public const bool AutoIndent = true;
     public const int TabWidth = 4;
     public const bool FormatOnSave = true;
+    public const bool ShowIndentGuides = true;
+
     public const bool IsMinimapVisible = true;
+    public const bool ShowInlayHints = true;
+    public const bool ShowCodeLenses = true;
+    public const bool ColorBracketsByDepth = true;
+    public const bool IsStickyScrollEnabled = true;
+    public const int StickyScrollDepth = 3;
 
     // ── Form designer grid ──────────────────────────────────────
     public const bool ShowGrid = true;
@@ -47,5 +56,5 @@ public static class SettingsDefaults
     public const bool IsEditToolbarVisible = false;
     public const bool IsDebugToolbarVisible = false;
     public const bool IsFormEditorToolbarVisible = false;
-    public const string? RevocationListUrl = null;
+    public const string? RevocationListUrl = "https://hexide.io/revocations.json";
 }

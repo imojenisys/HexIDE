@@ -4,6 +4,9 @@ namespace HexIDE.IDE;
 
 public interface IEditorService
 {
+    void SaveOpenDocuments(ProjectDefinition project);
+    void RestoreOpenDocuments(ProjectDefinition project);
+
     void EditForm(FormDefinition? form);
     void EditCode(FormDefinition? form);
     void EditCode(ModuleDefinition? module);
@@ -11,6 +14,25 @@ public interface IEditorService
     /// <summary>Opens a file the project carries but does not compile, in the plain-text editor.</summary>
     void EditRelatedDocument(RelatedDocumentDefinition? relatedDocument);
     void EditProject(ProjectDefinition? project);
+    void EditProjectFile(ProjectFileSource source);
+
+    /// <summary>The loaded member name for a URI, or null when nothing loaded answers.</summary>
+    string? DocumentNameForUri(string uri);
+
+    /// <summary>Opens a loaded code member by URI, or returns null when none answers.</summary>
+    Forms.ViewModels.CodeEditorViewModel? OpenCodeForUri(string uri);
+
+    /// <summary>Opens a loaded code member, optionally preserving the active tab and focus.</summary>
+    Forms.ViewModels.CodeEditorViewModel? OpenCodeForUri(string uri, bool takeFocus);
+
+    /// <summary>Finds a loaded code member without opening or activating a window.</summary>
+    DocumentIdentity? CodeDocumentForUri(string uri);
+
+    /// <summary>Finds an existing code window without activating it.</summary>
+    Forms.ViewModels.CodeEditorViewModel? FindOpenCode(DocumentIdentity document);
+
+    void RestoreCaret(DocumentIdentity document, int offset);
+    void RestoreCaret(RelatedDocumentDefinition document, int offset);
 
     /// <summary>
     /// Opens whatever document a URI names and puts the caret at a position in it. False when nothing
@@ -29,4 +51,9 @@ public interface IEditorService
     /// </para>
     /// </remarks>
     bool NavigateTo(string uri, int line, int column);
+
+    /// <summary>Opens a loaded member with the server-requested range and focus; refuses external URIs.</summary>
+    string? ApplyWorkspaceEdit(HexIDE.Lsp.Messages.WorkspaceEdit edit, System.Func<string, HexIDE.Lsp.RenameDocumentSnapshot?> documentFor);
+
+    bool ShowDocument(HexIDE.Lsp.Messages.ShowDocumentParams request);
 }

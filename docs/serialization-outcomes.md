@@ -4,8 +4,8 @@ Decided 2026-08-11. The axis for judging any round-trip defect: **what does it d
 This replaces ad-hoc severity labels, which kept conflating "ugly diff" with "destroyed project".
 
 > **The framework stands; the numbers in it are the 2026-08-11 position.** Where this file says "0/22",
-> read it as the state that prompted the decision, not the state today — that is now **21 of 22**, with
-> the 22nd refused rather than saved. The prediction below was borne out: pass-through landed, and it
+> read it as the state that prompted the decision, not the state today — that is now **22 of 22**, since
+> #60 carried the last one's ImageList pictures through a save. The prediction below was borne out: pass-through landed, and it
 > moved the number without the text writer changing. The live figure is `KnownVb6Failures` in
 > `IDE/HexIDE.Runtime.Tests/SerializationCorpusTests.cs`.
 
@@ -36,10 +36,36 @@ be gone from your working tree.
 **Any finding in category 3 is a launch blocker regardless of how narrow it looks.** Issue #22 (menu
 shortcuts) is the canonical example: the form still opens perfectly in HexIDE.
 
+## Recovered load errors
+
+| Input | Load and run | Save |
+|---|---|---|
+| A control's negative Width or Height | Reads 0, with `Line N: Property Width/Height in Control could not be set.` at the control's Begin line; the designer remains editable and F5 runs | Save, Save Project and Save Project Group ask for a new form path. Cancellation writes nothing; noninteractive in-place writes refuse. After Save As, normal saves resume. The original bytes and modification time stay unchanged. |
+
+Measured in VB6 SP6's IDE: [oracle PR #4350](https://github.com/hexide-io/HexIDE/pull/4350),
+recorded in [#4179's revised decision](https://github.com/hexide-io/HexIDE/issues/4179).
+Zero and small sizes and negative positions retain their existing behaviour; size floors are separate.
+This recovery uses `FormDefinition.LoadedWithErrors`, independently of the read-only faithful-save gate.
+
+## Designer files declared as code modules
+
+A code module whose first non-blank line is `VERSION n.nn` (without `CLASS`), followed by
+zero or more `Object = ` references and then `Begin `, carries
+`UnfaithfulSaveCause.DesignerFileAsModule`. Both contributed projects and `.vbp` module entries retain
+the whole file as code, with no split header, and hold it read-only. Saves, including Save As, refuse
+before writing; editor input, server workspace edits, project-wide replacement and automation writes
+refuse too. The reason names the file and the project or add-in that declared it a code module.
+
+This moves the measured form and UserControl damage from outcome 4 to outcome 0
+([#4459, measurements and decision](https://github.com/hexide-io/HexIDE/issues/4459)). A contributed
+member keeps the kind its add-in declared; declaring the correct designer kind belongs to that add-in.
+Ordinary `.bas` and `VERSION 1.0 CLASS` files retain their header split and writable save path.
+
 ## Target per format
 
 | Format | Target | Why |
 |---|---|---|
+| `.vbg` | **1**, or **0** for mixed project kinds | Only `.vbp` members are safe: VB6 opens other extensions as code modules ([oracle PR #4308](https://github.com/hexide-io/HexIDE/pull/4308)). Mixed-group saves refuse before writing anything, pending #1206’s workspace descriptor |
 | `.vbp` | **1** | Small key=value file; humans read its diffs |
 | `.frm` / `.ctl` designer block | **1** | See "diffs are the real requirement" below. 2 is an interim state, not a resting place |
 | `.cls` / `.bas` headers | **1** | These carry Instancing semantics; preserving what was read is both easier and safer than regenerating |
@@ -158,7 +184,7 @@ scheduled as **feature work with a fidelity dividend**, not as fidelity debt nob
 | 1 | Byte comparison after load+save | `SerializationCorpusTests.Forms_and_controls_round_trip_byte_for_byte` |
 | 2 | Every offset the form cites resolves to a record, and that record is unchanged | `SerializationCorpusTests.Every_companion_offset_cited_by_a_form_resolves_to_a_blob` |
 | 4 | Load failure on our own output | Implicit — a failed re-read |
-| 0 | Deliberate refusal | Not yet implemented as a gate |
+| 0 | Deliberate refusal | `FormDefinition.CanSaveFaithfully` and `ModuleDefinition.CanSaveFaithfully`, consulted before a save |
 | **3** | **Only the oracle can see this** | `Vb6OracleRoundTripTests` — round-trip through HexIDE, then `vb6.exe /make` |
 
 **Category 3 is the only outcome we cannot detect by reasoning about our own code.** Every other check is
@@ -184,6 +210,10 @@ HexIDE. Only "VB6 built the original but not our output" counts as a failure, wh
 ---
 
 ## Status: the gate is in place (2026-08-11)
+
+> **Since then:** the parenting model landed (#84), so a container's children and a menu's items round-trip, and the gate
+> now refuses only what still cannot be reproduced. The editing surface is gated as well: a form that cannot be saved
+> faithfully is held read-only in the designer and the code window. The rest of this section is the 2026-08-11 position.
 
 Forms HexIDE cannot reproduce are now **refused on save** rather than written. Detection is the deepest
 `Begin` nesting seen at load: depth 1 is the root, 2 is the root plus direct children, and 3+ means a

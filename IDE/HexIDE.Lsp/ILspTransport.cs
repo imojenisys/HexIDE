@@ -10,11 +10,14 @@ public enum TransportNoticeKind
 
     /// <summary>The process starting, stopping, or reporting an exit code.</summary>
     Lifecycle,
+
+    /// <summary>A line a named-pipe server wrote to standard output.</summary>
+    StandardOutput,
 }
 
 /// <summary>Something the server's process said or did that is not a protocol message.</summary>
-/// <param name="Kind">Which of the two channels this came from.</param>
-/// <param name="Text">Verbatim. A stderr line as written, or a lifecycle fact in plain words.</param>
+/// <param name="Kind">Which channel this came from.</param>
+/// <param name="Text">Verbatim. A stdout or stderr line as written, or a lifecycle fact in plain words.</param>
 /// <param name="Fault">A lifecycle fact that is a failure: the process exiting with a non-zero code (#945).</param>
 public sealed record TransportNotice(TransportNoticeKind Kind, string Text, bool Fault = false);
 
@@ -28,6 +31,12 @@ public sealed record TransportNotice(TransportNoticeKind Kind, string Text, bool
 /// </summary>
 public interface ILspTransport : IAsyncDisposable
 {
+    /// <summary>The last launch was refused solely because no workspace directory was chosen yet.</summary>
+    bool WaitingForWorkspace => false;
+
+    /// <summary>Called after shutdown answered successfully and exit was sent.</summary>
+    void ShutdownCompleted() { }
+
     /// <summary>True while the underlying channel is connected and usable.</summary>
     bool IsAlive { get; }
 
@@ -46,10 +55,10 @@ public interface ILspTransport : IAsyncDisposable
     /// it has not failed.
     ///
     /// <para>
-    /// A string rather than a structured result, deliberately. All three transports already <em>compose</em>
+    /// A string rather than a structured result, deliberately. The transports already <em>compose</em>
     /// this sentence for their log line and then throw it away; the text is the thing that was lost, and
     /// modelling it would mean inventing a taxonomy for failures that arrive as arbitrary
-    /// <see cref="Exception"/>s from three unrelated stacks.
+    /// <see cref="Exception"/>s from unrelated stacks.
     /// </para>
     ///
     /// <para>

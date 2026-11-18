@@ -1,0 +1,196 @@
+## In-box classes: a bare name binds to the first library (2026-10-27, #2265)
+
+**The obvious guess is that a control library's class needs its library's name in a `Dim`. It doesn't:** with MSCOMCTL.OCX
+in the project, `Dim li As ListImage` compiles and runs. With two libraries that both declare `ListView`, the bare name
+takes the one whose `Object=` line comes first in the `.vbp`.
+
+**The probe.**
+- **The software:** VB6 6.00.8176 SP6, with MSCOMCTL.OCX 6.01.9782 (MSComctlLib, Common Controls 6.0) and COMCTL32.OCX
+  6.00.8105 (ComctlLib, Common Controls 5.0), on Windows 10.
+- **The projects:** five Sub Main projects, each made native and p-code.
+  - One referenced MSCOMCTL.OCX alone, with VB6's saved ImageList and VB6's own double-clicked ListView, TreeView and
+    ProgressBar.
+  - Four referenced both libraries, with a ListView and a ProgressBar of each: one per order of the two `Object=` lines in
+    the `.vbp` and in the `.frm`.
+- **The read:** every Set read Err straight after it. Native code and p-code logged the same lines in all five.
+
+### Bare names, with MSCOMCTL.OCX referenced
+
+| Declared bare, then | Err | `TypeName` | `TypeOf … Is` the bare name |
+|---|---|---|---|
+| `Dim il As ImageList`, `Set il = ImageList1` | 0 | ImageList | True, and True for `MSComctlLib.ImageList` |
+| `Dim lis As ListImages`, `Set lis = il.ListImages` | 0 | **IImages** | True |
+| `Dim li As ListImage`, `Set li = il.ListImages(1)` | 0 | **IImage** | True |
+| `Dim lv As ListView`, `Set lv = ListView1` | 0 | ListView | True |
+| `Dim ch As ColumnHeader`, `Set ch = lv.ColumnHeaders.Add(...)` | 0 | **IColumnHeader** | True |
+| `Dim it As ListItem`, `Set it = lv.ListItems.Add(...)` | 0 | **IListItem** | True |
+| `Dim tv As TreeView`, `Set tv = TreeView1` | 0 | TreeView | True |
+| `Dim ns As Nodes`, `Set ns = tv.Nodes` | 0 | **INodes** | True |
+| `Dim n As Node`, `Set n = tv.Nodes.Add(...)` | 0 | **INode** | True |
+| `Dim pb As ProgressBar`, `Set pb = ProgressBar1` | 0 | ProgressBar | True |
+| `Dim q As MSComctlLib.Node`, `Set q = n` | 0 | | `q Is n` True |
+| `Set pb = ListView1`; `Set n = it`, a ListItem | **13** | | |
+
+- **A variable dimmed but not set** reads `TypeName` Nothing.
+- **`TypeName` of a control is its class, but of a control's objects it is the interface,** an `I` in front of the
+  class: IImage, not ListImage; INode, not Node. `TypeOf n Is Node` is still True.
+- **`TypeOf ListView1 Is ProgressBar` is False.**
+
+### Two libraries that declare the same classes
+
+ComctlLib and MSComctlLib both declare ListView, ListItem, ProgressBar, TreeView and the rest. The form held ListView1 and
+ProgressBar1 from MSComctlLib, ListView2 and ProgressBar2 from ComctlLib.
+
+| `Object=` first in the `.vbp` | first in the `.frm` | A bare `ListView`, `ListItem` and `ProgressBar` are |
+|---|---|---|
+| MSCOMCTL.OCX | MSCOMCTL.OCX | **MSComctlLib's** |
+| MSCOMCTL.OCX | COMCTL32.OCX | **MSComctlLib's** |
+| COMCTL32.OCX | COMCTL32.OCX | **ComctlLib's** |
+| COMCTL32.OCX | MSCOMCTL.OCX | **ComctlLib's** |
+
+- **The `.vbp`'s order decides. The `.frm`'s doesn't.** Swapping the two lines in the `.vbp` swapped the binding.
+- **The other library's control doesn't fit.** With MSCOMCTL.OCX first, `Dim b As ListView: Set b = ListView2` was **13**
+  "Type mismatch". So was adding a ListItem to ListView2 into a bare `ListItem`, and ProgressBar2 into a bare
+  `ProgressBar`. With COMCTL32.OCX first, the same was true the other way round.
+- **`TypeOf` follows the same binding.** `TypeOf ListView2 Is ListView` was False with MSCOMCTL.OCX first and True with
+  COMCTL32.OCX first. `TypeOf … Is MSComctlLib.ListView` and `Is ComctlLib.ListView` each named their own library's
+  control, in every order.
+- **Nothing failed to compile:** VB6 gave no "Ambiguous name" for a bare name both libraries declare. `TypeName` was
+  ListView for both ListViews.
+
+### A `Reference=` library against an `Object=` one
+
+Four more projects, native and p-code alike:
+- **Two set the form's controls from MSCOMCTL.OCX.** The `.vbp` had its `Object=` line and a `Reference=` to COMCTL32.OCX's
+  type library, with no control from it.
+- **Two did the reverse.**
+- Each pair had the two lines in both orders.
+
+| First of the two lines in the `.vbp` | Second | A bare `ListView`, `ListItem` and `ProgressBar` are |
+|---|---|---|
+| `Object=` MSCOMCTL.OCX | `Reference=` COMCTL32.OCX | **MSComctlLib's**: the controls fit |
+| `Reference=` COMCTL32.OCX | `Object=` MSCOMCTL.OCX | **ComctlLib's**: the form's own ListView is **13** in a bare `ListView` |
+| `Object=` COMCTL32.OCX | `Reference=` MSCOMCTL.OCX | **ComctlLib's**: the controls fit |
+| `Reference=` MSCOMCTL.OCX | `Object=` COMCTL32.OCX | **MSComctlLib's**: 13 again |
+
+- **A `Reference=` line ranks exactly as an `Object=` line does: by its place in the `.vbp`.** The two kinds form one list,
+  and the first library declaring the name wins.
+- **The form's own controls get no priority.** With the reference first, `TypeOf ListView1 Is ListView` was False for
+  the form's own ListView, and assigning it to a bare `ListView` was 13 "Type mismatch".
+- **Where VB6 writes the two kinds depends on the References dialog.** A save with no edit keeps every line where it was
+  read. Once Project → References has been confirmed, even with nothing changed, the next save writes every `Reference=`
+  line before every `Object=` line ("A reference's path, and the line order a save writes", #2274). So a referenced type
+  library outranks a component for a bare name only where the file lists it first, as a save after a References OK
+  always does.
+  - **Corrected 2026-10-28:** this bullet said VB6 always writes the references first, and that a referenced library
+    therefore outranks every component in any project VB6 has saved. The probe it cited had confirmed the References
+    dialog before saving. The follow-up found that dialog is the trigger: VB6's unedited saves of its own templates kept a
+    `Reference=` after a `Designer=`, and an `Object=` after the members.
+  - **Corrected 2026-10-27:** this entry first cited the 16 `.vbp` files in `corpus/inbox-controls/pending/` that have
+    both kinds. Those files are hand-written, as the corpus README says, so they show nothing about VB6. The #2274
+    measurement replaced them.
+
+**Not measured:** whether the References dialog shows the libraries in the `.vbp`'s order.
+
+### More bare names: StatusBar, Toolbar, TabStrip and ListView's collections (2026-11-14, #2265)
+
+**The probe.** VB6 SP6, `/make`, native code and p-code, which logged the same lines. One Sub Main project per library,
+MSCOMCTL.OCX (MSComctlLib) and COMCTL32.OCX (ComctlLib), each referencing that library alone by its `Object=` line. Each
+had a hand-written form holding a StatusBar, a Toolbar, a TabStrip and a report-view ListView from its library. Before the
+probes ran, the setup added a Button, a ColumnHeader and a ListItem.
+
+For each class, a function:
+1. declared it bare and read `TypeName`;
+2. `Set` it from its own object, and read `Err`, `TypeName` and `TypeOf … Is` the bare name;
+3. `Set` it from another class's object, held in an `Object` variable, and read `Err` and `TypeName`.
+
+| Declared bare | Its own object | `TypeName` | Another class's object |
+|---|---|---|---|
+| `StatusBar` | `Form1.StatusBar1` | StatusBar | the Toolbar |
+| `Panels` | `Form1.StatusBar1.Panels` | **IPanels** | the Toolbar's Buttons |
+| `Panel` | `Form1.StatusBar1.Panels.Add()` | **IPanel** | `Buttons.Add()` |
+| `Toolbar` | `Form1.Toolbar1` | Toolbar | the StatusBar |
+| `Buttons` | `Form1.Toolbar1.Buttons` | **IButtons** | the StatusBar's Panels |
+| `Button` | `Form1.Toolbar1.Buttons.Add()` | **IButton** | `Panels.Add()` |
+| `ButtonMenus` | `Form1.Toolbar1.Buttons(1).ButtonMenus` | **IButtonMenus** | the Toolbar's Buttons |
+| `ButtonMenu` | `….ButtonMenus.Add()` | **IButtonMenu** | `Panels.Add()` |
+| `TabStrip` | `Form1.TabStrip1` | TabStrip | the ListView |
+| `Tabs` | `Form1.TabStrip1.Tabs` | **ITabs** | the ListView's ListItems |
+| `ListItems` | `Form1.ListView1.ListItems` | **IListItems** | the TabStrip's Tabs |
+| `ColumnHeaders` | `Form1.ListView1.ColumnHeaders` | **IColumnHeaders** | the ListView's ListItems |
+| `ListSubItems` | `Form1.ListView1.ListItems(1).ListSubItems` | **IListSubItems** | the ListView's ColumnHeaders |
+| `ListSubItem` | `….ListSubItems.Add(, , "s")` | **IListSubItem** | `ColumnHeaders.Add()` |
+| `MSComctlLib.Tab`, `ComctlLib.Tab` | `Form1.TabStrip1.Tabs.Add()` | **ITab** | `ListItems.Add()` |
+
+In every row and both libraries:
+- the variable read `TypeName` Nothing before its `Set`;
+- its own object set with Err 0, and `TypeOf … Is` the declared name was True;
+- another class's object was **13**, and `TypeName` still read the earlier object afterwards.
+
+ComctlLib gave the same `TypeName` for every name it has.
+
+| Only COMCTL32.OCX referenced | vb6.exe |
+|---|---|
+| `Dim x As ButtonMenus`, `ButtonMenu`, `ListSubItems` or `ListSubItem` | compile error: User-defined type not defined |
+| `Dim x As Tab`, with either library | compile error: Syntax error |
+
+**Readings:**
+- **The 10-27 rule holds for these classes too.** A control's `TypeName` is its class, and a control's object's is its
+  interface, `I` in front of the class.
+- **`Tab` can't be declared bare.** It's a syntax error, `Tab` being the `Print` function's keyword. Qualified by its
+  library, it declares and binds as the rest do.
+- **A `Set` that fails with 13 leaves the variable holding what it held.**
+- **ComctlLib lacks the four classes Common Controls 6.0 added.** COMCTL32.OCX's type library declares no ButtonMenus,
+  ButtonMenu, ListSubItems or ListSubItem, and a bare declaration of one with only that library is "User-defined type not
+  defined". Its list of classes, read from the type library: TabStrip, Tabs, Tab, Toolbar, Buttons, Button, StatusBar,
+  Panels, Panel, ProgressBar, TreeView, Nodes, Node, ListView, ListItems, ListItem, ColumnHeaders, ColumnHeader,
+  ImageList, ListImages, ListImage, Slider, Controls, DataObject and DataObjectFiles.
+
+**Not measured:** these names with both libraries referenced. The 10-27 rows measured that for ListView, ListItem and
+ProgressBar only.
+
+### The other in-box libraries: MSComCtl2, TabDlg, MSMask, RichTextLib, MSComDlg, and Slider and ImageCombo (2026-11-15, #2265)
+
+**The question.** The sections above measured MSComctlLib's and ComctlLib's classes. Do the other in-box control
+libraries' classes bind bare too, and so do MSComctlLib's Slider and ImageCombo, with ImageCombo's collection and item?
+
+**The probe.**
+- **Build:** VB6 SP6, `/make`, native code and p-code, which logged the same lines.
+- **The projects:** one per library. Each referenced the library by its `Object=` line alone, with each control on
+  `Form1`. The libraries were:
+  - MSCOMCT2.OCX 2.0 (MSComCtl2), TABCTL32.OCX 1.1 (TabDlg), MSMASK32.OCX 1.1 (MSMask);
+  - RICHTX32.OCX 1.2 (RichTextLib), COMDLG32.OCX 1.2 (MSComDlg), MSCOMCTL.OCX 2.0 (MSComctlLib).
+- **The test:** each class was declared bare, `Dim x As DTPicker`. It was `Set` to its own control (or ImageCombo1's
+  `ComboItems`, or one of its items), then to another control on the form, or to `Form1` itself where the library has
+  only one control.
+
+| Library | Class | Declared | `Set` to its own | `TypeOf x Is` it | `Set` to another |
+|---|---|---|---|---|---|
+| MSComCtl2 | DTPicker, MonthView, UpDown, Animation, FlatScrollBar | Nothing | 0, `TypeName` the class | True | 13, keeps its object |
+| TabDlg | SSTab | Nothing | 0, SSTab | True | 13 |
+| MSMask | MaskEdBox | Nothing | 0, MaskEdBox | True | 13 |
+| RichTextLib | RichTextBox | Nothing | 0, RichTextBox | True | 13 |
+| MSComDlg | CommonDialog | Nothing | 0, CommonDialog | True | 13 |
+| MSComctlLib | Slider, ImageCombo | Nothing | 0, the class | True | 13 |
+| MSComctlLib | ComboItems; ComboItem | Nothing | 0, **IComboItems**; **IComboItem** | True | 13 |
+
+**Readings:**
+- **Every class measured here binds bare,** with only its OCX's `Object=` line, as MSComctlLib's do above. A typed slot
+  keeps its class: another class is 13 and leaves the earlier object.
+- **`TypeName` of ImageCombo's collection and item is the interface's name,** IComboItems and IComboItem, as
+  ListView's ListSubItems is IListSubItems above.
+
+**Not measured:** two of these libraries referenced together, where a name would be declared twice. None of these
+classes shares a name with another library's.
+
+### In HexIDE
+
+A bare declaration of any class measured here binds as VB6 binds it (#2265): the 24 MSComctlLib names and the 20 that
+ComctlLib also declares. The first library declaring the name wins, in the project's combined `Reference=`/`Object=`
+order (#3524). `Tab` binds only qualified. A typed slot keeps its class, bare or qualified: a Set of another class raises
+13 and leaves the earlier object in place, and `TypeOf` follows the same binding for a control and for its objects.
+`TypeName` returns the measured interface names.
+
+With both libraries referenced, VB6 was measured for ListView, ListItem and ProgressBar only. HexIDE applies the same
+rule to the other names. A class of the project keeps the precedence it already had over a library's, which is
+unmeasured. Slider, ImageCombo and ComboItem(s), and the other in-box libraries' classes, are still not bound bare.

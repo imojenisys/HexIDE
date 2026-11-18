@@ -131,8 +131,7 @@ public class DocumentContentTests : IDisposable
         var dock = Substitute.For<IDocumentDockService>();
         dock.OpenDocuments.Returns(new List<BaseEditorWindowViewModel>());
 
-        return new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             Substitute.For<IWindowManager>(),
             Substitute.For<IEventBus>(),
             projectManager,
@@ -141,18 +140,13 @@ public class DocumentContentTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<ILocalizationService>(),
-            new HeaderRefresher(new EventBus(), dock, new BreakpointService(), new BookmarkService()));
+            new HeaderRefresher(new EventBus(), dock, new BreakpointService(), new BookmarkService()), new ComponentRegistry());
     }
 
     private static string? FindUpwards(string relative)
     {
-        for (var at = new DirectoryInfo(AppContext.BaseDirectory); at is not null; at = at.Parent)
-        {
-            var candidate = Path.Join(at.FullName, relative);
-            if (Directory.Exists(candidate))
-                return candidate;
-        }
-        return null;
+        var candidate = Path.Join(HexIDE.Tests.Infrastructure.RepoTree.Root(), relative);
+        return Directory.Exists(candidate) ? candidate : null;
     }
 
     private static readonly string[] SourceExtensions =
@@ -223,7 +217,7 @@ public class DocumentContentTests : IDisposable
         var written = DocumentContent.Write(document, editor: null, read);
         written.Refusal.Should().BeNull("the write takes back exactly what the read returned");
         written.NewText.Should().Be(read);
-        DocumentContent.LeftOutAttributeLines(document, read).Should().BeFalse("nothing was left out, so nothing is reported kept");
+        DocumentContent.LeftOutLeadingRegion(document, read).HasValue.Should().BeFalse("nothing was left out, so nothing is reported kept");
         (await service.SaveForm(form, saveAs: false, interactive: false)).Should().BeTrue();
 
         var after = await File.ReadAllBytesAsync(form.AbsolutePath!, TestContext.Current.CancellationToken);
@@ -373,7 +367,7 @@ public class DocumentContentTests : IDisposable
         var document = DocumentOf(kind);
         var read = DocumentContent.Read(document, editor: null);
 
-        read.Should().Be(CodeWindowText.Of(document).Text);
+        read.Should().Be(DocumentContent.TextOf(document, null).Text);
         read.Should().EndWith(document.Module?.Code ?? document.Form!.Code);
         read.Length.Should().BeGreaterThan((document.Module?.Code ?? document.Form!.Code).Length, "the header comes first");
     }
@@ -386,7 +380,7 @@ public class DocumentContentTests : IDisposable
         var vm = document.Module is { } module ? NewEditor().Initialize(module) : NewEditor().Initialize(document.Form!);
 
         DocumentContent.Read(document, vm).Should().Be(vm.CodeWindowText.Text)
-            .And.Be(CodeWindowText.Of(document).Text, "open or not, the read is the same file");
+            .And.Be(DocumentContent.TextOf(document, null).Text, "open or not, the read is the same file");
     }
 
     [Fact]
@@ -396,7 +390,7 @@ public class DocumentContentTests : IDisposable
         var lines = DocumentContent.Read(document, editor: null).Replace("\r\n", "\n").Split('\n');
 
         lines[0].Should().StartWith("VERSION 1.0 CLASS");
-        Array.IndexOf(lines, "Option Explicit").Should().Be(CodeWindowText.Of(document).HeaderLineCount,
+        Array.IndexOf(lines, "Option Explicit").Should().Be(DocumentContent.TextOf(document, null).HeaderLineCount,
             "the code starts on the line after the header, counted from the top of the file");
     }
 
@@ -560,10 +554,10 @@ public class DocumentContentTests : IDisposable
     {
         var document = DocumentOf("form");
 
-        DocumentContent.LeftOutAttributeLines(document, "Option Explicit\r\n").Should().BeTrue();
-        DocumentContent.LeftOutAttributeLines(document, Frm).Should().BeFalse();
-        DocumentContent.LeftOutAttributeLines(document, "Attribute VB_Name = \"frmOrders\"\r\nOption Explicit\r\n").Should().BeFalse();
-        DocumentContent.LeftOutAttributeLines(DocumentOf("class"), "Option Explicit\r\n").Should().BeFalse(
+        DocumentContent.LeftOutLeadingRegion(document, "Option Explicit\r\n").HasValue.Should().BeTrue();
+        DocumentContent.LeftOutLeadingRegion(document, Frm).HasValue.Should().BeFalse();
+        DocumentContent.LeftOutLeadingRegion(document, "Attribute VB_Name = \"frmOrders\"\r\nOption Explicit\r\n").HasValue.Should().BeFalse();
+        DocumentContent.LeftOutLeadingRegion(DocumentOf("class"), "Option Explicit\r\n").HasValue.Should().BeFalse(
             "a module's header is kept without remark; the report exists for a form's identity");
     }
 

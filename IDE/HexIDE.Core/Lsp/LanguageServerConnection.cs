@@ -100,7 +100,14 @@ public sealed record LanguageServerConnection(
     // Not `= []`: a collection expression is not a constant, so it cannot be a parameter default.
     IReadOnlyList<string>? DeclinedByClient = null,
     int OpenDocumentCount = 0,
-    string? WorkspaceRootUri = null);
+    string? WorkspaceRootUri = null,
+    // Who contributed the connection: an add-in's title, or null for the configuration file and the bundled server.
+    string? Origin = null,
+    /// <summary>
+    /// What the server's entry says about AI Chat using its tools, or null where its route can't offer any (#4257). The
+    /// person's own setting in Options wins over it.
+    /// </summary>
+    ServerChatToolsPolicy? ChatTools = null);
 
 /// <summary>
 /// How far a connection attempt got. Ordered, and the order is the sequence itself.
@@ -175,12 +182,13 @@ public sealed record LanguageConnectionAttempt(
     IReadOnlyList<LanguageConnectionStep> Steps,
     DateTimeOffset StartedAt);
 
-/// <summary>How a connection is reached. The three the configuration file accepts, and nothing else.</summary>
+/// <summary>How a connection is reached. The transports the configuration file accepts, and nothing else.</summary>
 public enum LanguageConnectionTransport
 {
     Stdio,
     Pipe,
     WebSocket,
+    Tcp,
 }
 
 /// <summary>
@@ -204,6 +212,9 @@ public sealed record ServerIdentity(string? Name, string? Version);
 /// </summary>
 public interface ILanguageConnectionRegistry
 {
+    /// <summary>Current diagnostics, attributed to the publisher rather than diagnostic.source.</summary>
+    IReadOnlyList<OwnedDiagnostic> Diagnostics { get; }
+
     /// <summary>Every registered connection, including those deliberately not started.</summary>
     IReadOnlyList<LanguageServerConnection> Connections { get; }
 
@@ -223,6 +234,12 @@ public interface ILanguageConnectionRegistry
     /// </summary>
     IReadOnlyList<LanguageServerConfigProblem> ConfigurationProblems { get; }
 
+    /// <summary>Restarts one entry using its loaded registration and reopens its known documents.</summary>
+    Task RestartAsync(string id, CancellationToken cancellationToken = default);
+
     /// <summary>Raised when any connection's state or advertised capabilities change.</summary>
     event EventHandler? ConnectionsChanged;
 }
+
+/// <summary>One current diagnostic and the publisher that owns it.</summary>
+public sealed record OwnedDiagnostic(string Uri, string Owner, Messages.Diagnostic Diagnostic);

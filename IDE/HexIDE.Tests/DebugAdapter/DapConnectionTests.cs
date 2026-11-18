@@ -32,8 +32,8 @@ public class DapConnectionTests
             Client = new(_toClient.Reader.AsStream(), slowClientWrites ? new YieldingOutput(outgoing) : outgoing, options, capture);
         }
 
-        public Task<DapResponse> Request(string command, JsonElement? arguments = null, CancellationToken? cancellationToken = null)
-            => Client.RequestAsync(command, arguments, cancellationToken ?? TestContext.Current.CancellationToken);
+        public Task<DapResponse> Request(string command, JsonElement? arguments = null, CancellationToken? cancellationToken = null, TimeSpan? requestTimeout = null)
+            => Client.RequestAsync(command, arguments, cancellationToken ?? TestContext.Current.CancellationToken, requestTimeout);
 
         public async Task Send(string json, bool fragmented = false)
         {
@@ -242,9 +242,48 @@ public class DapConnectionTests
         await peer.Receive();
         await ((Func<Task>)(() => pending.WaitAsync(Patience, TestContext.Current.CancellationToken))).Should().ThrowExactlyAsync<TimeoutException>();
         (peer.Client.Completion.IsCompleted).Should().BeFalse();
-        var next = peer.Request("threads");
+        var next = peer.Request("threads", requestTimeout: Patience);
         var request = await peer.Receive();
         request.GetProperty("seq").GetInt32().Should().Be(2);
+        await peer.Reply(request);
+        await next.WaitAsync(Patience, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_request_can_override_the_connection_timeout()
+    {
+        await using var peer = new Peer();
+        var timeout = TimeSpan.FromSeconds(1);
+        var pending = peer.Request("threads", requestTimeout: timeout);
+        await peer.Receive();
+        var error = (await ((Func<Task>)(() => pending.WaitAsync(Patience, TestContext.Current.CancellationToken)))
+            .Should().ThrowExactlyAsync<TimeoutException>()).Which;
+        error.Message.Should().Be($"Debug adapter did not complete 'threads' within {timeout}.");
+    }
+
+    [Fact]
+    public async Task A_request_override_can_outlast_the_connection_timeout()
+    {
+        await using var peer = new Peer(new() { RequestTimeout = TimeSpan.FromSeconds(1) });
+        var pending = peer.Request("threads", requestTimeout: Patience);
+        var request = await peer.Receive();
+        await Task.Delay(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        await peer.Reply(request);
+        await pending.WaitAsync(Patience, TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(4294967295)]
+    public async Task Invalid_request_timeout_overrides_are_refused_before_sending(long milliseconds)
+    {
+        await using var peer = new Peer();
+        await ((Func<Task>)(() => peer.Request("threads", requestTimeout: TimeSpan.FromMilliseconds(milliseconds))))
+            .Should().ThrowExactlyAsync<ArgumentOutOfRangeException>();
+        var next = peer.Request("threads");
+        var request = await peer.Receive();
+        request.GetProperty("seq").GetInt32().Should().Be(1);
         await peer.Reply(request);
         await next.WaitAsync(Patience, TestContext.Current.CancellationToken);
     }
@@ -289,14 +328,34 @@ public class DapConnectionTests
         (await peer.Client.Completion.WaitAsync(Patience, TestContext.Current.CancellationToken)).Should().BeOfType<InvalidDataException>();
     }
 
-    [Fact]
-    public async Task Event_backlog_closes_instead_of_silently_dropping_state()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Event_backlog_waits_for_the_consumer_and_resumes_in_order(bool disposeWhileFull)
     {
         await using var peer = new Peer(new() { EventCapacity = 1 });
-        await peer.Send("""{"seq":1,"type":"event","event":"stopped"}""");
-        await peer.Send("""{"seq":2,"type":"event","event":"terminated"}""");
-        var failure = (await peer.Client.Completion.WaitAsync(Patience, TestContext.Current.CancellationToken)).Should().BeOfType<IOException>().Which;
-        failure.Message.Should().Contain("event queue");
+        for (var i = 0; i < 20; i++)
+            await peer.Send($$$"""{"seq":{{{i}}},"type":"event","event":"output","body":{"output":"line {{{i}}}"}}""");
+        var pending = peer.Request("stackTrace");
+        await peer.Reply(await peer.Receive(), """{"stackFrames":[]}""");
+        await Task.Delay(200, TestContext.Current.CancellationToken);
+        peer.Client.Completion.IsCompleted.Should().BeFalse();
+        pending.IsCompleted.Should().BeFalse("the reply is behind events awaiting room");
+        if (disposeWhileFull)
+        {
+            await peer.Client.DisposeAsync().AsTask().WaitAsync(Patience, TestContext.Current.CancellationToken);
+            (await peer.Client.Completion).Should().BeNull();
+            await ((Func<Task>)(() => pending)).Should().ThrowAsync<IOException>();
+            return;
+        }
+        for (var i = 0; i < 20; i++)
+        {
+            var message = await peer.Client.Events.ReadAsync(TestContext.Current.CancellationToken).AsTask()
+                .WaitAsync(Patience, TestContext.Current.CancellationToken);
+            message.Body!.Value.GetProperty("output").GetString().Should().Be($"line {i}");
+        }
+        (await pending.WaitAsync(Patience, TestContext.Current.CancellationToken)).Body!.Value
+            .GetProperty("stackFrames").GetArrayLength().Should().Be(0);
     }
 
     private sealed class BlockingOutput(bool failOnDisposal = false) : Stream

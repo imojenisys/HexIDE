@@ -22,6 +22,10 @@ namespace HexIDE.Forms.ViewModels;
 /// </remarks>
 public interface ISearchableDocument
 {
+    /// <summary>Structural scopes come from the document's language server, or fall back to the document.</summary>
+    System.Threading.Tasks.Task<HexIDE.Lsp.Messages.DocumentSymbol[]> RequestSearchSymbolsAsync() =>
+        System.Threading.Tasks.Task.FromResult<HexIDE.Lsp.Messages.DocumentSymbol[]>([]);
+
     /// <summary>The live buffer. Live, not a snapshot: a search must see unsaved edits.</summary>
     TextDocument Document { get; }
 
@@ -55,4 +59,14 @@ public interface ISearchableDocument
     /// buffer backwards, because a replacement never moves anything before it.
     /// </remarks>
     Func<int, int, bool> SnapshotReadOnlyRegions() => static (_, _) => false;
+}
+
+internal static class SearchableDocumentNavigation
+{
+    internal static void NavigateToOffset(this ISearchableDocument document, int offset)
+    {
+        document.SelectionLength = 0;
+        document.CaretOffset = offset;
+        document.SelectionStart = offset;
+    }
 }

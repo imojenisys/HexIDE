@@ -16,6 +16,16 @@ options {
         return base.NextToken();
     }
 
+    // Whether the character just before the current token ends a word: a letter, a digit or an underscore. Called
+    // only from the predicate at the right edge of IDENTIFIER_CONTINUATION, after the whole token has matched.
+    private bool WordEndsBeforeToken()
+    {
+        var before = TokenStartCharIndex - 1;
+        if (before < 0) return false;
+        var c = InputStream.LA(before - InputStream.Index);
+        return char.IsLetterOrDigit((char)c) || c == '_';
+    }
+
     // ANTLR counts only LF itself. Count a lone CR too, including in skipped continuations/comments.
     private sealed class PhysicalLineSimulator(VisualBasic6Lexer lexer)
         : LexerATNSimulator(lexer, _ATN, VisualBasic6Lexer.decisionToDFA, VisualBasic6Lexer.sharedContextCache)
@@ -126,6 +136,10 @@ DEFCUR: 'DEFCUR';
 DEFINT: 'DEFINT';
 
 DEFLNG: 'DEFLNG';
+
+DEFLNGLNG: 'DEFLNGLNG';
+
+DEFLNGPTR: 'DEFLNGPTR';
 
 DEFOBJ: 'DEFOBJ';
 
@@ -509,13 +523,16 @@ fragment DATENAME:
 fragment DATESEPARATOR: [ \t/.,:\-]+;
 fragment DATEMERIDIEM: ('A' | 'P') 'M'?;
 
-COLORLITERAL: '&H' [0-9A-F]+ ( AMPERSAND | PERCENT )?;
+// A `^` straight after a number is the LongLong type character unless a digit follows, so `5^ + 1` and `5^-1` read as
+// 64-bit VBA7 reads them (measured, #4383: 6 and 4). `2^3` stays exponentiation, as VB6 and 32-bit VBA read it: 64-bit
+// VBA7 refuses it as a syntax error (#4383), but the server can't know a file's bitness, so it accepts it.
+COLORLITERAL: '&H' [0-9A-F]+ ( AMPERSAND | PERCENT | POW {InputStream.LA(1) < '0' || InputStream.LA(1) > '9'}? )?;
 
 // Clean-room: '%' (Integer) added to the numeric type-declaration suffix set (VB6 Language
 // Reference, Type Declaration Characters). Not derived from any other grammar.
 // Clean-room: 'D' added as an exponent marker beside 'E', as DOUBLELITERAL already had it; vb6.exe compiles 1D3 as
 // 1000, a Double (measured, #1611). Not derived from any other grammar.
-INTEGERLITERAL: [0-9]+ (('E' | 'D') INTEGERLITERAL)* ( HASH | AMPERSAND | EXCLAMATIONMARK | AT | PERCENT)?;
+INTEGERLITERAL: [0-9]+ (('E' | 'D') INTEGERLITERAL)* ( HASH | AMPERSAND | EXCLAMATIONMARK | AT | PERCENT | POW {InputStream.LA(1) < '0' || InputStream.LA(1) > '9'}?)?;
 
 // Clean-room: a literal may end in its point, `5.` or `5.D1`; vb6.exe compiles each as a Double (measured, #1615). Not
 // derived from any other grammar.
@@ -525,7 +542,7 @@ DOUBLELITERAL:
 
 FILENUMBER: HASH LETTERORDIGIT+;
 
-OCTALLITERAL: '&O' [0-7]+ ( AMPERSAND | PERCENT )?;
+OCTALLITERAL: '&O' [0-7]+ ( AMPERSAND | PERCENT | POW {InputStream.LA(1) < '0' || InputStream.LA(1) > '9'}? )?;
 
 // A DESIGNER property-bag key - `_ExtentX`, `_ExtentY`, `_Version`. VB6 writes these into the Begin block
 // of every ActiveX control, and they are deliberately NOT VB6 identifiers: a name may not begin with an
@@ -555,10 +572,10 @@ fragment LINE_END: '\r' '\n'? | '\n';
 
 // A continuation between word fragments must separate names rather than concatenate them (#224).
 // Other continuations retain their existing handling, including KWSEP inside multi-word keywords.
+// Both checks sit at the RIGHT edge; the interpreter's grammar says why (#2676).
 IDENTIFIER_CONTINUATION
-   : {char.IsLetterOrDigit((char)InputStream.LA(-1)) || InputStream.LA(-1) == '_'}?
-     [ \t]+ '_' [ \t]* LINE_END [ \t]*
-     {char.IsLetterOrDigit((char)InputStream.LA(1))}? -> type(WS)
+   : [ \t]+ '_' [ \t]* LINE_END [ \t]*
+     {WordEndsBeforeToken() && char.IsLetterOrDigit((char)InputStream.LA(1))}? -> type(WS)
    ;
 
 // A whitespace RUN before the underscore, and any whitespace after it — mirrored from the interpreter's

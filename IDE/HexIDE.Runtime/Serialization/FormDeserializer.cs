@@ -28,6 +28,7 @@ public class FormDeserializer
         TextBoxComponentClass.Instance,
         TimerComponentClass.Instance,
         VScrollBarComponentClass.Instance,
+        Components.InBox.TreeViewComponentClass.Instance,
     ];
 
     private static Dictionary<string, ComponentBaseClass> componentsByTypeNames;
@@ -68,11 +69,54 @@ public class FormDeserializer
                 componentsByTypeNames[library.TypeName(inBox.ControlClassName)] = inBox;
     }
 
+    /// <summary>
+    /// The class a ProgID names, in any case, as <c>Controls.Add</c> takes one: <c>"vb.commandbutton"</c> is a CommandButton
+    /// (measured, #1556).
+    /// </summary>
+    internal static bool TryGetComponentClass(string progId, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ComponentBaseClass? componentClass)
+    {
+        foreach (var (typeName, component) in componentsByTypeNames)
+            if (string.Equals(typeName, progId, StringComparison.OrdinalIgnoreCase))
+            {
+                componentClass = component;
+                return true;
+            }
+        componentClass = null;
+        return false;
+    }
+
     /// <summary>The in-box ActiveX controls HexIDE implements (#1082).</summary>
     internal static readonly Components.InBox.InBoxComponentClass[] InBoxComponents =
     [
         Components.InBox.ProgressBarComponentClass.Instance,
+        Components.InBox.FlexGridComponentClass.Instance,
+        Components.InBox.ListViewComponentClass.Instance,
+        Components.InBox.SliderComponentClass.Instance,
+        Components.InBox.TabStripComponentClass.Instance,
+        Components.InBox.StatusBarComponentClass.Instance,
+        Components.InBox.ImageListComponentClass.Instance,
+        Components.InBox.ToolbarComponentClass.Instance,
+        Components.InBox.MonthViewComponentClass.Instance,
+        Components.InBox.SSTabComponentClass.Instance,
+        Components.InBox.CommonDialogComponentClass.Instance,
+        Components.InBox.MaskedEdBoxComponentClass.Instance,
+        RichTextBoxComponentClass.Instance,
+        Components.InBox.FlatScrollBarComponentClass.Instance,
     ];
+
+    /// <summary>
+    /// Whether a control the designer carries as a block is one HexIDE runs (#2327): a Toolbar
+    /// (#1088), an UpDown (#1093), a DTPicker (#1094), a MonthView (#1095), an Animation (#1096) or a FlatScrollBar (#1097) that holds no controls and is no control array's element.
+    /// Loading one warns of nothing, and the designer's box says it is view-only there rather than unsupported.
+    /// Nested or arrayed Toolbars, UpDowns, DTPickers, MonthViews, Animations and FlatScrollBars are still refused at run time.
+    /// </summary>
+    public static bool RunsWhenCarried(string type, bool holdsControls, bool inArray) =>
+        !holdsControls && !inArray
+            && (type.Equals("MSComCtl2.UpDown", StringComparison.OrdinalIgnoreCase)
+                || type.Equals("MSComCtl2.Animation", StringComparison.OrdinalIgnoreCase)
+                || type.Equals("MSComCtl2.FlatScrollBar", StringComparison.OrdinalIgnoreCase)
+                || type.Equals("MSComCtl2.DTPicker", StringComparison.OrdinalIgnoreCase)
+                || componentsByTypeNames.TryGetValue(type, out var known) && known is Components.InBox.ToolbarComponentClass or Components.InBox.MonthViewComponentClass);
 
     public FormDefinition? Deserialize(ProjectDefinition owner, string source, IDeserializeErrorSink errorSink,
         IReadOnlyDictionary<int, byte[]>? frxBlobs = null,
@@ -86,6 +130,7 @@ public class FormDeserializer
         {
             var vb = new VbFrmFormatDeserializer();
             (rootComponent, code) = vb.Deserialize(source);
+            TabStripPersistence.Validate(rootComponent);
             headerLines = vb.HeaderLines;
             designerText = vb.DesignerText;
             // The parser no longer reports a raw Begin depth. It counted every Begin without knowing what
@@ -102,6 +147,24 @@ public class FormDeserializer
         {
             errorSink.LogError("Str.ProjectLoad.InvalidForm", "This is not a valid form file");
             return null;
+        }
+
+        // Nor is a form that holds another form, or a UserControl or PropertyPage block, which read as one. Loading it
+        // put two forms in one model, and saving that threw (#1222). A stack rather than recursion: the nesting is the
+        // file's to choose.
+        var below = new Stack<VBSerializedComponent>(rootComponent.SubComponents);
+        while (below.Count > 0)
+        {
+            var child = below.Pop();
+            if ((componentsByTypeNames.TryGetValue(child.Type, out var childClass)
+                    || extraComponents != null && extraComponents.TryGetValue(child.Type, out childClass))
+                && childClass is FormComponentClass)
+            {
+                errorSink.LogError("Str.ProjectLoad.InvalidForm", "This is not a valid form file");
+                return null;
+            }
+            foreach (var grandchild in child.SubComponents)
+                below.Push(grandchild);
         }
 
         var form = new FormDefinition(owner, Array.Empty<ComponentInstance>(), "");
@@ -128,8 +191,14 @@ public class FormDeserializer
         // what lets the writer put a preserved block back between the right two siblings.
         void LoadRecur(VBSerializedComponent serializedComponent, ComponentInstance? parent, int depth, int ordinal)
         {
-            if (!componentsByTypeNames.TryGetValue(serializedComponent.Type, out var componentClass) &&
-                (extraComponents == null || !extraComponents.TryGetValue(serializedComponent.Type, out componentClass)))
+            var known = componentsByTypeNames.TryGetValue(serializedComponent.Type, out var componentClass)
+                || extraComponents != null && extraComponents.TryGetValue(serializedComponent.Type, out componentClass);
+            // The designer carries Toolbar and MonthView blocks verbatim; the runtime reads their property bags.
+            if (!known || componentClass is null || componentClass is Components.InBox.FlatScrollBarComponentClass && !Components.InBox.FlatScrollBarComponentClass.CanModel(serializedComponent)
+                || componentClass is (Components.InBox.ToolbarComponentClass or Components.InBox.MonthViewComponentClass)
+                && (extraComponents is null || !extraComponents.ContainsKey(serializedComponent.Type)
+                    || serializedComponent.SubComponents.Count != 0
+                    || serializedComponent.Properties.Keys.Any(name => name.Equals("Index", StringComparison.OrdinalIgnoreCase))))
             {
                 // Unknown component type — reconstruct raw text and preserve for round-trip.
                 //
@@ -154,9 +223,10 @@ public class FormDeserializer
                 // FormComponentClass — so parent is never null here.
                 parent!.AddPreservedChildSubtree(ordinal, preservedSubtreesSeen++, string.Join("\r\n", subtreeLines),
                     subtreeRecords.Count > 0 ? subtreeRecords : null);
-                // A CommonDialog is kept the same way, but it runs (#1084) and saves byte for byte, so there is nothing to
-                // warn of: the warning used to tell the user, as the project opened, that a control which works did not.
-                if (!serializedComponent.Type.Equals("MSComDlg.CommonDialog", StringComparison.OrdinalIgnoreCase))
+                // A control HexIDE runs is kept the same way and saves byte for byte, so there is nothing to warn of: the
+                // warning used to tell the user, as the project opened, that a control which works did not (#1084, #2327).
+                if (!RunsWhenCarried(serializedComponent.Type, serializedComponent.SubComponents.Count != 0,
+                        serializedComponent.Properties.Keys.Any(name => name.Equals("Index", StringComparison.OrdinalIgnoreCase))))
                     errorSink.LogError("Str.ProjectLoad.UnknownControl", "Class {0} of control {1} is not a supported control class — preserved as unknown.", serializedComponent.Type, serializedComponent.Name);
 
                 // No depth contribution. The block is recorded on the component it was read from, indented
@@ -175,9 +245,17 @@ public class FormDeserializer
             }
 
             var instance = new ComponentInstance(componentClass, serializedComponent.Name);
+            if (componentClass is Components.InBox.StatusBarComponentClass)
+            {
+                instance.SetProperty(Components.InBox.StatusBarComponentClass.SavedPanelsProperty, serializedComponent);
+                instance.SetProperty(Components.InBox.StatusBarComponentClass.PanelPicturesProperty, frxBlobs);
+            }
             // Every component stays in the flat list, menus included. The tree below is additive, so
             // nothing that reads FormDefinition.Components needs to know it exists.
             components.Add(instance);
+
+            if (componentClass is Components.InBox.FlatScrollBarComponentClass)
+                instance.SetProperty(Components.InBox.FlatScrollBarComponentClass.SavedProperty, serializedComponent);
 
             var isMenu = componentClass is MenuComponentClass;
             var parentIsMenu = parent?.BaseClass is MenuComponentClass;
@@ -243,7 +321,13 @@ public class FormDeserializer
             // Known properties whose value could not be read, kept as raw lines below.
             var unparsedKnownNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var serializedProperty in serializedComponent.Properties)
+            var assignments = serializedComponent.PropertyAssignments.Count > 0
+                ? serializedComponent.PropertyAssignments
+                : serializedComponent.Properties.ToList();
+            var duplicatedNames = assignments.GroupBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+                .Where(group => group.Count() > 1).Select(group => group.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var serializedProperty in assignments)
             {
                 // One spelling, before anything compares it. VB6 reads a property name in any case: measured,
                 // `caption`, `TEXT` and `backcolor` on controls, and on a form's own root `clientwidth`,
@@ -251,6 +335,21 @@ public class FormDeserializer
                 // exact spellings, so a lowercase `width` on the root used to miss the outer-rectangle branch and
                 // bind as the client width once property lookup ignored case (#819).
                 var propertyName = CanonicalPropertyName(serializedProperty.Key, componentClass);
+
+                // VB6 reads measurements as Single and refuses >= 2^31; only Height's negative
+                // refusal is measured (#4096, issuecomment-6915523429). Leave refused lines unset.
+                if (propertyName is "Left" or "Top" or "Width" or "Height"
+                        or "ClientLeft" or "ClientTop" or "ClientWidth" or "ClientHeight"
+                    && (parent is null || componentClass.PropertiesByName.ContainsKey(propertyName))
+                    && TryReadNumber(serializedProperty.Value, out var measurement)
+                    && ((float)measurement >= 2147483648f || propertyName == "Height" && (float)measurement < 0)
+                    // Refused Height on a form's control recovers as zero with Save As (#4179, #4422).
+                    && !(propertyName == "Height" && rootComponent.Type == "VB.Form" && parent is not null))
+                {
+                    form.MarkUnfaithfulToSave(UnfaithfulSaveCause.RefusedMeasurement,
+                        FormattableString.Invariant($"Property {serializedProperty.Key} in {serializedComponent.Name} could not be set to {serializedProperty.Value}."));
+                    continue;
+                }
 
                 // The two rectangles. A designer root records its CLIENT rectangle as Client*, and may
                 // record its OUTER window rectangle beside it as the plain four — Dialog.frm is the file
@@ -322,12 +421,42 @@ public class FormDeserializer
                     continue; // unknown property — preserved verbatim by OrderedRawProperties loop below
 
                 var val = serializedProperty.Value;
+                // VB6 IDE load errors recover the size as zero, requiring Save As (#4179, PR #4350; #4422).
+                if (rootComponent.Type == "VB.Form" && parent is not null && TryReadNumber(val, out var size)
+                    && (DesignerSizeValidation.Refuses(propertyClass, size)
+                        || propertyClass == VBProperties.HeightProperty && (float)size >= 2147483648f))
+                {
+                    val = 0;
+                    form.LoadedWithErrors = true;
+                    errorSink.LogError("Str.ProjectLoad.PropertyNotSet", "Line {0}: Property {1} in {2} could not be set.",
+                        serializedComponent.BeginLine, propertyName, serializedComponent.Name);
+                }
                 void InvalidValue()
                 {
                     errorSink.LogError("Str.ProjectLoad.InvalidValue", "Property {0} in {1} had an invalid value.", serializedProperty.Key, serializedComponent.Name);
                     // Kept as written, so a save puts it back rather than losing it: a palette colour
                     // (&H02C0C0C0&) is a value VB6 accepts that HexIDE cannot hold yet (#786).
                     unparsedKnownNames.Add(serializedProperty.Key);
+                    if (duplicatedNames.Contains(serializedProperty.Key))
+                        form.MarkUnfaithfulToSave(UnfaithfulSaveCause.UnreadableDuplicateProperty,
+                            $"Property {serializedProperty.Key} in {serializedComponent.Name} has an unreadable duplicate value.");
+                }
+                if (componentClass is MenuComponentClass
+                    && (propertyClass == VBProperties.HelpContextIDProperty || propertyClass == MenuComponentClass.NegotiatePositionProperty))
+                {
+                    // Keep other spellings raw; NegotiatePosition's trailing enum comment is measured (#4141).
+                    var lines = serializedComponent.OrderedRawProperties
+                        .Where(p => p.Name.Equals(serializedProperty.Key, StringComparison.OrdinalIgnoreCase))
+                        .SelectMany(p => p.RawLines).ToArray();
+                    var numberText = lines.Length == 1 ? lines[0][(lines[0].IndexOf('=') + 1)..].Trim() : "";
+                    var comment = propertyClass == MenuComponentClass.NegotiatePositionProperty ? numberText.IndexOf('\'') : -1;
+                    if (comment >= 0)
+                        numberText = numberText[..comment].TrimEnd();
+                    if (lines.Length == 1 && int.TryParse(numberText, out var number))
+                        instance.SetUntypedProperty(propertyClass, number);
+                    else
+                        InvalidValue();
+                    continue;
                 }
                 if (propertyClass.PropertyType == typeof(string))
                 {
@@ -336,7 +465,8 @@ public class FormDeserializer
                         InvalidValue();
                         continue;
                     }
-                    instance.SetUntypedProperty(propertyClass, val);
+                    instance.SetUntypedProperty(propertyClass, propertyClass == MenuComponentClass.ShortcutProperty
+                        ? VBMenuShortcut.Canonicalize((string)val) : val);
                 }
                 else if (propertyClass.PropertyType == typeof(bool))
                 {
@@ -530,13 +660,89 @@ public class FormDeserializer
                 instance.UnknownRawProperties.Add(
                     new ComponentInstance.UnknownRawProperty(name, rawLines, records.Count > 0 ? records : null));
             }
+            if (componentClass is Components.InBox.MaskedEdBoxComponentClass)
+            {
+                MaskedEdBoxPersistence.Loaded(instance, serializedComponent);
+                if (!MaskedEdBoxPersistence.CanWrite(serializedComponent))
+                    form.MarkUnfaithfulToSave(UnfaithfulSaveCause.UnimplementedControlPersistence,
+                        "MaskEdBox persistence is not implemented (#1098).");
+            }
+            if (componentClass is RichTextBoxComponentClass)
+            {
+                try { _ = RichTextBoxPersistence.RtfToWrite(instance); }
+                catch (NotImplementedException ex)
+                {
+                    form.MarkUnfaithfulToSave(UnfaithfulSaveCause.UnreproducibleBinaryContent, ex.Message);
+                }
+            }
+            if (componentClass is Components.InBox.TabStripComponentClass)
+            {
+                instance.SetProperty(TabStripPersistence.SavedProperty, serializedComponent);
+                if (!TabStripPersistence.CanWrite(serializedComponent)
+                    || serializedComponent.Properties.GetValueOrDefault("_ExtentX") is not int
+                    || serializedComponent.Properties.GetValueOrDefault("_ExtentY") is not int)
+                    form.MarkUnfaithfulToSave(UnfaithfulSaveCause.UnimplementedControlPersistence,
+                        "TabStrip persistence is not implemented (#1089).");
+            }
             // An in-box control is written back under the type name it was read under, and with the extents it was read with
             // until it is sized (#1082).
             if (componentClass is Components.InBox.InBoxComponentClass inBox)
+            {
                 inBox.Loaded(instance, serializedComponent.Type);
+                if (inBox is Components.InBox.ListViewComponentClass)
+                    instance.SetProperty(Components.InBox.ListViewComponentClass.FilePropertiesProperty, serializedComponent);
+            }
+            else if (componentClass is Components.InBox.TreeViewComponentClass)
+            {
+                instance.SetProperty(Components.InBox.InBoxComponentClass.LoadedTypeNameProperty, serializedComponent.Type);
+                instance.SetProperty(Components.InBox.InBoxComponentClass.ExtentBasisProperty,
+                    new Components.InBox.InBoxComponentClass.ExtentBasis(
+                        instance.GetPropertyOrDefault(VBProperties.WidthProperty), instance.GetPropertyOrDefault(VBProperties.HeightProperty)));
+            }
+            if (componentClass is Components.InBox.ImageListComponentClass
+                && serializedComponent.Properties.TryGetValue("Images", out var imagesValue)
+                && imagesValue is Dictionary<string, object> imageProperties)
+            {
+                var pictures = new List<Components.InBox.ImageListPicture>();
+                foreach (var entry in imageProperties)
+                    if (entry.Value is Dictionary<string, object> image
+                        && image.TryGetValue("Picture", out var citation) && citation is string reference
+                        && frxBlobs is not null && FrxDeserializer.TryExtractBlob(reference, frxBlobs) is { } record)
+                    {
+                        pictures.Add(new Components.InBox.ImageListPicture(record,
+                            image.GetValueOrDefault("Key") as string ?? "",
+                            image.GetValueOrDefault("Object.Tag") as string ?? ""));
+                    }
+                // Unknown group members stay in the carried block, rather than disappearing on the next save.
+                var knownImages = imageProperties.Keys.All(k => k == "NumListImages" || k.StartsWith("ListImage", StringComparison.Ordinal))
+                    && imageProperties.Values.OfType<Dictionary<string, object>>()
+                        .All(image => image.Keys.All(k => k is "Picture" or "Key" or "Object.Tag")
+                            && (!image.TryGetValue("Key", out var key) || key is string)
+                            && (!image.TryGetValue("Object.Tag", out var tag) || tag is string));
+                if (knownImages && imageProperties.GetValueOrDefault("NumListImages") is int count && pictures.Count == count)
+                    instance.SetProperty(Components.InBox.ImageListComponentClass.PicturesProperty, pictures);
+            }
+
+            if (componentClass is Components.InBox.SSTabComponentClass)
+            {
+                instance.SetProperty(Components.InBox.SSTabSavedState.Property,
+                    new Components.InBox.SSTabSavedState(serializedComponent.Properties));
+            }
+
+            // A missing Font block takes a value copy of the form's font, never the container's (#2062).
+            if (parent is not null && rootComponent.Type == "VB.Form" &&
+                componentClass.Properties.Contains(VBProperties.FontProperty) &&
+                !serializedComponent.Properties.Keys.Any(k => k.Equals("Font", StringComparison.OrdinalIgnoreCase)) &&
+                components[0].TryGetProperty(VBProperties.FontProperty, out var formFont))
+                instance.SetProperty(VBProperties.FontProperty, formFont);
 
             for (var i = 0; i < serializedComponent.SubComponents.Count; i++)
                 LoadRecur(serializedComponent.SubComponents[i], instance, depth + 1, i);
+
+            if (instance.GetPropertyOrDefault(Components.InBox.SSTabSavedState.Property) is { } pages
+                && !pages.CanDesign(instance))
+                form.MarkUnfaithfulToSave(UnfaithfulSaveCause.SSTabPageMetadata,
+                    "SSTab page metadata cannot yet be regenerated after designer edits (#1090)");
         }
 
         LoadRecur(rootComponent, null, 1, 0);
@@ -587,6 +793,19 @@ public class FormDeserializer
             form.MarkUnfaithfulToSave(UnfaithfulSaveCause.UnreproducibleBinaryContent,
                 $"it references companion binary content HexIDE cannot re-emit "
                 + $"({capturedBlobs.Count} of {citedBlobCount} blob(s) reached the model)");
+
+        // A NUL in the designer text is damage: VB6 doesn't write one there, and the writer marks its companion citations
+        // with NULs, so a save with a citation to place refused it, after the user had edited (#4096). Said at open instead.
+        if (designerText.Contains('\0'))
+            form.MarkUnfaithfulToSave(UnfaithfulSaveCause.NulInDesignerText,
+                "its designer text holds a NUL character, which a save can't write back beside its companion citations");
+
+        // Rendering also serves dirty checks; only the save path may refuse missing extents (#1631).
+        if (components.Any(c => c.BaseClass is UserControlComponentClass uc && uc.Setting("InvisibleAtRuntime")
+            && (!c.UnknownRawProperties.Any(p => p.Name.Equals("_ExtentX", StringComparison.OrdinalIgnoreCase))
+                || !c.UnknownRawProperties.Any(p => p.Name.Equals("_ExtentY", StringComparison.OrdinalIgnoreCase)))))
+            form.MarkUnfaithfulToSave(UnfaithfulSaveCause.MissingUserControlExtents,
+                "it contains an invisible UserControl without both recorded extents; saving its size is not implemented");
 
         form.UpdateCode(code);
         form.UpdateComponents(components);

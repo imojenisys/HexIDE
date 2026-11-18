@@ -52,28 +52,8 @@ namespace HexIDE.Redaction;
 /// </remarks>
 public sealed partial class ConversationRedactor
 {
-    /// <summary>
-    /// A document URI — <c>file:</c> or <c>untitled:</c> — as it appears inside a JSON body.
-    /// </summary>
-    /// <remarks>
-    /// Stops at the JSON string delimiter and steps over escape sequences, so a path carrying a
-    /// <c>\uXXXX</c> escape is matched whole rather than truncated mid-escape. The matched text is never
-    /// decoded: two differently-escaped spellings of one path are meant to produce two different
-    /// pseudonyms, because that difference is precisely the kind of defect this preserves. The same applies
-    /// to case, which matters more for <c>untitled:</c> than for a path — two <c>untitled:</c> names are
-    /// compared case-insensitively by the client, so two spellings reaching the wire is a defect worth
-    /// seeing rather than one worth folding away here.
-    ///
-    /// <para>
-    /// <b>Both schemes, one expression, and it will match the word in prose too.</b> A diagnostic message
-    /// quoting a URI has it replaced along with the real ones. That is the safe direction for something
-    /// that governs egress, and it was already true of <c>file:</c>.
-    /// </para>
-    /// </remarks>
-    [GeneratedRegex(@"(?:file|untitled):(?:\\.|[^""\\\s])*", RegexOptions.IgnoreCase)]
-    private static partial Regex DocumentUriInJson();
-
     private readonly Pseudonymiser _names;
+    private readonly List<(string Path, string Token)> _roots = [];
 
     /// <param name="names">
     /// The session's mapping. Shared across every surface on purpose: the same directory appearing in a
@@ -86,10 +66,43 @@ public sealed partial class ConversationRedactor
     /// with anything exported</b> — an export that does not say whether it was redacted is worse than one
     /// that never was, because the reader cannot tell which they are holding.
     /// </param>
-    public ConversationRedactor(Pseudonymiser names, bool pseudonymise = true)
+    /// <param name="sensitiveRoots">An explicit root set, for callers supplying their own environment.</param>
+    public ConversationRedactor(Pseudonymiser names, bool pseudonymise = true,
+        IEnumerable<(string Path, string Token)>? sensitiveRoots = null)
     {
         _names = names;
         IsPseudonymising = pseudonymise;
+        foreach (var (path, token) in sensitiveRoots ?? [
+            (Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "<home>"),
+            (System.IO.Path.GetTempPath(), "<temp>")])
+            AddRoot(path, token);
+    }
+
+    public void AddWorkspaceRoot(string path) => AddRoot(path, "<workspace>");
+
+    private void AddRoot(string path, string token)
+    {
+        if (System.Uri.TryCreate(path, UriKind.Absolute, out var uri) && uri.IsFile)
+            path = System.Uri.UnescapeDataString(uri.LocalPath);
+        path = path.Replace('\\', '/').TrimEnd('/');
+        if (path.Length == 0) return;
+        foreach (var spelling in new[] { path, path.Replace('/', '\\'),
+                     string.Join('/', path.Split('/').Select(System.Uri.EscapeDataString)).Replace("%3A", ":") })
+            _roots.Add((spelling, token));
+        _roots.Sort((a, b) => b.Path.Length.CompareTo(a.Path.Length));
+    }
+
+    private string ReplaceRoots(string text)
+    {
+        foreach (var (path, token) in _roots)
+        {
+            var comparison = OperatingSystem.IsWindows() || path.Contains(':') || path.StartsWith("\\\\") || path.StartsWith("//")
+                ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            text = text.Replace(path, token, comparison);
+            // JSON carries backslashes doubled, including in prose inside a message.
+            text = text.Replace(path.Replace("\\", "\\\\"), token, comparison);
+        }
+        return text;
     }
 
     /// <summary>Whether anything here is actually being rewritten.</summary>
@@ -99,7 +112,7 @@ public sealed partial class ConversationRedactor
     public long NamedValues => _names.Assigned;
 
     /// <summary>
-    /// Every document URI inside a message body, rewritten in place.
+    /// Document URIs, JSON path fields and plain absolute paths in a message body, rewritten in place.
     /// </summary>
     /// <remarks>
     /// Textual rather than structural, because the body may be one this client could not decode — which is
@@ -110,28 +123,46 @@ public sealed partial class ConversationRedactor
     {
         if (!IsPseudonymising || json.Length == 0) return json;
 
-        var uris = DocumentUriInJson().Replace(json, match => Uri(match.Value));
-        // DAP Source.path is commonly a plain filesystem path, not a file URI. Match complete JSON
-        // string values so escaping is decoded correctly and the rest of the raw message is untouched.
-        // This also works for complete path fields inside an otherwise truncated/invalid JSON frame.
-        return PathInJson().Replace(uris, match =>
+        // One pass keeps a path inside a URI or JSON field from being named a second time.
+        return BodyValue().Replace(ReplaceRoots(json), match =>
         {
+            if (match.Groups["uri"].Success) return Uri(match.Value);
+            if (!match.Groups["field"].Success) return LocalPath(match.Value);
             try
             {
-                var path = JsonSerializer.Deserialize<string>(match.Groups[2].Value)!;
-                if (path.StartsWith("file:", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("untitled:", StringComparison.OrdinalIgnoreCase)) return match.Value;
-                return match.Groups[1].Value + JsonSerializer.Serialize(LocalPath(path));
+                var path = JsonSerializer.Deserialize<string>(match.Groups["value"].Value)!;
+                if (SchemeOf(path) is not null) return match.Value;
+                return match.Groups["field"].Value + JsonSerializer.Serialize(LocalPath(path));
             }
             catch (JsonException) { return match.Value; }
         });
     }
 
-    [GeneratedRegex("""("path"\s*:\s*)("(?:\\.|[^"\\])*")""")]
-    private static partial Regex PathInJson();
+    /// <summary>
+    /// A document URI — <c>file:</c>, <c>untitled:</c> or <c>archive-entry:</c> — as it appears inside a JSON body.
+    /// </summary>
+    /// <remarks>
+    /// Stops at the JSON string delimiter and steps over escape sequences, so a path carrying a
+    /// <c>\uXXXX</c> escape is matched whole rather than truncated mid-escape. The matched text is never
+    /// decoded: two differently-escaped spellings of one path are meant to produce two different
+    /// pseudonyms, because that difference is precisely the kind of defect this preserves. The same applies
+    /// to case, which matters more for <c>untitled:</c> than for a path — two <c>untitled:</c> names are
+    /// compared case-insensitively by the client, so two spellings reaching the wire is a defect worth
+    /// seeing rather than one worth folding away here.
+    ///
+    /// <para>
+    /// <b>All three schemes, one expression, and it will match the word in prose too.</b> A diagnostic message
+    /// quoting a URI has it replaced along with the real ones. That is the safe direction for something
+    /// that governs egress, and it was already true of <c>file:</c>.
+    /// </para>
+    /// </remarks>
+    // Quoted paths may contain spaces. Unquoted paths stop at prose punctuation; a slash inside a
+    // method name or URL is not a Unix root. Relative paths cannot be distinguished from ordinary words.
+    [GeneratedRegex("""(?<field>"path"\s*:\s*)(?<value>"(?!(?:archive-entry|file|untitled):)(?:\\.|[^"\\])*")|(?<uri>(?:archive-entry|file|untitled):(?:\\.|[^"\\\s])*)|(?<=["'])(?:[A-Za-z]:[/\\]|\\\\|/)[^"'\r\n]+|(?<![\w:/\\])(?:[A-Za-z]:[/\\]|\\\\|/)[^\s"'<>|,;()\[\]{}]+""", RegexOptions.IgnoreCase)]
+    private static partial Regex BodyValue();
 
     /// <summary>
-    /// One URI. A <c>file:</c> or <c>untitled:</c> URI is rewritten segment by segment; every other scheme
+    /// One URI. File, untitled and archive-entry URIs are rewritten segment by segment; every other scheme
     /// is left alone.
     /// </summary>
     /// <remarks>
@@ -149,9 +180,19 @@ public sealed partial class ConversationRedactor
     public string Uri(string uri)
     {
         if (!IsPseudonymising || uri.Length == 0) return uri;
+        if (HexIDE.Lsp.ArchiveEntryUri.TryParse(uri, out var container, out _))
+        {
+            var query = uri.IndexOf("?container=", StringComparison.Ordinal);
+            var pathStart = "archive-entry:/".Length;
+            return uri[..pathStart] + string.Join('/', uri[pathStart..query].Split('/')
+                .Select(e => Segment(e, keepExtension: true)))
+                + "?container=" + System.Uri.EscapeDataString(Uri(container));
+        }
+        if (uri.StartsWith("archive-entry:", StringComparison.OrdinalIgnoreCase))
+            return "archive-entry:" + _names.For(uri["archive-entry:".Length..]);
         if (SchemeOf(uri) is not { } scheme) return uri;
 
-        var rest = uri[scheme.Length..];
+        var rest = ReplaceRoots(uri[scheme.Length..]);
 
         var segments = rest.Split('/');
         for (var i = 0; i < segments.Length; i++)
@@ -185,6 +226,7 @@ public sealed partial class ConversationRedactor
     {
         if (!IsPseudonymising || path.Length == 0) return path;
 
+        path = ReplaceRoots(path);
         var rebuilt = new StringBuilder(path.Length);
         var segment = new StringBuilder(32);
 
@@ -368,7 +410,7 @@ public sealed partial class ConversationRedactor
 
     private string Segment(string segment, bool keepExtension)
     {
-        if (segment.Length == 0) return segment;
+        if (segment.Length == 0 || segment is "<home>" or "<temp>" or "<workspace>") return segment;
         if (IsDriveLetter(segment)) return segment;
 
         if (!keepExtension) return _names.For(segment);

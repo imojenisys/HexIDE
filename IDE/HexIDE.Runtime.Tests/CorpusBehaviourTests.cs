@@ -87,26 +87,8 @@ public class CorpusBehaviourTests
         ["aggregate-visibility/two-private-enums-same-name"] = "PRIVATE-ENUM-AGGREGATION: member not found",
         ["continuation-basics/cont-declare-header-wrapped"] = "DECLARE-NOT-CALLABLE: header wrapped, Sub not defined",
 
-        // EQUALITY-OPERATOR-STRING-VS-NUMERIC. `"1" = 1` and `"1.0" = 1` are both True in VB6; HexIDE
-        // raises Type mismatch, because GetTwoValuesSameTypesOrNull has no String/numeric path and falls
-        // through to its throw. Found while measuring Select Case, and deliberately NOT fixed with it: the
-        // two are different rules. Select Case coerces the case value to the SELECTOR's type, so
-        // `Select Case "1.0" / Case 1` does NOT match — while `"1.0" = 1` does. Sharing one helper between
-        // them, which is the obvious move, would break whichever one it was not written for.
-        ["select-case-matching/equality-operator-string-against-numeric"] =
-            "EQ-OPERATOR-COERCION: raises Type mismatch, VB6 says True",
-        ["select-case-matching/equality-operator-string-numerically-equal-textually-different"] =
-            "EQ-OPERATOR-COERCION: raises Type mismatch, VB6 says True",
-
         // ---- REFUSES CODE VB6 RAN. A false rejection at run time rather than parse time — the parse ---
         // ---- gate is blind to these too, because the module parses and then dies executing. ----------
-
-        // A type-declaration character on a declaration, `Dim s_$` (#742). Filed as a continuation inside an expression,
-        // with three `Left$(` and `Mid$(` calls the `$` fix closed (#1071): the continuation was never the cause.
-        ["continuation-vs-identifier/trailing-underscore-then-type-hint"] = "EXPR-CONTINUATION: NotImplementedException",
-
-        // A jump to a label sharing Next's line remains deferred by the tree-walking limit (#223).
-        ["line-labels/label-immediately-before-a-loop-terminator"] = "LABEL-BEFORE-TERMINATOR: dies after the first print",
 
         // GOSUB. Not a defect but the tree-walking limit CLAUDE.md names explicitly: a visitor-frame stack
         // has no position to return to. Listed so the count is honest, not because it is fixable here.

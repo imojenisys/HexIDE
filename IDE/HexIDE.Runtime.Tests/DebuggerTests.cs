@@ -21,6 +21,126 @@ public class DebuggerTests : BaseVBTestFixture
     }
 
     [Fact]
+    public async Task ConditionalBreakpoint_UsesLocalFrame_AndSkipsFalse()
+    {
+        var (vb, dbg) = NewDebuggable("Helper\nSub Helper()\nDim i As Integer\nFor i = 1 To 3\nDebug.Print i\nNext\nEnd Sub\n", "M");
+        dbg.SetBreakpoints("M", [5]);
+        dbg.SetBreakpointConditions("m", new Dictionary<int, string> { [5] = "i = 2" });
+        var hits = new List<string?>();
+        dbg.Stopped += _ => { hits.Add(dbg.EvaluateAsync("i").GetAwaiter().GetResult()); dbg.Continue(); };
+        await vb.Execute().Guarded();
+        hits.Should().Equal("2");
+        AssertDebugLog([1, 2, 3]);
+    }
+
+    [Theory]
+    [InlineData("x >", "Syntax error")]
+    [InlineData("missingName", "Variable not defined")]
+    public async Task ConditionalBreakpoint_ErrorStopsWithoutProgramOutput(string expression, string error)
+    {
+        var (vb, dbg) = NewDebuggable("Debug.Print 1\nSub Other()\nDim missingName As Integer\nEnd Sub\n", "M");
+        dbg.SetBreakpoints("M", [1]);
+        dbg.SetBreakpointConditions("M", new Dictionary<int, string> { [1] = expression });
+        var output = new List<string>();
+        var hits = 0;
+        void Capture(string text) => output.Add(text);
+        VBDebugConsole.Written += Capture;
+        StoppedInfo? stopped = null;
+        dbg.Stopped += info => { stopped = info; hits++; dbg.Continue(); };
+        try { await vb.Execute().Guarded(); }
+        finally { VBDebugConsole.Written -= Capture; }
+        using (new AwesomeAssertions.Execution.AssertionScope())
+        {
+            hits.Should().Be(1);
+            stopped.Should().NotBeNull();
+            stopped?.Reason.Should().Be(StopReason.Breakpoint);
+            stopped?.ConditionExpression.Should().Be(expression);
+            stopped?.ConditionError.Should().Be(error);
+            dbg.CurrentStop.Should().BeNull();
+            output.Should().NotContain(text => text.Contains(error, StringComparison.Ordinal));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConditionalBreakpoint_FalsePreservesOtherStops(bool runToCursor)
+    {
+        var (vb, dbg) = NewDebuggable("Debug.Print 1\nDebug.Print 2\n", "M");
+        dbg.SetBreakpoints("M", [1, 2]);
+        dbg.SetBreakpointConditions("M", new Dictionary<int, string> { [1] = "False", [2] = "False" });
+        if (runToCursor) dbg.RunToCursor("M", 1); else dbg.StepInto();
+        var hits = 0;
+        dbg.Stopped += info =>
+        {
+            info.Reason.Should().Be(runToCursor ? StopReason.Breakpoint : StopReason.Step);
+            hits++;
+            dbg.Continue();
+        };
+        await vb.Execute().Guarded();
+        hits.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData("Sub Helper()", "Debug.Print 1", "End Sub", "Helper", 3)]
+    [InlineData("Sub Helper()", "Debug.Print 1", "End Sub", "Helper", 5)]
+    [InlineData("Function Helper() As Integer", "Helper = 1", "End Function", "Debug.Print Helper()", 5)]
+    public async Task ProcedureBoundaries_BreakBeforeBodyAndBeforeReturn(string declaration, string body, string end, string call, int line)
+    {
+        var (vb, dbg) = NewDebuggable($"{call}\nDebug.Print 2\n{declaration}\n{body}\n{end}\n", "M");
+        dbg.SetBreakpoints("M", new[] { line });
+        var stop = NextStop(dbg);
+        var run = vb.Execute();
+        (await stop.Guarded()).Line.Should().Be(line);
+        dbg.GetCallStack()[0].Line.Should().Be(line);
+        if (line == 3)
+            debug.Should().BeEmpty();
+        debug.Should().NotContain(v => v.Value != null && v.Value.ToString() == "2");
+        dbg.Continue();
+        await run.Guarded();
+        debug.Last().Value!.ToString().Should().Be("2");
+    }
+
+    [Fact]
+    public async Task PropertyGetEnd_BreaksBeforeReturningValue()
+    {
+        var (vb, dbg) = NewDebuggable("Dim o As New C\nDebug.Print o.Helper\nDebug.Print 2\n", "M",
+            ("C", "Public Property Get Helper() As Integer\nHelper = 1\nEnd Property\n"));
+        dbg.SetBreakpoints("C", new[] { 3 });
+        var stop = NextStop(dbg);
+        var run = vb.Execute();
+        var info = await stop.Guarded();
+        info.Module.Should().Be("C");
+        info.Line.Should().Be(3);
+        debug.Should().BeEmpty();
+        dbg.Continue();
+        await run.Guarded();
+        AssertDebugLog([1, 2]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StepFromLastStatement_StopsOnEndThenCallersNextLine(bool function)
+    {
+        var (vb, dbg) = NewDebuggable(function
+            ? "x = Helper()\nDebug.Print 2\nFunction Helper() As Integer\nHelper = 1\nEnd Function\n"
+            : "Helper\nDebug.Print 2\nSub Helper()\nDebug.Print 1\nEnd Sub\n", "M");
+        dbg.SetBreakpoints("M", new[] { 4 });
+        var stop = NextStop(dbg);
+        var run = vb.Execute();
+        (await stop.Guarded()).Line.Should().Be(4);
+        var atEnd = NextStop(dbg);
+        dbg.StepOver();
+        (await atEnd.Guarded()).Line.Should().Be(5);
+        var atCaller = NextStop(dbg);
+        dbg.StepOver();
+        (await atCaller.Guarded()).Line.Should().Be(2);
+        dbg.Continue();
+        await run.Guarded();
+    }
+
+    [Fact]
     public async Task Breakpoint_StopsAtLine_ThenContinueResumes()
     {
         var (vb, dbg) = NewDebuggable("Debug.Print \"a\"\nDebug.Print \"b\"\nDebug.Print \"c\"\n", "M");
@@ -203,6 +323,75 @@ public class DebuggerTests : BaseVBTestFixture
         }
         finally
         {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    [Fact]
+    public void Pause_at_dispatch_idle_has_no_statement_and_continue_clears_the_request()
+    {
+        // #4261, measured in VB6's IDE (oracle PR #4270).
+        var dbg = new DebugController { TimeSliceMs = null };
+        dbg.Reset();
+        dbg.NotifyDispatchIdle();
+        var stops = new List<StoppedInfo>();
+        dbg.Stopped += stops.Add;
+        dbg.Pause();
+        dbg.State.Should().Be(DebugState.Paused);
+        stops.Should().ContainSingle().Which.Should().Be(new StoppedInfo(StopReason.Pause, "", 0));
+        dbg.GetLocals().Should().BeNull();
+        dbg.GetCallStack().Should().BeEmpty();
+        dbg.Continue();
+        dbg.OnStatementAsync(2, "M", null).IsCompletedSuccessfully.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("Into")]
+    [InlineData("Over")]
+    [InlineData("Out")]
+    public void StepReturningToIdle_LeavesBreakModeAndReleasesFrozenEvents(string step)
+    {
+        var previous = SynchronizationContext.Current;
+        var pump = new YieldContext();
+        SynchronizationContext.SetSynchronizationContext(pump);
+        var dbg = new DebugController { TimeSliceMs = null };
+        try
+        {
+            dbg.SetBreakpoints("M", new[] { 1 });
+            var decider = dbg.OnStatementAsync(1, "M", null).AsTask();
+            var newcomer = dbg.OnStatementAsync(2, "Other", null).AsTask();
+            newcomer.IsCompleted.Should().BeFalse();
+            var continued = 0;
+            dbg.Continued += () => continued++;
+
+            if (step == "Into") dbg.StepInto();
+            else if (step == "Over") dbg.StepOver();
+            else dbg.StepOut();
+            pump.Pump();
+            decider.IsCompletedSuccessfully.Should().BeTrue();
+            continued.Should().Be(0);
+            newcomer.IsCompleted.Should().BeFalse();
+
+            dbg.NotifyDispatchIdle();
+            continued.Should().Be(1);
+            dbg.State.Should().Be(DebugState.Running);
+            dbg.CurrentStop.Should().BeNull();
+            pump.Pump();
+            // #4269 overturns D4's old disarm. With no frame, Over/Out fall back to Into.
+            dbg.State.Should().Be(DebugState.Paused);
+            dbg.CurrentStop!.Value.Reason.Should().Be(StopReason.Step);
+            newcomer.IsCompleted.Should().BeFalse();
+            dbg.Continue();
+            pump.Pump();
+            newcomer.IsCompletedSuccessfully.Should().BeTrue();
+            dbg.NotifyDispatchIdle();
+            continued.Should().Be(2);
+            dbg.OnStatementAsync(3, "Other", null).IsCompletedSuccessfully.Should().BeTrue();
+        }
+        finally
+        {
+            dbg.Stop();
+            pump.Pump();
             SynchronizationContext.SetSynchronizationContext(previous);
         }
     }

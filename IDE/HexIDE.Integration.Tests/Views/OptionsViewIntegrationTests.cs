@@ -23,6 +23,86 @@ namespace HexIDE.Integration.Tests.Views;
 
 public class OptionsViewIntegrationTests
 {
+    [AvaloniaFact]
+    [Trait("Issue", "4307")]
+    public async Task AddinServerSettingsRenderReadOnlyAndResetThroughTheButton()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "hexide-options-settings-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var settings = new SettingsService(Path.Combine(directory, "settings.json"));
+        await using var router = new HexIDE.Lsp.LspClientRegistry([],
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<HexIDE.Lsp.LspClientRegistry>.Instance);
+        var contributions = new HexIDE.Lsp.LanguageServerContributions(settings, router,
+            new HexIDE.Lsp.LanguageServerRegistrationFactory(Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance),
+            new HexIDE.Lsp.LanguageServerConfigLoader(Microsoft.Extensions.Logging.Abstractions.NullLogger<HexIDE.Lsp.LanguageServerConfigLoader>.Instance),
+            new HashSet<string>(StringComparer.Ordinal),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<HexIDE.Lsp.LanguageServerContributions>.Instance);
+        await using var connection = contributions.Register(new AddinLanguageServer(new HexIDE.Lsp.LanguageServerEntry
+        {
+            Id = "example", DisplayName = "Example server", Extensions = [".example"], LanguageId = "example",
+            Transport = "stdio", Command = "example-server",
+        }), "Add-in");
+        using var page = new AddinOptionsPageViewModel(Substitute.For<IAddinRegistry>(), SampleAddin,
+            settings: settings, servers: [("Example server", connection)]);
+        var view = new AddinOptionsPageView { DataContext = page };
+        view.Resources["Str.LspArtifact.Reset"] = "Reset";
+        view.Resources["Str.TranslationEditor.Tooltip.None"] = "(none)";
+        var window = new Window { Content = view, Width = 600, Height = 800 };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            view.GetVisualDescendants().OfType<TextBlock>().Select(block => block.Text).Should().Contain("Example server");
+            var reset = view.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Reset"));
+            reset.IsEffectivelyEnabled.Should().BeFalse();
+            await Task.Run(() => connection.SetSettingsAsync(
+                System.Text.Json.JsonDocument.Parse("""{"rdcore":{"enabled":false}}""").RootElement,
+                TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+            Dispatcher.UIThread.RunJobs();
+            reset.IsEffectivelyEnabled.Should().BeTrue();
+            var json = view.GetVisualDescendants().OfType<TextBox>().Single();
+            json.IsReadOnly.Should().BeTrue();
+            json.Text.Should().Contain("\"enabled\": false");
+            ((Avalonia.Automation.Provider.IInvokeProvider)new ButtonAutomationPeer(reset)).Invoke();
+            Dispatcher.UIThread.RunJobs();
+            settings.HasLanguageServerSettings("example").Should().BeFalse();
+            reset.IsEffectivelyEnabled.Should().BeFalse();
+            page.Servers[0].IsNone.Should().BeTrue();
+        }
+        finally
+        {
+            window.Close();
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void TheSystemDefaultRowReadsInTheIdesLanguage()
+    {
+        var (settings, _, _, languageSwitch, _, _) = Mocks();
+        settings.ActiveLanguage.Returns("system");
+        languageSwitch.AvailableLanguages.Returns([new LanguageInfo("system", "System default", "ltr"), new LanguageInfo("en", "English", "ltr")]);
+        var view = new LanguagePageView
+        {
+            DataContext = new LanguagePageViewModel(settings, languageSwitch, new LocalizationService(), () => { }),
+        };
+        view.Resources["Str.Options.Language.SystemDefault"] = "localized system default";
+        var window = new Window { Content = view, Width = 480, Height = 360 };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var shown = view.GetVisualDescendants().OfType<TextBlock>()
+                .Where(text => text.IsEffectivelyVisible).Select(text => text.Text).ToList();
+            shown.Should().Contain("localized system default").And.NotContain("System default");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static readonly AddinInfo SampleAddin =
         new("/addins/Demo.dll", "Demo Add-in", "A demo add-in", "1.0", "Tester");
 
@@ -56,9 +136,97 @@ public class OptionsViewIntegrationTests
     }
 
     [AvaloniaTheory]
-    [InlineData("tab", "Str.Options.EditorFormatting.Indentation.TabWidth", "Tab _width:", "Tab width:")]
-    [InlineData("width", "Str.Options.Grid.Width", "_Width:", "Width:")]
-    [InlineData("height", "Str.Options.Grid.Height", "_Height:", "Height:")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AddInManager_ShowsOverviewAndInstalledAddins(bool installed)
+    {
+        var (settings, theme, keymap, languageSwitch, registry, addinOptions) = Mocks();
+        if (!installed) registry.GetAll().Returns([]);
+        var vm = new OptionsViewModel(settings, theme, keymap, languageSwitch, registry, addinOptions,
+            Substitute.For<IDeveloperModeService>(), new LocalizationService(), Substitute.For<IEventBus>(),
+            "Str.Options.Node.AddIns");
+        var view = new OptionsView { DataContext = vm };
+        view.DataTemplates.Add(new ViewLocator());
+        view.Resources["Str.Options.Addins.Overview"] = "Add-in overview guidance";
+        view.Resources["Str.Options.Node.NoAddins"] = "No add-ins";
+        var window = new Window { Content = view, Width = 720, Height = 520 };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            var texts = view.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
+            texts.Should().Contain("Add-in overview guidance");
+            texts.Should().Contain(Path.Combine(AppContext.BaseDirectory, "addins"));
+            if (installed)
+                texts.Count(t => t == SampleAddin.Title).Should().Be(2, "the tree and the overview both list the add-in");
+            else
+                texts.Should().Contain("No add-ins");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StickyDepth_IsNamedByItsLocalizedLabel(bool enabled)
+    {
+        var settings = Substitute.For<ISettingsService>();
+        var vm = new EditorGeneralPageViewModel(settings) { IsStickyScrollEnabled = enabled };
+        var view = new EditorGeneralPageView { DataContext = vm };
+        var window = new Window { Content = view, Width = 480, Height = 400 };
+        window.Show();
+        try
+        {
+            var loc = new LocalizationService();
+            foreach (var id in LanguageManifest.Packs.Select(p => p.Id).Append("en-GB"))
+            {
+                var caption = ResolvedString(loc, id, "Str.Options.EditorGeneral.Display.StickyDepth");
+                view.Resources["Str.Options.EditorGeneral.Display.StickyDepth"] = caption;
+                Dispatcher.UIThread.RunJobs();
+                var spinner = view.GetVisualDescendants().OfType<NumericUpDown>().Single();
+                spinner.IsEnabled.Should().Be(enabled);
+                ControlAutomationPeer.CreatePeerForElement(spinner).GetName().Should()
+                    .Be(MenuPath.StripAccessKey(caption).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("de", "Erhöhen", "Verringern")]
+    [InlineData("nl", "Verhogen", "Verlagen")]
+    [InlineData("id", "Tambah", "Kurangi")]
+    [InlineData("fi", "Lisää", "Vähennä")]
+    [InlineData("cs", "Zvýšit", "Snížit")]
+    [InlineData("da", "Forøg", "Reducer")]
+    public void SpinnerTranslations_DescribeChangingANumber(string pack, string increase, string decrease)
+    {
+        Dispatcher.UIThread.CheckAccess().Should().BeTrue("language packs must load on the Avalonia thread (#2856)");
+        var loc = new LocalizationService();
+        ResolvedString(loc, pack, "Str.Spinner.Increase").Should().Be(increase);
+        ResolvedString(loc, pack, "Str.Spinner.Decrease").Should().Be(decrease);
+    }
+
+    private static string ResolvedString(LocalizationService loc, string pack, string key)
+    {
+        loc.TryResolveMap(pack, out var map, out _).Should().BeTrue("language pack '{0}' must resolve before comparing translations", pack);
+        return map.TryGetValue(key, out var value) ? value : key;
+    }
+
+    [AvaloniaFact]
+    public void UnresolvedPack_FailsBeforeComparingTranslations()
+    {
+        var loc = LocalizationService.CreateWithPackUris(id =>
+            new Uri($"avares://HexIDE/Localization/Packs/missing-{id}.json"));
+        Action read = () => ResolvedString(loc, "cs", "Str.Spinner.Increase");
+        read.Should().Throw<Exception>().WithMessage("*language pack 'cs' must resolve*");
+        loc.GetStringFrom("cs", "Str.Spinner.Increase").Should().Be("Increase");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("tab", "Str.Options.EditorFormatting.Indentation.TabWidth", "Tab _width:", "Tab width")]
+    [InlineData("width", "Str.Options.Grid.Width", "_Width:", "Width")]
+    [InlineData("height", "Str.Options.Grid.Height", "_Height:", "Height")]
     public void NumericOptionField_IsNamedByItsLocalizedLabel(string field, string key, string caption, string expected)
     {
         var settings = Substitute.For<ISettingsService>();
@@ -78,7 +246,73 @@ public class OptionsViewIntegrationTests
 
             view.Resources[key] = "名前:";
             Dispatcher.UIThread.RunJobs();
-            peer.GetName().Should().Be("名前:", "a language without access-key markers still names the field");
+            peer.GetName().Should().Be("名前", "a language without access-key markers still names the field");
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("en")]
+    [InlineData("system")]
+    public void LanguageAndRegion_AreNamedByTheirLabels_InEveryShippedPack(string selection)
+    {
+        var (settings, _, _, languageSwitch, _, _) = Mocks();
+        settings.ActiveLanguage.Returns(selection);
+        languageSwitch.AvailableLanguages.Returns([new LanguageInfo("system", "System default", "ltr"), new LanguageInfo("en", "English", "ltr")]);
+        var loc = new LocalizationService();
+        var view = new LanguagePageView
+        {
+            DataContext = new LanguagePageViewModel(settings, languageSwitch, loc, () => { }),
+        };
+        var window = new Window { Content = view, Width = 480, Height = 360 };
+        window.Show();
+        try
+        {
+            foreach (var id in LanguageManifest.Packs.Select(p => p.Id).Append("en-GB"))
+            {
+                var language = ResolvedString(loc, id, "Str.Options.Language.LanguageLabel");
+                var region = ResolvedString(loc, id, "Str.Options.Language.RegionLabel");
+                view.Resources["Str.Options.Language.LanguageLabel"] = language;
+                view.Resources["Str.Options.Language.RegionLabel"] = region;
+                Dispatcher.UIThread.RunJobs();
+                using var frame = window.CaptureRenderedFrame();
+                frame.Should().NotBeNull();
+                var boxes = view.GetVisualDescendants().OfType<ComboBox>().ToArray();
+                boxes.Should().HaveCount(2);
+                boxes[1].IsEnabled.Should().Be(selection != "system");
+                if (selection == "system") boxes[1].ItemCount.Should().Be(0);
+                ControlAutomationPeer.CreatePeerForElement(boxes[0]).GetName()
+                    .Should().Be(MenuPath.StripAccessKey(language).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
+                ControlAutomationPeer.CreatePeerForElement(boxes[1]).GetName()
+                    .Should().Be(MenuPath.StripAccessKey(region).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
+            }
+        }
+        finally { window.Close(); }
+    }
+
+    [AvaloniaTheory]
+    [InlineData("theme", "Str.Options.Theme.ThemeLabel")]
+    [InlineData("keymap", "Str.Options.Keymap.Label")]
+    public void OtherOptionsLists_AreNamedByTheirLocalizedLabel(string field, string key)
+    {
+        var (settings, theme, keymap, _, _, _) = Mocks();
+        Control view = field == "theme"
+            ? new ThemePageView { DataContext = new ThemePageViewModel(settings, theme) }
+            : new KeymapPageView { DataContext = new KeymapPageViewModel(settings, keymap) };
+        var loc = new LocalizationService();
+        var window = new Window { Content = view, Width = 480, Height = 360 };
+        window.Show();
+        try
+        {
+            foreach (var id in LanguageManifest.Packs.Select(p => p.Id).Append("en-GB"))
+            {
+                var caption = ResolvedString(loc, id, key);
+                view.Resources[key] = caption;
+                Dispatcher.UIThread.RunJobs();
+                var box = view.GetVisualDescendants().OfType<ComboBox>().Single();
+                ControlAutomationPeer.CreatePeerForElement(box).GetName()
+                    .Should().Be(MenuPath.StripAccessKey(caption).TrimEnd().TrimEnd(':', '：').TrimEnd(), id);
+            }
         }
         finally { window.Close(); }
     }
@@ -182,7 +416,7 @@ public class OptionsViewIntegrationTests
 
         locator.Build(new AddinConsentDialogViewModel("X", "1.0", "A", "Pub", Substitute.For<ILocalizationService>())).Should().BeOfType<AddinConsentDialog>();
         locator.Build(new DeveloperPageViewModel(settings)).Should().BeOfType<DeveloperPageView>();
-        locator.Build(new TrustChainViewModel(null, "x", false, true)).Should().BeOfType<TrustChainView>();
+        locator.Build(new TrustChainViewModel(null, "x", false, true, new LocalizationService())).Should().BeOfType<TrustChainView>();
 
         var languageSwitch = Substitute.For<ILanguageSwitchService>();
         languageSwitch.AvailableLanguages.Returns([new LanguageInfo("en", "English", "ltr")]);
@@ -248,7 +482,7 @@ public class OptionsViewIntegrationTests
         var frame = window.CaptureRenderedFrame();
         frame.Should().NotBeNull();
         var path = Path.Combine(Path.GetTempPath(), name);
-        frame!.Save(path);
+        frame!.Save(path, Avalonia.Media.Imaging.PngBitmapEncoderOptions.Default);
         window.Close();
         return path;
     }
@@ -350,7 +584,7 @@ public class OptionsViewIntegrationTests
     [AvaloniaFact]
     public void TrustChainView_RendersVerifiedChain()
     {
-        var vm = new TrustChainViewModel(SampleChain(), null, isRevoked: false, asDialog: true);
+        var vm = new TrustChainViewModel(SampleChain(), null, isRevoked: false, asDialog: true, localization: new LocalizationService());
         var snapshot = CaptureToPng(new TrustChainView { DataContext = vm }, "hexide_trustchain.png");
         new FileInfo(snapshot).Length.Should().BeGreaterThan(0);
     }
@@ -359,7 +593,7 @@ public class OptionsViewIntegrationTests
     public void TrustChainView_RendersUnavailableState()
     {
         var vm = new TrustChainViewModel(null, "No verifiable identity — unsigned developer build.",
-            isRevoked: false, asDialog: false);
+            isRevoked: false, asDialog: false, localization: new LocalizationService());
         var snapshot = CaptureToPng(new TrustChainView { DataContext = vm }, "hexide_trustchain_unavailable.png");
         new FileInfo(snapshot).Length.Should().BeGreaterThan(0);
     }

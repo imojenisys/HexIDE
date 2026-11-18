@@ -96,3 +96,143 @@ between a designer that is incomplete and one that is destructive.
 - **WHEN** a form hosting a UserControl is opened and saved without being edited
 - **THEN** every property of the hosted control is written back unchanged, including those the designer does not model
 
+
+### Requirement: A placed UserControl SHALL expose its configured extender members
+At run time a placed UserControl SHALL refuse TabIndex, TabStop, SetFocus, CausesValidation and
+HelpContextID when its `.ctl` sets CanGetFocus False, except that ForwardFocus True retains TabIndex.
+ForwardFocus True SHALL remove TabStop, SetFocus, CausesValidation and HelpContextID. Enabled and Data* members SHALL be absent regardless
+of that setting. An early-bound refusal SHALL use the interpreter's existing method-or-data-member
+compile-error path; a late-bound missing member SHALL raise 438.
+
+InvisibleAtRuntime True SHALL leave Name, Index, Parent and Object as members; Left and Top reads SHALL
+raise 393, and other members SHALL be absent. A windowed hWnd SHALL be explicitly unimplemented, with
+no fabricated value; a windowless hWnd SHALL be absent, per #1631's supervisor decision. Recognised
+members without runtime bindings (Parent, Object, Container, CausesValidation and HelpContextID) SHALL
+be explicitly refused as unimplemented rather than reported as missing.
+
+Parts A–C of #1631 cover member availability, focus, keys, containers, drawing and lifecycle. Designer
+property editing remains separate work.
+
+#### Scenario: A late-bound non-focusable control
+- **WHEN** a program reads TabIndex or calls SetFocus through an Object holding a UserControl with CanGetFocus False and ForwardFocus False
+- **THEN** the statement raises 438
+
+#### Scenario: An invisible extender
+- **WHEN** a program reads Left on a UserControl with InvisibleAtRuntime True
+- **THEN** the statement raises 393
+- **AND** reading Width instead is refused as a missing member
+
+#### Scenario: Native handles are never invented
+- **WHEN** a program reads hWnd on a windowed UserControl
+- **THEN** HexIDE refuses the operation as not implemented
+- **AND** a windowless UserControl instead refuses hWnd as a missing member
+
+
+### Requirement: A placed UserControl SHALL receive and forward focus keys
+Tab SHALL skip CanGetFocus False, ForwardFocus True and InvisibleAtRuntime controls, while a windowless
+UserControl and a child of a ControlContainer SHALL be separate stops. Controls without TabIndex SHALL
+leave holes; out-of-range file indices SHALL take free positions in form order.
+
+AccessKeys SHALL require Alt. A normal UserControl SHALL receive AccessKeyPress with the lower-case
+letter before taking focus. ForwardFocus SHALL send the key to the next focusable control in tab order;
+CanGetFocus False SHALL send it to the first. A UserControl receiving another control's access key,
+including a Label's, SHALL receive AccessKeyPress for that key even without AccessKeys of its own.
+
+#### Scenario: Access key forwarding
+- **WHEN** Alt+Z activates a CanGetFocus False UserControl whose AccessKeys is z
+- **THEN** the first focusable control takes focus
+- **AND** if that destination is a UserControl it receives AccessKeyPress 122
+
+### Requirement: DefaultCancel SHALL route Enter and Esc to the UserControl
+DefaultCancel True SHALL expose Default and Cancel, initially False. Default True SHALL make
+Ambient.DisplayAsDefault True and raise AmbientChanged with DisplayAsDefault. With Default and Cancel
+True, Enter from a TextBox SHALL raise AccessKeyPress 13 on the UserControl without TextBox KeyPress,
+and Esc SHALL raise 27. CommandButton focus SHALL make DisplayAsDefault False; Enter SHALL click that
+button. Each placed control SHALL execute its handlers on its own instance using the program's shared
+interpreter and event queue.
+
+#### Scenario: Enter in a TextBox
+- **WHEN** a TextBox has focus and a DefaultCancel UserControl has Default True
+- **THEN** the UserControl receives AccessKeyPress 13
+- **AND** the TextBox receives no KeyPress for Enter
+
+### Requirement: UserControl containers and drawing SHALL follow measured settings
+
+At run time Container assignment into a ControlContainer UserControl SHALL preserve Left and Top;
+assignment into a plain or InvisibleAtRuntime UserControl SHALL raise 425. ContainedControls.Count
+SHALL count the placed children. Alignable SHALL expose Align initially as Integer 0 and Negotiate
+reads SHALL raise 393. Align 2 SHALL span the form width at its bottom, preserving the control height.
+BackStyle 0 SHALL show the underlying form rather than paint the UserControl BackColor.
+
+#### Scenario: Moving a control into a ControlContainer
+- **WHEN** a program assigns a CommandButton's Container to an eligible UserControl
+- **THEN** Container identifies that UserControl and Left and Top retain their values
+
+### Requirement: UserControl events SHALL follow the measured order
+
+Focus entry SHALL raise EnterFocus, the form's instance GotFocus, then the control's GotFocus;
+a windowless instance SHALL raise the form's GotFocus first. Leaving SHALL raise the control's
+LostFocus, ExitFocus, then the form's instance LostFocus. Between UserControls, the new EnterFocus
+SHALL precede the old LostFocus and ExitFocus, before the form's old LostFocus and new GotFocus and
+the new control's GotFocus.
+
+Startup SHALL raise Initialize, ReadProperties and Resize in form order with windowless instances
+last. Show SHALL follow Form_Load and precede Form_Activate. Unload SHALL raise Hide then Terminate
+per control. InvisibleAtRuntime instances SHALL raise only Initialize, ReadProperties and Terminate.
+
+#### Scenario: An invisible instance loads and unloads
+- **WHEN** its form starts and subsequently unloads
+- **THEN** Initialize and ReadProperties run before Form_Load and Terminate runs on unload
+- **AND** Resize, Show and Hide do not run
+
+### Requirement: Form-hosted Ambient reads
+
+A running form-hosted UserControl SHALL read its container's BackColor, ForeColor and Font object,
+its instance DisplayName, and the measured constants from [#4149](https://github.com/hexide-io/HexIDE/issues/4149).
+UserMode SHALL be True and ShowHatching False. Palette, RightToLeft on a right-to-left form and non-form
+containers SHALL refuse explicitly as not implemented.
+Design-time UserControl execution remains unavailable.
+
+#### Scenario: Reading the form font during startup
+- **WHEN** a UserControl reads Ambient.Font in ReadProperties on a form with Arial 12 Bold
+- **THEN** the object reads Name Arial, Size 12, Bold True and Italic False
+
+#### Scenario: A refusal while the form loads its controls
+- **WHEN** a UserControl's Initialize, ReadProperties or Resize reads a member HexIDE refuses
+- **THEN** the refusal is reported as one in any event procedure is, rather than ending the run unreported
+
+### Requirement: Ambient.LocaleID SHALL answer only where it was measured
+
+A form-hosted UserControl's Ambient.LocaleID SHALL read 1033 whatever the user locale where Windows' system
+locale and interface languages are US English, as measured (#4266). Which of those it follows is unmeasured, so
+it SHALL refuse explicitly where any of them differs, and off Windows.
+
+#### Scenario: An en-GB user locale on US English Windows
+- **WHEN** a UserControl reads Ambient.LocaleID with the user locale en-GB and the system locale and interface
+  languages US English
+- **THEN** it reads 1033
+
+### Requirement: A loaded UserControl array element SHALL run its own code
+
+For templates with saved custom properties, loaded array elements SHALL attach their own module
+instance and run Initialize, Resize and ReadProperties inside Load, never InitProperties. They SHALL copy the template geometry and start
+hidden. Show SHALL be deferred, and form teardown SHALL include loaded elements in index order.
+Measured: [#4337](https://github.com/hexide-io/HexIDE/issues/4337), native and p-code (oracle PR #4341).
+
+#### Scenario: Loading a hidden array element
+- **WHEN** a program loads a new UserControl array element from a template with saved custom properties
+- **THEN** its own Initialize, Resize with extender Width zero, and ReadProperties run before Load returns
+- **AND** ReadProperties receives the same PropertyBag surface as a design-time element, with operations still unimplemented
+- **AND** the resulting element has the template's saved Width, Height and Top and Visible False
+
+#### Scenario: Showing loaded elements before the form appears
+- **WHEN** loaded elements are made visible before the form shows
+- **THEN** Show runs in index order with the other elements before Form_Activate
+
+#### Scenario: Showing a loaded element on a visible form
+- **WHEN** the program sets the loaded element's Visible to True on a showing form
+- **THEN** Show waits until that statement has returned
+
+#### Scenario: Unloading the form with loaded elements
+- **WHEN** a program executes Unload Me
+- **THEN** Form_Unload runs before each element's Hide and Terminate, in index order

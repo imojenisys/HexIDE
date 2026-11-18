@@ -8,6 +8,10 @@ namespace HexIDE.Runtime.BuiltinControls;
 
 public class AttachedProperties
 {
+    public static readonly AttachedProperty<bool> KeyPreviewProperty = AvaloniaProperty.RegisterAttached<VBProps, Control, bool>("KeyPreview");
+    public static bool GetKeyPreview(AvaloniaObject element) => element.GetValue(KeyPreviewProperty);
+    public static void SetKeyPreview(AvaloniaObject element, bool value) => element.SetValue(KeyPreviewProperty, value);
+
     // Cursor loses the VB value: Default, Arrow, Icon and Custom can all draw the same pointer (#769).
     public static readonly AttachedProperty<VBCursorType> MousePointerProperty = AvaloniaProperty.RegisterAttached<VBProps, Control, VBCursorType>("MousePointer", VBCursorType.Default);
     public static VBCursorType GetMousePointer(AvaloniaObject element) => element.GetValue(MousePointerProperty);
@@ -45,6 +49,7 @@ public class AttachedProperties
         {
             if (e.NewValue is VBFont font)
             {
+                AvaloniaInterop.ControlFont.DescriptorChanged(control, font);
                 control.FontFamily = font.ToFontFamily();
                 control.FontWeight = font.ToFontWeight();
                 control.FontSize = font.ToFontSize();
@@ -52,7 +57,7 @@ public class AttachedProperties
                 // Only on the controls that draw a caption in their own font. It is inherited, so set on a form it would
                 // reach the form's menus, which VB6 draws in the menu font whatever the form's is.
                 if (control is VBLabel or VBCommandButton or VBCheckBox or VBOptionButton)
-                    SymbolFontText.SetSymbolGlyphs(control, SymbolFontText.UsesSymbolGlyphs(font));
+                    SymbolFontText.Apply(control, font);
             }
         });
     }

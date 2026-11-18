@@ -47,16 +47,25 @@ public partial class VB6BuiltIns
 
     // StrComp(string1, string2[, compare]): -1, 0 or 1 as an Integer, or Null where either string is Null. Measured (#1560):
     // the compare is read first, as CLng reads it (0.5 is 0 and 1.5 is 2), so a Null one is 94 whatever the strings are; 0
-    // is binary and 1 text (VbTextCompare), 2 and a negative are 5. Then the strings, an array being 13 even beside a Null,
+    // is binary and 1 text (VbTextCompare). Validation follows the Null/empty paths below (#881). An array is 13 even beside a Null,
     // and anything else read as & reads it, so StrComp(5, "5") is 0. Given no compare, vb6.exe takes the calling module's
     // Option Compare (measured, #1572).
     private static Vb6Value StrComp(IReadOnlyList<Vb6Value> a, bool compareText)
     {
-        var text = Supplied(a, 2) ? IsTextCompare(CompareArgument(a[2])) : compareText;
+        var compare = Supplied(a, 2) ? CompareArgument(a[2]) : (compareText ? 1 : 0);
         var first = StrCompOperand(a[0]);
         var second = StrCompOperand(a[1]);
         if (first is null || second is null)
             return Vb6Value.Null;
+        // 2 is refused even for empty strings; other modes need two non-empty strings (#881).
+        if (compare == 2) throw InvalidCall();
+        if (first.Length > 0 && second.Length > 0 && compare >= 3)
+        {
+            if (!OperatingSystem.IsWindows())
+                throw new NotImplementedException("StrComp with a locale ID requires Windows collation (#4151).");
+            return new Vb6Value(WindowsLocaleCompare.Compare(first, second, compare));
+        }
+        var text = first.Length > 0 && second.Length > 0 && IsTextCompare(compare);
         return new Vb6Value(text ? VbTextCompare.Compare(first, second) : Math.Sign(string.CompareOrdinal(first, second)));
     }
 
@@ -143,6 +152,7 @@ public partial class VB6BuiltIns
     private static Vb6Value LenB(IReadOnlyList<Vb6Value> a)
     {
         if (a[0].IsNull) return Vb6Value.Null;
+        if (a is IntrinsicArgumentValues { FixedStringByteLength: { } bytes }) return new Vb6Value(bytes);
         if (a is IntrinsicArgumentValues { LenVariableSize: { } size }) return new Vb6Value(size);
         if (a[0].Type == Vb6Value.ValueType.UserDefinedType)
             throw new NotImplementedException("LenB of a user-defined type is not implemented: it is the Type's size in memory, "
@@ -243,19 +253,32 @@ public partial class VB6BuiltIns
     /// <paramref name="target"/> IN PLACE from 1-based <paramref name="start"/>, replacing at most
     /// <paramref name="length"/> chars and at most <c>replacement.Length</c> chars — the total length never changes.
     /// <paramref name="start"/> outside [1, Len(target)] raises Err 5 (oracle-verified vs vb6.exe). Returns the new
-    /// string (the caller writes it back to the target slot).</summary>
-    public static Vb6Value MidStatementReplace(Vb6Value target, Vb6Value start, Vb6Value? length, Vb6Value replacement)
+    /// string (the caller writes it back to the target slot). With <paramref name="bytes"/>, positions and lengths
+    /// count UTF-16 bytes instead of characters (#2623).</summary>
+    public static Vb6Value MidStatementReplace(Vb6Value target, Vb6Value start, Vb6Value? length, Vb6Value replacement, bool bytes = false)
     {
+        if (target.IsNull || replacement.IsNull) throw InvalidUseOfNull();
         string s = AsStr(target);
         string repl = AsStr(replacement);
         int st = AsInt(start);
-        if (st < 1 || st > s.Length) throw InvalidCall();
+        int units = bytes ? 2 : 1;
+        if (st < 1 || st > s.Length * units) throw InvalidCall();
         int from = st - 1;
-        int count = Math.Min(repl.Length, s.Length - from);
+        int count = Math.Min(repl.Length * units, s.Length * units - from);
         if (length is { } lv) count = Math.Min(count, Math.Max(0, AsInt(lv)));
         if (count <= 0) return new Vb6Value(s);
         var chars = s.ToCharArray();
-        for (int i = 0; i < count; i++) chars[from + i] = repl[i];
+        for (int i = 0; i < count; i++)
+        {
+            if (!bytes) chars[from + i] = repl[i];
+            else
+            {
+                // Replace just the addressed byte, keeping its neighbour even for an odd count or offset.
+                int at = from + i;
+                int shift = (at % 2) * 8;
+                chars[at / 2] = (char)((chars[at / 2] & ~(0xff << shift)) | ByteAt(repl, i) << shift);
+            }
+        }
         return new Vb6Value(new string(chars));
     }
 
@@ -267,18 +290,32 @@ public partial class VB6BuiltIns
     private static Vb6Value InStr(IReadOnlyList<Vb6Value> a, bool compareText)
     {
         // InStr([start,] string1, string2[, compare]). A leading numeric start is present only with 3+ args.
-        int start = 1, i = 0, compare = compareText ? 1 : 0;
+        int start = 1, i = 0;
+        long compare = compareText ? 1 : 0;
         if (a.Count >= 3) { start = AsInt(a[0]); i = 1; }
-        if (Supplied(a, 3)) compare = AsInt(a[3]);
+        if (Supplied(a, 3)) compare = CompareArgument(a[3]);
         if (a[i].IsNull || a[i + 1].IsNull) return Vb6Value.Null;
         if (start < 1) throw InvalidCall();
         string s1 = AsStr(a[i]), s2 = AsStr(a[i + 1]);
         // An empty string1 holds nothing, and an empty string2 is found at start, however far past the end (measured, #1567).
         if (s1.Length == 0) return new Vb6Value(0L);
         if (s2.Length == 0) return new Vb6Value((long)start);
+        // #4151: only the measured locale columns; no inferred rule for their expansions.
+        if (compare >= 3)
+        {
+            if (compare is 3000 or 4095 or 32767 or 65536 or 65535 or 999999)
+                throw InvalidCall();
+            if (compare is not (3 or 1027 or 4 or 2052 or 5 or 1029 or 7 or 1031 or 9 or 1033 or 2057 or 100 or 1024 or 2048))
+                throw new NotImplementedException($"InStr with locale ID {compare} has not been measured (#4151).");
+            var search = new VbTextCompare.Searchable(s1,
+                expandSharpS: compare is 1029 or 1031 or 1033 or 2057,
+                expandLigature: compare is 1031 or 1033 or 2057);
+            return new Vb6Value(start > s1.Length ? 0L : (long)search.IndexOf(s2, start - 1, false, out _) + 1);
+        }
+        var text = IsTextCompare(compare);
         if (start > s1.Length) return new Vb6Value(0L);
         // As text a match may start or end inside an expansion: "s" is in "ß" (measured, #1567).
-        return new Vb6Value((long)Find(s1, s2, start - 1, compare == 1, wholeCharacters: false, out _) + 1);   // 0 when not found
+        return new Vb6Value((long)Find(s1, s2, start - 1, text, wholeCharacters: false, out _) + 1);   // 0 when not found
     }
 
     /// <summary>Where <paramref name="find"/> is next in <paramref name="s"/> from the 0-based <paramref name="start"/>, or -1,
@@ -301,17 +338,17 @@ public partial class VB6BuiltIns
     private static Vb6Value InStrRev(IReadOnlyList<Vb6Value> a, bool compareText)
     {
         // InStrRev(string1, string2[, start[, compare]]) — start defaults to -1 (from the end).
+        var text = Supplied(a, 3) ? IsTextCompare(CompareArgument(a[3]), databaseAsText: true) : compareText;
         if (a[0].IsNull || a[1].IsNull) return Vb6Value.Null;
         string s1 = AsStr(a[0]), s2 = AsStr(a[1]);
         int start = Supplied(a, 2) ? AsInt(a[2]) : -1;
-        int compare = Supplied(a, 3) ? AsInt(a[3]) : (compareText ? 1 : 0);
         // A start past the end is 0, even where the text is there to find (measured, #1567).
         if (start > s1.Length) return new Vb6Value(0L);
         int from = start < 0 ? s1.Length - 1 : start - 1;
         if (from < 0 || s1.Length == 0) return new Vb6Value(0L);
         // An empty string2 is found at start: .NET's LastIndexOf would say one past it.
         if (s2.Length == 0) return new Vb6Value((long)from + 1);
-        return new Vb6Value((long)(compare == 1
+        return new Vb6Value((long)(text
             ? VbTextCompare.LastIndexOf(s1, s2, from)
             : s1.LastIndexOf(s2, from, StringComparison.Ordinal)) + 1);
     }
@@ -319,15 +356,15 @@ public partial class VB6BuiltIns
     private static string Replace(IReadOnlyList<Vb6Value> a, bool compareText)
     {
         // Replace(expression, find, replace[, start[, count[, compare]]]) — returns from `start` onward.
+        var compare = Supplied(a, 5) ? IsTextCompare(CompareArgument(a[5]), databaseAsText: true) : compareText;
         string s = AsStr(a[0]), find = AsStr(a[1]), repl = AsStr(a[2]);
         int start = Supplied(a, 3) ? AsInt(a[3]) : 1;
         int count = Supplied(a, 4) ? AsInt(a[4]) : -1;
-        int compare = Supplied(a, 5) ? AsInt(a[5]) : (compareText ? 1 : 0);
         if (start < 1) throw InvalidCall();
         string sub = start <= s.Length ? s.Substring(start - 1) : "";
         if (find.Length == 0 || count == 0) return sub;
         var sb = new StringBuilder();
-        var text = compare == 1 ? new VbTextCompare.Searchable(sub) : null;
+        var text = compare ? new VbTextCompare.Searchable(sub) : null;
         int i = 0, done = 0;
         while (count < 0 || done < count)
         {
@@ -426,7 +463,7 @@ public partial class VB6BuiltIns
         // CStr's, without the zero before the point: Str(0.5) is " .5" and Str(-0.5) is "-.5" (measured). The point
         // is always a period, which is documented rather than measured: the oracle's locale already uses one.
         double d = AsDouble(v);
-        string s = v.Value is DateTime ? AsStr(v) : VbDisplay.ToText(v, CultureInfo.InvariantCulture);
+        string s = v.Value is VbDate ? AsStr(v) : VbDisplay.ToText(v, CultureInfo.InvariantCulture);
         if (s.StartsWith("0.", StringComparison.Ordinal))
             s = s.Substring(1);
         else if (s.StartsWith("-0.", StringComparison.Ordinal))
@@ -443,13 +480,13 @@ public partial class VB6BuiltIns
         {
             int j = 2;
             while (j < s.Length && Uri.IsHexDigit(s[j])) j++;
-            return j > 2 ? Convert.ToInt64(s.Substring(2, j - 2), 16) : 0;
+            return j > 2 ? RadixNumber(Convert.ToInt64(s.Substring(2, j - 2), 16), Vb6Value.ValueType.Integer) : 0;
         }
         if (s.StartsWith("&O", StringComparison.OrdinalIgnoreCase))
         {
             int j = 2;
             while (j < s.Length && s[j] is >= '0' and <= '7') j++;
-            return j > 2 ? Convert.ToInt64(s.Substring(2, j - 2), 8) : 0;
+            return j > 2 ? RadixNumber(Convert.ToInt64(s.Substring(2, j - 2), 8), Vb6Value.ValueType.Integer) : 0;
         }
         int i = 0;
         if (i < s.Length && (s[i] == '+' || s[i] == '-')) i++;

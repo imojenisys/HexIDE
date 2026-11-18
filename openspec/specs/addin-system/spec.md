@@ -32,8 +32,8 @@ and would leave add-in authors depending on things that were never meant to be c
 - **THEN** the capability is added to the host surface rather than the add-in reaching past it
 
 ### Requirement: Contributions SHALL be removable by the contributor
-Registering a menu item, tool window, command, control, or project template SHALL return a handle that
-removes the contribution when disposed.
+Registering a menu item, tool window, command, control, project template, debug launch or project type
+(`contributed-projects`) SHALL return a handle that removes the contribution when disposed.
 
 Add-ins are loaded and unloaded, enabled and disabled, and may contribute conditionally. Without a removal
 handle the only way to withdraw a contribution is to restart the IDE, and every contribution point would
@@ -43,14 +43,21 @@ need its own bespoke unregister call.
 - **WHEN** an add-in disposes the handle returned by a registration
 - **THEN** the contributed item disappears from the surface it was added to
 
+#### Scenario: Withdrawing a control or project template
+- **WHEN** an add-in disposes a `RegisterComponent` or `RegisterProjectTemplate` handle
+- **THEN** that registration is removed from the toolbox or the templates offered by subsequently opened New Project dialogs
+- **AND** disposing the handle again, including during initialization rollback, has no further effect
+
 #### Scenario: Shutting down
 - **WHEN** the IDE shuts down
 - **THEN** every loaded add-in is disposed
 
 ### Requirement: The IDE SHALL offer menu, tool window, command, control and template contribution
-The host surface SHALL let an add-in add menu items at a named location, register a dockable tool window
+The host surface SHALL let an add-in add menu items under Tools or AddIns (case-insensitive), register a dockable tool window
 from a factory, register a named command, register a custom VB6 control into the toolbox, and register a
-project template. A contributed control SHALL NOT be a container, and a form nesting a control under one
+project template. Tool-window ids SHALL be scoped to the owning add-in id: duplicates within an add-in
+SHALL be refused before invoking the content factory; different add-ins MAY reuse the same window id.
+The owner SHALL remain attached to the host facade after initialization. A contributed control SHALL NOT be a container, and a form nesting a control under one
 SHALL be held read-only rather than saved.
 
 These are the extension points the original add-in ecosystem actually used. Controls and project templates
@@ -69,6 +76,16 @@ such a form is recoverable; writing it is not.
 - **THEN** it appears there, visually separated from the IDE's own items
 - **AND** it can supply a predicate that greys the item out when unavailable
 
+Unknown menu locations SHALL be logged with the contributing add-in's identity and requested path, and
+the placement SHALL be dropped without removing a separately registered command. AddIns SHALL also accept
+a submenu name after `/`; Tools SHALL retain its flat placement. A dropped placement SHALL return a
+harmless disposable handle.
+
+#### Scenario: Contributing to an unknown menu location
+- **WHEN** an add-in requests a menu location other than Tools or AddIns, including an empty path
+- **THEN** the host logs the add-in and requested path and adds no menu item
+- **AND** a separately registered command remains available
+
 #### Scenario: Contributing a tool window
 - **WHEN** an add-in registers a tool window with a factory
 - **THEN** the window docks, floats and hides like a built-in one
@@ -81,6 +98,31 @@ such a form is recoverable; writing it is not.
 #### Scenario: A control nested under a contributed class
 - **WHEN** a form nests a control under a class an add-in contributed
 - **THEN** the form opens read-only and the save is refused, with the reason given
+
+### Requirement: Add-ins SHALL be able to contribute a language server
+The host surface SHALL let an add-in contribute a language server registration, with a gate that runs before the
+server launches and a message channel of the add-in's own on the server's connection, as `lsp-client` specifies. The
+registration SHALL return a handle that stops the server and removes it when disposed, and SHALL be accepted after
+start-up, since an add-in whose first run waits for consent initialises after the window opens.
+
+An add-in exists to make a server one thing to install rather than an entry to write by hand (#457), and it cannot
+do that if the server it brings has to be written into the user's configuration behind their back. The capability
+design maps this member to `languageServer.contribute`; the member checks no declaration today, since that design's
+host checks are not built.
+
+#### Scenario: Contributing a server
+- **WHEN** an add-in registers a language server
+- **THEN** the server is launched, routed to and listed as a configured server is, under the add-in's name
+
+#### Scenario: A failed initialisation rolls the server back
+- **WHEN** an add-in's initialisation fails after it registered a language server
+- **THEN** the server is taken out with its other contributions
+
+#### Scenario: Trust changes during a session
+- **WHEN** an add-in is disabled or its consent is revoked
+- **THEN** its contributed language servers SHALL be unregistered immediately
+- **AND** a launch SHALL check the add-in is still enabled, consented and not revoked, before and after its own gate
+- **AND** a refused launch SHALL name the contributing add-in in the connection attempt
 
 ### Requirement: Add-ins SHALL be able to observe IDE lifecycle events
 The host surface SHALL raise events for project load and unload, file open and close, and run start and
@@ -196,6 +238,13 @@ write did not land.
 - **WHEN** an add-in reads a form that is open
 - **THEN** it receives the form's designer block and code together, as the file holds them
 
+#### Scenario: Reading a document by name
+- **WHEN** an add-in calls `TryGetDocument` with a document name and optional project
+- **THEN** HexIDE SHALL return its open buffer or, when closed, its whole-file model text
+- **AND** SHALL NOT open a code window, activate a tab or move the caret
+- **AND** a name that resolves to no document or more than one SHALL return a reason instead of content
+- **AND** an older host using the default interface member SHALL refuse with a reason without navigating
+
 #### Scenario: Rewriting a module and keeping its header
 - **WHEN** an add-in replaces a module's content with text whose header is unchanged
 - **THEN** the replacement is applied
@@ -207,3 +256,185 @@ write did not land.
 #### Scenario: Two projects with a document of the same name
 - **WHEN** an add-in names such a document without naming a project
 - **THEN** the call is refused and the add-in is told the name is ambiguous
+
+### Requirement: Add-in tool window placement SHALL survive delayed registration
+The IDE SHALL save contributed tool windows by their registration ID in a separate add-in key namespace,
+including their open state, left/right/bottom dock region, stack order and proportion. It SHALL retain saved entries
+before the matching add-in registers, including across eager saves, and apply them when registration arrives.
+Reset Window Layout SHALL discard saved add-in placements, return open registered add-in tools to the right
+column and keep closed tools closed. A new tool SHALL use the right column by default.
+
+#### Scenario: An add-in registers after the layout is loaded
+- **WHEN** a saved add-in tool registers after startup
+- **THEN** an open tool returns to its saved region, order and proportion
+- **AND** a saved closed tool remains closed until explicitly shown
+
+#### Scenario: Saving before registration
+- **WHEN** the IDE saves its layout before a saved add-in tool registers
+- **THEN** its saved entry is preserved for later registration
+
+#### Scenario: Resetting with registered add-in tools
+- **WHEN** the developer resets the window layout with add-in tools registered
+- **THEN** open add-in tools return to the default right column
+- **AND** closed add-in tools remain closed
+
+### Requirement: Contributed tools SHALL declare a measured usable width
+A contributed tool's content MAY implement `IToolWindowMinimumWidth` to measure the width at which its
+controls fit. On first display in a dock, the IDE SHALL grow that dock's column to the measured width,
+borrowing only space above the document column's minimum. This SHALL NOT impose a permanent resize
+minimum. A saved width and later user resizing SHALL be retained. Tools without a declaration SHALL
+keep their existing sizing.
+
+#### Scenario: AI Chat opens in the default left dock
+- **WHEN** AI Chat is first displayed in the narrow left dock
+- **THEN** the column grows to fit its measured prompt, Send and New row, subject to the document minimum
+- **AND** the Toolbox alone retains its narrow default
+
+#### Scenario: The developer narrows the dock afterwards
+- **WHEN** the developer resizes a dock after its initial usable width has been applied
+- **THEN** subsequent layout passes and showing that tool again retain the chosen width
+
+### Requirement: Schema 2 capability declaration validation and packing
+Schema 2 manifests SHALL contain a top-level `capabilities` array containing only unique,
+case-sensitive identifiers from `project.read`, `project.write`, `program.run`, `ui.contribute` and
+`languageServer.contribute`. Invalid or missing declarations SHALL be incompatible before trust
+verification, including in developer mode. The declaration SHALL be covered by the existing raw-byte
+manifest signature and hash. Schema 1 and older manifests SHALL retain compatibility without requiring
+this field. Host enforcement is tracked separately in #459's unarchived change.
+
+The packer SHALL emit schema 2 with an explicit array (empty when none are requested), sort identifiers
+ordinally, accept repeated `--capability` arguments, and validate before modifying its output directory.
+Bundled add-ins SHALL declare their own current host use.
+
+#### Scenario: Invalid declaration
+- **WHEN** a schema 2 manifest has no declaration, null, a non-array, a non-string entry, a duplicate or an unknown identifier
+- **THEN** verification returns Incompatible before trust checks
+
+#### Scenario: Packing without capabilities
+- **WHEN** a publisher packs an add-in without `--capability` arguments
+- **THEN** its signed manifest contains schema 2 and an empty capabilities array
+
+#### Scenario: Packing an invalid declaration
+- **WHEN** a publisher passes an unknown or duplicate capability
+- **THEN** packing fails before touching the output directory
+
+### Requirement: Verified declaration metadata preserves build provenance
+Successful package verification SHALL produce an immutable declaration snapshot containing the add-in
+id, publisher id, manifest hash, legacy state and declared capabilities. Registry metadata SHALL expose
+that snapshot before consent. Failed verification SHALL NOT produce a verified declaration snapshot.
+Legacy schemas SHALL be identified as lacking a declaration, even if a stray capabilities field exists;
+an explicit schema-2 empty list SHALL remain distinguishable from that absence. This metadata SHALL
+represent declarations, not capability grants or observed host use.
+
+#### Scenario: Inspecting a build before consent
+- **WHEN** a verified schema-2 package awaits consent
+- **THEN** registry metadata exposes its declaration and exact manifest hash without executing its code
+
+#### Scenario: Legacy declaration absence
+- **WHEN** a schema-0 or schema-1 package verifies successfully
+- **THEN** its snapshot identifies legacy absence and contains no declared capabilities
+
+#### Scenario: Verification fails
+- **WHEN** a package is untrusted or incompatible
+- **THEN** it has no verified declaration snapshot
+
+### Requirement: Add-in chrome titles follow the IDE language without callbacks
+Tool window, menu item and command registration SHALL accept `AddinTitle` alongside every existing string
+signature. Labels SHALL follow live IDE language changes using only data copied at registration, without
+add-in callbacks or dictionary rereads. Plain text and translations SHALL share one display boundary and
+retain existing access-key treatment. The title API SHALL expose only inert data.
+
+#### Scenario: Owned IDE key and Pseudo
+- **WHEN** first-party `com.hexide.aichat` registers its pane and Tools item with `Str.AIChat.*` keys
+- **THEN** their text comes from the active pack, changes on a language switch, and is bracketed in Pseudo
+
+#### Scenario: Translated package text
+- **WHEN** a title contains plain text and translations in the brand `text`/`translations` shape
+- **THEN** it resolves through `BrandText.LanguageChain` and `DistributionText.Resolve`: resolved IDE language,
+  its neutral, `en`, then the plain text
+- **WHEN** a title supplies `fr-CA`, `fr` and `en` translations
+- **THEN** `fr-CA` selects the regional text, its absence selects `fr`, then `en`, then the plain text
+- **AND** changing the IDE language re-resolves the title
+
+#### Scenario: Registration refuses invalid data before contributing anything
+- **WHEN** a key is absent from the canonical pack, outside the add-in's owned area, a translation language
+  is malformed, or a translation is empty
+- **THEN** registration throws `ArgumentException` identifying the invalid data and contributes nothing
+- **AND** no tool content factory runs
+
+#### Scenario: Key ownership is closed by default
+- **WHEN** any add-in requests an IDE key
+- **THEN** the only allowed area is `Str.AIChat.`, owned by the id `com.hexide.aichat` with either verified
+  `IsFirstParty` status or `DeveloperUnsigned` status; every other area, including consent and signing, is refused
+- **AND** a signed third-party package claiming that id gains no key access
+- **AND** an unsigned AI Chat loaded under `com.hexide.aichat` in Debug developer mode with unsigned loading enabled
+  owns that area; an unsigned package with any other id gains no key access
+
+#### Scenario: Two packages declare one id
+- **WHEN** multiple package folders declare the same add-in id
+- **THEN** the IDE SHALL select one before initializing any of them: a verified package wins over an unsigned
+  package regardless of folder order; between packages of the same kind, the first in folder order wins
+- **AND** the other packages are never initialized and contribute nothing
+- **AND** Options → Add-Ins lists each loser with status `Error` and a message naming the id and winning folder
+- **AND** the key-area owner allow-list is pinned by a test, with an owner for every area and no overlapping areas
+
+#### Scenario: Add-in data changes after registration
+- **WHEN** an add-in mutates its translations dictionary and the IDE switches languages several times
+- **THEN** only the registration-time copy is read, with no subsequent dictionary member access
+- **AND** no add-in factory, invocation or predicate delegate runs to obtain text
+
+#### Scenario: The public title API remains inert
+- **WHEN** the title type and its registration overloads are inspected
+- **THEN** they expose no text callback, event, or add-in-implemented interface for later invocation
+- **AND** the translations dictionary is accepted solely for copying during registration
+
+#### Scenario: Existing string calls
+- **WHEN** an add-in uses an existing string registration signature
+- **THEN** its label remains literal through language switches and its handle removes the contribution as before
+
+#### Scenario: Other titles and menu paths
+- **WHEN** an add-in contributes a debug launch, project type, or menu parent path such as `Tools` or `AddIns/name`
+- **THEN** these retain their existing plain titles or path identifiers without translation
+
+### Requirement: Add-in chrome text is validated before registration
+Tool-window titles, menu-item labels and command labels SHALL pass one shared check for both string and
+`AddinTitle` overloads, including every translation regardless of active language. Text MUST be trimmed,
+nonempty and at most 128 UTF-16 code units, without control, Format, LineSeparator or ParagraphSeparator
+characters except U+200C/U+200D. Invalid text SHALL throw a descriptive `ArgumentException` before registration
+or any content factory runs. Text MUST be valid UTF-16. Refusals SHALL remain English regardless of the IDE
+language and identify the broken rule without quoting the text; a translation refusal SHALL name its language.
+
+#### Scenario: Unsafe literal or translation
+- **WHEN** any of the three registration calls receives empty, whitespace-only, untrimmed or 129-character
+  text, or text containing a tab, U+202E, U+2066, U+200B, U+FEFF, U+2028, U+2029 or supplementary Format character U+E0001
+- **THEN** registration refuses it through either overload, including when it occurs only in a translation
+- **AND** nothing is registered and no factory runs
+- **AND** an uncaught refusal during initialization makes the add-in fail to initialize
+
+#### Scenario: Specific English refusal in a German IDE
+- **WHEN** the IDE is in German and a title or translation breaks a text rule
+- **THEN** the English exception names empty/whitespace-only text, leading/trailing whitespace, the excessive
+  length and limit, or the refused character's code point and zero-based UTF-16 index, as applicable
+- **AND** an unpaired high or low surrogate is refused as invalid UTF-16 with its index
+- **AND** a translation refusal also identifies its language without quoting the unsafe text
+
+#### Scenario: Ordinary international text and access keys
+- **WHEN** text is exactly 128 code units, ordinary Arabic or Hebrew, a Persian word with U+200C,
+  an emoji sequence with U+200D, or text containing an access-key underscore
+- **THEN** registration accepts it and retains the supplied text
+
+#### Scenario: Owned key has no literal text
+- **WHEN** an authorized add-in registers `AddinTitle.FromKey` with a valid owned IDE key
+- **THEN** the empty `Text` field does not undergo the display-text check
+- **AND** the title resolves from the IDE's packs under the existing key-ownership rules
+
+### Requirement: Add-in Options details SHALL follow the active IDE language
+The add-in Options page SHALL localize publisher, fallback metadata, toggle, consent, trust reasons
+and status text. It SHALL refresh these properties and load messages when the IDE language changes and
+unsubscribe when Options closes. Manifest metadata SHALL remain unchanged. Load messages SHALL retain
+their key and arguments; `AddinInfo.CompatibilityError` SHALL remain the original load-time string.
+
+#### Scenario: Switching language with an add-in page open
+- **WHEN** the developer changes the IDE language while inspecting an add-in
+- **THEN** the page's host-owned details and load message use the new language
+- **AND** the signed manifest metadata is unchanged

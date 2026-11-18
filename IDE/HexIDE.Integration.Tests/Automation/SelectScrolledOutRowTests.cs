@@ -178,6 +178,23 @@ public class SelectScrolledOutRowTests
 
     private static IEnumerable<UiNode> Flatten(UiNode node) => node.Children.SelectMany(Flatten).Prepend(node);
 
+    // AvaloniaUI/Avalonia#22165 recycles temporary ScrollIntoView containers. Recreate the old unindexed
+    // row explicitly so the automation guards remain covered without depending on the virtualizer retaining it.
+    private static void AddReleasedRow(ListBox list, Row model, bool editable = false)
+    {
+        Control text = editable ? new TextBox { Text = "original" } : new TextBlock { Text = model.Name };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(text, $"txt_{model.Name}");
+        var row = new ListBoxItem
+        {
+            DataContext = model,
+            Template = new FuncControlTemplate<ListBoxItem>((item, _) => (Control)item.Content!),
+            Content = new Border { Height = 16, Child = text },
+        };
+        list.ItemsPanelRoot!.Children.Add(row);
+        row.Measure(new Avalonia.Size(120, 16));
+        row.Arrange(new Avalonia.Rect(0, 0, 120, 16));
+    }
+
     // The scroll a select made and put back leaves a released row in the tree, holding the item it last showed, and once
     // that item shows again so does the row, by its bound visibility. The dump listed it as a row, a second copy of an
     // item or a row for one out of view, and a path or an id reached it (#1292). It lists only the rows the list holds.
@@ -190,6 +207,7 @@ public class SelectScrolledOutRowTests
             UiAutomationDriver.Interact(list, "select", "Row28").Success.Should().BeFalse();
             rows[28].Visible = true;
             Dispatcher.UIThread.RunJobs();
+            AddReleasedRow(list, rows[28]);
             var released = list.GetVisualDescendants().OfType<ListBoxItem>().Where(i => list.IndexFromContainer(i) < 0).ToList();
             released.Should().Contain(i => i.IsEffectivelyVisible, "a released row must show for this to test anything");
 
@@ -209,6 +227,37 @@ public class SelectScrolledOutRowTests
         finally { window.Close(); }
     }
 
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_dump_lists_scrolled_rows_in_item_order(bool home)
+    {
+        var (window, list, _) = ScrolledRows();
+        try
+        {
+            list.Height = 100;
+            list.UpdateLayout();
+            UiAutomationDriver.Interact(list, "select", home ? "Row2" : "Row28").Success.Should().BeTrue();
+            if (home)
+            {
+                list.ScrollIntoView(28);
+                list.UpdateLayout();
+                list.ScrollIntoView(0);
+                list.UpdateLayout();
+            }
+
+            var dump = Flatten(UiAutomationDriver.Dump(window, "Window", 12, false)).ToList();
+            var rows = dump.Where(n => n.ControlType == "ListItem").ToList();
+            var indices = rows.Select(n => int.Parse(n.Name![3..])).ToList();
+            indices.Count.Should().BeGreaterThan(2);
+            indices.Should().BeInAscendingOrder();
+            indices.Should().OnlyHaveUniqueItems();
+            foreach (var row in rows)
+                UiAutomationDriver.Resolve(window, row.Path).control.Should().BeSameAs(list.ContainerFromIndex(int.Parse(row.Name![3..])));
+        }
+        finally { window.Close(); }
+    }
+
     // Only Row28 has an input surface; panel order cannot decide which item receives input (#1327).
     private static (Window Window, ListBox List, TextBox Box) ReleasedTextBox()
     {
@@ -218,6 +267,7 @@ public class SelectScrolledOutRowTests
             UiAutomationDriver.Interact(list, "select", "Row28").Success.Should().BeFalse();
             rows[28].Visible = true;
             Dispatcher.UIThread.RunJobs();
+            AddReleasedRow(list, rows[28], editable: true);
             var box = list.GetVisualDescendants().OfType<TextBox>().Single();
             Avalonia.Automation.AutomationProperties.GetAutomationId(box).Should().Be("txt_Row28");
             var row = box.GetVisualAncestors().OfType<ListBoxItem>().Single();

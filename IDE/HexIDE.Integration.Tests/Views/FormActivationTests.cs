@@ -9,6 +9,7 @@ using Avalonia.Interactivity;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using HexIDE.Runtime;
+using HexIDE.Automation;
 using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.ProjectElements;
@@ -34,20 +35,20 @@ public class FormActivationTests
         public void LogError(string _) { }
     }
 
-    private static string Header(string name) =>
+    private static string Header(string name, bool controls = true) =>
         "VERSION 5.00\r\n"
       + $"Begin VB.Form {name} \r\n"
       + $"   Caption         =   \"{name}\"\r\n"
       + "   ClientHeight    =   3000\r\n"
       + "   ClientWidth     =   4000\r\n"
-      + "   Begin VB.CommandButton Command1 \r\n"
+      + (controls ? "   Begin VB.CommandButton Command1 \r\n"
       + "      Caption         =   \"Command1\"\r\n"
       + "      Height          =   495\r\n"
       + "      Left            =   120\r\n"
       + "      TabIndex        =   0\r\n"
       + "      Top             =   120\r\n"
       + "      Width           =   1215\r\n"
-      + "   End\r\n"
+      + "   End\r\n" : "")
       + "End\r\n"
       + $"Attribute VB_Name = \"{name}\"\r\n";
 
@@ -67,6 +68,12 @@ public class FormActivationTests
         End Sub
         Private Sub Form_Deactivate()
             Debug.Print "{prefix} deactivate"
+        End Sub
+        Private Sub Form_GotFocus()
+            Debug.Print "{prefix} gotfocus"
+        End Sub
+        Private Sub Form_LostFocus()
+            Debug.Print "{prefix} lostfocus"
         End Sub
         Private Sub Form_Unload(Cancel As Integer)
             Debug.Print "{prefix} unload"
@@ -110,16 +117,16 @@ public class FormActivationTests
         }
     }
 
-    private static FormDefinition Form(ProjectDefinition project, string name, string code) =>
-        new FormDeserializer().Deserialize(project, (Header(name) + code).ReplaceLineEndings("\r\n"), new NullSink())!;
+    private static FormDefinition Form(ProjectDefinition project, string name, string code, bool controls = true) =>
+        new FormDeserializer().Deserialize(project, (Header(name, controls) + code).ReplaceLineEndings("\r\n"), new NullSink())!;
 
     /// <summary>Run Form1, with Form2 in the project, as F5 does, and let its start run.</summary>
-    private static Run Start(string form1Code, bool logEvents = true)
+    private static Run Start(string form1Code, bool logEvents = true, bool form2Controls = true)
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var form1 = Form(project, "Form1", (logEvents ? Logged("f1") : "") + form1Code);
         project.AddForm(form1);
-        project.AddForm(Form(project, "Form2", Form2Code));
+        project.AddForm(Form(project, "Form2", Form2Code, form2Controls));
 
         var printed = new List<string>();
         var errors = new List<Exception>();
@@ -212,14 +219,14 @@ public class FormActivationTests
         run.Click("Form1");
         var before = run.Printed.Count;
 
+        // Measured: the unloaded form gets no Deactivate, and the form shown before it is activated, without waiting for
+        // the window system (oracle, "A form's Resize, Activate and Deactivate", run 1's Unload Form2; #3936).
         run.Click("Form1");
-        run.Since(before).Should().Equal("f2 unload");
+        run.Since(before).Should().Equal("f2 unload", "f1 activate");
         run.Click("Form1");
 
-        // On the desktop Windows activates Form1 once Form2 has gone, and VB6 raises Form1's Activate there, then its
-        // Deactivate at this Show. Headless nothing activates Form1, so neither comes.
         run.Errors.Should().BeEmpty();
-        run.Since(before + 1).Should().Equal("f2 load", "f2 resize", "f2 activate");
+        run.Since(before + 2).Should().Equal("f2 load", "f2 resize", "f1 deactivate", "f2 activate");
     }
 
     [AvaloniaFact]
@@ -230,9 +237,36 @@ public class FormActivationTests
         run.Click("Form1");
         run.Since(Started.Length).Should().Equal("modal", "f2 initialize", "f2 load", "f2 resize", "f1 deactivate", "f2 activate");
 
+        // Measured: the modal form unloads, Show vbModal returns, then the form beneath is activated (oracle, run 1's
+        // Form5.Show vbModal; #3936).
         run.Click("Form2");
         run.Errors.Should().BeEmpty();
-        run.Since(Started.Length + 6).Should().Equal("f2 unload", "back");
+        run.Since(Started.Length + 6).Should().Equal("f2 unload", "back", "f1 activate");
+    }
+
+    // #2579: docs/vb6-fidelity-oracle/a-forms-resize-activate-and-deactivate.md, run 1 Form4.Show.
+    [AvaloniaFact]
+    public void Run1_Form4_Show_no_controls_raises_GotFocus_after_Activate()
+    {
+        using var run = Start(Steps("Form2.Show"), form2Controls: false);
+        run.Click("Form1");
+
+        run.Errors.Should().BeEmpty();
+        run.Since(Started.Length).Should().Equal("f2 initialize", "f2 load", "f2 resize",
+            "f1 deactivate", "f2 activate", "f2 gotfocus");
+    }
+
+    // The measured activation switch order: LostFocus, Deactivate, Activate, GotFocus (#2579).
+    [AvaloniaFact]
+    public void Run1_Me_SetFocus_leaves_form_focus_before_Deactivate()
+    {
+        using var run = Start(Steps("Form2.Show", "Me.SetFocus"), form2Controls: false);
+        run.Click("Form1");
+        var before = run.Printed.Count;
+        run.Click("Form1");
+
+        run.Errors.Should().BeEmpty();
+        run.Since(before).Should().Equal("f2 lostfocus", "f2 deactivate", "f1 activate");
     }
 
     // ── What raises nothing ──────────────────────────────────────────────────────────────────────────────
@@ -317,4 +351,108 @@ public class FormActivationTests
         run.Errors.Should().BeEmpty();
         run.Since(Started.Length).Should().Equal("f1 resize");
     }
+    private static void NativeSize(VBFormRuntime window, double width, double height)
+    {
+        var platform = window.PlatformImpl!;
+        // Resize() posts asynchronously headlessly; model a native notification with its backend size already updated.
+        var size = new Avalonia.Size(width, height);
+        platform.GetType().GetProperty("ClientSize")!.SetValue(platform, size);
+        var resized = (Action<Avalonia.Size, WindowResizeReason>)platform.GetType().GetProperty("Resized")!.GetValue(platform)!;
+        resized(size, WindowResizeReason.User);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(WindowState.Normal, WindowState.Maximized, true)]
+    [InlineData(WindowState.Maximized, WindowState.Normal, false)]
+    [InlineData(WindowState.Normal, WindowState.Minimized, false)]
+    [InlineData(WindowState.Minimized, WindowState.Normal, true)]
+    public async Task A_native_state_change_raises_one_Resize_then_Paint_only_when_the_client_grows(
+        WindowState from, WindowState to, bool paint)
+    {
+        // The automation route uses the same state setter, then waits for the queued window work.
+        foreach (var toolRoute in new[] { false, true })
+        {
+            using var run = Start("""
+                Private Sub Form_Resize()
+                    Debug.Print "resize " & Me.WindowState
+                    If Me.WindowState <> 1 Then Debug.Print "client " & Me.ScaleWidth & "x" & Me.ScaleHeight
+                End Sub
+                Private Sub Form_Paint()
+                    Debug.Print "paint"
+                End Sub
+                Private Sub Form_Activate()
+                    Debug.Print "activate"
+                End Sub
+                Private Sub Form_Deactivate()
+                    Debug.Print "deactivate"
+                End Sub
+                Private Sub Form_GotFocus()
+                    Debug.Print "focus"
+                End Sub
+                Private Sub Form_LostFocus()
+                    Debug.Print "blur"
+                End Sub
+                """, logEvents: false);
+            var window = run.Opened["Form1"];
+            window.WindowState = from;
+            NativeSize(window, from == WindowState.Maximized ? 1024 : 300, from == WindowState.Maximized ? 705 : 200);
+            Pump();
+            run.Printed.Clear();
+
+            var applied = toolRoute
+                ? WindowChange.ApplyAsync(window, to, null, null, null, null, TestContext.Current.CancellationToken)
+                : null;
+            if (!toolRoute)
+                window.WindowState = to;
+            if (to != WindowState.Minimized)
+            {
+                // A native state change can report intermediate client sizes before it settles.
+                NativeSize(window, 600, 400);
+                NativeSize(window, to == WindowState.Maximized ? 1024 : 300, to == WindowState.Maximized ? 705 : 200);
+            }
+            if (from == WindowState.Minimized)
+                window.Activate();
+            if (applied is not null)
+                (await applied).Should().BeTrue();
+            Pump();
+
+            run.Errors.Should().BeEmpty();
+            var expected = new List<string> { $"resize {(int)to}" };
+            if (to != WindowState.Minimized)
+                expected.Add(to == WindowState.Maximized ? "client 15360x10575" : "client 4500x3000");
+            if (paint)
+                expected.Add("paint");
+            run.Printed.Should().Equal(expected);
+        }
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_native_border_or_corner_drag_raises_Resize_then_Paint_per_move_and_nothing_on_release(bool corner)
+    {
+        using var run = Start("""
+            Private Sub Form_Resize()
+                Debug.Print "resize"
+            End Sub
+            Private Sub Form_Paint()
+                Debug.Print "paint"
+            End Sub
+            """, logEvents: false);
+        var window = run.Opened["Form1"];
+        NativeSize(window, 300, 200);
+        Pump();
+        run.Printed.Clear();
+        for (var i = 1; i <= (corner ? 1 : 5); i++)
+        {
+            NativeSize(window, 300 + (corner ? 40 : 20 * i), 200 + (corner ? 30 : 0));
+            Pump();
+            run.Printed.Should().Equal(Enumerable.Range(0, i).SelectMany(_ => new[] { "resize", "paint" }));
+        }
+        run.Printed.Clear();
+        Pump();
+        run.Printed.Should().BeEmpty("releasing a border does not change the size");
+        run.Errors.Should().BeEmpty();
+    }
+
 }

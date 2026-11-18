@@ -47,6 +47,9 @@ Generated\ Files/
 [Tt]est[Rr]esult*/
 [Bb]uild[Ll]og.*
 
+# A local test run's results directory; xunit reports carry the machine and account names
+int-results/
+
 # NUnit
 *.VisualState.xml
 TestResult.xml
@@ -325,6 +328,10 @@ node_modules/
 # `--others` only, never `--cached`, so a force-added demo binary is still reported and still
 # fails, which is what demo/README.md promises.
 demo/**/*.exe
+
+# The spring-tide demo's .rdproj: HexIDE writes it, with consent, the first time RDCore starts for the demo
+# (hexide-io/HexIDE#455), so it is a generated file like the binaries above, not source.
+demo/spring-tide/.rdproj
 
 # Visual Studio 6 workspace and project file (working project files containing files to include in project)
 *.dsw

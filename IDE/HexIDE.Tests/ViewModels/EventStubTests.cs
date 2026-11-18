@@ -89,7 +89,7 @@ public class EventStubTests : IDisposable
         var form = FormDefinition.NewForm(Project, FormComponentClass.Instance, "Form1");
         var vm = Open(form);
 
-        navigate!(new CreateOrNavigateToSubEvent(form, "Form_Load"));
+        navigate!(new CreateOrNavigateToSubEvent(form, "Form_Load", "Form", "Load"));
 
         vm.Document.Text.Should().EndWith(Attributes + "Private Sub Form_Load()\r\n\r\nEnd Sub\r\n",
             "VB6 writes it Private, in CRLF, straight after the Attribute lines");
@@ -102,7 +102,7 @@ public class EventStubTests : IDisposable
         var form = new FormDeserializer().Deserialize(Project, FormWithCode, NullSink.Instance)!;
         var vm = Open(form);
 
-        navigate!(new CreateOrNavigateToSubEvent(form, "Form_Load"));
+        navigate!(new CreateOrNavigateToSubEvent(form, "Form_Load", "Form", "Load"));
 
         vm.Document.Text.Should().EndWith(
             "Private Sub Zeta()\r\n    Debug.Print 1\r\nEnd Sub\r\n\r\nPrivate Sub Form_Load()\r\n\r\nEnd Sub\r\n");
@@ -134,7 +134,7 @@ public class EventStubTests : IDisposable
         var vm = Open(form);
         var before = vm.Document.Text;
 
-        navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click"));
+        navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click", "Command1", "Click"));
 
         vm.CaretOffset.Should().Be(BlankLineIn(vm, "Private Sub Command1_Click()\r\n"));
         if (handlerExists) vm.Document.Text.Should().Be(before);
@@ -162,6 +162,98 @@ public class EventStubTests : IDisposable
             : BlankLineIn(vm, "Private Sub Command1_Click()\r\n"));
         if (handlerExists) vm.Document.Text.Should().Be(before);
         else vm.Document.Text.Should().EndWith("Private Sub Command1_Click()\r\n\r\nEnd Sub\r\n");
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Event_navigation_skips_a_member_attribute_naming_the_handler(bool dropdown, bool handlerExists)
+    {
+        var source = FormWithCode.Replace("Private Sub Zeta()\r\n",
+            "Private Sub Zeta()\r\nAttribute Zeta.VB_Description = \"Undoes what Sub Command1_Click did\"\r\n");
+        if (handlerExists) source += "\r\nPrivate Sub Command1_Click()\r\n\r\nEnd Sub\r\n";
+        var form = new FormDeserializer().Deserialize(Project, source, NullSink.Instance)!;
+        var vm = Open(form);
+        var before = vm.Document.Text;
+
+        if (dropdown)
+        {
+            vm.SelectedObject = "Command1";
+            vm.SelectedProcedure = "Click";
+        }
+        else navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click", "Command1", "Click"));
+
+        var declaration = vm.Document.Text.IndexOf("Private Sub Command1_Click()", StringComparison.Ordinal);
+        declaration.Should().BeGreaterThan(0);
+        vm.CaretOffset.Should().Be(dropdown && handlerExists
+            ? vm.Document.GetLineByOffset(declaration).EndOffset
+            : BlankLineIn(vm, "Private Sub Command1_Click()\r\n"));
+        vm.IsReadOnlyRegion(vm.CaretOffset, 0).Should().BeFalse();
+        if (handlerExists) vm.Document.Text.Should().Be(before);
+        else vm.Document.Text.Should().EndWith("Private Sub Command1_Click()\r\n\r\nEnd Sub\r\n");
+    }
+
+    [AvaloniaFact]
+    public void A_double_click_navigates_past_the_handlers_member_attributes()
+    {
+        var source = FormWithCode + "\r\nPrivate Sub Command1_Click()\r\n"
+            + "Attribute Command1_Click.VB_Description = \"Clicks\"\r\n"
+            + "    Debug.Print 2\r\nEnd Sub\r\n";
+        var form = new FormDeserializer().Deserialize(Project, source, NullSink.Instance)!;
+        var vm = Open(form);
+
+        navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click", "Command1", "Click"));
+
+        vm.CaretOffset.Should().Be(vm.Document.Text.IndexOf("    Debug.Print 2", StringComparison.Ordinal));
+        vm.IsReadOnlyRegion(vm.CaretOffset, 0).Should().BeFalse();
+    }
+
+    // VB6 SP6 IDE measurements recorded in hexide-io/HexIDE#4205 (oracle PR #4358).
+    [AvaloniaTheory]
+    [InlineData(false, "Click", "Index As Integer")]
+    [InlineData(false, "MouseDown", "Index As Integer, Button As Integer, Shift As Integer, X As Single, Y As Single")]
+    [InlineData(true, "Click", "Index As Integer")]
+    public void An_array_elements_stub_puts_Index_first(bool doubleClick, string eventName, string arguments)
+    {
+        var source = FormWithCode.Replace("      Caption", "      Index = 0\r\n      Caption");
+        var form = new FormDeserializer().Deserialize(Project, source, NullSink.Instance)!;
+        var vm = Open(form);
+        if (doubleClick) navigate!(new CreateOrNavigateToSubEvent(form, "Command1_Click", "Command1", "Click"));
+        else
+        {
+            vm.SelectedObject = "Command1";
+            vm.SelectedProcedure = eventName;
+        }
+        vm.Document.Text.ReplaceLineEndings("\n").Should().Contain(
+            $"Private Sub Command1_{eventName}({arguments})\n\nEnd Sub");
+    }
+
+    [AvaloniaFact]
+    public void An_elements_Index_is_retained_when_its_frm_is_opened_from_disk()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, $"element-{Guid.NewGuid():N}.frm");
+        try
+        {
+            File.WriteAllText(path, FormWithCode.Replace("      Caption", "      Index = 0\r\n      Caption"));
+            var form = new FormDeserializer().Deserialize(Project, File.ReadAllText(path), NullSink.Instance)!;
+            var vm = Open(form);
+            vm.SelectedObject = "Command1";
+            vm.SelectedProcedure = "Click";
+            vm.Document.Text.ReplaceLineEndings("\n").Should().Contain("Private Sub Command1_Click(Index As Integer)\n");
+        }
+        finally { File.Delete(path); }
+    }
+
+    [AvaloniaFact]
+    public void A_double_click_carries_a_control_name_containing_an_underscore()
+    {
+        var form = new FormDeserializer().Deserialize(Project,
+            FormWithCode.Replace("Command1", "Command_one").Replace("      Caption", "      Index = 0\r\n      Caption"), NullSink.Instance)!;
+        var vm = Open(form);
+        navigate!(new CreateOrNavigateToSubEvent(form, "Command_one_Click", "Command_one", "Click"));
+        vm.Document.Text.ReplaceLineEndings("\n").Should().Contain("Private Sub Command_one_Click(Index As Integer)\n");
     }
 
     // A UserControl's root offers its own events, with the arguments VB6's stubs declare (measured on VB6 SP6, #1632). It

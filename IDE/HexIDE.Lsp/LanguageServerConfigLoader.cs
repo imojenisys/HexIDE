@@ -1,6 +1,8 @@
 using HexIDE.Conversations;
 using HexIDE.IDE;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 
 using HexIDE.Lsp.Messages;
@@ -45,7 +47,11 @@ public sealed class LanguageServerConfigLoader
     /// <summary>The shape this loader understands. A file declaring a later one is left alone.</summary>
     public const int SupportedVersion = 1;
 
+    private const string PathEscapeHint = """Use forward slashes (C:/tools/new/...) or doubled backslashes (C:\\tools\\new\\...).""";
+    private const string PathControlWarning = "Field '{0}' contains an escaped control character; likely intended backslash path: {1}. The value is unchanged.";
+
     private readonly string _filePath;
+    private string? _previewText;
     private readonly ILogger<LanguageServerConfigLoader> _logger;
 
     public LanguageServerConfigLoader(ILogger<LanguageServerConfigLoader> logger)
@@ -58,6 +64,14 @@ public sealed class LanguageServerConfigLoader
         _logger = logger;
     }
 
+    /// <summary>Validates an editor preview through the ordinary file loader, without writing or announcing commands.</summary>
+    public LanguageServerConfigResult Preview(string text, IReadOnlyList<LanguageServerEntry> defaults,
+        IWorkspaceArtifactProviderRegistry? artifactProviders = null)
+    {
+        var preview = new LanguageServerConfigLoader(_filePath, _logger) { _previewText = text };
+        return preview.Load(defaults, artifactProviders: artifactProviders);
+    }
+
     public static string DefaultFilePath()
     {
         return UserDataPath.For("lsp-servers.json");
@@ -67,9 +81,10 @@ public sealed class LanguageServerConfigLoader
     /// The defaults with the user's file layered over them, and everything that was wrong with it.
     ///
     /// <para>
-    /// A user entry sharing a default's id <b>replaces</b> that default rather than merging field by field.
-    /// Field-level merge would mean an entry could not remove something the default set, and would make the
-    /// effective configuration something the user cannot read off their own file.
+    /// A complete user entry sharing a default's id replaces that default rather than merging field by
+    /// field, so its effective configuration can still be read off the user's own file. Only an entry
+    /// omitting required fields adjusts the default. Explicit null clears a field; objects and arrays
+    /// replace the whole field. Neither the file nor the defaults are changed.
     /// </para>
     /// </summary>
     public LanguageServerConfigResult Load(
@@ -77,16 +92,31 @@ public sealed class LanguageServerConfigLoader
         IWorkspaceArtifactProviderRegistry? artifactProviders = null)
     {
         var problems = new List<LanguageServerConfigProblem>();
-        var file = ReadUserFile(problems);
+        var file = ReadUserFile(problems, out var writtenEntries);
         var user = file?.Servers ?? [];
 
-        // Defaults first, then user entries replace by id and new ones append. Ordinal because an id is an
+        // Defaults first, then user entries replace or adjust by id and new ones append. Ordinal because an id is an
         // identifier, not prose — two ids differing only by case are two servers.
         var byId = new Dictionary<string, LanguageServerEntry>(StringComparer.Ordinal);
         var order = new List<string>();
 
-        foreach (var entry in defaults.Concat(user))
+        foreach (var original in defaults.Concat(user))
         {
+            var entry = original;
+            if (writtenEntries.TryGetValue(original, out var written)
+                && original.Id is { } writtenId && byId.TryGetValue(writtenId, out var baseline)
+                && OmitsRequiredFields(written, original.Transport ?? baseline.Transport))
+            {
+                var merged = JsonSerializer.SerializeToNode(baseline,
+                    LanguageServerConfigJsonContext.Default.LanguageServerEntry)!.AsObject();
+                foreach (var field in written.EnumerateObject())
+                    merged[field.Name] = JsonNode.Parse(field.Value.GetRawText(), documentOptions: new JsonDocumentOptions
+                    {
+                        CommentHandling = JsonCommentHandling.Skip,
+                        AllowTrailingCommas = true,
+                    });
+                entry = merged.Deserialize(LanguageServerConfigJsonContext.Default.LanguageServerEntry)!;
+            }
             if (!Validate(entry, problems, artifactProviders, out var id))
                 continue;
             if (!byId.ContainsKey(id))
@@ -94,6 +124,8 @@ public sealed class LanguageServerConfigLoader
             byId[id] = entry;
         }
 
+        // Before the announcement, because added arguments change what runs.
+        ApplyArgumentOverrides(byId, file?.Arguments, problems);
         var entries = order.Select(id => byId[id]).ToList();
         AnnounceUnseenCommands(entries, seen, problems);   // instance: it logs
 
@@ -116,13 +148,95 @@ public sealed class LanguageServerConfigLoader
                     "capture.globalPayloadBytes is a ceiling across every connection, so it is only read "
                   + "from the top level of the file. The value on this entry has been ignored.",
                     false,
-                    LanguageServerConfigProblemKind.IgnoredField));
+                    LanguageServerConfigProblemKind.IgnoredField).WithDetails("GlobalCapture", "capture.globalPayloadBytes"));
             }
 
             perServer[id] = ReadCaptureLimits(override_, id, limits, problems, includeGlobalCeiling: false);
         }
 
         return new LanguageServerConfigResult(entries, problems, limits, perServer);
+    }
+
+    private static bool OmitsRequiredFields(JsonElement written, string? transport)
+    {
+        if (!written.TryGetProperty("extensions", out _)
+            || !written.TryGetProperty("languageId", out _)
+            || !written.TryGetProperty("transport", out _))
+            return true;
+
+        var destination = transport?.Trim().ToLowerInvariant() switch
+        {
+            "stdio" => "command",
+            "pipe" => "pipeName",
+            "websocket" => "endpoint",
+            _ => null,
+        };
+        return destination is not null && !written.TryGetProperty(destination, out _);
+    }
+
+    /// <summary>
+    /// Adds the file's top-level <c>arguments</c> to the entries they name (#262), after the user's entries have been
+    /// layered over the defaults, so an override follows the id whichever entry holds it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Added, never replacing.</b> The point is the entries whose command a user cannot write, and replacing their
+    /// arguments would drop whatever the found command was given.
+    /// </para>
+    /// <para>
+    /// <b>In the entry's own form, or not at all.</b> Two lists join, and two command lines join with a space. A list
+    /// added to a command line, or the reverse, is reported and left out. Joining them would mean quoting the list or
+    /// splitting the line, and the server would then receive HexIDE's guess at its arguments. An entry with no
+    /// arguments takes the override as written, which is the bundled server's case.
+    /// </para>
+    /// <para>
+    /// The entry is copied before it changes, since a default is an instance the caller still holds.
+    /// </para>
+    /// </remarks>
+    private static void ApplyArgumentOverrides(Dictionary<string, LanguageServerEntry> byId,
+        Dictionary<string, ServerArguments>? overrides, List<LanguageServerConfigProblem> problems)
+    {
+        if (overrides is not { Count: > 0 }) return;
+
+        foreach (var (id, added) in overrides.OrderBy(o => o.Key, StringComparer.Ordinal))
+        {
+            if (!byId.TryGetValue(id, out var entry))
+            {
+                problems.Add(new LanguageServerConfigProblem(id,
+                    $"\"arguments\" names '{id}', but no server has that id. They have been ignored.", false).WithDetails("ArgumentsUnknown", "arguments", id));
+                continue;
+            }
+            if (entry.Enabled == false) continue; // already reported as switched off, and nothing will run
+            if (LaunchedCommandOf(entry) is null)
+            {
+                problems.Add(new LanguageServerConfigProblem(id,
+                    $"\"arguments\" names '{id}', which {HexIDE.IDE.Distribution.DisplayName} connects to but starts no process for. They have been ignored.",
+                    false, LanguageServerConfigProblemKind.IgnoredField).WithDetails("ArgumentsNoProcess", "arguments", id));
+                continue;
+            }
+            if (added is null || added.ToString().Length == 0) continue;
+
+            var own = entry.Arguments;
+            ServerArguments? combined =
+                own is null || (own.List is null && string.IsNullOrWhiteSpace(own.Text)) || own.List is { Length: 0 } ? added
+                : own.List is { } ownList && added.List is { } addedList ? new ServerArguments(null, [.. ownList, .. addedList])
+                : own.List is null && added.List is null ? new ServerArguments($"{own.Text!.Trim()} {added.Text!.Trim()}", null)
+                : null;
+            if (combined is null)
+            {
+                problems.Add(new LanguageServerConfigProblem(id,
+                    $"\"arguments\" for '{id}' must be written in the same form as the entry's own: "
+                  + $"{(own!.List is null ? "a command-line string" : "an array of strings")}. They have been ignored.",
+                    false).WithDetails(own!.List is null ? "ArgumentsString" : "ArgumentsArray", "arguments", id));
+                continue;
+            }
+
+            var copy = JsonSerializer.Deserialize(
+                JsonSerializer.Serialize(entry, LanguageServerConfigJsonContext.Default.LanguageServerEntry),
+                LanguageServerConfigJsonContext.Default.LanguageServerEntry)!;
+            copy.Arguments = combined;
+            byId[id] = copy;
+        }
     }
 
     /// <summary>
@@ -146,15 +260,22 @@ public sealed class LanguageServerConfigLoader
         var requested = written?.Over(baseline, includeGlobalCeiling) ?? baseline;
         var clamped = requested.Clamped(out var adjustments);
 
-        foreach (var adjustment in adjustments)
+        // Match Clamped's order to retain its English log messages.
+        var adjustmentIndex = 0;
+        void Report(string field, long before, long after)
         {
-            problems.Add(new LanguageServerConfigProblem(
-                entryId,
-                entryId is null
-                    ? $"capture: {adjustment}"
-                    : $"capture (this server): {adjustment}",
-                false));
+            if (before == after) return;
+            problems.Add(new LanguageServerConfigProblem(entryId,
+                $"{(entryId is null ? "capture" : "capture (this server)")}: "
+              + $"{adjustments[adjustmentIndex++]}", false)
+                .WithDetails(before < after ? "CaptureBelow" : "CaptureAbove",
+                    entryId is null ? $"capture.{field}" : $"'{entryId}': capture.{field}", before, after));
         }
+        Report("envelopeEntries", requested.EnvelopeEntries, clamped.EnvelopeEntries);
+        Report("frameBytes", requested.FrameBytes, clamped.FrameBytes);
+        Report("globalPayloadBytes", requested.GlobalPayloadBytes, clamped.GlobalPayloadBytes);
+        Report("payloadBytesPerConnection", requested.PayloadBytesPerConnection, clamped.PayloadBytesPerConnection);
+        Report("prologueEntries", requested.PrologueEntries, clamped.PrologueEntries);
 
         return clamped;
     }
@@ -196,9 +317,9 @@ public sealed class LanguageServerConfigLoader
 
             problems.Add(new LanguageServerConfigProblem(
                 id,
-                $"'{id}' will run a command HexIDE has not run before: {command}",
+                $"'{id}' will run a command {HexIDE.IDE.Distribution.DisplayName} has not run before: {command}",
                 false,
-                LanguageServerConfigProblemKind.UnseenCommand));
+                LanguageServerConfigProblemKind.UnseenCommand).WithDetails("UnseenCommand", id, command));
 
             // Warning, not debug, and deliberately not only carried in the problem list. Until something
             // renders these (#259), the log is the ONLY place this reaches a person — and a notice nobody
@@ -233,12 +354,13 @@ public sealed class LanguageServerConfigLoader
     /// executable.
     /// </para>
     /// </summary>
-    private static string? LaunchedCommandOf(LanguageServerEntry entry)
+    public static string? LaunchedCommandOf(LanguageServerEntry entry)
     {
         var transport = entry.Transport?.Trim();
         var launches =
             string.Equals(transport, "stdio", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(transport, "pipe", StringComparison.OrdinalIgnoreCase);
+            || string.Equals(transport, "pipe", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(transport, "tcp", StringComparison.OrdinalIgnoreCase);
 
         if (!launches) return null;
 
@@ -266,11 +388,14 @@ public sealed class LanguageServerConfigLoader
     /// method that returned entries alone would have to read it twice or hand them out separately — either
     /// of which lets the two halves disagree about which file they came from.
     /// </remarks>
-    private LanguageServerConfigFile? ReadUserFile(List<LanguageServerConfigProblem> problems)
+    private LanguageServerConfigFile? ReadUserFile(List<LanguageServerConfigProblem> problems,
+        out Dictionary<LanguageServerEntry, JsonElement> writtenEntries)
     {
+        writtenEntries = [];
+        string? text = null;
         try
         {
-            if (!File.Exists(_filePath))
+            if (_previewText is null && !File.Exists(_filePath))
             {
                 _logger.LogDebug("No language server configuration at {Path}; using defaults", _filePath);
                 return null;
@@ -285,11 +410,12 @@ public sealed class LanguageServerConfigLoader
                 AllowTrailingCommas = true,
             };
 
-            var text = File.ReadAllText(_filePath);
+            text = _previewText ?? File.ReadAllText(_filePath);
             var file = JsonSerializer.Deserialize<LanguageServerConfigFile>(text, options);
             if (file is null)
             {
-                problems.Add(new LanguageServerConfigProblem(null, "The configuration file is empty.", true));
+                problems.Add(new LanguageServerConfigProblem(null, "The configuration file is empty.", true)
+                    .WithDetails("EmptyFile"));
                 return null;
             }
 
@@ -300,22 +426,80 @@ public sealed class LanguageServerConfigLoader
                 // add-in consent store makes about a future schema.
                 problems.Add(new LanguageServerConfigProblem(
                     null,
-                    $"The configuration declares version {file.Version}, but this HexIDE understands "
+                    $"The configuration declares version {file.Version}, but this {HexIDE.IDE.Distribution.DisplayName} understands "
                   + $"{SupportedVersion}. It has been ignored; the built-in servers are in use.",
-                    true));
+                    true).WithDetails("FutureVersion", file.Version, SupportedVersion));
                 return null;
             }
 
+            // Keep field presence: deserialization alone cannot distinguish absent from explicit null.
+            using var document = JsonDocument.Parse(text, new JsonDocumentOptions
+            {
+                CommentHandling = JsonCommentHandling.Skip,
+                AllowTrailingCommas = true,
+            });
+            if (file.Servers is { } servers && document.RootElement.TryGetProperty("servers", out var writtenServers))
+                for (var i = 0; i < servers.Length; i++)
+                    writtenEntries[servers[i]] = writtenServers[i].Clone();
+
+            foreach (var entry in file.Servers ?? [])
+            {
+                CheckPath(entry, "command", entry.Command, problems);
+                CheckPath(entry, "arguments", entry.Arguments?.Text, problems);
+                if (entry.Arguments?.List is { } arguments)
+                    for (var i = 0; i < arguments.Length; i++)
+                        CheckPath(entry, $"arguments[{i}]", arguments[i], problems);
+                if (entry.Environment is { } environment)
+                    foreach (var variable in environment)
+                        CheckPath(entry, $"environment.{variable.Key}", variable.Value, problems);
+                CheckPath(entry, "workingDirectory", entry.WorkingDirectory, problems);
+                CheckPath(entry, "workspaceArtifact.path", entry.WorkspaceArtifact?.Path, problems);
+            }
+
             return file;
+        }
+        catch (JsonException ex) when (text is not null && ex.LineNumber is { } line && ex.BytePositionInLine is { } position)
+        {
+            // The parser counts UTF-8 bytes from zero; the editor counts characters from one.
+            var bytes = Encoding.UTF8.GetBytes(text);
+            var start = 0;
+            // Clamped, because a throw here would escape the loader: this is already the catch.
+            for (long current = 0; current < line && start < bytes.Length; current++)
+            {
+                var next = Array.IndexOf(bytes, (byte)'\n', start);
+                if (next < 0) break;
+                start = next + 1;
+            }
+            var length = (int)Math.Clamp(position, 0, bytes.Length - start);
+            var column = Encoding.UTF8.GetCharCount(bytes.AsSpan(start, length)) + 1;
+            var badEscape = ex.Message.Contains("invalid escapable character", StringComparison.Ordinal)
+                || ex.Message.Contains("hex digit following", StringComparison.Ordinal);
+            var message = $"The configuration file '{_filePath}' contains invalid JSON at line {line + 1}, column {column}. Path: {ex.Path}";
+            if (badEscape) message += " " + PathEscapeHint;
+            // DISetup logs every problem the loader returns.
+            problems.Add(new LanguageServerConfigProblem(null, message, true)
+                .WithDetails(badEscape ? "JsonSyntaxEscape" : "JsonSyntax", _filePath, line + 1, column, ex.Path ?? ""));
+            return null;
         }
         catch (Exception ex)
         {
             // Every entry is lost, which is why the message has to reach a person and not only the log.
             _logger.LogWarning(ex, "Could not read language server configuration at {Path}", _filePath);
             problems.Add(new LanguageServerConfigProblem(
-                null, $"The configuration file could not be read: {ex.Message}", true));
+                null, $"The configuration file could not be read: {ex.Message}", true).WithDetails("ReadFailed", _filePath, ex.Message));
             return null;
         }
+    }
+
+    private void CheckPath(LanguageServerEntry entry, string field, string? value,
+        List<LanguageServerConfigProblem> problems)
+    {
+        if (value is null || value.IndexOfAny(['\t', '\n', '\r', '\b', '\f']) < 0) return;
+
+        var intended = value.Replace("\t", @"\t").Replace("\n", @"\n").Replace("\r", @"\r")
+            .Replace("\b", @"\b").Replace("\f", @"\f");
+        problems.Add(new LanguageServerConfigProblem(entry.Id,
+            string.Format(PathControlWarning, field, intended), false).WithDetails("PathControlWarning", field, intended));
     }
 
     /// <summary>
@@ -356,7 +540,7 @@ public sealed class LanguageServerConfigLoader
             Note("environment", entry.Environment);
         }
 
-        if (transport is "stdio" or "websocket")
+        if (transport is "stdio" or "websocket" or "tcp")
         {
             Note("pipeName", entry.PipeName);
             Note("pipeRole", entry.PipeRole);
@@ -365,8 +549,10 @@ public sealed class LanguageServerConfigLoader
         if (transport is "stdio" or "pipe")
         {
             Note("endpoint", entry.Endpoint);
-            Note("websocketRole", entry.WebSocketRole);
         }
+
+        if (transport != "websocket") Note("websocketRole", entry.WebSocketRole);
+        if (transport != "tcp") Note("tcpRole", entry.TcpRole);
 
         if (ignored.Count == 0) return;
 
@@ -375,8 +561,26 @@ public sealed class LanguageServerConfigLoader
             $"{(ignored.Count == 1 ? "Field" : "Fields")} {string.Join(", ", ignored)} "
           + $"{(ignored.Count == 1 ? "does" : "do")} not apply to transport '{transport}' and will be ignored.",
             false,
-            LanguageServerConfigProblemKind.IgnoredField));
+            LanguageServerConfigProblemKind.IgnoredField).WithDetails("IgnoredFields", entry.Transport!, string.Join(", ", ignored)));
     }
+
+    /// <summary>
+    /// The checks an entry of the file gets, for one an add-in contributes (#2760), and the notice of a command HexIDE has
+    /// not run before, so a contributed launch is shown before it runs as a hand-written one is.
+    /// </summary>
+    /// <returns>Whether the entry can be used. What was wrong with it is added to <paramref name="problems"/> either way.</returns>
+    public bool ValidateContributed(
+        LanguageServerEntry entry, List<LanguageServerConfigProblem> problems, LanguageServerCommandStore? seen = null,
+        IWorkspaceArtifactProviderRegistry? artifactProviders = null)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        ArgumentNullException.ThrowIfNull(problems);
+        if (!Validate(entry, problems, artifactProviders, out _)) return false;
+
+        AnnounceUnseenCommands([entry], seen, problems);
+        return true;
+    }
+
     private static bool Validate(
         LanguageServerEntry entry, List<LanguageServerConfigProblem> problems,
         IWorkspaceArtifactProviderRegistry? artifactProviders, out string id)
@@ -386,7 +590,7 @@ public sealed class LanguageServerConfigLoader
         if (string.IsNullOrWhiteSpace(entry.Id))
         {
             problems.Add(new LanguageServerConfigProblem(
-                null, "An entry has no id, so nothing can refer to it. It has been ignored.", true));
+                null, "An entry has no id, so nothing can refer to it. It has been ignored.", true).WithDetails("MissingId", "id"));
             return false;
         }
 
@@ -400,7 +604,8 @@ public sealed class LanguageServerConfigLoader
               + $"{string.Join(", ", entry.Unrecognized.Keys.Order(StringComparer.Ordinal))}. "
               + "Ignored — check the spelling.",
                 false,
-                LanguageServerConfigProblemKind.UnrecognisedField));
+                LanguageServerConfigProblemKind.UnrecognisedField)
+                .WithDetails(entry.Unrecognized.Count == 1 ? "UnknownField" : "UnknownFields", string.Join(", ", entry.Unrecognized.Keys.Order(StringComparer.Ordinal))));
 
         // Reported, and then survivable. A trace level nobody can read is a mistake worth naming, and it
         // is emphatically not a reason to refuse the server: the entry still says how to reach a working
@@ -415,7 +620,24 @@ public sealed class LanguageServerConfigLoader
               + $"'{LspTraceValue.Off}', '{LspTraceValue.Messages}' or '{LspTraceValue.Verbose}'. "
               + "Tracing is off for this server.",
                 false,
-                LanguageServerConfigProblemKind.Configuration));
+                LanguageServerConfigProblemKind.Configuration)
+                .WithDetails("Trace", entry.Id!, trace,
+                    LspTraceValue.Off, LspTraceValue.Messages, LspTraceValue.Verbose));
+        }
+
+        // Reported and survivable, as trace is. An approval setting nobody can read asks before every call, which is the
+        // safe reading of a typo in it (#4257).
+        if (entry.ChatTools is { } chatTools && ServerChatToolsSetting.Parse(chatTools) is null)
+        {
+            problems.Add(new LanguageServerConfigProblem(
+                entry.Id,
+                $"'{entry.Id}' sets chatTools to '{chatTools.Trim()}', which is not one of "
+              + $"'{ServerChatToolsSetting.Hints}', '{ServerChatToolsSetting.Ask}' or '{ServerChatToolsSetting.Off}'. "
+              + "AI Chat asks before every call to this server's tools.",
+                false,
+                LanguageServerConfigProblemKind.Configuration)
+                .WithDetails("ChatTools", entry.Id!, chatTools.Trim(),
+                    ServerChatToolsSetting.Hints, ServerChatToolsSetting.Ask, ServerChatToolsSetting.Off));
         }
 
         if (string.Equals(entry.Transport?.Trim(), "pipe", StringComparison.OrdinalIgnoreCase)
@@ -428,7 +650,8 @@ public sealed class LanguageServerConfigLoader
                 $"'{entry.Id}' asks for pipeRole '{pipeRole.Trim()}', which is not one of "
               + "'connect' or 'listen'. Falling back to 'connect' for this server.",
                 false,
-                LanguageServerConfigProblemKind.Configuration));
+                LanguageServerConfigProblemKind.Configuration)
+                .WithDetails("PipeRole", entry.Id!, "pipeRole", pipeRole, "connect", "listen"));
         }
 
         // Same judgement as trace above, and for the same reason: reported, then survivable. A server that
@@ -438,13 +661,16 @@ public sealed class LanguageServerConfigLoader
             entry.Id!, entry.WorkspaceArtifact, artifactProviders, out _, out var artifactProblems);
         problems.AddRange(artifactProblems);
 
+        ProjectImportSpecReader.TryRead(entry.Id!, entry.ProjectImport, out _, out var importProblems);
+        problems.AddRange(importProblems);
+
         if (entry.Enabled == false)
         {
             problems.Add(new LanguageServerConfigProblem(
                 entry.Id,
                 $"'{entry.Id}' is switched off (\"enabled\": false) and was not registered.",
                 false,
-                LanguageServerConfigProblemKind.Disabled));
+                LanguageServerConfigProblemKind.Disabled).WithDetails("Disabled", entry.Id!, "\"enabled\": false"));
             return true;
         }
 
@@ -465,6 +691,30 @@ public sealed class LanguageServerConfigLoader
             case "stdio":
                 if (string.IsNullOrWhiteSpace(entry.Command)) missing.Add("command");
                 break;
+            case "tcp":
+                if (string.IsNullOrWhiteSpace(entry.Endpoint)) missing.Add("endpoint");
+                else if (!TcpLspTransport.TryAddress(entry.Endpoint.Trim(), out var address)
+                    || (string.Equals(entry.TcpRole?.Trim(), "listen", StringComparison.OrdinalIgnoreCase)
+                        && !address!.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                        && !System.Net.IPAddress.TryParse(address.Host.Trim('[', ']'), out _))
+                    || (!string.Equals(entry.TcpRole?.Trim(), "listen", StringComparison.OrdinalIgnoreCase)
+                        && address!.Port == 0))
+                {
+                    problems.Add(new LanguageServerConfigProblem(entry.Id,
+                        "TCP requires tcp://host:port; listen requires localhost or an IP address, and connect requires a nonzero port.", true)
+                        .WithDetails("Tcp", "endpoint=tcp://host:port; listen=localhost/IP; connect port=1..65535"));
+                    return false;
+                }
+                if (!string.IsNullOrWhiteSpace(entry.TcpRole)
+                    && !string.Equals(entry.TcpRole.Trim(), "listen", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(entry.TcpRole.Trim(), "connect", StringComparison.OrdinalIgnoreCase))
+                {
+                    problems.Add(new LanguageServerConfigProblem(entry.Id,
+                        "tcpRole must be connect or listen. The entry has been ignored.", true)
+                        .WithDetails("Tcp", "tcpRole=connect|listen"));
+                    return false;
+                }
+                break;
             case "websocket":
                 if (string.IsNullOrWhiteSpace(entry.Endpoint)) missing.Add("endpoint");
                 break;
@@ -481,7 +731,8 @@ public sealed class LanguageServerConfigLoader
                     problems.Add(new LanguageServerConfigProblem(
                         entry.Id,
                         PipeNameLimit.Refusal(entry.PipeName!.Trim()) + " The entry has been ignored.",
-                        true));
+                        true).WithDetails(OperatingSystem.IsWindows() ? "PipeTooLong" : "PipeTooLongUnix",
+                            PipeNameLimit.RefusalArguments(entry.PipeName!.Trim())));
                     return false;
                 }
                 break;
@@ -491,9 +742,9 @@ public sealed class LanguageServerConfigLoader
             default:
                 problems.Add(new LanguageServerConfigProblem(
                     entry.Id,
-                    $"Unknown transport '{entry.Transport}'. Expected stdio, pipe or websocket. "
+                    $"Unknown transport '{entry.Transport}'. Expected stdio, pipe, websocket or tcp. "
                   + "The entry has been ignored.",
-                    true));
+                    true).WithDetails("UnknownTransport", entry.Transport!, "stdio", "pipe", "websocket", "tcp"));
                 return false;
         }
 
@@ -504,7 +755,7 @@ public sealed class LanguageServerConfigLoader
             entry.Id,
             $"Missing required {(missing.Count == 1 ? "field" : "fields")}: {string.Join(", ", missing)}. "
           + "The entry has been ignored.",
-            true));
+            true).WithDetails("MissingFields", string.Join(", ", missing)));
         return false;
     }
 }

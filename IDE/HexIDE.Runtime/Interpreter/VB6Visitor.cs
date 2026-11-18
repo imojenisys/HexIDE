@@ -24,7 +24,7 @@ public abstract class VB6Visitor<T> : VB6BaseVisitor<T>
     /// <c>a(3.5)</c> is <c>a(4)</c>), a numeric string read (<c>a(" 3 ")</c>), <c>True</c> -1, <c>Empty</c> 0,
     /// <c>Null</c> 94, <c>"x"</c> 13, and beyond a Long 6, all before the bounds are checked. One exception to CLng:
     /// an omitted <c>Optional</c> Variant is 13, where CLng reads it as 448 (measured, and so is <c>CVErr(5)</c>,
-    /// which HexIDE has no value for yet).
+    /// which also raises 13).
     /// </summary>
     /// <remarks>
     /// It accepted only an Integer, a Byte or an integral string, and refused anything else as an untrappable
@@ -32,7 +32,7 @@ public abstract class VB6Visitor<T> : VB6BaseVisitor<T>
     /// </remarks>
     public static int Subscript(Vb6Value value)
     {
-        if (value.IsMissing)
+        if (value.IsMissing || value.Type == Vb6Value.ValueType.Error)
             throw new VBRunTimeException(VBStandardError.TypeMismatch);
         return Convert.ToInt32(VB6BuiltIns.NarrowNum(value, Vb6Value.ValueType.Long).Value);
     }
@@ -45,7 +45,7 @@ public abstract class VB6Visitor<T> : VB6BaseVisitor<T>
     /// </summary>
     public static int ControlArrayIndex(Vb6Value value)
     {
-        if (value.IsMissing)
+        if (value.IsMissing || value.Type == Vb6Value.ValueType.Error)
             throw new VBRunTimeException(VBStandardError.TypeMismatch);
         var index = Convert.ToInt32(VB6BuiltIns.NarrowNum(value, Vb6Value.ValueType.Integer).Value);
         if (index < 0)
@@ -155,16 +155,18 @@ public abstract class VB6Visitor<T> : VB6BaseVisitor<T>
         throw new Exception("Type mismatch");
     }
 
-    public Vb6Value.ValueType ExtractType(VB6Parser.AsTypeClauseContext? asTypeClause, bool isArray)
+    public Vb6Value.ValueType ExtractType(VB6Parser.AsTypeClauseContext? asTypeClause, bool isArray, VbaBitness bitness = VbaBitness.None)
     {
         Vb6Value.ValueType type = Vb6Value.ValueType.EmptyVariant;
         if (asTypeClause != null)
         {
             if (asTypeClause.NEW() != null)
                 throw new NotImplementedException("An array declared As New is not implemented (#1482)");
-            if (asTypeClause.fieldLength() != null)
+            if (asTypeClause.fieldLength() != null && asTypeClause.type()?.baseType()?.STRING() is null)
                 throw new NotImplementedException("fieldLength as type not implemented");
-            if (asTypeClause.type().complexType() != null)
+            if (BaseTypeMapper.VbaType(asTypeClause.type().complexType()?.GetText(), bitness) is { } wide)
+                type = wide;
+            else if (asTypeClause.type().complexType() != null)
                 // A UDT/Enum param or return type — one generic UDT ValueType (the concrete identity is on the
                 // value). Enough for ByRef aliasability (both sides UDT) and to skip numeric coercion; a UDT-typed
                 // Dim itself is built directly in VisitVariableStmt, not here.

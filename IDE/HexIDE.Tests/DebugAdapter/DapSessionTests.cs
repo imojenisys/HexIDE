@@ -47,14 +47,105 @@ public class DapSessionTests
         await pending.WaitAsync(Patience, Token);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Evaluate_delivery_waits_for_a_full_event_queue_or_fails_when_session_ends(bool endSession)
+    {
+        await using var peer = new Peer(new() { EventCapacity = 1 });
+        await using var session = new DapSession(peer.Client, updateCapacity: 1);
+        var stop = await Stop(peer, session);
+        var evaluation = session.EvaluateAsync(stop, 0, "? output", Token);
+        await peer.Reply(await peer.Receive(), """{"result":""}""");
+        await evaluation.WaitAsync(Patience, Token);
+        // One update occupies the session queue, one publication waits for room, and one event
+        // fills the wire queue. Count confirms backpressure before the barrier is requested.
+        for (var i = 0; i < 3; i++)
+            await peer.Send(JsonSerializer.Serialize(new { seq = 20 + i, type = "event", @event = "output", body = new { output = i.ToString(System.Globalization.CultureInfo.InvariantCulture) } }));
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        deadline.CancelAfter(Patience);
+        while (!peer.Client.Events.TryPeek(out var queued) || queued.Sequence != 22)
+            await Task.Delay(10, deadline.Token);
+        session.Updates.Count.Should().Be(1);
+        peer.Client.Events.Count.Should().Be(1);
+        var delivery = session.WaitForDeliveryAsync();
+        delivery.IsCompleted.Should().BeFalse("a full queue must backpressure the barrier");
+        if (endSession)
+        {
+            await session.DisposeAsync().AsTask().WaitAsync(Patience, Token);
+            await ((Func<Task>)(() => delivery.WaitAsync(Patience, Token))).Should().ThrowAsync<IOException>();
+            return;
+        }
+        var printed = new System.Text.StringBuilder();
+        while (true)
+        {
+            var update = await session.Updates.ReadAsync(deadline.Token);
+            if (update.Event?.DeliveryBarrier is { } delivered)
+            {
+                printed.ToString().Should().Be("012");
+                delivered.TrySetResult();
+                break;
+            }
+            if (update.Event?.Event == "output") printed.Append(update.Event.Body!.Value.GetProperty("output").GetString());
+        }
+        await delivery.WaitAsync(Patience, Token);
+    }
+
     [Fact]
-    public async Task Configures_before_awaiting_launch_and_preserves_breakpoint_verification()
+    public async Task Initialize_advertises_invalidated_events()
+    {
+        await using var peer = new Peer();
+        await using var session = new DapSession(peer.Client);
+        var pending = session.LaunchAsync("external", Args, [], Token);
+        var initialize = await peer.Receive();
+        var advertised = initialize.GetProperty("arguments").TryGetProperty("supportsInvalidatedEvent", out var value)
+            && value.ValueKind == JsonValueKind.True;
+        await peer.Reply(initialize);
+        var launch = await peer.Receive();
+        await peer.Send("""{"seq":2,"type":"event","event":"initialized"}""");
+        await peer.Reply(launch);
+        await pending.WaitAsync(Patience, Token);
+        advertised.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("stackTrace")]
+    [InlineData("scopes")]
+    [InlineData("variables")]
+    public async Task Invalidated_expires_pending_inspection_without_resuming(string command)
+    {
+        await using var peer = new Peer();
+        await using var session = new DapSession(peer.Client);
+        await Launch(peer, session);
+        var stop = await Stop(peer, session);
+        var pending = command switch
+        {
+            "stackTrace" => session.StackTraceAsync(stop, 1, Token),
+            "scopes" => session.ScopesAsync(stop, 0, Token),
+            _ => session.VariablesAsync(stop, 1, Token),
+        };
+        var request = await peer.Receive();
+        await peer.Send("""{"seq":12,"type":"event","event":"invalidated","body":{"areas":["variables"]}}""");
+        var update = await Until(session, u => u.Event?.Event == "invalidated");
+        await peer.Reply(request);
+        await ((Func<Task>)(() => pending)).Should().ThrowAsync<InvalidOperationException>();
+        update.Snapshot.State.Should().Be(DapSessionState.Stopped);
+        update.Snapshot.Stop!.ThreadId.Should().Be(stop.ThreadId);
+        update.Snapshot.Stop.Reason.Should().Be(stop.Reason);
+        session.IsCurrent(update.Snapshot.Stop).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Configures_before_awaiting_launch_and_preserves_breakpoint_verification(bool earlyLaunch)
     {
         await using var peer = new Peer();
         await using var session = new DapSession(peer.Client);
         var pending = session.LaunchAsync("external", Args, [new("/workspace/Module1.bas", [4])], Token);
         await peer.Reply(await peer.Receive(), """{"supportsConfigurationDoneRequest":true,"exceptionBreakpointFilters":[{"filter":"unhandled","default":true},{"filter":"all","default":false}],"future":42}""");
         var launch = await peer.Receive();
+        if (earlyLaunch) await peer.Reply(launch);
         await peer.Send("""{"seq":2,"type":"event","event":"initialized"}""");
         var bp = await peer.Receive();
         bp.GetProperty("command").GetString().Should().Be("setBreakpoints");
@@ -69,7 +160,7 @@ public class DapSessionTests
         var done = await peer.Receive();
         done.GetProperty("command").GetString().Should().Be("configurationDone");
         await peer.Reply(done);
-        await peer.Reply(launch);
+        if (!earlyLaunch) await peer.Reply(launch);
         var results = await pending.WaitAsync(Patience, Token);
         results[0].Body!.Value.GetProperty("breakpoints")[0].GetProperty("verified").GetBoolean().Should().BeFalse();
         session.Capabilities.GetProperty("future").GetInt32().Should().Be(42);
@@ -304,19 +395,40 @@ public class DapSessionTests
         peer.Client.Completion.IsCompleted.Should().BeTrue();
     }
 
-    [Fact]
-    public async Task Output_is_preserved_and_queue_overflow_faults_instead_of_losing_state()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Output_flood_backpressures_until_reader_resumes_and_inspection_completes(bool disposeWhileFull)
     {
-        await using var peer = new Peer();
-        await using var session = new DapSession(peer.Client, updateCapacity: 1);
-        await peer.Send("""{"seq":1,"type":"event","event":"output","body":{"category":"stdout","output":"hello\n"}}""");
-        var output = await Until(session, u => u.Event?.Event == "output");
-        output.Event!.Body!.Value.GetProperty("output").GetString().Should().Be("hello\n");
-        await peer.Send("""{"seq":2,"type":"event","event":"thread"}""");
-        await peer.Send("""{"seq":3,"type":"event","event":"thread"}""");
-        await session.Completion.WaitAsync(Patience, Token);
-        session.Snapshot.State.Should().Be(DapSessionState.Faulted);
-        session.Snapshot.Failure.Should().BeOfType<IOException>();
+        await using var session = DapSession.Start(new("dotnet")
+        {
+            Arguments = [typeof(Dap.TestAdapter.Program).Assembly.Location, "event-flood"],
+            ShutdownTimeout = TimeSpan.FromSeconds(1),
+        });
+        await session.LaunchAsync("external", Args, [], Token);
+        var stop = (await Until(session, u => u.Event?.Event == "stopped")).Snapshot.Stop!;
+        var inspection = session.StackTraceAsync(stop, 1, Token);
+        // Stop draining long enough to fill both bounded queues, with the reply behind the flood.
+        await Task.Delay(500, Token);
+        session.Snapshot.State.Should().Be(DapSessionState.Stopped);
+        session.Completion.IsCompleted.Should().BeFalse();
+        if (disposeWhileFull)
+        {
+            await session.DisposeAsync().AsTask().WaitAsync(Patience, Token);
+            await ((Func<Task>)(() => inspection)).Should().ThrowAsync<IOException>();
+            session.Snapshot.State.Should().Be(DapSessionState.Ended);
+            return;
+        }
+        var text = new System.Text.StringBuilder();
+        for (var i = 0; i < 10_000; i++)
+        {
+            var update = await Until(session, u => u.Event?.Event == "output");
+            update.Snapshot.State.Should().Be(DapSessionState.Stopped);
+            text.Append(update.Event!.Body!.Value.GetProperty("output").GetString());
+        }
+        text.ToString().Should().Be(string.Concat(Enumerable.Range(0, 10_000).Select(i => $"line {i}\n")));
+        (await inspection.WaitAsync(Patience, Token)).Body!.Value.GetProperty("stackFrames").GetArrayLength().Should().Be(2);
+        session.Snapshot.State.Should().Be(DapSessionState.Stopped);
     }
 
     [Fact]
@@ -403,6 +515,71 @@ public class DapSessionTests
         await secondPeer.Output.DisposeAsync();
         await second.Completion.WaitAsync(Patience, Token);
         second.Snapshot.Failure.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Exception_info_asks_for_the_stopped_thread_only_when_the_adapter_advertises_it()
+    {
+        await using var peer = new Peer();
+        await using var session = new DapSession(peer.Client);
+        await Launch(peer, session, capabilities: """{"supportsConfigurationDoneRequest":true,"supportsExceptionInfoRequest":true}""");
+        await peer.Send("""{"seq":11,"type":"event","event":"stopped","body":{"threadId":3,"reason":"exception"}}""");
+        var stop = (await Until(session, u => u.Event?.Event == "stopped")).Snapshot.Stop!;
+        var pending = session.ExceptionInfoAsync(stop, stop.ThreadId!.Value, Token);
+        var request = await peer.Receive();
+        request.GetProperty("command").GetString().Should().Be("exceptionInfo");
+        request.GetProperty("arguments").GetProperty("threadId").GetInt32().Should().Be(3);
+        await peer.Reply(request, """{"exceptionId":"6","description":"Overflow","breakMode":"unhandled"}""");
+        (await pending).Body!.Value.GetProperty("description").GetString().Should().Be("Overflow");
+
+        await using var silentPeer = new Peer();
+        await using var silent = new DapSession(silentPeer.Client);
+        await Launch(silentPeer, silent);
+        var silentStop = await Stop(silentPeer, silent);
+        await ((Func<Task>)(() => silent.ExceptionInfoAsync(silentStop, 1, Token))).Should().ThrowExactlyAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task Terminate_is_sent_only_when_the_adapter_advertises_it_and_leaves_the_session_open()
+    {
+        await using var peer = new Peer();
+        await using var session = new DapSession(peer.Client);
+        await Launch(peer, session, capabilities: """{"supportsConfigurationDoneRequest":true,"supportsTerminateRequest":true}""");
+        await Stop(peer, session);
+        var terminate = session.TerminateAsync(Token);
+        var request = await peer.Receive();
+        request.GetProperty("command").GetString().Should().Be("terminate");
+        await peer.Reply(request);
+        await terminate.WaitAsync(Patience, Token);
+        await peer.Send("""{"seq":12,"type":"event","event":"terminated"}""");
+        await Until(session, u => u.Event?.Event == "terminated");
+        peer.Client.Completion.IsCompleted.Should().BeFalse("the disconnect that follows still needs the connection");
+
+        await using var silentPeer = new Peer();
+        await using var silent = new DapSession(silentPeer.Client);
+        await Launch(silentPeer, silent);
+        await ((Func<Task>)(() => silent.TerminateAsync(Token))).Should().ThrowExactlyAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task Terminated_during_disconnect_keeps_stdin_open_until_the_response()
+    {
+        await using var peer = new Peer();
+        await using var session = new DapSession(peer.Client);
+        await Launch(peer, session);
+        var disconnect = session.DisconnectAsync(Token);
+        var request = await peer.Receive();
+        request.GetProperty("command").GetString().Should().Be("disconnect");
+        await peer.Send("""{"seq":12,"type":"event","event":"terminated"}""");
+        await Until(session, update => update.Event?.Event == "terminated");
+        var eof = peer.Input.ReadAsync(new byte[1], Token).AsTask();
+        // The adapter has consumed disconnect but deliberately has not answered it yet.
+        disconnect.IsCompleted.Should().BeFalse();
+        peer.Client.Completion.IsCompleted.Should().BeFalse();
+        eof.IsCompleted.Should().BeFalse();
+        await peer.Reply(request);
+        await disconnect.WaitAsync(Patience, Token);
+        (await eof.WaitAsync(Patience, Token)).Should().Be(0);
     }
 
     [Fact]

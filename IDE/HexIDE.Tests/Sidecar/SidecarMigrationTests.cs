@@ -32,18 +32,69 @@ public sealed class SidecarMigrationTests : IDisposable
     private readonly string dir = Path.Join(Path.GetTempPath(), "HexIDE.Tests.Sidecar", Guid.NewGuid().ToString("N"));
     private readonly IProjectManager projectManager = Substitute.For<IProjectManager>();
     private readonly List<ProjectDefinition> loaded = [];
+    private Action<ProjectDefinition>? beforeSidecar;
 
     public SidecarMigrationTests()
     {
         Directory.CreateDirectory(dir);
         projectManager.LoadedProjects.Returns(_ => loaded);
         projectManager.When(m => m.AddProject(Arg.Any<ProjectDefinition>()))
-            .Do(ci => loaded.Add(ci.Arg<ProjectDefinition>()));
+            .Do(ci =>
+            {
+                var project = ci.Arg<ProjectDefinition>();
+                loaded.Add(project);
+                beforeSidecar?.Invoke(project);
+            });
     }
 
     public void Dispose()
     {
         try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    [InlineData(2, true)]
+    [InlineData(3, false)]
+    [InlineData(3, true)]
+    public async Task LoadedNameMigratesMarksAndConditions(int version, bool hasNewEntry)
+    {
+        var vbp = Stage("Module=WName; Odd.bas");
+        File.WriteAllText(Path.Join(dir, "Odd.bas"), Crlf(
+            "Attribute VB_Name = \"QName\"", "Public Sub Go()", "    Debug.Print 1", "End Sub"));
+        var breakpointKey = version == 1 ? "breakpoints" : version == 2 ? "fileBreakpoints" : "codeBreakpoints";
+        var bookmarkKey = version == 1 ? "bookmarks" : version == 2 ? "fileBookmarks" : "codeBookmarks";
+        var breakpointLine = version == 2 ? 3 : 2;
+        var preferred = hasNewEntry ? $", \"QName\": [{(version == 2 ? 2 : 1)}]" : "";
+        var preferredCondition = hasNewEntry ? ", \"QName\": { \"1\": \"x = 2\" }" : "";
+        File.WriteAllText(SidecarPath, $$"""
+            { "version": {{version}},
+              "{{breakpointKey}}": { "WName": [{{breakpointLine}}]{{preferred}} },
+              "{{bookmarkKey}}": { "WName": [{{breakpointLine - 1}}] },
+              "codeBreakpointConditions": { "WName": { "2": "x = 1" }{{preferredCondition}} } }
+            """);
+        var opened = await Open(vbp);
+        var document = Doc(opened.Project, "QName");
+        opened.Breakpoints.GetBreakpoints(document).Should().Equal(hasNewEntry ? 2 : 3);
+        opened.Bookmarks.GetBookmarks(document).Should().Equal(2);
+        if (!hasNewEntry)
+        {
+            LineOf(document, 3).Should().Be("    Debug.Print 1");
+            opened.Breakpoints.GetCondition(document, 3).Should().Be("x = 1");
+        }
+        opened.Breakpoints.GetCondition(document, hasNewEntry ? 2 : 3).Should().Be(hasNewEntry ? "x = 2" : "x = 1");
+        await opened.Sidecar.SaveAsync(opened.Project);
+        var written = ReadJson(SidecarPath);
+        Lines(written, "codeBreakpoints", "QName").Should().Equal(hasNewEntry ? 1 : 2);
+        Lines(written, "codeBookmarks", "QName").Should().Equal(1);
+        File.ReadAllText(SidecarPath).Should().NotContain("WName");
+        var reopened = await Open(vbp);
+        var again = Doc(reopened.Project, "QName");
+        reopened.Breakpoints.GetBreakpoints(again).Should().Equal(hasNewEntry ? 2 : 3);
+        reopened.Bookmarks.GetBookmarks(again).Should().Equal(2);
+        reopened.Breakpoints.GetCondition(again, hasNewEntry ? 2 : 3).Should().Be(hasNewEntry ? "x = 2" : "x = 1");
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────────────────────────────────────
@@ -175,7 +226,7 @@ public sealed class SidecarMigrationTests : IDisposable
     private string SidecarPath => Path.Join(dir, "Shop.user.hexproj");
 
     private sealed record Opened(
-        ProjectDefinition Project, BookmarkService Bookmarks, BreakpointService Breakpoints, UserSidecarService Sidecar);
+        ProjectDefinition Project, BookmarkService Bookmarks, BreakpointService Breakpoints, UserSidecarService Sidecar, ProjectService Service);
 
     /// <summary>Opens the project as the IDE does, with this test's own stores and sidecar service.</summary>
     private async Task<Opened> Open(string vbp)
@@ -196,8 +247,7 @@ public sealed class SidecarMigrationTests : IDisposable
             return Task.FromResult(true);
         });
 
-        var service = new ProjectService(
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        var service = new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             Substitute.For<IEventBus>(),
             projectManager,
@@ -206,9 +256,9 @@ public sealed class SidecarMigrationTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             Substitute.For<HexIDE.Localization.ILocalizationService>(),
-            Substitute.For<IHeaderRefresher>());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
         await service.OpenProject(vbp);
-        return new Opened(loaded.Single(), bookmarks, breakpoints, sidecar);
+        return new Opened(loaded.Single(), bookmarks, breakpoints, sidecar, service);
     }
 
     private void Close(ProjectDefinition project) =>
@@ -219,7 +269,7 @@ public sealed class SidecarMigrationTests : IDisposable
 
     /// <summary>The 1-based line of a document as its code window numbers it, without its terminator.</summary>
     private static string LineOf(DocumentIdentity document, int line) =>
-        CodeWindowText.Of(document).Text.Split('\n')[line - 1].TrimEnd('\r');
+        DocumentContent.TextOf(document, null).Text.Split('\n')[line - 1].TrimEnd('\r');
 
     /// <summary>The 1-based line the statement was on in the document's code, which is how version 1 counted.</summary>
     private static int OldLineOf(string fileText, ModuleKind? kind, string statement)
@@ -306,7 +356,7 @@ public sealed class SidecarMigrationTests : IDisposable
         var opened = await Open(vbp);
         var document = Doc(opened.Project, name);
         var statement = Marked[name].Statement;
-        var line = Array.IndexOf(CodeWindowText.Of(document).Text.ReplaceLineEndings("\n").Split('\n'), statement) + 1;
+        var line = Array.IndexOf(DocumentContent.TextOf(document, null).Text.ReplaceLineEndings("\n").Split('\n'), statement) + 1;
         opened.Bookmarks.SetBookmarks(document, [line - 1]);
         opened.Breakpoints.SetDocument(document, [line]);
         await opened.Sidecar.SaveAsync(opened.Project);
@@ -387,11 +437,13 @@ public sealed class SidecarMigrationTests : IDisposable
         var vbp = Stage();
         const string original = """{ "version": 2, "fileBookmarks": { "Orders": [29] }, "fileBreakpoints": { "Orders": [30] } }""";
         File.WriteAllText(SidecarPath, original);
-        Directory.CreateDirectory(SidecarPath + ".tmp");
-        var opened = await Open(vbp);
+        var previousOpen = AtomicFileWriter.OpenStream.Value;
+        AtomicFileWriter.OpenStream.Value = _ => throw new IOException("Injected sidecar write refusal");
+        Opened opened;
+        try { opened = await Open(vbp); }
+        finally { AtomicFileWriter.OpenStream.Value = previousOpen; }
         File.ReadAllText(SidecarPath).Should().Be(original);
 
-        Directory.Delete(SidecarPath + ".tmp");
         await opened.Sidecar.SaveAsync(opened.Project);
         var written = ReadJson(SidecarPath);
         Lines(written, "codeBookmarks", "Orders").Should().Equal(4);
@@ -427,14 +479,6 @@ public sealed class SidecarMigrationTests : IDisposable
     /// GIVEN a sidecar entry for a module whose file cannot be found; WHEN the project is opened and later saved;
     /// THEN the entry is still in the sidecar, unchanged.
     /// </summary>
-    /// <remarks>
-    /// A module whose file is missing is still loaded, empty, so the code window shows the header it would have:
-    /// one line for a <c>.bas</c>, thirteen for a <c>.cls</c>. Its LOW lines are what catch an entry being placed
-    /// rather than carried, because they are lines of that empty composition and would pass a range check. A
-    /// UserControl is the kind whose missing file leaves no trace on the model at all, so it is here as well. A
-    /// PropertyPage is loaded by the same pass as a <c>.bas</c> and a <c>.cls</c> but has no header to put in
-    /// front of its code, so it is the kind a placed entry would not even move.
-    /// </remarks>
     [Theory]
     [InlineData("Module=Gone; Gone.bas")]
     [InlineData("Class=Gone; Gone.cls")]
@@ -454,11 +498,8 @@ public sealed class SidecarMigrationTests : IDisposable
         File.WriteAllText(SidecarPath, entries);
 
         var opened = await Open(vbp);
-        var gone = Doc(opened.Project, "Gone");
-        gone.AbsolutePath.Should().NotBeNull();
-        File.Exists(gone.AbsolutePath!).Should().BeFalse("the fixture's file is missing");
-        opened.Breakpoints.GetBreakpoints(gone).Should().BeEmpty("lines that cannot be placed are not placed");
-        opened.Bookmarks.GetBookmarks(gone).Should().BeEmpty();
+        DocumentLookup.DocumentsOf(opened.Project).Should().NotContain(d => d.Name == "Gone");
+        opened.Project.PreservedItemLines.Should().Contain(vbpLine);
 
         // Saved, with a mark set elsewhere so the sidecar really is rewritten.
         opened.Breakpoints.SetDocument(Doc(opened.Project, "Utils"), [6]);
@@ -497,7 +538,7 @@ public sealed class SidecarMigrationTests : IDisposable
         File.WriteAllText(SidecarPath, $$"""{ "version": 1, "breakpoints": { "Gone": [{{oldLine}}] } }""");
 
         var first = await Open(vbp);
-        first.Breakpoints.GetBreakpoints(Doc(first.Project, "Gone")).Should().BeEmpty("its file is missing");
+        DocumentLookup.DocumentsOf(first.Project).Should().NotContain(d => d.Name == "Gone");
         first.Breakpoints.SetDocument(Doc(first.Project, "Utils"), [6]);
         await first.Sidecar.SaveAsync(first.Project);
         Close(first.Project);
@@ -513,7 +554,7 @@ public sealed class SidecarMigrationTests : IDisposable
         var breakpoint = second.Breakpoints.GetBreakpoints(gone).Should().ContainSingle().Subject;
         LineOf(gone, breakpoint).Should().Be("    Debug.Print 1", "the mark is on the statement it was set on");
         var written = ReadJson(SidecarPath);
-        Lines(written, "codeBreakpoints", "Gone").Should().Equal(breakpoint - CodeWindowText.Of(gone).HeaderLineCount);
+        Lines(written, "codeBreakpoints", "Gone").Should().Equal(breakpoint - DocumentContent.TextOf(gone, null).HeaderLineCount);
         Lines(written, "codeBreakpoints", "Utils").Should().Equal(5);
         written.ContainsKey("breakpoints").Should().BeFalse("the entry left the old keys once it was migrated");
     }
@@ -528,10 +569,14 @@ public sealed class SidecarMigrationTests : IDisposable
     /// entry would also be consumed, and the next opening could never migrate it into the module once its
     /// <c>.bas</c> is restored. Both formats are here, since the old keys are migrated and the new ones gathered.
     /// </remarks>
-    [Fact]
-    public async Task ANameSharedWithADocumentWhoseFileIsMissingIsCarried()
+    [Theory]
+    [InlineData("Module=Orders; Missing.bas")]
+    [InlineData("Class=Orders; Missing.cls")]
+    [InlineData("UserControl=Orders.ctl")]
+    [InlineData("PropertyPage=Orders.pag")]
+    public async Task ANameSharedWithADocumentWhoseFileIsMissingIsCarried(string line)
     {
-        var vbp = Stage("Module=Orders; Missing.bas");
+        var vbp = Stage(line);
         var formOld = OldLineOf(OrdersFrm, null, "    total = 12.5 * 3");
         var text = $$"""
             {
@@ -545,10 +590,8 @@ public sealed class SidecarMigrationTests : IDisposable
         var opened = await Open(vbp);
 
         var named = DocumentLookup.DocumentsOf(opened.Project).Where(d => d.Name == "Orders").ToList();
-        named.Should().HaveCount(2, "a form and a module share the name");
-        named.Should().ContainSingle(d => d.Form != null);
-        named.Single(d => d.Module != null).AbsolutePath.Should().NotBeNull();
-        File.Exists(named.Single(d => d.Module != null).AbsolutePath!).Should().BeFalse("the module's file is missing");
+        named.Should().ContainSingle().Which.Form.Should().NotBeNull();
+        opened.Project.PreservedItemLines.Should().Contain(line);
         foreach (var document in named)
         {
             opened.Breakpoints.GetBreakpoints(document).Should().BeEmpty($"{document.Display} cannot take half an entry");
@@ -562,14 +605,17 @@ public sealed class SidecarMigrationTests : IDisposable
     /// it: the next opening that can measure the entry joins the two.
     /// </summary>
     /// <remarks>
-    /// The document's file is missing, so its entry under the new keys is carried from the file, and the code
-    /// window still shows it, header and an empty line, so a breakpoint can be set in it. Writing the stores' marks
+    /// The document's file disappears after loading but before the sidecar is read, so its entry under the new
+    /// keys is carried from the file, while its loaded code window can still take a breakpoint. Writing the stores' marks
     /// alone under that name would delete the carried one for good.
     /// </remarks>
     [Fact]
     public async Task AMarkSetWhereAnEntryIsCarriedIsWrittenBesideIt()
     {
         var vbp = Stage("Module=Gone; Gone.bas");
+        var gonePath = Path.Join(dir, "Gone.bas");
+        File.WriteAllText(gonePath, "Attribute VB_Name = \"Gone\"\r\n");
+        beforeSidecar = _ => File.Delete(gonePath);
         File.WriteAllText(SidecarPath, """{ "version": 2, "fileBreakpoints": { "Gone": [5] } }""");
 
         var opened = await Open(vbp);
@@ -672,8 +718,8 @@ public sealed class SidecarMigrationTests : IDisposable
             "a bookmark counts from 0 and a breakpoint from 1, and the two were on one statement");
 
         var written = ReadJson(SidecarPath);
-        Lines(written, "codeBreakpoints", name).Should().Equal(breakpoint - CodeWindowText.Of(document).HeaderLineCount);
-        Lines(written, "codeBookmarks", name).Should().Equal(breakpoint - 1 - CodeWindowText.Of(document).HeaderLineCount);
+        Lines(written, "codeBreakpoints", name).Should().Equal(breakpoint - DocumentContent.TextOf(document, null).HeaderLineCount);
+        Lines(written, "codeBookmarks", name).Should().Equal(breakpoint - 1 - DocumentContent.TextOf(document, null).HeaderLineCount);
         written.ContainsKey("breakpoints").Should().BeFalse("every entry was placed, so none is left in the old keys");
         written.ContainsKey("bookmarks").Should().BeFalse();
         written["version"]!.GetValue<int>().Should().Be(3);
@@ -730,6 +776,8 @@ public sealed class SidecarMigrationTests : IDisposable
         readOnlyDrops.Should().Contain(m => m.Contains("Shop/Orders") && m.Contains("breakpoint"));
         readOnlyDrops.Should().Contain(m => m.Contains("Shop/Orders") && m.Contains("bookmark"));
         readOnlyDrops.Should().Contain(m => m.Contains("Shop/Utils"));
+        readOnlyDrops.Should().OnlyContain(m => m.EndsWith("those are read-only lines, where nothing can be marked"));
+
 
         var written = ReadJson(SidecarPath);
         Lines(written, "codeBreakpoints", "Orders").Should().Equal(breakpoint - 25);
@@ -792,35 +840,79 @@ public sealed class SidecarMigrationTests : IDisposable
         Lines(written, "codeBookmarks", "Utils").Should().Equal(4);
     }
 
-    /// <summary>
-    /// A module whose header the reader did not recognise (hexide-io/HexIDE#472) keeps its whole file in its code,
-    /// so the old window already showed the whole file and nothing moves.
-    /// </summary>
-    /// <remarks>
-    /// This is what tells the prefix apart from the header region. The code window still finds a header in such
-    /// a file, from its text, so a shift taken from the header region would move the mark two lines down.
-    /// </remarks>
-    [Fact]
-    public async Task AModuleWhoseHeaderWasNotRecognisedDoesNotMove()
+    /// <summary>Marks follow their statement when collecting a name (#3796).</summary>
+    [Theory]
+    [InlineData(1, false, 6, "    Debug.Print 1")]
+    [InlineData(2, false, 6, "    Debug.Print 1")]
+    [InlineData(3, false, 6, "    Debug.Print 1")]
+    [InlineData(1, true, 6, "    Debug.Print 1")]
+    [InlineData(2, true, 6, "    Debug.Print 1")]
+    [InlineData(3, true, 6, "    Debug.Print 1")]
+    [InlineData(1, false, 9, "    Debug.Print 1", true)]
+    [InlineData(2, false, 9, "    Debug.Print 1", true)]
+    [InlineData(3, false, 9, "    Debug.Print 1", true)]
+    [InlineData(1, false, 0, "", false, true)]
+    [InlineData(2, false, 0, "", false, true)]
+    [InlineData(3, false, 0, "", false, true)]
+    [InlineData(1, true, 0, "", false, true)]
+    [InlineData(2, true, 0, "", false, true)]
+    [InlineData(3, true, 0, "", false, true)]
+    [InlineData(1, false, 0, "", true, true)]
+    [InlineData(2, false, 0, "", true, true)]
+    [InlineData(3, false, 0, "", true, true)]
+    public async Task ReorderedModuleHeadersPinHistoricalMarksAndLoadDirtiness(int version, bool afterProcedure, int expectedLine, string expectedText, bool isClass = false, bool markHeader = false)
     {
-        // A comment above the attribute run: a blank line there no longer hides the header (#472).
-        File.WriteAllText(Path.Join(dir, "Odd.bas"), Crlf(
-            "' generated",
-            "Attribute VB_Name = \"Odd\"",
-            "Option Explicit",
-            "",
-            "Public Sub Go()",
-            "    Debug.Print 1",
-            "End Sub"));
-        var vbp = Stage("Module=Odd; Odd.bas");
-        File.WriteAllText(SidecarPath, """{ "version": 1, "breakpoints": { "Odd": [6] } }""");
-
+        var originalLines = afterProcedure
+            ? new[] { "' generated", "Option Explicit", "", "Public Sub Go()", "    Debug.Print 1", "End Sub", "Attribute VB_Name = \"Odd\"" }
+            : new[] { "' generated", "Attribute VB_Name = \"Odd\"", "Option Explicit", "", "Public Sub Go()", "    Debug.Print 1", "End Sub" };
+        var classPrefix = new[] { "VERSION 1.0 CLASS", "BEGIN", "END" };
+        if (isClass) originalLines = classPrefix.Concat(originalLines).ToArray();
+        var file = isClass ? "Odd.cls" : "Odd.bas";
+        File.WriteAllText(Path.Join(dir, file), Crlf(originalLines));
+        var vbp = Stage($"{(isClass ? "Class" : "Module")}=Odd; {file}");
+        var line = afterProcedure ? 5 : 6;
+        if (markHeader) line = afterProcedure ? 7 : 2;
+        if (isClass && version == 2) line += 3;
+        var breakpointKey = version == 1 ? "breakpoints" : version == 2 ? "fileBreakpoints" : "codeBreakpoints";
+        var bookmarkKey = version == 1 ? "bookmarks" : version == 2 ? "fileBookmarks" : "codeBookmarks";
+        var condition = version == 3
+            ? $$""", "codeBreakpointConditions": { "Odd": { "{{line}}": "x > 0" } }"""
+            : "";
+        File.WriteAllText(SidecarPath,
+            $$"""{ "version": {{version}}, "{{breakpointKey}}": { "Odd": [{{line}}] }, "{{bookmarkKey}}": { "Odd": [{{line - 1}}] } {{condition}} }""");
         var opened = await Open(vbp);
-
         var odd = Doc(opened.Project, "Odd");
-        odd.Module!.OriginalHeader.Should().BeEmpty("the reader split nothing off");
-        opened.Breakpoints.GetBreakpoints(odd).Should().Equal(6);
-        LineOf(odd, 6).Should().Be("    Debug.Print 1");
+        odd.Module!.OriginalHeader.Should().Be((isClass ? Crlf(classPrefix) : "") + "Attribute VB_Name = \"Odd\"\r\n");
+        opened.Service.HasUnsavedChanges(odd.Module).Should().BeFalse("load snapshots the composed render, not the disk bytes");
+        if (markHeader)
+        {
+            opened.Breakpoints.GetBreakpoints(odd).Should().BeEmpty();
+            opened.Bookmarks.GetBookmarks(odd).Should().BeEmpty();
+        }
+        else
+        {
+            opened.Breakpoints.GetBreakpoints(odd).Should().Equal(expectedLine);
+            opened.Bookmarks.GetBookmarks(odd).Should().Equal(expectedLine - 1);
+            LineOf(odd, expectedLine).Should().Be(expectedText);
+            if (version == 3) opened.Breakpoints.GetCondition(odd, expectedLine).Should().Be("x > 0");
+        }
+        var composed = FormCodeText.WholeFile(odd.Module);
+        composed.Split("\r\n")[isClass ? 4 : 1].Should().Be("' generated");
+        await opened.Sidecar.SaveAsync(opened.Project);
+        Close(opened.Project);
+        opened = await Open(vbp);
+        odd = Doc(opened.Project, "Odd");
+        opened.Breakpoints.GetBreakpoints(odd).Should().Equal(markHeader ? [] : new[] { expectedLine });
+        opened.Bookmarks.GetBookmarks(odd).Should().Equal(markHeader ? [] : new[] { expectedLine - 1 });
+        if (!markHeader && version == 3)
+            opened.Breakpoints.GetCondition(odd, expectedLine).Should().Be("x > 0");
+        await opened.Service.SaveProject(opened.Project, saveAs: false);
+        File.ReadAllText(odd.AbsolutePath!).Should().Be(composed);
+        Close(opened.Project);
+        opened = await Open(vbp);
+        odd = Doc(opened.Project, "Odd");
+        opened.Breakpoints.GetBreakpoints(odd).Should().Equal(markHeader ? [] : new[] { expectedLine });
+        opened.Bookmarks.GetBookmarks(odd).Should().Equal(markHeader ? [] : new[] { expectedLine - 1 });
     }
 
     /// <summary>
@@ -912,19 +1004,21 @@ public sealed class SidecarMigrationTests : IDisposable
     /// </summary>
     /// <remarks>
     /// Every save takes the old keys from the file as it is then, and until the migration's write lands the file
-    /// still holds what was moved. The temporary file's path is held by a directory, which no write can replace.
+    /// still holds what was moved. The atomic writer's stream factory refuses the migration's write.
     /// </remarks>
     [Fact]
     public async Task AMigrationWhoseWriteFailsIsNotWrittenBackInTheOldNumberingLater()
     {
         var vbp = Stage();
         File.WriteAllText(SidecarPath, """{ "version": 1, "breakpoints": { "Ledger": [3], "Absent": [9] } }""");
-        Directory.CreateDirectory(SidecarPath + ".tmp");
+        var previousOpen = AtomicFileWriter.OpenStream.Value;
+        AtomicFileWriter.OpenStream.Value = _ => throw new IOException("Injected sidecar write refusal");
 
-        var opened = await Open(vbp);
+        Opened opened;
+        try { opened = await Open(vbp); }
+        finally { AtomicFileWriter.OpenStream.Value = previousOpen; }
         ReadJson(SidecarPath)["version"]!.GetValue<int>().Should().Be(1, "the migration's write could not be made");
 
-        Directory.Delete(SidecarPath + ".tmp");
         Close(opened.Project);
 
         var written = ReadJson(SidecarPath);
@@ -948,14 +1042,16 @@ public sealed class SidecarMigrationTests : IDisposable
     {
         var vbp = Stage();
         File.WriteAllText(SidecarPath, """{ "version": 1, "breakpoints": { "Ledger": [3] } }""");
-        Directory.CreateDirectory(SidecarPath + ".tmp");
+        var previousOpen = AtomicFileWriter.OpenStream.Value;
+        AtomicFileWriter.OpenStream.Value = _ => throw new IOException("Injected sidecar write refusal");
 
-        var opened = await Open(vbp);
+        Opened opened;
+        try { opened = await Open(vbp); }
+        finally { AtomicFileWriter.OpenStream.Value = previousOpen; }
         ReadJson(SidecarPath)["version"]!.GetValue<int>().Should().Be(1, "the migration's write could not be made");
 
         // The earlier build's save: its own marks, in its own numbering, under the key this one migrated.
         File.WriteAllText(SidecarPath, """{ "version": 1, "breakpoints": { "Ledger": [3, 4] } }""");
-        Directory.Delete(SidecarPath + ".tmp");
         await opened.Sidecar.SaveAsync(opened.Project);
 
         var written = ReadJson(SidecarPath);

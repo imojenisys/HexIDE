@@ -9,6 +9,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Labs.Input;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Avalonia.Threading;
@@ -17,8 +19,10 @@ using HexIDE.Forms.ViewModels;
 using HexIDE.IDE;
 using HexIDE.Localization;
 using HexIDE.Projects;
+using HexIDE.Runtime;
 using HexIDE.Runtime.BuiltinTypes;
 using HexIDE.Runtime.Components;
+using HexIDE.Runtime.Components.InBox;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Runtime.Serialization;
 using HexIDE.Utils;
@@ -70,12 +74,52 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     [Notify]
     private ComponentInstanceViewModel? selectedComponent;
 
+    private void OnSelectedComponentChanged()
+    {
+        if (selectedComponent is { HasDesignerPreview: false })
+            SelectedComponent = Form;
+    }
+
     public IReadOnlyList<ComponentInstanceViewModel> SelectedComponents { get; private set; } = [];
 
-    public void SetSelectedComponents(IEnumerable<ComponentInstanceViewModel> components) =>
-        SelectedComponents = [.. components];
+    public void SetSelectedComponents(IEnumerable<ComponentInstanceViewModel> components)
+    {
+        SelectedComponents = [.. components.Where(c => c.HasDesignerPreview)];
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(SelectedComponents)));
+        CommandManager.InvalidateRequerySuggested();
+    }
+
+    private bool HasMultipleSelectedControls => SelectedComponents.Count >= 2;
+
+    public bool CanAlignLefts(object? parameter) => HasMultipleSelectedControls;
+    public bool CanAlignRights(object? parameter) => HasMultipleSelectedControls;
+    public bool CanAlignTops(object? parameter) => HasMultipleSelectedControls;
+    public bool CanAlignBottoms(object? parameter) => HasMultipleSelectedControls;
+    public bool CanAlignCentersH(object? parameter) => HasMultipleSelectedControls;
+    public bool CanAlignCentersV(object? parameter) => HasMultipleSelectedControls;
+    public bool CanMakeSameWidth(object? parameter) => HasMultipleSelectedControls;
+    public bool CanMakeSameHeight(object? parameter) => HasMultipleSelectedControls;
+    public bool CanMakeSameSize(object? parameter) => HasMultipleSelectedControls;
 
     public ObservableCollection<ComponentInstanceViewModel> AllComponents { get; } = new();
+    public ObservableCollection<ComponentInstanceViewModel> SelectableComponents { get; } = new();
+
+    internal void RefreshPreviewSelection()
+    {
+        OnSelectedComponentChanged();
+        SetSelectedComponents(SelectedComponents);
+        var selectable = AllComponents.Where(c => c.HasDesignerPreview).ToList();
+        foreach (var item in SelectableComponents.Except(selectable).ToList())
+            SelectableComponents.Remove(item);
+        for (var i = 0; i < selectable.Count; i++)
+        {
+            var oldIndex = SelectableComponents.IndexOf(selectable[i]);
+            if (oldIndex < 0)
+                SelectableComponents.Insert(i, selectable[i]);
+            else if (oldIndex != i)
+                SelectableComponents.Move(oldIndex, i);
+        }
+    }
 
     /// <summary>
     /// The view-model wrapping a given model component, for the walks that start from the model tree — the
@@ -120,6 +164,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     // is deleted, and comes back with it on undo. No other change can alter the boxes.
     private void OnAllComponentsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        RefreshPreviewSelection();
         static bool HoldsAny(IList? items) =>
             items?.OfType<ComponentInstanceViewModel>().Any(c => c.Instance.PreservedChildSubtrees.Count > 0) == true;
 
@@ -194,6 +239,12 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     /// </summary>
     internal ILocalizationService Localization => localization;
 
+    public string? ControlDoubleClickProcedure(ComponentInstanceViewModel control) =>
+        control.Instance.BaseClass.DesignerDoubleClickEvent is { } eventName ? $"{control.Name}_{eventName}" : null;
+
+    public void RequestControlDoubleClickCode(ComponentInstanceViewModel control) =>
+        RequestCode(ControlDoubleClickProcedure(control), control.Name, control.Instance.BaseClass.DesignerDoubleClickEvent);
+
     public ObservableCollection<ComponentInstanceViewModel> TopLevelMenu { get; } = new();
 
     public IEventBus EventBus => eventBus;
@@ -215,6 +266,13 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     public bool IsReadOnly => formDefinition is { CanSaveFaithfully: false };
 
     public string? ReadOnlyReason => formDefinition?.UnfaithfulSaveReason;
+
+    /// <summary>
+    /// Whether it is read-only because the add-in that read it can't write it back, which the banner has its own words for:
+    /// its type has nothing that writes, or its format refused it.
+    /// </summary>
+    public bool IsReadByAddin => formDefinition is { } form
+        && (form.UnfaithfulSaveCauses & (UnfaithfulSaveCause.ReadByAddin | UnfaithfulSaveCause.RefusedByFormat)) != 0;
 
     public DesignerUndoStack UndoStack { get; private set; } = null!;
     public DelegateCommand UndoCommand { get; private set; } = null!;
@@ -256,13 +314,32 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             RedoCommand.RaiseCanExecutedChanged();
             RefreshModified();
         };
+        // Made read-only, or writable, without a reload: as when the add-in that writes it is taken out.
+        AutoDispose(this.eventBus.Subscribe<FormReadOnlyChangedEvent>(e =>
+        {
+            if (formDefinition is not null && ReferenceEquals(e.Designer, formDefinition))
+            {
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
+                OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadByAddin)));
+            }
+        }));
         AutoDispose(this.eventBus.Subscribe<DocumentSavedEvent>(e =>
         {
             if ((e.Form is not null && ReferenceEquals(e.Form, formDefinition))
                 || (e.Module is not null && ReferenceEquals(e.Module, formDefinition?.OwningModule)))
                 RefreshModified();
         }));
-        AutoDispose(this.eventBus.Subscribe<ApplyAllUnsavedChangesEvent>(_ => FlushComponentsToModel()));
+        AutoDispose(this.eventBus.Subscribe<ApplyAllUnsavedChangesEvent>(e =>
+        {
+            if (!e.OnlyWhereAhead || HasComponentsNotInModel)
+                FlushComponentsToModel();
+        }));
+        AutoDispose(this.eventBus.Subscribe<ModuleUnloadedEvent>(e =>
+        {
+            if (e.Module == formDefinition?.OwningModule)
+                RequestClose();
+        }));
         AutoDispose(this.eventBus.Subscribe<FormUnloadedEvent>(e =>
         {
             if (e.Form == formDefinition)
@@ -361,7 +438,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     private static bool IsMenu(ComponentInstanceViewModel component) => component.Instance.BaseClass is MenuComponentClass;
 
-    private static bool IsWindowless(IComponentClass type) => type is ComponentBaseClass { IsWindowless: true };
+    internal static bool IsWindowless(IComponentClass type) => type is IDesignerComponentClass { IsWindowless: true };
 
     private bool IsContentOf(ComponentInstanceViewModel component, ComponentInstance container) =>
         !IsMenu(component) && ReferenceEquals(ParentOf(component.Instance), container);
@@ -449,7 +526,9 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     /// <summary>The children a container's block holds, in the order a save writes them, as the writer reads them.</summary>
     private IReadOnlyList<ComponentInstance> WrittenChildren(ComponentInstance container, IReadOnlyList<ComponentInstance> fileOrder) =>
-        ReferenceEquals(container, Form.Instance) ? FormSerializer.RootChildren(fileOrder, container) : container.ContainedControls;
+        ReferenceEquals(container, Form.Instance)
+            ? formDefinition is { } own ? ProjectFormats.Of(own.Owner).RootChildren(fileOrder, container) : container.ContainedControls
+            : container.ContainedControls;
 
     /// <summary>
     /// Where a save puts each container's carried blocks among the children it writes, from how many of them each child
@@ -525,6 +604,9 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         RebuildContainmentOrder(positionInList);
         foreach (var (container, ordinals) in CarriedPlacement(orderedComponents).ToList())
             container.SetPreservedChildOrdinals(ordinals);
+        foreach (var instance in orderedComponents.Where(c => !IsReadOnly && c.BaseClass is SSTabComponentClass))
+            SSTabComponentClass.Instance.SynchronizeDesignerPages(instance,
+                orderedComponents.Where(c => ReferenceEquals(c.Container, instance)).ToList());
         formDefinition?.UpdateComponents(orderedComponents);
     }
 
@@ -597,6 +679,9 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         // watches, so the banner and the disabled surface would keep the old answer until the tab was reopened.
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadByAddin)));
+        // As the code window's reload does: clean after a reload from disk, edited after a crash recovery restore (#499).
+        RefreshModified();
     }
 
     // AllComponents keeps the file's order; Components takes the order the canvas draws in.
@@ -615,8 +700,22 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             AllComponents.Add(vm);
         }
 
+        foreach (var instance in fileOrder.Where(c => !IsReadOnly && c.BaseClass is SSTabComponentClass))
+            SSTabComponentClass.Instance.InitializeDesignerPages(instance);
+
         foreach (var comp in DrawOrder(fileOrder))
             Components.Add(viewModels[comp]);
+
+        // Menus stay in the flat component list; SubItems identifies which belong under another menu.
+        TopLevelMenu.Clear();
+        var menus = AllComponents.Where(IsMenu).ToList();
+        var subItems = new HashSet<ComponentInstance>(ReferenceEqualityComparer.Instance);
+        foreach (var menu in menus)
+            if (menu.Instance.GetPropertyOrDefault(MenuComponentClass.SubItemsProperty) is { } children)
+                subItems.UnionWith(children);
+        foreach (var menu in menus)
+            if (!subItems.Contains(menu.Instance))
+                TopLevelMenu.Add(menu);
 
         // Where each control stands against the carried ones beside it, as the file has them (#1498).
         foreach (var container in fileOrder.Where(c => c.PreservedChildSubtrees.Count > 0))
@@ -654,19 +753,32 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     /// nearest grid line when Align to Grid is on, as VB6 puts it (measured, #929: a 1215 x 495 button on a 6000 x 4500
     /// form went to 2400, 2040, where its centre is 2392.5, 2002.5). A position exactly between two lines goes to the
     /// higher: 12.5 grid units became 13 (measured), where the default to-even rounding gives 12. Its size is its class's
-    /// <see cref="ComponentBaseClass.AddedSize"/>, the one VB6 gives it (measured, #1473).
+    /// <see cref="IDesignerComponentClass.AddedSize"/>, the one VB6 gives it (measured, #1473).
     /// </summary>
-    public void SpawnControlCenter(ComponentBaseClass componentClass)
+    public void SpawnControlCenter(IDesignerComponentClass componentClass, RuntimeLibrary? library = null)
     {
+        if (componentClass is StatusBarComponentClass)
+        {
+            // VB6's toolbox double-click: full form width, 25 px high, centred on a whole pixel (#1087).
+            SpawnControlAt(componentClass, new Rect(0, Math.Floor((Form.Height - 25) / 2), Form.Width, 25), library: library);
+            return;
+        }
+        if (componentClass is FlatScrollBarComponentClass)
+        {
+            // VB6 centres the 1500 × 255 control as if it were 750 twips high (#1097).
+            SpawnControlAt(componentClass, new Rect(Pixels(Twips(Form.Width) / 2 - 750),
+                Pixels(Twips(Form.Height) / 2 - 375), 100, 17), library: library);
+            return;
+        }
         var (width, height) = componentClass.AddedSize;
         var left = Twips(Form.Width) / 2 - width / 2;
         var top = Twips(Form.Height) / 2 - height / 2;
-        if (settingsService.AlignToGrid)
+        if (settingsService.AlignToGrid && componentClass is not ImageListComponentClass)
         {
             left = OnGrid(left, settingsService.GridWidth);
             top = OnGrid(top, settingsService.GridHeight);
         }
-        SpawnControlAt(componentClass, new Rect(Pixels(left), Pixels(top), Pixels(width), Pixels(height)));
+        SpawnControlAt(componentClass, new Rect(Pixels(left), Pixels(top), Pixels(width), Pixels(height)), library: library);
 
         static long OnGrid(long twips, int gridPixels)
         {
@@ -683,12 +795,84 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     private static double Pixels(long twips) => twips / (double)VBScaleModeExtensions.PixelToTwips;
 
-    public void SpawnControl(Rect rect)
+    internal bool SwitchSSTabPage(Point point)
     {
-        if (ToolsBoxToolViewModel.SelectedComponent?.BaseClass is not { } baseClass)
+        if (IsReadOnly)
+            return false;
+        for (var i = Components.Count - 1; i >= 0; i--)
+        {
+            var vm = Components[i];
+            if (vm.Instance.BaseClass is not SSTabComponentClass tab
+                || !new Rect(vm.Left, vm.Top, vm.Width, vm.Height).Contains(point))
+                continue;
+            var children = AllComponents.Where(c => ReferenceEquals(c.Instance.Container, vm.Instance))
+                .Select(c => c.Instance).ToList();
+            if (!tab.SelectDesignerPage(vm.Instance, point - new Vector(vm.Left, vm.Top),
+                    new Size(vm.Width, vm.Height), children))
+                return false;
+            SelectedComponent = vm;
+            CommitLayout();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// A control drawn with the selected tool by a drag from <paramref name="pressedAt"/> to <paramref name="releasedAt"/>,
+    /// both in canvas space and not yet snapped. VB6's designer puts it in the innermost container under the press, snaps
+    /// its corners on that container's own grid, measured from its client origin, and holds the drag to it on every side
+    /// (measured, #2039).
+    /// </summary>
+    /// <remarks>
+    /// Each corner goes to the nearest grid line, and the control ends one pixel past its far corner, grid or no grid
+    /// (measured, #2058): a drag from 5, 14 to 50, 30 with the 120-twip grid is Left 120, Top 240, 615 × 255, and the same
+    /// drag with the grid off is Left 75, Top 210, 690 × 270. A corner exactly half way goes up, as a control placed by a
+    /// double-click does (#1473); that case is unmeasured for a drag.
+    /// </remarks>
+    public void SpawnControlDrawn(Point pressedAt, Point releasedAt)
+    {
+        if (ToolsBoxToolViewModel.SelectedComponent is not { BaseClass: { } baseClass } tool)
             return;
 
-        SpawnControlAt(baseClass, rect);
+        var (rect, container) = DrawnControlRectangle(pressedAt, releasedAt);
+        SpawnControl(baseClass, rect, container, tool.Library);
+    }
+
+    /// <summary>The canvas rectangle and container shared by the drag preview and placement.</summary>
+    internal (Rect Rectangle, ComponentInstanceViewModel? Container) DrawnControlRectangle(Point pressedAt, Point releasedAt)
+    {
+        var container = ContainerAt(pressedAt);
+        var origin = container?.ClientOrigin ?? default;
+        var (x1, x2) = (Snapped(pressedAt.X - origin.X, settingsService.GridWidth), Snapped(releasedAt.X - origin.X, settingsService.GridWidth));
+        var (y1, y2) = (Snapped(pressedAt.Y - origin.Y, settingsService.GridHeight), Snapped(releasedAt.Y - origin.Y, settingsService.GridHeight));
+        var rect = new Rect(origin.X + Math.Min(x1, x2), origin.Y + Math.Min(y1, y2),
+            Math.Max(1, Math.Abs(x2 - x1)), Math.Max(1, Math.Abs(y2 - y1)));
+        if (container is not null)
+            rect = HeldTo(rect, container);
+        return (new Rect(rect.X, rect.Y, rect.Width + 1, rect.Height + 1), container);
+
+        double Snapped(double pixels, int grid) =>
+            settingsService.AlignToGrid && grid > 0 ? Math.Round(pixels / grid, MidpointRounding.AwayFromZero) * grid : pixels;
+    }
+
+    /// <summary>
+    /// The container a control drawn from <paramref name="pressedAt"/> goes into: the innermost Frame or PictureBox under
+    /// the point, or null for the form. VB6's designer decides by where the drag began, not where it ended (measured, #2039).
+    /// </summary>
+    /// <remarks>
+    /// A container's contents follow it in <see cref="Components"/>, which is the canvas's drawing order, so the last
+    /// container under the point is the innermost, and of two overlapping ones the one on top.
+    /// </remarks>
+    internal ComponentInstanceViewModel? ContainerAt(Point pressedAt)
+    {
+        for (var i = Components.Count - 1; i >= 0; i--)
+        {
+            var candidate = Components[i];
+            if (candidate != Form && ContainerClasses.IsContainer(candidate.Instance.BaseClass)
+                && new Rect(candidate.Left, candidate.Top, candidate.Width, candidate.Height).Contains(pressedAt))
+                return candidate;
+        }
+        return null;
     }
 
     /// <summary>
@@ -705,18 +889,44 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     private static bool HasTabIndex(IComponentClass type) => type.Properties.Contains(VBProperties.TabIndexProperty);
 
-    public void SpawnControlAt(ComponentBaseClass baseClass, Rect rect)
+    /// <param name="pressedAt">
+    /// Where a drawn control's drag began, in canvas space. It goes into the innermost container under that point, and its
+    /// rectangle is held to that container, as VB6's designer holds the drag to it (measured, #2039). Null places it on
+    /// the form, as a double-click on the toolbox does whatever is selected (measured).
+    /// </param>
+    /// <param name="library">
+    /// For an in-box control, the library it is placed from, when the toolbox offers it from an older library than its
+    /// class's newest: a ProgressBar from COMCTL32.OCX is <c>ComctlLib.ProgressBar</c> (#1103).
+    /// </param>
+    public void SpawnControlAt(IDesignerComponentClass baseClass, Rect rect, Point? pressedAt = null,
+        RuntimeLibrary? library = null)
+    {
+        var container = pressedAt is { } press ? ContainerAt(press) : null;
+        if (container is not null)
+            rect = HeldTo(rect, container);
+        SpawnControl(baseClass, rect, container, library);
+    }
+
+    private void SpawnControl(IDesignerComponentClass baseClass, Rect rect, ComponentInstanceViewModel? container,
+        RuntimeLibrary? library)
     {
         var newName = FreeName(baseClass);
         Log.Debug("FormEditViewModel: Spawning {ControlType} as {ControlName} at ({Left},{Top} {Width}x{Height})",
             baseClass.Name, newName, rect.Left, rect.Top, rect.Width, rect.Height);
         var instance = new ComponentInstance(baseClass, newName);
+        if (container is not null)
+            instance.SetContainer(container.Instance);
+        if (baseClass is InBoxComponentClass inBox && library is not null && !ReferenceEquals(library, inBox.Library))
+            instance.SetProperty(InBoxComponentClass.LoadedTypeNameProperty, library.TypeName(inBox.ControlClassName));
+        DeclareLibraryOf(instance);
         if (HasTabIndex(baseClass))
             instance.SetProperty(VBProperties.TabIndexProperty, NextTabIndex());
         // A drawn control starts with its name as its Caption, or as its Text: VB6's designer writes Text = "Text1" for a
         // TextBox and Text = "Combo1" for a ComboBox (measured, #926). Only where the class has the property.
         if (baseClass.Properties.Contains(VBProperties.CaptionProperty))
             instance.SetProperty(VBProperties.CaptionProperty, newName);
+        if (baseClass is RichTextBoxComponentClass)
+            RichTextBoxPersistence.Seed(instance, newName);
         if (baseClass.Properties.Contains(VBProperties.TextProperty))
             instance.SetProperty(VBProperties.TextProperty, newName);
         var newComponent = new ComponentInstanceViewModel(this, instance)
@@ -726,10 +936,11 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             Left = rect.Left,
             Top = rect.Top
         };
-        // On top of its plane, so VB6 finds it first among the form's windowed blocks, or first among its windowless ones
-        // after them (measured, #1481), carried ones included (measured, #1498).
-        Components.Insert(TopOfPlane(Components, Form.Instance, IsWindowless(baseClass)), newComponent);
-        newComponent.CarriedBelow = CarriedBelowInPlane(Form.Instance, IsWindowless(baseClass), top: true, except: null);
+        // On top of its plane, so VB6 finds it first among its container's windowed blocks, or first among its windowless
+        // ones after them (measured, #1481), carried ones included (measured, #1498).
+        var plane = container?.Instance ?? Form.Instance;
+        Components.Insert(TopOfPlane(Components, plane, IsWindowless(baseClass)), newComponent);
+        newComponent.CarriedBelow = CarriedBelowInPlane(plane, IsWindowless(baseClass), top: true, except: null);
         AllComponents.Add(newComponent);
         UndoStack.Push(new AddControlsCommand(
             [(newComponent, Components.IndexOf(newComponent), AllComponents.IndexOf(newComponent))],
@@ -739,7 +950,40 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         SelectedComponent = newComponent;
     }
 
-    public void BringToFront()
+    /// <summary>
+    /// An in-box control's form names its library in its header, as VB6's designer writes it once one is placed (#1103). A
+    /// form holding none of a library's controls has no line for it, though its project references it (measured).
+    /// </summary>
+    private void DeclareLibraryOf(ComponentInstance instance)
+    {
+        if (formDefinition is null || instance.BaseClass is not InBoxComponentClass inBox)
+            return;
+        var library = inBox.LibraryOf(instance);
+        if (!formDefinition.ObjectReferences.Any(library.IsNamedBy))
+            formDefinition.HeaderLines.Add(library.FormLine);
+    }
+
+    /// <summary>
+    /// A drawn rectangle held to the container it was begun in, as VB6's designer holds the drag (measured, #2039). Measured
+    /// from the container's client origin, it starts no further up or left than that origin, and stops at the container's
+    /// outer Width and Height, snapped down to the grid: for a bordered PictureBox a little past its client area, which is
+    /// drawn clipped.
+    /// </summary>
+    private Rect HeldTo(Rect rect, ComponentInstanceViewModel container)
+    {
+        var origin = container.ClientOrigin;
+        var right = origin.X + SnappedDown(container.Width, settingsService.GridWidth);
+        var bottom = origin.Y + SnappedDown(container.Height, settingsService.GridHeight);
+        var left = Math.Min(Math.Max(rect.Left, origin.X), right - 1);
+        var top = Math.Min(Math.Max(rect.Top, origin.Y), bottom - 1);
+        return new Rect(left, top, Math.Max(1, Math.Min(rect.Right, right) - left), Math.Max(1, Math.Min(rect.Bottom, bottom) - top));
+
+        double SnappedDown(double pixels, int grid) =>
+            settingsService.AlignToGrid && grid > 0 ? Math.Floor(pixels / grid) * grid : pixels;
+    }
+
+    // Separate command names avoid the typed-overload preference in AvaloniaUI/Avalonia#21867.
+    public void BringSelectedToFront()
     {
         if (selectedComponent != null)
             BringToFront(selectedComponent);
@@ -777,7 +1021,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void BringToFront(ComponentInstanceViewModel instance) => MoveInPlane(instance, toFront: true, "Bring to Front");
 
-    public void SendToBack()
+    public void SendSelectedToBack()
     {
         if (selectedComponent != null)
             SendToBack(selectedComponent);
@@ -845,7 +1089,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void AlignLefts()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Align Lefts: {targets.Count} controls", targets, [VBProperties.LeftProperty],
@@ -854,7 +1098,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void AlignRights()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Align Rights: {targets.Count} controls", targets, [VBProperties.LeftProperty],
@@ -863,7 +1107,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void AlignTops()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Align Tops: {targets.Count} controls", targets, [VBProperties.TopProperty],
@@ -872,7 +1116,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void AlignBottoms()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Align Bottoms: {targets.Count} controls", targets, [VBProperties.TopProperty],
@@ -881,7 +1125,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void AlignCentersH()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Align Centers H: {targets.Count} controls", targets, [VBProperties.LeftProperty],
@@ -890,7 +1134,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void AlignCentersV()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Align Centers V: {targets.Count} controls", targets, [VBProperties.TopProperty],
@@ -899,7 +1143,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void MakeSameWidth()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Same Width: {targets.Count} controls", targets, [VBProperties.WidthProperty],
@@ -908,7 +1152,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void MakeSameHeight()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Same Height: {targets.Count} controls", targets, [VBProperties.HeightProperty],
@@ -917,7 +1161,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void MakeSameSize()
     {
-        if (selectedComponent == null) return;
+        if (!HasMultipleSelectedControls || selectedComponent == null) return;
         var primary = selectedComponent;
         var targets = SelectedComponents.ToList();
         PushBatch($"Same Size: {targets.Count} controls", targets,
@@ -1319,14 +1563,23 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     /// <summary>
     /// Record a property just set on <paramref name="target"/> as one undoable change, with what VB6's designer changes
-    /// along with it, which this applies (<see cref="ComponentBaseClass.ApplyDesignerConsequences"/>). Returns those.
+    /// along with it, which this applies (<see cref="IComponentClass.ApplyDesignerConsequences"/>). Returns those.
     /// </summary>
     public IReadOnlyList<PropertyChange> PushSetPropertyCommand(ComponentInstance target, PropertyClass property, object? before, object? after)
     {
         if (Equals(before, after))
             return [];
         var command = new Commands.SetPropertyCommand(target, property, before, after);
-        var consequences = target.BaseClass.ApplyDesignerConsequences(target, property);
+        IReadOnlyList<PropertyChange> consequences;
+        try
+        {
+            consequences = target.BaseClass.ApplyDesignerConsequences(target, property);
+        }
+        catch (NotImplementedException)
+        {
+            target.SetUntypedProperty(property, before);
+            throw;
+        }
         if (consequences.Count == 0)
         {
             UndoStack.Push(command);
@@ -1411,15 +1664,48 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     public void SaveFormAs() => projectService.SaveForm(formDefinition!, true).ListenErrors();
 
+    public async Task PreviewForm()
+    {
+        if (formDefinition is null || !HasWindowFrame)
+            return;
+
+        VBFormRuntime? preview = null;
+        try
+        {
+            preview = FormComponentClass.Instance.InstantiateWindow(Form.Instance, VBLoader.HasMenuBar(formDefinition));
+            // No SetCode, PrepareForm or Start: events have no interpreter to dispatch to (#2003).
+            preview.Content = VBLoader.SpawnComponents(formDefinition, preview.Context.ExecutionContext,
+                preview.Context.RootEnv, new StandaloneStandardLib(preview, HexIDE.IDE.Distribution.DisplayName));
+            if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } owner })
+                preview.Show(owner);
+            else
+                preview.Show();
+        }
+        catch (NotImplementedException e)
+        {
+            preview?.Close();
+            await windowManager.MessageBox(e.Message, localization.GetString("Str.Designer.PreviewForm"),
+                MessageBoxButtons.Ok, MessageBoxIcon.Error);
+        }
+    }
+
     public void ViewCode() => editorService.EditCode(formDefinition);
 
     public void ViewObject() => editorService.EditForm(formDefinition);
 
     public async Task EditMenu()
     {
-        var vm = new MenuEditorViewModel(this);
-        if (!await windowManager.ShowDialog(vm))
+        var vm = new MenuEditorViewModel(this, localization);
+        if (!await windowManager.ShowDialog(vm) || !vm.HasChanges)
             return;
+
+        if (!vm.HasLayoutChanges)
+        {
+            foreach (var item in vm.ItemsToApply)
+                item.Apply(item.Menu!);
+            CommitLayout();
+            return;
+        }
 
         foreach (var deleted in vm.Deleted)
         {
@@ -1429,7 +1715,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
         List<ComponentInstanceViewModel> topLevel = new();
         Stack<(int level, ComponentInstance component)> stack = new();
-        foreach (var menuViewModel in vm.FlatMenu)
+        foreach (var menuViewModel in vm.ItemsToApply)
         {
             if (menuViewModel.Menu != null)
             {
@@ -1438,7 +1724,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
                     subItems.Clear();
             }
         }
-        foreach (var menuViewModel in vm.FlatMenu)
+        foreach (var menuViewModel in vm.ItemsToApply)
         {
             var menu = menuViewModel.Menu;
             if (menu == null)
@@ -1469,25 +1755,22 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             TopLevelMenu.Add(x);
 
         // The first of the three paths that bypass the undo stack: the menu editor adds, removes and
-        // re-parents components and pushes nothing, so nothing else would announce it. In practice the
-        // refresh usually stops at the fidelity gate — HexIDE flattens nested Begin blocks, so a form with
-        // a real menu is one it refuses to save — and that is the correct outcome rather than a missing
-        // one: the buffer keeps showing the file, which is what the save refusal protects.
+        // re-parents components and pushes nothing, so nothing else would announce it. Commit the menu
+        // tree to the model and refresh the code buffer, subject to the form's fidelity gate.
         CommitLayout();
     }
 
-    public void RequestCode(string? subName)
+    public void RequestCode(string? subName, string? objectName, string? eventName)
     {
         Log.Debug("FormEditViewModel: RequestCode({SubName}) for form {FormName}", subName ?? "(null)", formDefinition?.Name);
         editorService.EditCode(formDefinition);
-        if (subName == null)
-            return;
-
         // this is a hack, the following line can be executed only after the window is created, it should be solved in a better way.
         DispatcherTimer.RunOnce(() => LoggedTimerCallback.Run("designer code navigation", () =>
         {
-            Log.Debug("FormEditViewModel: Dispatching CreateOrNavigateToSubEvent({SubName})", subName);
-            eventBus.Publish(new CreateOrNavigateToSubEvent(formDefinition!, subName));
+            if (subName is null || objectName is null || eventName is null)
+                eventBus.Publish(new NavigateToDeclarationsEvent(formDefinition!));
+            else
+                eventBus.Publish(new CreateOrNavigateToSubEvent(formDefinition!, subName, objectName, eventName));
         }), TimeSpan.FromMilliseconds(16));
     }
 }

@@ -19,7 +19,7 @@ internal enum RecordOperandKind
 }
 
 /// <summary>A <c>Put</c> or <c>Get</c> operand's kind, and for <see cref="RecordOperandKind.Typed"/> its type.</summary>
-internal readonly record struct RecordOperand(RecordOperandKind Kind, Vb6Value.ValueType? Type = null);
+internal readonly record struct RecordOperand(RecordOperandKind Kind, Vb6Value.ValueType? Type = null, int? FixedStringWidth = null);
 
 /// <summary>
 /// A <c>Get</c> that failed after reading had begun: VB6 leaves the file where it was and, for some failures, clears the
@@ -127,7 +127,7 @@ internal static class VbRecordFormat
         else if (type == Vb6Value.ValueType.Currency)
             w.I64(decimal.ToInt64(Convert.ToDecimal(typed.Value, CultureInfo.InvariantCulture) * 10000m));
         else if (type == Vb6Value.ValueType.Date)
-            w.Double(((DateTime)typed.Value!).ToOADate());
+            w.Double(((VbDate)typed.Value!).Serial);
         else if (type == Vb6Value.ValueType.Boolean)
             w.U16((bool)typed.Value! ? 0xFFFF : 0);
         else if (type == Vb6Value.ValueType.Byte)
@@ -166,8 +166,8 @@ internal static class VbRecordFormat
             w.U16(9);
             throw new RecordObjectInVariant(w.ToArray());
         }
-        if (value.Type == Vb6Value.ValueType.Missing)
-            throw new NotImplementedException("Put of an Error Variant is not implemented: CVErr is not implemented");
+        if (value.Type == Vb6Value.ValueType.Missing || value.Type == Vb6Value.ValueType.Error)
+            throw new NotImplementedException("Put of an Error Variant is not implemented (#2520)");
         if (value.Type == Vb6Value.ValueType.UserDefinedType)
             throw new NotImplementedException("Put of a Variant holding a user-defined Type is not implemented (#1646)");
         var vt = VariantType(value.Type);
@@ -237,13 +237,15 @@ internal static class VbRecordFormat
     private static void WriteElements(Writer w, VBArray array)
     {
         var element = array.ElementType;
+        if (array.FixedStringWidth is not null)
+            throw new NotImplementedException("Get/Put of an array of fixed-length Strings is not implemented (#179): its record layout is unmeasured");
+        if (element == Vb6Value.ValueType.UserDefinedType)
+            throw new NotImplementedException("Get/Put of an array of a user-defined Type is not implemented (#178)");
         if (array.DeclaredClass is not null || element == Vb6Value.ValueType.Object)
             throw new VBCompileErrorException(ObjectRefused);
         foreach (var index in ColumnMajor(array))
         {
             var value = array.GetValue(index);
-            if (element == Vb6Value.ValueType.UserDefinedType && value.Value is not VbUdt)
-                throw new NotImplementedException("Put of an array of a user-defined Type is not implemented: its elements are not made yet (#178)");
             if (value.Value is VbUdt udt)
                 WriteUdt(w, udt);
             else if (element is null || element == Vb6Value.ValueType.EmptyVariant)
@@ -256,14 +258,17 @@ internal static class VbRecordFormat
     /// <summary>A user-defined Type: its fields in order, packed.</summary>
     public static void WriteUdt(Writer w, VbUdt udt)
     {
+        udt.RefuseUnmeasuredLongLongLayout();
         foreach (var (name, value) in udt.EnumerateFields())
         {
+            if (value.Value is VBArray)
+                throw new NotImplementedException("Get/Put of a Type containing an array field is not implemented (#178)");
             if (value.Value is VbUdt nested)
                 WriteUdt(w, nested);
             else if (udt.IsVariantField(name))
                 WriteVariant(w, value);
             else if (udt.DeclaredTypeOf(name) is { } type)
-                WriteTyped(w, value, type, prefixed: true);
+                WriteTyped(w, value, type, prefixed: udt.FixedStringWidthOf(name) is null);
             else
                 throw new VBCompileErrorException(ObjectRefused);
         }
@@ -357,15 +362,10 @@ internal static class VbRecordFormat
     // a HexIDE Date can hold, it is refused rather than read as some other date.
     private static Vb6Value ToDate(double serial)
     {
-        try
-        {
-            return new Vb6Value(DateTime.FromOADate(serial));
-        }
-        catch (ArgumentException)
-        {
-            throw new NotImplementedException(
-                $"Get of a Date whose serial is {serial.ToString(CultureInfo.InvariantCulture)} is not implemented: it is outside the years 100 to 9999");
-        }
+        if (VbDate.InRange(serial))
+            return new Vb6Value(new VbDate(serial));
+        throw new NotImplementedException(
+            $"Get of a Date whose serial is {serial.ToString(CultureInfo.InvariantCulture)} is not implemented: it is outside the years 100 to 9999");
     }
 
     /// <summary>
@@ -388,7 +388,7 @@ internal static class VbRecordFormat
                 case 9:
                     throw new RecordGetFailure(VBStandardError.TypeMismatch, null);
                 case 10:
-                    throw new NotImplementedException("Get of an Error Variant is not implemented: CVErr is not implemented");
+                    throw new NotImplementedException("Get of an Error Variant is not implemented (#2520)");
                 case 13:
                     throw new RecordGetFailure(VBStandardError.TypeMismatch, Vb6Value.Variant);
                 case 14:
@@ -471,13 +471,15 @@ internal static class VbRecordFormat
     public static void ReadElementsInto(IRecordSource source, VBArray array)
     {
         var element = array.ElementType;
+        if (array.FixedStringWidth is not null)
+            throw new NotImplementedException("Get/Put of an array of fixed-length Strings is not implemented (#179): its record layout is unmeasured");
+        if (element == Vb6Value.ValueType.UserDefinedType)
+            throw new NotImplementedException("Get/Put of an array of a user-defined Type is not implemented (#178)");
         if (array.DeclaredClass is not null || element == Vb6Value.ValueType.Object)
             throw new VBCompileErrorException(ObjectRefused);
         foreach (var index in ColumnMajor(array))
         {
             var current = array.GetValue(index);
-            if (element == Vb6Value.ValueType.UserDefinedType && current.Value is not VbUdt)
-                throw new NotImplementedException("Get of an array of a user-defined Type is not implemented: its elements are not made yet (#178)");
             try
             {
                 if (current.Value is VbUdt udt)
@@ -503,8 +505,11 @@ internal static class VbRecordFormat
     /// </summary>
     public static void ReadUdtInto(IRecordSource source, VbUdt udt)
     {
+        udt.RefuseUnmeasuredLongLongLayout();
         foreach (var (name, current) in udt.EnumerateFields().ToList())
         {
+            if (current.Value is VBArray)
+                throw new NotImplementedException("Get/Put of a Type containing an array field is not implemented (#178)");
             try
             {
                 if (current.Value is VbUdt nested)
@@ -512,7 +517,8 @@ internal static class VbRecordFormat
                 else if (udt.IsVariantField(name))
                     udt.TrySet(name, ReadVariant(source));
                 else if (udt.DeclaredTypeOf(name) is { } type)
-                    udt.TrySet(name, ReadTyped(source, type, prefixed: true));
+                    udt.TrySet(name, ReadTyped(source, type, prefixed: udt.FixedStringWidthOf(name) is null,
+                        unprefixedLength: udt.FixedStringWidthOf(name) ?? 0));
                 else
                     throw new VBCompileErrorException(ObjectRefused);
             }

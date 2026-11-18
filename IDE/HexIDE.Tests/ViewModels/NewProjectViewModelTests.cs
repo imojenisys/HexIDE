@@ -10,20 +10,21 @@ public class NewProjectViewModelTests
     private readonly IWindowManager _windowManager = Substitute.For<IWindowManager>();
     private readonly IRecentProjectsService _recentProjects = Substitute.For<IRecentProjectsService>();
     private readonly ISettingsService _settingsService = Substitute.For<ISettingsService>();
-    private readonly IPersonalityService _personality = Substitute.For<IPersonalityService>();
+    private readonly IProfileService _profile = Substitute.For<IProfileService>();
     private readonly ILocalizationService _localization = Substitute.For<ILocalizationService>();
 
     public NewProjectViewModelTests()
     {
         _recentProjects.GetRecent().Returns(new List<string>());
         _settingsService.PromptForProjectOnStartup.Returns(true);
-        _personality.AvailableProjectTypes.Returns(new List<IProjectTemplate>(IProjectTemplate.Templates));
+        _profile.AvailableProjectTypes.Returns(new List<IProjectTemplate>(Vb6ProjectType.Templates));
         _localization.GetString("Str.NewProject.Msg.Title").Returns("New Project");
         _localization.GetString("Str.NewProject.Msg.VersionDoesNotSupport").Returns("Your HexIDE version doesn't support {0}");
+        _localization.GetString("Str.ProjectType.ActiveXEXE").Returns("localized ActiveX EXE");
         _localization.GetString("Str.NewProject.Msg.ProjectNoLongerExists").Returns("The project file no longer exists:\n{0}");
     }
 
-    private NewProjectViewModel CreateSut() => new(_windowManager, _recentProjects, _settingsService, _personality, _localization);
+    private NewProjectViewModel CreateSut() => new(_windowManager, _recentProjects, _settingsService, _profile, _localization);
 
     [AvaloniaFact]
     public void Title_ShouldBeNewProject()
@@ -46,8 +47,8 @@ public class NewProjectViewModelTests
     {
         var sut = CreateSut();
 
-        sut.Templates.Should().HaveCount(IProjectTemplate.Templates.Length);
-        sut.Templates[0].Name.Should().Be(IProjectTemplate.Templates[0].Name);
+        sut.Templates.Should().HaveCount(Vb6ProjectType.Templates.Length);
+        sut.Templates[0].Name.Should().Be(Vb6ProjectType.Templates[0].Name);
     }
 
     [AvaloniaFact]
@@ -104,7 +105,7 @@ public class NewProjectViewModelTests
 
         received.Should().BeNull();
         _windowManager.Received(1).MessageBox(
-            Arg.Is<string>(s => s.Contains(unsupported.Name)),
+            Arg.Is<string>(s => s.Contains(unsupported.DisplayName) && unsupported.DisplayName == "localized ActiveX EXE"),
             "HexIDE",
             MessageBoxButtons.Ok,
             MessageBoxIcon.Information);

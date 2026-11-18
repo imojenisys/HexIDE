@@ -44,6 +44,10 @@ product's own templates — the two numbers are unrelated, and no layer may hold
 - **THEN** its contents are not drawn on the form, at the offset they would have had against the form's own
   origin or anywhere else
 
+#### Scenario: A Timer's designer position is read by a running program
+- **WHEN** a running program reads a Timer's Left or Top through an Object reference
+- **THEN** it raises run-time error 393 rather than returning the designer position (#2069)
+
 ### Requirement: A container SHALL carry what it holds
 Every operation that acts on a container SHALL act on its contents with it — moving, hiding, disabling,
 deleting, copying and saving alike — as one thing rather than as a container and a set of unrelated
@@ -69,6 +73,12 @@ with nothing to hold them, a copy that arrives empty.
 #### Scenario: Disabling a container
 - **WHEN** a container is disabled
 - **THEN** nothing it holds responds to the user
+- **AND** a contained control's Enabled reads False, including through nested containers and Me.Controls
+
+#### Scenario: Assigning Enabled inside a disabled container
+- **WHEN** a program assigns a contained control's Enabled while a container above it is disabled
+- **THEN** its Enabled still reads False
+- **AND** once its containers are enabled it reads its own assigned value
 
 ### Requirement: A contained control SHALL remain editable in its own right
 A control inside a container SHALL be selectable, movable, resizable, renameable and deletable on its own,
@@ -164,3 +174,297 @@ control produces a file that opens cleanly and is quietly a different form. Refu
 - **WHEN** a component class contributed by an extension has a control nested under it
 - **THEN** it is treated the same way, because the IDE cannot host controls inside a class it did not build
 
+
+
+### Requirement: A running control SHALL expose its container and parent as objects
+For a visual control on a running form, reading Container SHALL return the Frame or PictureBox holding
+it, or the form when it is on the form. Reading Parent SHALL return the form, including when the control
+is nested inside containers. Both results SHALL support subsequent member reads and Set into an object
+variable ([#2064](https://github.com/hexide-io/HexIDE/issues/2064), measured native and p-code;
+[oracle](../../../docs/vb6-fidelity-oracle/controls-add-and-controls-remove.md)).
+
+This requirement does not specify Container assignment or the unexplained Timer and Data Container
+errors recorded in the oracle. Controls.Add is implemented separately (#1556); this requirement covers
+design-time controls.
+
+#### Scenario: A control inside a PictureBox inside a Frame
+- **WHEN** a program reads Text1.Container.Name and Text1.Parent.Name with Text1 inside Picture1 inside Frame1
+- **THEN** the results are Picture1 and the form's name respectively
+
+#### Scenario: A control on the form
+- **WHEN** a program assigns Command1.Container or Command1.Parent to an Object variable
+- **THEN** reading that object's Name gives the form's name
+
+### Requirement: TabStrip top-row drawing
+
+An MSComctlLib.TabStrip SHALL paint its single top row with raised selected tabs (Style 0),
+pressed selected buttons (Style 1), or flat buttons with optional separators (Style 2).
+Caption mnemonic letters SHALL be underlined. Disabled painting SHALL match enabled painting.
+The strip SHALL remain excluded from the designer's container classes.
+
+#### Scenario: Selection changes from code or input
+
+- **WHEN** a supported top-row strip changes its selection, tabs or captions
+- **THEN** it repaints the row with the current selection and captions
+
+#### Scenario: Drawing outside the supported slice
+
+- **WHEN** drawing encounters TabStyle 1, nondefault Placement, MultiRow, TabWidthStyle, fixed sizes or row overflow
+- **THEN** a running form reports the not-implemented error through its event queue
+- **AND** it does not substitute a guessed layout
+
+#### Scenario: Designer drawing outside the supported slice
+
+- **WHEN** the designer previews a strip with an unsupported drawing layout
+- **THEN** it SHALL show the view-only placeholder with the control name and refusal reason
+- **AND** the saved block remains unchanged
+
+### Requirement: TabStrip saved property bags
+
+An MSComctlLib.TabStrip SHALL write its measured own-property order, with `_Version` after the
+scalar properties, then a Tabs block, MousePointer, Font and OLEDropMode. Every tab SHALL write
+ImageVarType, using ImageIndex for type 2 and ImageKey for type 8. Saved selection SHALL be ignored.
+TabFixedWidth, TabFixedHeight and TabMinWidth SHALL load from HIMETRIC. Unsupported property bags
+and loaded blocks lacking measured extents SHALL keep the designer read-only.
+
+#### Scenario: VB6's measured save
+
+- **WHEN** the measured TabStrip form and its ImageList companion are loaded and serialized
+- **THEN** the output matches VB6's save byte for byte, with line endings normalized for the checkout
+- **AND** a minimal strip writes one empty tab with ImageVarType 2
+
+#### Scenario: A missing image key
+
+- **WHEN** a tab declares ImageVarType 8 without ImageKey
+- **THEN** loading refuses the entire form with Type mismatch
+
+#### Scenario: Runtime loading outside the file slice
+
+- **WHEN** a saved TabStrip requires ImageList, Font or tab-image runtime loading
+- **THEN** it reports the not-implemented error rather than silently dropping those properties
+
+#### Scenario: Designer preview of runtime-only properties
+
+- **WHEN** a saved TabStrip with ImageList, Font or tab images is opened in the designer
+- **THEN** preview creation does not raise a runtime not-implemented error
+- **AND** those properties remain carried and view-only, with runtime refusal unchanged
+
+### Requirement: TabStrip focus events
+
+An MSComctlLib.TabStrip SHALL declare and raise GotFocus and LostFocus when it gains and loses focus.
+Mnemonic focus acquisition SHALL raise GotFocus before BeforeClick and Click.
+
+#### Scenario: Mnemonic from another control
+
+- **WHEN** focus is in a TextBox and an Alt caption mnemonic selects a TabStrip tab
+- **THEN** the TabStrip raises GotFocus, BeforeClick and Click in that order
+- **AND** moving focus back to the TextBox raises LostFocus
+
+### Requirement: SSTab page bookkeeping preserves observable positions
+The SSTab runtime container SHALL move children by 75000 twips rather than changing their Visible or
+Enabled values. Interpreter Tab assignments SHALL use this page engine (#1090).
+Initial page membership SHALL be supplied explicitly, rather than inferred from hidden coordinates.
+
+#### Scenario: Leaving and showing a page
+- **WHEN** a page is left
+- **THEN** every current child whose right and bottom edges are at or past zero is recorded for that page,
+  moved left by 75000 twips, and given TabStop False
+- **AND** showing a page moves its recorded children right by exactly 75000 twips at their current positions
+  and restores their recorded TabStop values before notifying the caller with the previous page
+
+#### Scenario: Removing a page with recorded children
+- **WHEN** the requested tab count removes the showing page
+- **THEN** the engine selects page zero first
+- **AND** if a removed page still holds recorded children it raises 380 and keeps the old count, even if a
+  recorded child has since been reparented
+
+#### Scenario: An unmeasured empty tab count
+- **WHEN** zero or a negative tab count is requested with no recorded children on page zero
+- **THEN** the engine explicitly refuses it as not implemented pending a measurement separating that range
+  from refusal for recorded children
+
+### Requirement: SSTab exposes its runtime pages
+A minimal SSTab block SHALL run as a container with three tabs, tab zero showing, three tabs per row,
+and captions Tab 0 through Tab 2. TabCaption, TabEnabled and TabVisible SHALL accept indexes, with
+381 for an invalid index. Tab SHALL reject out-of-range or hidden pages with 380, accept disabled pages,
+and raise Click with the previous tab after movement. Rows SHALL count visible tabs and refuse writes
+with 383. Its implicit default member SHALL read zero and ignore assignments.
+
+Saved own properties and page lists SHALL initialize the runtime pages as described below.
+Unimplemented members and unmeasured property coercions SHALL refuse explicitly.
+Drawing and input are separate slices; this requirement does not define tab-strip rendering.
+
+#### Scenario: Programmatic page selection
+- **WHEN** a program changes SSTab.Tab
+- **THEN** its children move through the position-based page engine and Click receives PreviousTab
+- **AND** assigning the tab already showing raises no Click
+
+#### Scenario: Disabled container reads
+- **WHEN** a program disables an SSTab or Frame
+- **THEN** a child's Enabled reads False while retaining its own enabled setting for when the container is enabled again
+
+### Requirement: SSTab loads saved page metadata
+The runtime SHALL load SSTab page lists independently of child positions, suppress listed TabStops
+according to ControlEnabled, and interpret recorded HIMETRIC dimensions. Saved runtime-only flags SHALL
+be ignored. Unmeasured conversions and child references SHALL refuse explicitly. Designer edits SHALL maintain saved page membership.
+SSTabs with array or unresolved references, or carried child blocks, SHALL remain read-only in the designer.
+
+#### Scenario: Saved pages switch without position repair
+- **GIVEN** a saved SSTab with tab one showing and tab zero's ControlEnabled False
+- **WHEN** the form loads
+- **THEN** children keep their written positions, and listed children with ControlEnabled False lose TabStop
+- **AND** saved TabEnabled, TabVisible and per-control Enabled suffixes are ignored
+- **AND** selecting tab zero brings back its listed controls by exactly 75000 twips
+
+#### Scenario: Missing or true tab-zero flag leaves tab zero on load
+- **GIVEN** a saved SSTab showing a nonzero tab with tab zero's ControlEnabled missing or True
+- **WHEN** the form loads
+- **THEN** on-page children move left by 75000 twips and are recorded for tab zero
+- **AND** the showing tab brings no controls back, so those children show on tab zero instead
+
+### Requirement: SSTab writes saved page metadata
+The writer SHALL emit extenders, extents and version, then SSTab own properties and page metadata in
+measured order. It SHALL retain saved HIMETRIC lengths, page lists, ControlEnabled flags and optional
+companion pictures. It SHALL always write TabHeight (520 when absent) and SHALL omit runtime-only
+TabEnabled and TabVisible. Own properties and page metadata SHALL use the current block’s property
+indentation, including for newly drawn SSTabs nested inside containers.
+
+#### Scenario: VB6-designed forms round-trip
+- **WHEN** either measured SSTab corpus form is loaded and serialized without edits
+- **THEN** its form text and companion records match the saved source exactly
+
+#### Scenario: Extender edit preserves the saved pages
+- **WHEN** an SSTab extender property changes in the model
+- **THEN** the writer emits the changed extender before its own-property run
+- **AND** it preserves page lists, flags and HIMETRIC lengths without inferring membership from positions
+- **AND** each page writes caption, optional picture, ControlEnabled, control references with Enabled suffixes, then ControlCount
+- **AND** even flags triggering the tab-zero load quirk remain as read
+- **AND** designer membership edits regenerate control lists and counts
+
+
+### Requirement: SSTab draws its runtime tab strip
+The runtime SSTab SHALL draw a page and tab captions without insetting its child host. Style 0 SHALL
+share the strip length by TabsPerRow and bold the active caption; Style 1 SHALL size captions individually
+without active bolding. TabMaxWidth SHALL cap tab lengths. Visible captions SHALL pack from the start,
+retaining their share when another tab is hidden. The active row SHALL be nearest the page, with other
+rows behind and offset. Side captions SHALL remain horizontal and clipped to the strip thickness.
+These requirements prescribe relationships, not exact pixel metrics. Appearance/picture member binding
+remains outstanding.
+
+#### Scenario: Selecting a tab in a back row
+- **GIVEN** five tabs with three tabs per row
+- **WHEN** a program selects tab four
+- **THEN** tabs three and four are in the row nearest the page
+- **AND** Style 0 bolds tab four's caption while Style 1 does not
+
+#### Scenario: Drawing does not change page coordinates
+- **WHEN** TabHeight, TabsPerRow, Style, TabMaxWidth or a tab's visibility changes
+- **THEN** the strip is redrawn without moving children or insetting the child host
+- **AND** side orientations draw horizontal captions clipped to each tab
+
+#### Scenario: Caption height and focus indication
+- **GIVEN** WordWrap is True and a caption exceeds its tab's width
+- **THEN** its text wraps and is clipped to the tab's height
+- **AND** the active caption has a dotted focus rectangle only while the SSTab has focus and ShowFocusRect is True
+
+### Requirement: SSTab switches pages through runtime input
+The SSTab SHALL switch tabs on a left caption press after MouseDown and before MouseUp, raising
+Click(PreviousTab) only when the tab changes. Caption presses SHALL focus the SSTab even for disabled
+captions. A double-click SHALL raise DblClick in place of its second MouseDown. Page clicks SHALL
+not raise Click. Mouse coordinates SHALL be in twips.
+
+#### Scenario: Caption press changes the page
+- **WHEN** a user clicks an enabled caption for another tab
+- **THEN** MouseDown runs to completion while Tab still identifies the old page
+- **AND** the tab changes through the same event dispatch before Click(PreviousTab), followed by MouseUp
+- **AND** the SSTab has focus and its page engine has switched the controls
+
+#### Scenario: Disabled caption or page press
+- **WHEN** a user clicks a disabled caption or the page
+- **THEN** MouseDown and MouseUp occur without Click or a tab change
+- **AND** a disabled caption press gives the SSTab focus
+
+### Requirement: SSTab keyboard navigation respects focus
+While the SSTab itself has focus, Left/Right and Ctrl+Tab/Ctrl+Shift+Tab SHALL select the adjacent tab,
+wrapping at the ends, and SHALL stop at a disabled tab without skipping it. Home, End, Up, Down and
+plain letters SHALL not select tabs. Ctrl+Tab SHALL not switch pages from a child control. An Alt
+caption mnemonic from a child SHALL switch to its enabled visible tab and then focus the SSTab.
+
+#### Scenario: Keyboard selects an adjacent tab
+- **GIVEN** the SSTab itself has focus
+- **WHEN** Right or Ctrl+Tab is pressed on the last tab
+- **THEN** tab zero is selected if enabled and visible
+
+#### Scenario: Mnemonic from a child
+- **GIVEN** a child control has focus and tab two has caption &Third
+- **WHEN** Alt+T is pressed
+- **THEN** tab two is selected and the SSTab receives focus
+
+
+### Requirement: SSTab runtime pictures belong to each tab
+As measured in [#3426](https://github.com/hexide-io/HexIDE/issues/3426) (including the corrected control rows,
+#4297), `TabPicture(i)` SHALL return the stored Picture object, initially empty (Type 0), never Nothing.
+Set and Let SHALL accept a Picture by reference; Nothing SHALL clear to an empty Picture.
+A PictureBox or Image SHALL supply a separate Picture object containing its Picture's image.
+String, number, Form, TextBox and Label assignments SHALL raise 13 and preserve the stored picture.
+Indexes SHALL convert as CInt and raise 381 outside the tab range. `Picture` SHALL read and write the
+current tab's picture. Shrinking Tabs SHALL discard pictures beyond the new count.
+A picture SHALL draw at its own pixel size left of its caption, with both centred together;
+a tab without a picture SHALL retain its existing rendering. Native handles (#2626), live
+PictureBox.Image references and saved `.frx` pictures (#2696) remain outside this requirement.
+
+#### Scenario: Stored identity and current tab alias
+- **GIVEN** a Picture assigned to TabPicture(2)
+- **WHEN** Tab is set to 2
+- **THEN** Picture and TabPicture(2) return that same object
+- **AND** reducing Tabs to 2 and increasing it to 3 leaves TabPicture(2) empty
+
+### Requirement: SSTab previews its saved strip in the designer
+The designer SHALL apply the implemented saved strip properties and select the saved Tab, without
+running the runtime-only ControlEnabled tab-zero load quirk. The initial preview SHALL leave saved child
+positions and page metadata unchanged. Design-time `.frx` TabPicture binding remains a later slice (#2696).
+
+#### Scenario: Preview a saved nonzero page
+- **GIVEN** an SSTab saved with tab one showing and custom captions
+- **WHEN** the designer renders its preview
+- **THEN** tab one is selected and the saved captions are used
+- **AND** counts, style, orientation, HIMETRIC dimensions, WordWrap and ShowFocusRect use the same
+  measured saved conversions as the runtime
+- **AND** ControlEnabled flags do not change the designer's showing page
+
+### Requirement: SSTab designer pages maintain saved membership
+The designer SHALL switch pages when a caption is clicked, moving departing children left by 75000 twips
+and restoring arriving children by the same amount. Drawn children and controls cut and pasted within the
+SSTab SHALL join the current page. Saving SHALL write child names, Enabled suffixes of zero and counts
+in the measured page order. A page switch SHALL add no undo entry until VB6 designer undo is measured.
+
+#### Scenario: Draw on a page and save another page showing
+- **GIVEN** tab one is showing in the designer
+- **WHEN** a control is drawn onto it and tab zero is clicked
+- **THEN** the control moves left by 75000 twips
+- **AND** its saved reference belongs to tab one, with the updated ControlCount
+
+#### Scenario: Move a child between pages by cut and paste
+- **WHEN** a child is cut from tab one and pasted with tab zero showing
+- **THEN** it belongs to tab zero and follows tab zero on subsequent switches
+- **AND** saving removes its old reference and writes its new reference
+
+### Requirement: Runtime PictureBox bitmap assignment honors AutoSize
+A running AutoSize PictureBox SHALL fit an assigned bitmap plus its measured border. It SHALL retain dimensions on load, when cleared with LoadPicture(), and when AutoSize is enabled without a picture. Explicit Width SHALL hold until the next picture assignment. [Measurements](../../../docs/vb6-fidelity-oracle/autosize-on-a-label-and-a-picturebox.md).
+
+#### Scenario: Assigning and clearing a bitmap
+- **GIVEN** an AutoSize PictureBox with the default border
+- **WHEN** code assigns a 40 by 30 pixel bitmap with LoadPicture
+- **THEN** Width reads 660 twips and Height reads 510 twips
+- **AND** with no border they read 600 and 450 twips
+- **WHEN** code assigns Width 3000 and clears the picture with LoadPicture()
+- **THEN** Width remains 3000 and Height stays unchanged
+
+#### Scenario: An unmeasured sizing case
+- **WHEN** AutoSize would fit a non-bitmap picture or a flat Fixed Single border
+- **THEN** the runtime refuses as not implemented before replacing the picture
+- **AND** other unmeasured Picture assignment conversions refuse as not implemented
+
+#### Scenario: Turning AutoSize on with a picture already present
+- **WHEN** code enables AutoSize with a picture already present
+- **THEN** the runtime refuses the unmeasured transition as not implemented before changing AutoSize

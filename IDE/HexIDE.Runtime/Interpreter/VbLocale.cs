@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using HexIDE.IDE;
 
 namespace HexIDE.Runtime.Interpreter;
 
@@ -27,10 +28,11 @@ namespace HexIDE.Runtime.Interpreter;
 /// </list>
 /// </para>
 /// <para>
-/// A program sees the culture through <see cref="ForProgram"/>: the user's separators, patterns and names, but two
+/// A program sees the culture through <see cref="ForProgram"/>: the user's separators, patterns and names, but some
 /// things are VB6's own rather than the culture's. A date is always in the Gregorian calendar, and a sign is always an
 /// ASCII <c>-</c> or <c>+</c>. Both were decided for writing, in <see cref="VbDisplay"/> (#779), and reading has to
-/// agree with writing, or <c>CDate(CStr(d))</c> is a different date.
+/// agree with writing, or <c>CDate(CStr(d))</c> is a different date. Nonbreaking spaces in date/time
+/// patterns and AM/PM designators become ordinary spaces, matching Windows locale data (#2102).
 /// </para>
 /// <para>
 /// What it governs: the text a value becomes (<c>CStr</c>, <c>&amp;</c>, <c>Format</c>), and text a program reads
@@ -45,15 +47,19 @@ public static class VbLocale
     /// <summary>The cultures <see cref="ForProgram"/> had to change, by the culture they came from.</summary>
     private static readonly ConditionalWeakTable<CultureInfo, CultureInfo> Adapted = new();
 
-    /// <summary>The user's locale, set by the host at startup. Null until a host sets it.</summary>
-    public static CultureInfo? Default { get; set; }
+    /// <summary>The user's locale, set by the host at startup, and held as <see cref="UserRegion.Culture"/>. Null until a host sets it.</summary>
+    public static CultureInfo? Default
+    {
+        get => UserRegion.Culture;
+        set => UserRegion.Culture = value;
+    }
 
     /// <summary>The locale the running program uses now, as <see cref="ForProgram"/> gives it.</summary>
     public static CultureInfo Current => ForProgram(Scoped.Value ?? Default ?? CultureInfo.CurrentCulture);
 
     /// <summary>
     /// <paramref name="culture"/> as a VB6 program reads and writes it: the same culture, but with the Gregorian
-    /// calendar and ASCII signs.
+    /// calendar, ASCII signs and ordinary spaces in date/time patterns and AM/PM designators.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -68,16 +74,26 @@ public static class VbLocale
     /// Windows' own locale data, which VB6 reads, does not.
     /// </para>
     /// <para>
-    /// A culture already in that shape is returned unchanged, so a user's own overrides, such as a moved two-digit-year
+    /// Gregorian-default locales take date patterns and names from live NLS on Windows (#2041), and from
+    /// the checked-in Windows defaults elsewhere (#3928). Locales absent from the table retain ICU. Other cultures
+    /// already in that shape are returned unchanged. A user's other overrides, such as a moved two-digit-year
     /// window, reach the program. <c>CultureInfo.Calendar</c> is still the culture's own calendar on the result; read
     /// <c>DateTimeFormat.Calendar</c>.
     /// </para>
     /// </remarks>
-    public static CultureInfo ForProgram(CultureInfo culture) =>
+    public static CultureInfo ForProgram(CultureInfo culture) => ForProgram(culture, DateLocaleAppliesTo);
+
+    internal static CultureInfo ForProgram(CultureInfo culture, Func<CultureInfo, bool> appliesTo) =>
         culture.DateTimeFormat.Calendar is GregorianCalendar
         && culture.NumberFormat.NegativeSign == "-" && culture.NumberFormat.PositiveSign == "+"
+        && !HasNonbreakingSpaces(culture.DateTimeFormat)
+        && !appliesTo(culture)
             ? culture
             : Adapted.GetValue(culture, Adapt);
+
+    private static bool DateLocaleAppliesTo(CultureInfo culture) => OperatingSystem.IsWindows()
+        ? WindowsDateLocale.AppliesTo(culture)
+        : WindowsDateTable.AppliesTo(culture);
 
     private static CultureInfo Adapt(CultureInfo culture)
     {
@@ -98,10 +114,39 @@ public static class VbLocale
                 format.YearMonthPattern = WithoutEra(format.YearMonthPattern);
             }
         }
+        if (DateLocaleAppliesTo(culture))
+        {
+            if (OperatingSystem.IsWindows())
+                WindowsDateLocale.Apply(adapted);
+            else
+                WindowsDateTable.Apply(adapted);
+        }
+        var dates = adapted.DateTimeFormat;
+        var fullDateTimePattern = dates.FullDateTimePattern;
+        dates.ShortDatePattern = OrdinarySpaces(dates.ShortDatePattern);
+        dates.LongDatePattern = OrdinarySpaces(dates.LongDatePattern);
+        dates.ShortTimePattern = OrdinarySpaces(dates.ShortTimePattern);
+        dates.LongTimePattern = OrdinarySpaces(dates.LongTimePattern);
+        dates.FullDateTimePattern = OrdinarySpaces(fullDateTimePattern);
+        dates.MonthDayPattern = OrdinarySpaces(dates.MonthDayPattern);
+        dates.YearMonthPattern = OrdinarySpaces(dates.YearMonthPattern);
+        dates.AMDesignator = OrdinarySpaces(dates.AMDesignator);
+        dates.PMDesignator = OrdinarySpaces(dates.PMDesignator);
         adapted.NumberFormat.NegativeSign = "-";
         adapted.NumberFormat.PositiveSign = "+";
         return CultureInfo.ReadOnly(adapted);
     }
+
+    private static bool HasNonbreakingSpaces(DateTimeFormatInfo format) =>
+        HasNonbreakingSpaces(format.ShortDatePattern) || HasNonbreakingSpaces(format.LongDatePattern)
+        || HasNonbreakingSpaces(format.ShortTimePattern) || HasNonbreakingSpaces(format.LongTimePattern)
+        || HasNonbreakingSpaces(format.FullDateTimePattern) || HasNonbreakingSpaces(format.MonthDayPattern)
+        || HasNonbreakingSpaces(format.YearMonthPattern) || HasNonbreakingSpaces(format.AMDesignator)
+        || HasNonbreakingSpaces(format.PMDesignator);
+
+    private static bool HasNonbreakingSpaces(string text) => text.IndexOfAny(['\u202f', '\u00a0']) >= 0;
+
+    private static string OrdinarySpaces(string text) => text.Replace('\u202f', ' ').Replace('\u00a0', ' ');
 
     /// <summary><paramref name="pattern"/> without its era (<c>g</c> or <c>gg</c>), or the space that set it apart.</summary>
     private static string WithoutEra(string pattern)

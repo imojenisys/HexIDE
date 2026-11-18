@@ -45,6 +45,22 @@ internal sealed class ConsentStore
         Save();
     }
 
+    public void RecordWorkspace(string serverId, string workspaceRoot, string key, string? artifactPath = null,
+        string? provider = null)
+    {
+        _byHash[key] = new AddinConsentRecord
+        {
+            Id = serverId,
+            ManifestHash = key,
+            WorkspaceRoot = workspaceRoot,
+            ArtifactPath = artifactPath,
+            Provider = provider,
+            Decision = ConsentDecisions.Allow,
+            TimestampUtc = DateTime.UtcNow.ToString("o"),
+        };
+        Save();
+    }
+
     /// <summary>Drops the recorded decision for a manifest hash, so the add-in is re-prompted next launch.</summary>
     public void Revoke(string manifestHash)
     {
@@ -87,13 +103,16 @@ internal sealed class ConsentStore
         return map;
     }
 
+    public IReadOnlyCollection<AddinConsentRecord> Records => _byHash.Values;
+
     private void Save()
     {
         try
         {
             var data = new AddinConsentFile { Consents = _byHash.Values.ToArray() };
             var bytes = JsonSerializer.SerializeToUtf8Bytes(data, AddinConsentJsonContext.Default.AddinConsentFile);
-            File.WriteAllBytes(_filePath, bytes);
+            Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
+            AtomicFileWriter.WriteRecoverableBytes(_filePath, bytes);
         }
         catch (Exception ex)
         {

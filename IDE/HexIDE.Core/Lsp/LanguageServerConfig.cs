@@ -33,6 +33,20 @@ public sealed class LanguageServerConfigFile
     /// </remarks>
     [JsonPropertyName("capture")]
     public CaptureLimitsEntry? Capture { get; set; }
+
+    /// <summary>
+    /// Arguments added to an entry's own, by entry id, without replacing the entry (#262).
+    /// </summary>
+    /// <remarks>
+    /// <b>A channel of its own rather than a merge or a placeholder.</b> A complete user entry that shares a default's id
+    /// replaces it wholesale, and the bundled server's command is found at run time, so this channel lets the user
+    /// pass that server one more argument. An incomplete entry can adjust default fields, including replacing
+    /// arguments; this channel appends arguments instead. A placeholder for the found command would bring a template language
+    /// into a file that has none. This adjusts arguments and nothing else, and it is written apart from the servers,
+    /// so the effective entry can still be read off the file.
+    /// </remarks>
+    [JsonPropertyName("arguments")]
+    public Dictionary<string, ServerArguments>? Arguments { get; set; }
 }
 
 /// <summary>
@@ -54,6 +68,10 @@ public sealed class LanguageServerConfigFile
 /// </remarks>
 public sealed class WorkspaceArtifactEntry
 {
+    /// <summary>Provider-owned settings, passed through without interpreting their schema.</summary>
+    [JsonPropertyName("settings")]
+    public JsonElement? Settings { get; set; }
+
     /// <summary>
     /// Where the file goes, relative to the workspace root.
     /// </summary>
@@ -68,6 +86,16 @@ public sealed class WorkspaceArtifactEntry
     /// <summary>The registered provider that produces the content.</summary>
     [JsonPropertyName("provider")]
     public string? Provider { get; set; }
+
+    /// <summary>
+    /// Restart the server when a regeneration changes the file, for a server that reads it only when it starts (#2072).
+    /// </summary>
+    /// <remarks>
+    /// Off unless set: a server that watches its own artefact, as clangd does its compilation database, loses its state
+    /// for nothing when restarted. A stopgap for servers that don't yet re-read the file themselves.
+    /// </remarks>
+    [JsonPropertyName("restartOnChange")]
+    public bool? RestartOnChange { get; set; }
 
     /// <summary>Anything unrecognised inside this object, so a misspelling here is reportable too.</summary>
     [JsonExtensionData]
@@ -138,7 +166,7 @@ public sealed class CaptureLimitsEntry
 /// </summary>
 public sealed class LanguageServerEntry
 {
-    /// <summary>Stable identity. A user entry carrying a default's id replaces that default.</summary>
+    /// <summary>Stable identity. A complete user entry replaces the default; an incomplete one adjusts written fields.</summary>
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
@@ -160,7 +188,7 @@ public sealed class LanguageServerEntry
     [JsonPropertyName("languageId")]
     public string? LanguageId { get; set; }
 
-    /// <summary><c>stdio</c>, <c>pipe</c> or <c>websocket</c>.</summary>
+    /// <summary><c>stdio</c>, <c>pipe</c>, <c>websocket</c> or <c>tcp</c>.</summary>
     [JsonPropertyName("transport")]
     public string? Transport { get; set; }
 
@@ -185,6 +213,10 @@ public sealed class LanguageServerEntry
     [JsonPropertyName("websocketRole")]
     public string? WebSocketRole { get; set; }
 
+    /// <summary><c>connect</c> (default) or <c>listen</c> for a TCP endpoint.</summary>
+    [JsonPropertyName("tcpRole")]
+    public string? TcpRole { get; set; }
+
     // ── pipe ──────────────────────────────────────────────────────────────────────────────────────────
     [JsonPropertyName("pipeName")]
     public string? PipeName { get; set; }
@@ -192,6 +224,14 @@ public sealed class LanguageServerEntry
     /// <summary><c>connect</c> (default) or <c>listen</c>.</summary>
     [JsonPropertyName("pipeRole")]
     public string? PipeRole { get; set; }
+
+    /// <summary>Server-owned settings, answered by section without interpreting their schema.</summary>
+    [JsonPropertyName("settings")]
+    public JsonElement? Settings { get; set; }
+
+    /// <summary>Server-specific JSON passed unchanged in the initialize request.</summary>
+    [JsonPropertyName("initializationOptions")]
+    public JsonElement? InitializationOptions { get; set; }
 
     /// <summary>
     /// Decides which server answers where only one can. Absent means zero; the entries HexIDE contributes
@@ -227,6 +267,22 @@ public sealed class LanguageServerEntry
     /// </remarks>
     [JsonPropertyName("capture")]
     public CaptureLimitsEntry? Capture { get; set; }
+
+    /// <summary>Restart on project membership changes for servers that ignore folder notifications.</summary>
+    [JsonPropertyName("restartOnProjectChange")]
+    public bool? RestartOnProjectChange { get; set; }
+
+    /// <summary>
+    /// Whether AI Chat may use the tools and context this server offers under <c>experimental.hexide.chatTools</c>
+    /// (#4257): <c>"hints"</c>, the default, asks before each call unless the tool says it only reads; <c>"ask"</c> asks
+    /// before every call and takes no context; <c>"off"</c> uses none. See <see cref="ServerChatToolsSetting"/>.
+    /// </summary>
+    [JsonPropertyName("chatTools")]
+    public string? ChatTools { get; set; }
+
+    /// <summary>A command and argument template for importing the in-memory project.</summary>
+    [JsonPropertyName("projectImport")]
+    public ProjectImportEntry? ProjectImport { get; set; }
 
     /// <summary>
     /// A file this server needs to exist, in the workspace, before it starts.
@@ -281,7 +337,15 @@ public sealed record LanguageServerConfigProblem(
     string? EntryId,
     string Message,
     bool EntryRejected,
-    LanguageServerConfigProblemKind Kind = LanguageServerConfigProblemKind.Configuration);
+    LanguageServerConfigProblemKind Kind = LanguageServerConfigProblemKind.Configuration)
+{
+    /// <summary>Display-time message code and verbatim arguments. Message remains English for logs.</summary>
+    public string? Code { get; init; }
+    public object[] Arguments { get; init; } = [];
+
+    public LanguageServerConfigProblem WithDetails(string code, params object[] arguments) =>
+        this with { Code = code, Arguments = arguments };
+}
 
 public enum LanguageServerConfigProblemKind
 {
