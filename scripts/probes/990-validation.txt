@@ -1,0 +1,219 @@
+Issue #990 validation record (2026-11-18, WSL/Linux, .NET 11)
+
+Base: upstream/main 86dcc6c50. Changes intentionally remain uncommitted.
+No push, PR, gh, MCP call, VB6 measurement, or twinBASIC compiler use.
+
+BEFORE-CHANGE PROOF
+New/updated cases on main: 120 failed; 10 already passed. No skips.
+  CoordinateSystemTests: 97-case main run: 95 failed, 2 passed.
+  Additional late-bound Scale guards: 4 failed on main.
+  Additional arity guards: 4 failed with the main-built runtime assembly.
+    These VB-program tests call no newly added CLR member; the main assembly came
+    from the unchanged-product main build used for the pointer baseline.
+  Runtime ScaleStatementTests: 10 failed, 1 passed.
+  LSP ScaleStatementTests: 3 failed, 7 passed.
+  Updated metric position cases: 2 failed on main.
+  Updated second-form scale load: 1 failed on main.
+  Updated pointer/centimetre case: 1 failed on main through real input at 150%.
+
+Already-correct main regression guards:
+  HexIDE.Runtime.Tests.ScaleStatementTests.ScaleMode_still_parses_as_an_assignment
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "Form1.Scale (0, 0)-(1, 1)")
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "Scale")
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "Picture1.Scale (0, 100)-(10, 0)")
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "Me.Scale (0, 100)-(10, 0)")
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "Scale (0, 100)-(10, 0)")
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "Me.Scale")
+  HexIDE.VbLspServer.Tests.ScaleStatementTests.Scale_and_its_properties_parse(statement: "ScaleMode = 3")
+  HexIDE.Runtime.Integration.Tests.Views.CoordinateSystemTests.Initial_properties_have_the_measured_type_and_value(target: "Me.", member: "ScaleWidth", expected: "4680 Single")
+  HexIDE.Runtime.Integration.Tests.Views.CoordinateSystemTests.Initial_properties_have_the_measured_type_and_value(target: "Me.", member: "ScaleHeight", expected: "3195 Single")
+
+MEASUREMENT AND LIMITS
+docs/vb6-fidelity-oracle/the-coordinate-system-scalemode-scale-scalex-and-scaley.md
+https://github.com/hexide-io/HexIDE/issues/990 (final comment: measured cm/mm factor)
+No oracle file was edited. Cm/mm results are tested through CStr, not raw Single bits.
+Accepted known miss: inches to centimetres prints 2.540002 versus VB6 2.540003.
+Late-bound Scale, saved User scales lacking extents, and ScaleX/ScaleY arities
+outside 1-3 refuse naming #990. UserControl scale support remains outside this slice.
+PictureBox resize and non-96-dpi fidelity remain unmeasured; no new VB6 values are pinned.
+Mouse user-scale mapping is the brief's explicit decision; no new fidelity test.
+Scale as a conditional constant remains unmeasured: prior identifier handling is retained.
+CurrentX/CurrentY and drawing belong to #988.
+New diagnostics are interpreter/program error payloads in English; no IDE chrome text was added.
+
+MISSING_LANGUAGE COUNTS
+Scale moves Dies -> Partial. Total Dies 59 -> 58; Partial 506 -> 507.
+In-box absent 44 -> 43; partial 41 -> 42. Total names remains 1192.
+No test-count floor was changed.
+
+LIVE CHECK FOR SUPERVISOR
+Run the 4680x3195-twip form and its default-border PictureBox. Set a user scale,
+switch to pixels and back, set child positions, and confirm geometry stays at the
+same physical points. Check mouse X/Y in the active scale and resize the form:
+a user unit retains its size. Verify client extents exclude the PictureBox border.
+
+Possible drift: none.
+
+FILES CHANGED
+  IDE/HexIDE.Integration.Tests/Views/MouseEventTests.cs
+  IDE/HexIDE.Runtime.Integration.Tests/Views/ControlPositionTests.cs
+  IDE/HexIDE.Runtime.Integration.Tests/Views/CoordinateSystemTests.cs
+  IDE/HexIDE.Runtime.Integration.Tests/Views/FormInstanceTests.cs
+  IDE/HexIDE.Runtime.Integration.Tests/Views/SeveralFormsTests.cs
+  IDE/HexIDE.Runtime.Tests/ScaleStatementTests.cs
+  IDE/HexIDE.Runtime/AvaloniaInterop/AvaloniaMethodsInteroperability.cs
+  IDE/HexIDE.Runtime/AvaloniaInterop/ControlPositions.cs
+  IDE/HexIDE.Runtime/AvaloniaInterop/DesignPositions.cs
+  IDE/HexIDE.Runtime/AvaloniaInterop/RuntimeScale.cs
+  IDE/HexIDE.Runtime/BuiltinControls/AttachedEvents.cs
+  IDE/HexIDE.Runtime/Interpreter/ConditionalCompilation/ConstantExpression.cs
+  IDE/HexIDE.Runtime/Interpreter/ExpressionExecutor.cs
+  IDE/HexIDE.Runtime/Interpreter/FormMembers.cs
+  IDE/HexIDE.Runtime/Interpreter/Grammar/VB6.g4
+  IDE/HexIDE.Runtime/Interpreter/StatementExecutor.cs
+  IDE/HexIDE.Runtime/VBLoader.cs
+  LspServer/HexIDE.VbLspServer.Tests/ScaleStatementTests.cs
+  LspServer/HexIDE.VbLspServer/Grammar/VisualBasic6Lexer.g4
+  LspServer/HexIDE.VbLspServer/Grammar/VisualBasic6Parser.g4
+  LspServer/HexIDE.VbLspServer/VbConditionalCompilation.cs
+  changelog.d/990.md
+  docs/MISSING_LANGUAGE.md
+  docs/lsp-server-features.md
+  openspec/specs/interpreter-core/spec.md
+  scripts/probes/990-validation.txt
+
+COMPLETED CHECKS
+Runtime (full): total 9927, passed 9907, failed 0, skipped 20.
+Skipped (not claimed as coverage):
+  HexIDE.Runtime.Tests.VbSettingsStoreTests.A_value_another_program_wrote_that_is_not_text_reads_as_no_text
+  HexIDE.Runtime.Tests.VbSettingsStoreTests.The_registry_keeps_each_setting_as_text_as_vb6_exe_does
+  HexIDE.Runtime.Tests.UiThreadTests.Child_ReportsTheUiThreadsStack
+  HexIDE.Runtime.Tests.ContainerHierarchySaveTests.RoundTrip_OfVb6sOwnNestedTemplates_ReproducesTheBeginStructure
+  HexIDE.Runtime.Tests.Vb6OracleRoundTripTests.HexIDE_output_still_builds_in_vb6
+  HexIDE.Runtime.Tests.ShellTests.RecordsMeasuredStylesAndDefault
+  HexIDE.Runtime.Tests.Vb6TextFileTests.The_one_corpus_file_with_high_bytes_round_trips
+  HexIDE.Runtime.Tests.ClassHeaderPreservationTests.A_renamed_module_retargets_VB_Name_but_keeps_everything_else
+  HexIDE.Runtime.Tests.ClassHeaderPreservationTests.A_real_vb6_class_round_trips_byte_for_byte
+  HexIDE.Runtime.Tests.ClassHeaderPreservationTests.Instancing_and_data_binding_settings_survive
+  HexIDE.Runtime.Tests.MenuHierarchySaveTests.Vb6sOwnMenuTemplates_AreNoLongerHeldReadOnly
+  HexIDE.Runtime.Tests.MenuHierarchySaveTests.RoundTrip_OfVb6sOwnMenuTemplates_ReproducesTheMenuShape
+  HexIDE.Runtime.Tests.LocaleCompareTests.StrComp_matches_every_measured_cell_on_Windows
+  HexIDE.Runtime.Tests.WindowsDateLocaleTests.Date_output_matches_GetDateFormatEx
+  HexIDE.Runtime.Tests.WindowsDateLocaleTests.Era_date_output_matches_GetDateFormatEx_and_reads_without_a_wrong_date
+  HexIDE.Runtime.Tests.FileSystemTests.Windows_error_rows
+  HexIDE.Runtime.Tests.FileSystemTests.Windows_attribute_rows
+  HexIDE.Runtime.Tests.FileSystemTests.Windows_name_rows
+  HexIDE.Runtime.Tests.FileSystemTests.CurDir_uses_only_the_first_drive_character
+  HexIDE.Runtime.Tests.FileSystemTests.Windows_numeric_rows
+Runtime integration (full): total 3398, passed 3396, failed 0, skipped 2.
+Skipped (not claimed as coverage):
+  HexIDE.Runtime.Integration.Tests.Views.ToolbarCaptionTests.Windows_caption_width_follows_installed_fonts_Gdi_extent
+  HexIDE.Runtime.Integration.Tests.Views.ToolbarCaptionTests.Segoe_UI_nine_point_matches_console_measurements
+Bundled LSP (full): total 796, passed 796, failed 0, skipped 0.
+MouseEventTests (real pointer route): total 80, passed 80, failed 0, skipped 0.
+MissingLanguageDocTests: 20 passed, zero skips.
+LiteralTests after preserving conditional Scale names: 141 passed, zero skips.
+Headless runtime and mouse xUnit reports checked: no hidden errors.
+Tree hygiene: passed; 9 existing warnings, none blocking. Identity scan not configured.
+git diff --check: passed.
+Build/test environment: Windows PATH entries removed; UseSharedCompilation=false;
+writable XDG_RUNTIME_DIR; clone-local NuGet caches; serial builds without MSBuild node reuse.
+Full suites use dotnet test --no-build after explicit successful project builds.
+The standard-module Scale assertion also requires VBCompileErrorException: rerun on
+main failed (1 case); the final ScaleStatementTests class passed all 11 cases.
+
+First full IDE run (before final conditional-name/grammar compatibility edits):
+total 10315; passed 10243; failed 0; skipped 72; elapsed 60m49s.
+xUnit report checked: no hidden errors. A full run on the frozen tree follows.
+
+FINAL FULL IDE RESULT
+Total 10315; passed 10242; failed 1; skipped 72; elapsed 58m23s.
+xUnit report checked: no hidden initialization/assembly errors.
+Failure: HexIDE.Tests.DebugAdapter.ForeignAdapterTests.Debugpy_runs_a_complete_session.
+debugpy 1.8.22 exited 1 during disconnect while reporting debugpySockets.
+The recorded traceback ends in debugpy.common.messaging.NoMoreMessages and AssertionError.
+The trace resembles the previously documented #3894 disconnect problem in docs/dap-client.md;
+its exact cause was not established in this run. DAP/Core/ForeignAdapterTests have no task changes.
+Isolated reproduction: copy of the test output using the main-built Runtime assembly;
+DAP, Core, and test source are unchanged main code. 18 repeated debugpy sessions passed,
+zero skips, so this did not reproduce on main. Do not call this a proved main failure.
+The earlier full IDE run passed all 10243 runnable cases. The final full run is not green.
+IDE skips (not claimed as coverage):
+  HexIDE.Tests.LspClient.WorkspaceArtifactProjectTests.TheTypeLibraryNamesOleAutomationStdole
+  HexIDE.Tests.LspClient.WorkspaceArtifactProjectTests.ALocalTypeLibraryIsNamedFromItsFile
+  HexIDE.Tests.Tools.ProjectTreeBuilderTests.CrossDriveMember_RendersAtRoot
+  HexIDE.Tests.Tools.ProjectTreeBuilderTests.ForwardSlashPath_NormalizesAndNests
+  HexIDE.Tests.Tools.ProjectTreeBuilderTests.AMemberWithNoRelativeForm_CaptionsItsAbsoluteLocation
+  HexIDE.Tests.Addins.PackageVerificationTests.Locked_signature_file_yields_Untrusted_not_an_exception
+  HexIDE.Tests.Projects.ClassModuleSaveFidelityTests.Editing_the_body_leaves_the_header_untouched
+  HexIDE.Tests.Projects.ClassModuleSaveFidelityTests.Saving_a_project_leaves_an_untouched_class_byte_identical
+  HexIDE.Tests.Projects.ClassModuleSaveFidelityTests.A_reload_from_disk_also_preserves_the_header
+  HexIDE.Tests.Infrastructure.ProjectWriteSafetyTests.A_copy_that_cannot_be_removed_is_kept_and_named
+  HexIDE.Tests.Projects.ContributedProjectTests.A_contributed_project_already_open_is_refused_when_opened_again_with_different_drive_and_folder_case
+  HexIDE.Tests.LspClient.WireStressTests.ConcurrentConnectionsKeepEveryFrameValid
+  HexIDE.Tests.LspClient.LspDocumentSessionTests.AWindowsDriveLetterInTheOtherCaseStillMatches
+  HexIDE.Tests.UserDataPathTests.OnWindowsItIsUnderAppData
+  HexIDE.Tests.Server.ProcessWindowsToolTests.A_minimized_program_is_read_as_minimized_and_visible
+  HexIDE.Tests.Server.ProcessWindowsToolTests.A_program_started_hidden_is_read_as_hidden_and_the_note_says_vbHide_did_it
+  HexIDE.Tests.Server.ProcessWindowsToolTests.A_window_of_a_process_the_started_one_started_is_read_through_it
+  HexIDE.Tests.Server.ProcessWindowsToolTests.A_running_process_with_no_window_is_said_to_have_none_yet
+  HexIDE.Tests.Infrastructure.WindowStateUnconfirmedTests.On_Windows_the_probe_does_not_guess
+  HexIDE.Tests.IDE.CodeTrustTests.Windows_reads_the_Zone_Identifier_stream_beside_a_file
+  HexIDE.Tests.IDE.CodeTrustTests.MacOS_reads_the_quarantine_attribute
+  HexIDE.Tests.Profiles.ProfileReaderSafetyTests.WindowsPipeHandleIsRefused
+  HexIDE.Tests.Profiles.ProfileContainmentTests.JunctionEscapeIsRefused
+  HexIDE.Tests.Profiles.ProfileContainmentTests.JunctionSwappedInAfterPreflightIsRefusedDuringRead
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "revocations.sig")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "hexide-root.pub")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "revocations-cache.json")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "brand.json")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "revocations-cache.signed")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "revocations.json")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "nested/HEXIDE-FIRSTPARTY.PUB")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "LICENSE")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "acme-ide.exe")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "revocations-cache.sig")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "HexIDE.exe")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: "branding/logo.png")
+  HexIDE.Tests.Repack.WindowsRepackerTests.Every_file_but_the_executable_is_exactly_as_published
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_missing_folder_is_refused
+  HexIDE.Tests.Repack.WindowsRepackerTests.A_default_profile_folder_travels_with_the_brand
+  HexIDE.Tests.Repack.WindowsRepackerTests.A_branded_process_declares_that_identity_to_Windows
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_links_are_refused_at_the_root_or_inside
+  HexIDE.Tests.Repack.WindowsRepackerTests.The_brands_files_land_where_the_IDE_will_look_for_them
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_folder_below_a_link_is_allowed
+  HexIDE.Tests.Repack.WindowsRepackerTests.A_brand_with_no_copyright_keeps_stocks_rather_than_claiming_none
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_files_reach_the_installable_payload_and_report
+  HexIDE.Tests.Repack.WindowsRepackerTests.A_signed_stock_executable_comes_out_unsigned_and_the_run_says_so
+  HexIDE.Tests.Repack.WindowsRepackerTests.The_installer_inputs_are_written_beside_the_build_and_not_inside_it
+  HexIDE.Tests.Repack.WindowsRepackerTests.The_icon_is_the_brands_with_nothing_left_of_stocks
+  HexIDE.Tests.Repack.WindowsRepackerTests.A_repacked_executable_says_it_is_the_brand_when_Windows_reads_it
+  HexIDE.Tests.Repack.WindowsRepackerTests.A_run_that_fails_partway_leaves_nothing_behind
+  HexIDE.Tests.Repack.WindowsRepackerTests.Included_output_ancestor_is_refused_before_staging
+  HexIDE.Tests.LspClient.TypeLibraryServicePathTests.GuidOnlyReferenceLoadsWindowsOleAutomationLibrary
+  HexIDE.Tests.Repack.LinuxRepackerTests.A_linux_build_is_refused_on_windows
+  HexIDE.Tests.IDE.EditorServiceNavigationTests.AFileUriWhoseDriveLetterTheServerNormalisedStillResolves
+  HexIDE.Tests.Projects.MadeProgramTests.A_made_program_starts_and_runs_its_Sub_Main
+  HexIDE.Tests.Sidecar.UserSidecarSaveTests.TheProjectsOwnSidecarSpelledInAnotherCaseIsStillItsOwn
+  HexIDE.Tests.Projects.DuplicateProjectOpenTests.Opening_the_same_project_with_different_drive_and_folder_case_is_refused
+  HexIDE.Tests.LspClient.TypeLibraryNamesTests.ALocalLinkToAShareIsNotALocalPath
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.A_second_save_still_leaves_the_companion_intact
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.AFormWhoseBlobsAreAllModelled_DoesNotRaiseTheLossFlag
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.The_form_records_that_it_lost_binary_fidelity
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.Saving_never_shrinks_or_deletes_a_companion_it_cannot_reproduce
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.Dropping_a_blob_bearing_control_keeps_both_halves_in_step
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.A_form_whose_records_HexIDE_does_not_model_saves_both_halves_as_VB6_wrote_them
+  HexIDE.Tests.Projects.CompanionBinaryPreservationTests.A_form_that_reproduces_its_companion_is_never_denied_the_write
+  HexIDE.Tests.Processes.ChildProcessJobTests.Closing_the_job_ends_the_process_put_in_it
+  HexIDE.Tests.Processes.ChildProcessJobTests.A_process_left_out_of_the_job_outlives_it
+  HexIDE.Tests.Processes.ChildProcessJobTests.A_closed_job_refuses_a_process
+  HexIDE.Tests.Repack.MacRepackerTests.macOS_accepts_the_property_list_signature_and_icon
+  HexIDE.Tests.Repack.MacRepackerTests.A_mac_build_is_refused_on_windows
+  HexIDE.Tests.Repack.MacRepackerTests.A_sealed_bundle_is_resealed_after_branding
+  HexIDE.Tests.Repack.MacRepackerTests.A_mac_build_is_repacked_as_one
+
+All 130 issue cases ran without skips: 120 fail before the change; 10 already pass on main.
+
+Post-full-run adapter class retry: 6 passed, zero failures, zero skips (33s).
+This does not erase the full-run debugpy failure or establish its cause.
+Final git diff --check and tree hygiene passed; no commits or remote actions.
