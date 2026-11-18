@@ -32,7 +32,8 @@ public sealed class VbObject
     /// <summary>
     /// For an instance of a form module, the window it runs in, whose built-in members (Caption, Width, Hide and the
     /// rest) the instance answers for once its own procedures, properties, fields and controls have been looked at.
-    /// Null for a class instance, and for a form run with no window behind it, as a test's is (#822).
+    /// Also holds a placed UserControl's owner for its coordinate members (#4693). Null for other class instances,
+    /// and for a form run with no window behind it, as a test's is (#822).
     /// </summary>
     public Avalonia.Controls.Control? FormWindow { get; set; }
 
@@ -63,7 +64,7 @@ public sealed class VbObject
     /// with a window. Asks for the form to be loaded first while it isn't (see <see cref="FormLoaded"/>).
     /// </summary>
     public Avalonia.Controls.Control? BuiltInMembersFor(string member) =>
-        FormWindow is null ? null
+        FormWindow is null || ClassDef.HostedControl ? null
         : FormLoaded ? FormWindow
         : throw new FormLoadNeeded(this, $"{ClassName}.{member}");
 

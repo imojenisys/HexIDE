@@ -2002,6 +2002,14 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
         CommonDialogMembers.Check(variable, memberIdentifier);
 
+        if (variable.Value is VBUserControl.RootObject root)
+        {
+            if (throughObject && FormMembers.IsCoordinateMember(MemberName(member)))
+                throw new NotImplementedException($"UserControl.{memberIdentifier} is not implemented (#1631)");
+            if (RuntimeScale.IsConversion(MemberName(member)))
+                return RuntimeScale.ConvertUnits(root.Owner, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
+        }
+
         // A CSharp property bag (e.g. Err.Number) resolves its own properties by name.
         if (variable.Value is ICSharpPropertyBag propertyBag && propertyBag.TryGetProperty(memberIdentifier, out var bagValue))
             return bagValue;
@@ -2011,6 +2019,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
         // Every member of a control Controls.Remove took out is 735, its Name included (measured, #1556).
         VBProps.RefuseIfRemoved(control);
+        if (throughObject && control is (VBTextBox or VBUserControl) && RuntimeScale.IsConversion(MemberName(member)))
+            throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
         if (control is VBPictureBox && RuntimeScale.IsConversion(MemberName(member)))
             return RuntimeScale.ConvertUnits(control, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
 
@@ -2048,7 +2058,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             if (AvaloniaInteroperability.TryGet(control, prop, out var value))
                 return value;
         }
-        if (RuntimeScale.TryGet(control, memberIdentifier, out var scaleMember))
+        if (control is not VBUserControl && RuntimeScale.TryGet(control, memberIdentifier, out var scaleMember))
             return scaleMember;
         // FontName, which is no property of its own here but the name of the control's font (#1141).
         if (FontMembers.TryGet(control, memberIdentifier, out var fontMember))
