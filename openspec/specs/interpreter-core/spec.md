@@ -2399,6 +2399,12 @@ coordinate system, with the state, syntax, pixels and refusals measured for
   and AutoRedraw/FontTransparent Booleans
 - **AND** current positions remain whole twips rounded half to even and keep their physical positions across scale changes
 
+#### Scenario: Drawing placement follows display scaling and resizing
+- **WHEN** a form or PictureBox displays its drawing surface at any render scaling, including after resizing
+- **THEN** each bitmap pixel covers one device-independent unit, aligned with the contained controls
+- **AND** neighbouring bitmap pixels retain their own colours without smoothing
+- **AND** the surface covers the client area while retained pixels keep their positions; Point's pixel rules are unchanged
+
 #### Scenario: Graphics syntax and unsuitable receivers
 - **WHEN** either grammar parses graphics statements
 - **THEN** Line, PSet and Circle accept qualified or bare receivers, Step coordinates, short Line, B/BF boxes

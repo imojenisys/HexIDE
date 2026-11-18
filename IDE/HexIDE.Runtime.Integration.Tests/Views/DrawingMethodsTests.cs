@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Media;
 using Avalonia.Threading;
 using HexIDE.Runtime;
 using HexIDE.Runtime.BuiltinControls;
@@ -52,11 +53,12 @@ public class DrawingMethodsTests
     private sealed record Run(List<string> Printed, List<Exception> Errors);
 
     /// <summary>Run Form1 as F5 does, with <paramref name="load"/> as its Load, then close it.</summary>
-    private static Run RunLoad(string frm, string load, Action<Window>? inspect = null)
+    private static Run RunLoad(string frm, string load, Action<Window>? inspect = null, string procedures = "")
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var code = "Private Sub Form_Load()\r\n" + load.ReplaceLineEndings("\r\n") + "\r\nEnd Sub\r\n"
-            + "Sub S(ByVal what As String, ByVal v As Variant)\r\n    Debug.Print what & \" = \" & v & \" \" & TypeName(v)\r\nEnd Sub\r\n";
+            + "Sub S(ByVal what As String, ByVal v As Variant)\r\n    Debug.Print what & \" = \" & v & \" \" & TypeName(v)\r\nEnd Sub\r\n"
+            + procedures.ReplaceLineEndings("\r\n");
         var form = new FormDeserializer().Deserialize(project, frm + code, new NullSink())!;
         project.AddForm(form);
 
@@ -349,6 +351,117 @@ public class DrawingMethodsTests
         run.Errors.Should().ContainSingle().Which.Should().BeOfType<NotImplementedException>()
             .Which.Message.Should().Contain("#988");
         run.Printed.Should().BeEmpty();
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1, false)]
+    [InlineData(1.5, false)]
+    [InlineData(1, true)]
+    [InlineData(1.5, true)]
+    public void Surface_pixels_align_with_controls_and_client_edges_before_and_after_resize(double scaling, bool inPicture)
+    {
+        // #988 round 2: compare the actual Skia frame with control layout, rather than Point's backing store.
+        const string text = """
+            Begin VB.TextBox Text1
+                Text = ""
+                Left = 600
+                Top = 900
+                Width = 900
+                Height = 360
+            End
+            """;
+        var frm = Form.ReplaceLineEndings("\n");
+        frm = inPicture
+            ? frm.Replace("      Left = 2160", text + "\n      Left = 450").Replace("      Top = 1200", "      Top = 600")
+            : frm.Replace("   Begin VB.PictureBox Picture1", text + "\n   Begin VB.PictureBox Picture1");
+        var target = inPicture ? "Picture1." : "";
+        var procedures = $"""
+            Public Sub Draw()
+                {target}AutoRedraw = True
+                {target}ScaleMode = vbPixels
+                {target}BackColor = vbWhite
+                {target}Cls
+                {target}Line (Text1.Left, Text1.Top)-(Text1.Left + Text1.Width - 1, Text1.Top + Text1.Height - 1), vbRed, B
+                {target}Line (0, 0)-({target}ScaleWidth - 1, {target}ScaleHeight - 1), vbGreen, B
+                Dim x As Integer
+                For x = 10 To 29
+                    If x Mod 2 = 0 Then
+                        {target}Line (x, 30)-(x, 39), vbRed, BF
+                    Else
+                        {target}Line (x, 30)-(x, 39), vbBlue, BF
+                    End If
+                Next
+            End Sub
+            """;
+        var run = RunLoad(frm, "", window =>
+        {
+            window.SetRenderScaling(scaling);
+            window.UpdateLayout();
+            var canvas = window.GetLogicalDescendants().OfType<Canvas>().First(c => c.Children.OfType<VBPictureBox>().Any());
+            var picture = canvas.Children.OfType<VBPictureBox>().Single();
+            var host = inPicture ? picture.ChildHost! : canvas;
+            var box = host.Children.OfType<VBTextBox>().Single();
+            if (!inPicture) picture.IsVisible = false;
+            ((VBFormRuntime)window).ExecuteSub("Draw");
+            var textOrigin = box.TranslatePoint(default, window)!.Value;
+            var textBounds = new Rect(textOrigin, box.Bounds.Size);
+            // Reveal the drawing underneath the opaque TextBox, keeping its laid-out frame as the reference.
+            box.IsVisible = false;
+
+            void CheckFrame(bool edges)
+            {
+                window.UpdateLayout();
+                var context = ExecutionContext.Capture();
+                Dispatcher.UIThread.RunJobs();
+                ExecutionContext.Restore(context!);
+                using var frame = window.CaptureRenderedFrame() ?? throw new InvalidOperationException("No rendered frame");
+                using var buffer = frame.Lock();
+                Color At(int x, int y)
+                {
+                    var offset = y * buffer.RowBytes + x * 4;
+                    byte Byte(int i) => System.Runtime.InteropServices.Marshal.ReadByte(buffer.Address, offset + i);
+                    return buffer.Format == Avalonia.Platform.PixelFormat.Bgra8888
+                        ? Color.FromRgb(Byte(2), Byte(1), Byte(0))
+                        : Color.FromRgb(Byte(0), Byte(1), Byte(2));
+                }
+                var origin = host.TranslatePoint(default, window)!.Value;
+                var client = new Rect(origin, host.Bounds.Size);
+                void Outline(Color colour, Rect expected)
+                {
+                    var points = new List<Point>();
+                    for (var y = (int)Math.Ceiling(client.Top * scaling); y < (int)(client.Bottom * scaling); y++)
+                    for (var x = (int)Math.Ceiling(client.Left * scaling); x < (int)(client.Right * scaling); x++)
+                        if (At(x, y) == colour && (colour != Colors.Red || y > (origin.Y + 45) * scaling))
+                            points.Add(new Point(x, y));
+                    points.Should().NotBeEmpty($"the {colour} outline must be visible");
+                    points.Min(p => p.X).Should().BeApproximately(expected.Left * scaling, 1);
+                    points.Min(p => p.Y).Should().BeApproximately(expected.Top * scaling, 1);
+                    (points.Max(p => p.X) + 1).Should().BeApproximately(expected.Right * scaling, 1);
+                    (points.Max(p => p.Y) + 1).Should().BeApproximately(expected.Bottom * scaling, 1);
+                }
+                Outline(Colors.Red, textBounds);
+                if (edges) Outline(Colors.Lime, client);
+                // Adjacent one-VB-pixel stripes must retain their colours without interpolated shades.
+                for (var x = (int)((origin.X + 10) * scaling); x < (int)((origin.X + 30) * scaling); x++)
+                    At(x, (int)((origin.Y + 35) * scaling)).Should().BeOneOf(Colors.Red, Colors.Blue);
+            }
+
+            CheckFrame(true);
+            if (inPicture)
+            {
+                picture.Width += 20;
+                picture.Height += 10;
+            }
+            else
+            {
+                window.Width += 20;
+                window.Height += 10;
+            }
+            CheckFrame(false); // Retained pixels stay in place when the client grows.
+            ((VBFormRuntime)window).ExecuteSub("Draw");
+            CheckFrame(true); // A new outline reaches the resized client's edges.
+        }, procedures);
+        run.Errors.Should().BeEmpty();
     }
 
     [AvaloniaTheory]

@@ -326,10 +326,13 @@ internal sealed class RuntimeDrawing
         }
         host.Background = new ImageBrush(bitmap)
         {
-            Stretch = Stretch.None,
+            // One bitmap pixel covers one DIP, including the extra off-client row/column used by Point.
+            DestinationRect = new RelativeRect(0, 0, width, height, RelativeUnit.Absolute),
+            Stretch = Stretch.Fill,
             AlignmentX = AlignmentX.Left,
             AlignmentY = AlignmentY.Top,
         };
+        RenderOptions.SetBitmapInterpolationMode(host, BitmapInterpolationMode.None);
         host.InvalidateVisual();
     }
 }
