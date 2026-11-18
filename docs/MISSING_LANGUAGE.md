@@ -131,9 +131,9 @@ on the *read* path — seven rows describe the single-dot restriction it removed
 | Keywords and modifiers | 0 | 0 | 1 | 23 | 1 | 26 | 51 |
 | Literals, types and suffixes | 0 | 0 | 0 | 20 | 0 | 33 | 53 |
 | Compiler directives and options | 0 | 0 | 0 | 14 | 19 | 14 | 47 |
-| In-box objects | 0 | 0 | 41 | 45 | 0 | 39 | 125 |
+| In-box objects | 0 | 0 | 40 | 46 | 0 | 39 | 125 |
 | Intrinsic constants | 0 | 0 | 0 | 258 | 0 | 363 | 621 |
-| **Total** | **0** | **0** | **54** | **512** | **20** | **607** | **1193** |
+| **Total** | **0** | **0** | **51** | **515** | **20** | **607** | **1193** |
 
 The *Silently wrong* column counts only what a verifier proved by running it. It is a floor, not a
 census — see the caveat above.
@@ -167,9 +167,9 @@ visitor, not changing how the language is understood.
 ### Where the damage actually is
 
 **Operators are nearly complete** — 1 absent of 32 — so expressions and arithmetic generally work. The
-damage is concentrated in **statements** and the **in-box object model**: 8% of VB6's statements (9
-of 109) and 33% of the
-in-box surface (`App`, `Printer`, `Clipboard`; 41 of 125) are unavailable. Both
+damage is concentrated in **statements** and the **in-box object model**: 6% of VB6's statements (7
+of 109) and 32% of the
+in-box surface (`App`, `Printer`, `Clipboard`; 40 of 125) are unavailable. Both
 figures are rounded to the nearest whole percent.
 
 That is the honest answer to "will my code run?" — the arithmetic will; the plumbing around it often will
@@ -274,7 +274,7 @@ operator `:=`, the other such gap, since [#1465](https://github.com/hexide-io/He
 | Name | Status | Detail | Source |
 |---|---|---|---|
 
-## Dies mid-run — 54 names
+## Dies mid-run — 51 names
 
 These parse. The program starts, reaches the statement, and throws. Grouped by area below so the clusters
 are visible — and they are very clustered: the file-I/O family beyond text files is absent as a block, and so is
@@ -288,7 +288,6 @@ most of the in-box object model.
 | `AppActivate` | **Dies** | throws `"AppActivate not implemented"` — Grammar rule `appActivateStmt : APPACTIVATE WS valueStmt (WS? COMMA WS? valueStmt)?` (VB6.g4); the visitor body is a single throw:… | StatementExecutor.cs |
 | `AsyncProperty` | **Dies** | `Dim a As AsyncProperty` declares an object variable that holds Nothing, from the VBRUN type table (`vb6-inbox-types.json`, since #822; checked 2026-11-08). Its members are not modelled. | StatementExecutor.cs |
 | `AsyncProperty_VB5` | **Dies** | `Dim a As AsyncProperty_VB5` declares an object variable that holds Nothing, from the VBRUN type table (`vb6-inbox-types.json`, since #822; checked 2026-11-08). Its members are not modelled. | StatementExecutor.cs |
-| `Circle` | **Dies** | #988: dedicated Circle syntax, including Step and positional omissions, in both grammars. Execution explicitly refuses with NotImplementedException naming #988; circles, arcs, sectors and filled circles remain for a later slice. See the [drawing oracle](vb6-fidelity-oracle/the-drawing-methods-line-pset-circle-cls-and-point.md). | StatementExecutor.cs |
 | `Clipboard.GetData` | **Dies** | Explicitly refused as not implemented (#1156). | VbClipboard.cs |
 | `Clipboard.SetData` | **Dies** | Explicitly refused as not implemented (#1156). | VbClipboard.cs |
 | `Collection._NewEnum` | **Dies** | For Each over a Collection works ([#1471](https://github.com/hexide-io/HexIDE/issues/1471)), but the hidden member itself is not: a program that calls `c.[_NewEnum]` does not get an enumerator. | VbCollection.cs |
@@ -334,7 +333,6 @@ most of the in-box object model.
 | `SavePicture` | **Dies** | Named parameter names are measured and declared (#1087); execution still throws `"Savepicture not implemented"` — The grammar has `savepictureStmt : SAVEPICTURE WS valueStmt WS? COMMA WS? valueStmt` (VB6.g4) and SAVEPICTURE is a real token, but the visitor body… | StatementExecutor.cs |
 | `SelectedControls` | **Dies** | `Dim s As SelectedControls` declares an object variable that holds Nothing, from the VBRUN type table (`vb6-inbox-types.json`, since #822; checked 2026-11-08). Its members are not modelled. | StatementExecutor.cs |
 | `SendKeys` | **Dies** | throws `"Sendkeys not implemented"` — Grammar rule `sendkeysStmt : SENDKEYS WS valueStmt (WS? COMMA WS? valueStmt)?` (VB6.g4) with a real SENDKEYS token; the visitor body is a single… | StatementExecutor.cs |
-| `Time (statement)` | **Dies** | **Fixed by #191** — was Silently wrong: it ran, did nothing and let the program continue. Now raises, naming the intrinsic | StatementExecutor.cs |
 
 ## Full inventory by category
 
@@ -860,7 +858,7 @@ missing.
 | `Option Base` | Supported | Collected by PrePass ('ArrayBase = int.Parse(context.INTEGERLITERAL().GetText());', PrePass.cs) and applied on both declaration paths: module-level Dim arrays (PrePass.cs) and… | PrePass.cs |
 | `Version` | Supported | Handled on three independent paths. Form/control files: the deserializer skips the line ('if (line.StartsWith("VERSION")) { continue; }', VbFrmFormatDeserializer.cs) and the serializer… | VbFrmFormatDeserializer.cs |
 
-### In-box objects — 125 names (41 absent, 45 partial, 39 supported)
+### In-box objects — 125 names (40 absent, 46 partial, 39 supported)
 
 | Name | Status | Detail | Source |
 |---|---|---|---|
@@ -891,7 +889,7 @@ missing.
 | `App.TaskVisible` | Partial | Boolean True for a desktop run; Boolean assignments read back (#2551). Other conversions are refused as not implemented; no OS task-list integration. | VbApp.cs |
 | `AsyncProperty` | **Dies** | `Dim a As AsyncProperty` declares an object variable that holds Nothing, from the VBRUN type table (`vb6-inbox-types.json`, since #822; checked 2026-11-08). Its members are not modelled. | StatementExecutor.cs |
 | `AsyncProperty_VB5` | **Dies** | `Dim a As AsyncProperty_VB5` declares an object variable that holds Nothing, from the VBRUN type table (`vb6-inbox-types.json`, since #822; checked 2026-11-08). Its members are not modelled. | StatementExecutor.cs |
-| `Circle` | **Dies** | #988: dedicated Circle syntax, including Step and positional omissions, in both grammars. Execution explicitly refuses with NotImplementedException naming #988; circles, arcs, sectors and filled circles remain for a later slice. See the [drawing oracle](vb6-fidelity-oracle/the-drawing-methods-line-pset-circle-cls-and-point.md). | StatementExecutor.cs |
+| `Circle` | Partial | #4720: DrawWidth 1 full circles and ellipses on forms and PictureBoxes match the 12 full-circle grids, including zero/negative aspects, zero and fractional radii, fractional centres and FillStyle 0. CurrentX/Y end at the whole-twip centre; negative radii and angles beyond 2π raise 5 before drawing. Colours use the method conversion or ForeColor. [Measured grids and fallback decision](https://github.com/hexide-io/HexIDE/issues/4720), oracle PR #4719; [position/error oracle](vb6-fidelity-oracle/the-drawing-methods-line-pset-circle-cls-and-point.md). Arcs/sectors, unequal scale units, thick pens, patterned fills, nonzero DrawStyle, non-copy DrawMode and late binding explicitly refuse with #988. | StatementExecutor.cs, RuntimeDrawing.cs |
 | `Clipboard` | Partial | Text operations use the host clipboard (#1156); declared names still win. Image/data and non-text format queries remain explicitly unsupported. | VbClipboard.cs |
 | `Clipboard.Clear` | Supported | Clears the host clipboard, including all formats (#1156). | VbClipboard.cs, AvaloniaTextClipboard.cs |
 | `Clipboard.GetData` | **Dies** | Explicitly refused as not implemented (#1156). | VbClipboard.cs |
@@ -1278,11 +1276,13 @@ AutoRedraw persistence and Paint timing are #991, and text output is #989.
 
 | Member or edge | Status | Detail |
 |---|---|---|
-| CurrentX, CurrentY | Supported | Single coordinates stored as whole twips, half to even; scale changes preserve their physical position. A coordinate overflow raises 6 before either current coordinate changes. |
+| CurrentX, CurrentY | Supported | Single coordinates stored as whole twips, half to even; scale changes preserve their physical position. PSet/Line coordinate overflow raises 6 before either current coordinate changes. |
 | DrawWidth, DrawStyle, DrawMode, FillStyle, FillColor | Partial | Read and set at run time, with saved values or the measured defaults. Width is Integer 1–32767, style 0–6, mode 1–16, fill 0–7; invalid assignments raise 380 and Integer overflow 6. FillColor is Long and uses property colour validation. Drawing with width above 1, style other than 0, mode other than 13 or fill other than 0/1 refuses with #988. |
 | AutoRedraw, FontTransparent | Partial | Boolean defaults False and True; saved values are read. AutoRedraw assignments are retained, with no repaint/event semantics yet (#991). FontTransparent assignments are unmeasured and explicitly refuse with #988. |
 | Point | Partial | Reads Long RGB from the surface, rounding straight to pixels, without whole-twip quantisation. Readback stays one bitmap pixel per VB pixel regardless of display scaling. The measured outside points return Long -1, and oversized coordinates raise 6. The bitmap includes the measured row/column beyond the client area; the actual VB6 backing-store edge is unmeasured. Other coordinates read the surface, or -1 off it; no additional VB6 boundary is pinned. |
-| Circle | Dies | Grammar only in this slice; execution refuses with #988, including arcs, sectors and aspect. |
+| Circle | Partial | #4720: full circles/ellipses at DrawWidth 1, transparent or solid filled, with the 12 measured grids, Step and whole-twip centres. Negative radius or angles beyond 2π raise 5 before drawing. [Grids and decision](https://github.com/hexide-io/HexIDE/issues/4720); oracle PR #4719. |
+| Circle arcs and sectors | Dies | Not implemented: the five #4720 arc/sector grids are not all reproduced by the candidate rasterisers. Explicitly refuse with #988, as the issue permits; no approximate pixels are drawn. |
+| Circle with unequal scale units | Dies | Not implemented: which axis measures the radius when x/y units differ in size is unmeasured. Explicitly refuses with #988. |
 | Late-bound Line, PSet, Circle | Dies | Compile acceptance is measured; runtime late-binding behaviour is not. Each explicitly refuses with #988, even under On Error Resume Next. |
 | Saved FillColor outside representable RGB/system colours | Dies | Explicitly refused with #988 instead of silently substituting black. Palette property assignments retain the shared #786 refusal. |
 | Cls used as a value; Cls/Point argument counts outside 0/2 | Dies | Unmeasured; explicitly refuse with #988. |
