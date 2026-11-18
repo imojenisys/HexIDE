@@ -408,8 +408,10 @@ public sealed class Vb6ToolchainReplacementTests : IDisposable
         (await build.MakeWithVb6Async(project)).Should().BeFalse();
         File.ReadAllText(Path.Combine(ExePath, "original")).Should().Be("old bytes");
         Directory.GetDirectories(directory).Should().Equal(ExePath);
+        // The OS supplies the exception text; Windows need not include the destination filename.
         await windows.Received(1).MessageBox(
-            Arg.Is<string>(message => message.StartsWith("Compilation failed: ") && message.Contains("Output.exe")),
+            Arg.Is<string>(message => message.StartsWith("Compilation failed: ") &&
+                !string.IsNullOrWhiteSpace(message.Substring("Compilation failed: ".Length))),
             "Str.Vb6Toolchain.BuildFailedTitle", MessageBoxButtons.Ok, MessageBoxIcon.Error);
     }
 
