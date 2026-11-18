@@ -516,7 +516,11 @@ public sealed class DebugController : IDebugGate
         _dispatchIdle = false;
     }
 
-    public void NotifyDispatchIdle(bool carryStep = true)
+    public void NotifyDispatchIdle(bool carryStep = true) => NotifyDispatchIdle(carryStep, carryOver: true);
+
+    public void NotifyMainDispatchIdle() => NotifyDispatchIdle(carryStep: true, carryOver: false);
+
+    private void NotifyDispatchIdle(bool carryStep, bool carryOver)
     {
         if (_dispatchDepth > 0 && --_dispatchDepth > 0)
             return;
@@ -526,9 +530,9 @@ public sealed class DebugController : IDebugGate
             return;
         if (_state != DebugState.Running || _stepMode == StepMode.None)
             return;
-        // #4261/#4269, measured in VB6's IDE (oracle PR #4270). Only a completed outermost chain
+        // #4261/#4269/#4449, measured in VB6's IDE. Only a completed outermost chain
         // carries a step into a fresh event; a nested event must retain the active step's depth rule.
-        _stepAtNextEvent = _stepMode is StepMode.Into or StepMode.Over;
+        _stepAtNextEvent = _stepMode is StepMode.Into or StepMode.Out || (carryOver && _stepMode == StepMode.Over);
         _stepMode = _stepAtNextEvent ? StepMode.Into : StepMode.None;
         var rg = _resumeGate;
         _resumeGate = null;

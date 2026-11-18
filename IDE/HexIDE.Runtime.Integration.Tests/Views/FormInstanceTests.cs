@@ -631,13 +631,10 @@ public class FormInstanceTests
     [AvaloniaTheory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Step_Into_from_design_mode_breaks_on_the_first_statement_of_the_start(bool hasInitialize)
+    public void Step_Into_from_design_mode_uses_the_measured_start_positions(bool hasInitialize)
     {
-        // Start-and-step breaks on the first executable line, not its declaration. The start is one dispatch now: a step armed
-        // before it reaches Initialize's first statement, or Load's when there is no Initialize, and a step off the end
-        // of Initialize goes on into Load. Each piece was a dispatch of its own, and the first one's end disarmed the
-        // step, so the run went straight through (#656, #1010 review).
-        // End-line breakpoint support must not consume that startup step at Initialize's End Sub (#2172 review).
+        // Measured: https://github.com/hexide-io/HexIDE/issues/4449 — Initialize declaration, statement, End, Load declaration.
+        // The no-Initialize case is still unmeasured and preserves its previous first-statement start.
         var code = "Private Score As Integer\nDim Grid(1 To 3) As Integer\n"
             + (hasInitialize ? "Private Sub Form_Initialize()\n    Score = 1\nEnd Sub\n" : "")
             + "Private Sub Form_Load()\n    Score = Score + 1\n    Debug.Print Score\nEnd Sub\n";
@@ -660,11 +657,14 @@ public class FormInstanceTests
             Dispatcher.UIThread.RunJobs();
             if (hasInitialize)
             {
-                stops.Should().Equal([LineOf("    Score = 1")], "Initialize's first statement, after the two declarations and its Sub line");
-                dbg.StepInto();
-                Dispatcher.UIThread.RunJobs();
-                stops.Should().Equal([LineOf("    Score = 1"), LineOf("    Score = Score + 1")],
-                    "off the end of Initialize, into Load's first statement");
+                stops.Should().Equal([LineOf("Private Sub Form_Initialize()")]);
+                foreach (var expected in new[] { LineOf("    Score = 1"), LineOf("    Score = 1") + 1,
+                             LineOf("Private Sub Form_Load()"), LineOf("    Score = Score + 1") })
+                {
+                    dbg.StepOver();
+                    Dispatcher.UIThread.RunJobs();
+                    stops[^1].Should().Be(expected);
+                }
             }
             else
                 stops.Should().Equal([LineOf("    Score = Score + 1")], "Load's first statement: the declarations are never a stop");
