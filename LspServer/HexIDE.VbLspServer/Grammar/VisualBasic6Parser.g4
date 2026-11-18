@@ -362,7 +362,7 @@ blockStmt
     | rmdirStmt
     | rsetStmt
     | scaleStmt
-   | savepictureStmt
+    | savepictureStmt
     | saveSettingStmt
     | seekStmt
     | selectCaseStmt

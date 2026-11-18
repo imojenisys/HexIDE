@@ -207,7 +207,11 @@ internal static class ControlPositions
             return 1;
         var host = control.Parent as Control;
         if (host is not null && RuntimeScale.Of(host) is { } scale)
-            return scale.TwipsPerUnit(IsVertical(property));
+        {
+            // #990 round 2: sizes are magnitudes even in a flipped user scale; positions keep its sign.
+            var unit = scale.TwipsPerUnit(IsVertical(property));
+            return IsSize(property) ? Math.Abs(unit) : unit;
+        }
         return TwipsPerUnit(host is null ? VBScaleMode.Twip : VBProps.GetScaleMode(host), IsVertical(property), property.Name);
     }
 

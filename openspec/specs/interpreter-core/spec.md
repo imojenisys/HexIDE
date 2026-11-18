@@ -2240,7 +2240,10 @@ The interpreter SHALL expose ScaleMode as Integer and ScaleLeft, ScaleTop, Scale
 Single on each running form and PictureBox, initialized from the saved scale. Setting an origin or extent
 SHALL select User mode; selecting mode 0 SHALL retain the current mapping, and modes 1–7 SHALL map the
 client area in the chosen unit. Child positions SHALL use their container’s mapping, with assigned positions
-retained as whole twips rounded half to even. Form and PictureBox mouse coordinates SHALL use the object’s
+retained as whole twips rounded half to even. Left and Top SHALL use the signed unit and origin; Width and
+Height SHALL use the unit’s magnitude even in flipped user scales. Negative CommandButton sizes SHALL still
+raise 380 from a property assignment and 5 from Move, before anything moves (issue #990 round-2 measurements).
+Form and PictureBox mouse coordinates SHALL use the object’s
 own mapping; other controls retain their existing mouse units. A form resize SHALL retain the size
 of a user unit. UserControl scales and PictureBox resize are outside this slice (part of #990).
 

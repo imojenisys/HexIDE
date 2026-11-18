@@ -1,8 +1,13 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
+using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
 using Avalonia.Threading;
 using HexIDE.Runtime;
+using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Runtime.Serialization;
@@ -35,6 +40,40 @@ public class CoordinateSystemTests
 
         """;
 
+    private const string FlippedForm = """
+        VERSION 5.00
+        Begin VB.Form Form1
+           ClientHeight = 3015
+           ClientWidth = 4560
+           Begin VB.CommandButton Command1
+              Caption = "Command1"
+              Left = 150
+              Top = 150
+              Width = 1215
+              Height = 495
+           End
+        End
+        Attribute VB_Name = "Form1"
+
+        """;
+
+    private static string ButtonSnapshot =>
+        "CStr(Command1.Left) & \"|\" & CStr(Command1.Top) & \"|\" & CStr(Command1.Width) & \"|\" & CStr(Command1.Height)";
+
+    private static readonly string[] FlippedStatements =
+    [
+        "Scale (0, 100)-(10, 0)",
+        "",
+        "Command1.Height = 10",
+        "Command1.Height = -10",
+        "Command1.Move 1, 90, 3, 10",
+        "Command1.Move 1, 90, 3, -10",
+        "Command1.Top = 50",
+        "Scale (10, 0)-(0, 10)",
+        "Command1.Width = 2",
+        "Command1.Left = 5",
+    ];
+
     private static string Snapshot(string target) =>
         $"CStr({target}ScaleMode) & \"|\" & CStr({target}ScaleLeft) & \"|\" & CStr({target}ScaleTop) & \"|\" & CStr({target}ScaleWidth) & \"|\" & CStr({target}ScaleHeight)";
 
@@ -48,7 +87,7 @@ public class CoordinateSystemTests
     private sealed record Run(List<string> Printed, List<Exception> Errors);
 
     /// <summary>Run Form1 as F5 does, with <paramref name="load"/> as its Load, then close it.</summary>
-    private static Run RunLoad(string frm, string load)
+    private static Run RunLoad(string frm, string load, Action<Window>? inspect = null)
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var code = "Private Sub Form_Load()\r\n" + load.ReplaceLineEndings("\r\n") + "\r\nEnd Sub\r\n"
@@ -67,8 +106,15 @@ public class CoordinateSystemTests
         try
         {
             VBLoader.RunForm(form, CancellationToken.None, out var window);
-            Dispatcher.UIThread.RunJobs();
-            window.Close();
+            try
+            {
+                Dispatcher.UIThread.RunJobs();
+                inspect?.Invoke(window);
+            }
+            finally
+            {
+                window.Close();
+            }
         }
         finally
         {
@@ -78,6 +124,70 @@ public class CoordinateSystemTests
             VBWindowContext.CompileError -= OnCompileError;
         }
         return run;
+    }
+
+    // Issue #990, round 2: SP6 native and p-code agree on each successive row of the flipped-scale probe.
+    [AvaloniaTheory]
+    [InlineData(0, "CStr(ScaleTop) & \"|\" & CStr(ScaleHeight)", "100|-100")]
+    [InlineData(1, "", "0.3289474|95.02487|2.664474|16.41791")]
+    [InlineData(2, "CStr(Command1.Height)", "10.01658")]
+    [InlineData(3, "CStr(Err.Number) & \"|\" & Err.Description & \"|\" & CStr(Command1.Height)", "380|Invalid property value|10.01658")]
+    [InlineData(4, "", "1|89.98341|3|10.01658")]
+    [InlineData(5, "CStr(Err.Number) & \"|\" & Err.Description & \"|\" & ", "5|Invalid procedure call or argument|1|89.98341|3|10.01658")]
+    [InlineData(6, "CStr(Command1.Top)", "49.98342")]
+    [InlineData(7, "", "9|5.001658|3|1.001658")]
+    [InlineData(8, "CStr(Command1.Width)", "2")]
+    [InlineData(9, "CStr(Command1.Left)", "5")]
+    public void Flipped_scale_probe_matches_each_measured_row(int row, string expression, string expected)
+    {
+        var code = "On Error Resume Next\n" + string.Join("\n", FlippedStatements.Take(row + 1));
+        if (expression.Length == 0 || row == 5)
+            expression += ButtonSnapshot;
+        var extra = row switch
+        {
+            1 => "\nDebug.Print CStr(ScaleY(Command1.Height, vbUser, vbTwips))",
+            6 => "\nScaleMode = vbTwips\nDebug.Print CStr(Command1.Top)",
+            7 => "\nDebug.Print CStr(ScaleLeft) & \"|\" & CStr(ScaleWidth)",
+            _ => "",
+        };
+        var run = RunLoad(FlippedForm, code + "\nDebug.Print " + expression + extra);
+        run.Errors.Should().BeEmpty();
+        run.Printed.Should().Equal(row switch
+        {
+            1 => [expected, "-495"],
+            6 => [expected, "1508"],
+            7 => [expected, "10|-10"],
+            _ => new[] { expected },
+        });
+    }
+
+    [AvaloniaTheory]
+    [InlineData("Command1.Height = -10", "380|Invalid property value|True")]
+    [InlineData("Command1.Move 1, 90, 3, -10", "5|Invalid procedure call or argument|True")]
+    public void Flipped_scale_negative_sizes_are_refused_before_anything_changes(string statement, string expected)
+    {
+        var run = RunLoad(FlippedForm, "Scale (0, 100)-(10, 0)\nDim before As String\nbefore = " + ButtonSnapshot
+            + "\nOn Error Resume Next\n" + statement
+            + "\nDebug.Print CStr(Err.Number) & \"|\" & Err.Description & \"|\" & (before = (" + ButtonSnapshot + "))");
+        run.Errors.Should().BeEmpty();
+        run.Printed.Should().Equal(expected);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(1)]
+    [InlineData(1.5)]
+    public void Flipped_scale_Move_renders_the_measured_button_height(double scaling)
+    {
+        var run = RunLoad(FlippedForm, "Scale (0, 100)-(10, 0)\nCommand1.Move 1, 90, 3, 10", window =>
+        {
+            window.SetRenderScaling(scaling);
+            window.UpdateLayout();
+            var button = window.GetLogicalDescendants().OfType<VBCommandButton>().Single();
+            button.Height.Should().BeApproximately(302 / 15.0, 0.000001);
+            button.Bounds.Height.Should().BeApproximately(302 / 15.0, 1 / scaling,
+                "the rendered button must retain its 302 twips, within one device pixel of layout rounding");
+        });
+        run.Errors.Should().BeEmpty();
     }
 
     [AvaloniaTheory]
