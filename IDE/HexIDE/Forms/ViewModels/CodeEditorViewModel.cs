@@ -1344,7 +1344,9 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             {
                 ProcedureNames.Add(DeclarationsProc);
                 foreach (var s in FlattenedSymbols())
-                    if (s.Kind is SymbolKind.Method or SymbolKind.Function or SymbolKind.Property)
+                    // Designer controls can be Property symbols too (RDCore, #4526); they belong in the Object box.
+                    if (s.Kind is SymbolKind.Method or SymbolKind.Function or SymbolKind.Property &&
+                        FindComponent(s.Name) is null)
                         ProcedureNames.Add(s.Name);
             }
             else
