@@ -51,12 +51,10 @@ public partial class ComponentToolViewModel : ObservableObject
     public string Name { get; }
 
     /// <summary>
-    /// The button's name for a screen reader and the automation tree: its control's class, <c>CommandButton</c> from
-    /// <c>VB.CommandButton</c>, the name code uses, where <see cref="Name"/> is the prefix a new control's name takes
-    /// (#2751). A caller looking for the CommandButton found nothing. The tip still shows <see cref="Name"/> until
-    /// VB6's own is measured.
+    /// The control's class for its tooltip and automation name, matching VB6's measured toolbox tips (#2751,
+    /// oracle PR #4729). <see cref="Name"/> remains the prefix a new control's name takes.
     /// </summary>
-    public string AutomationName => VBTypeName is { } typeName && typeName.LastIndexOf('.') is var dot and >= 0
+    public string DisplayName => VBTypeName is { } typeName && typeName.LastIndexOf('.') is var dot and >= 0
         ? typeName[(dot + 1)..]
         : Name;
 
