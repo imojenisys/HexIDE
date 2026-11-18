@@ -420,13 +420,14 @@ blockStmt
    | inputStmt
    | killStmt
    | timeStmt
+   | lsetStmt
+   | rsetStmt
    | setStmt
    | letStmt
    | lineInputStmt
    | lineLabel
    | loadStmt
    | lockStmt
-   | lsetStmt
    | macroIfThenElseStmt
    | midStmt
    | mkdirStmt
@@ -444,7 +445,6 @@ blockStmt
    | resumeStmt
    | returnStmt
    | rmdirStmt
-   | rsetStmt
    | scaleStmt
    | lineStmt
    | psetStmt
@@ -497,7 +497,7 @@ constSubStmt
    ;
 
 dateStmt
-   : DATE WS? EQ WS? valueStmt
+   : DATE DOLLAR? WS? EQ WS? valueStmt
    ;
 
 // `Lib WS? "x"` / `Alias WS? "x"` — a Declare line is long and gets continued before the library name.
@@ -897,7 +897,7 @@ subStmt
    ;
 
 timeStmt
-   : TIME WS? EQ WS? valueStmt
+   : TIME DOLLAR? WS? EQ WS? valueStmt
    ;
 
 // At least ONE member — see enumerationStmt. VB6: "User-defined type without members not allowed".
