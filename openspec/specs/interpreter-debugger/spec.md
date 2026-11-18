@@ -15,6 +15,26 @@ prompt for a reset and the execution point moves only between top-level statemen
 
 ## Requirements
 
+### Requirement: Desktop run-time dialogs and keyboard focus
+
+A run-time error dialog SHALL retain the active running form as owner and SHALL disable all existing desktop
+windows, including the IDE, until answered, restoring each window's previous enabled state afterwards.
+Opening the error SHALL NOT activate the IDE. Debug from the error and entering break mode after Ctrl+Break
+SHALL activate the IDE. With a desktop running form focused, IDE shortcuts SHALL NOT execute; Ctrl+Break
+SHALL still reach the IDE's Break command. Measured on vb6.exe SP6 in
+[issue #1297's 2026-11-16 comment](https://github.com/hexide-io/HexIDE/issues/1297).
+
+#### Scenario: Error while the running form is active
+- **WHEN** the running form is active and an unhandled run-time error opens its dialog
+- **THEN** the form owns the dialog, and the IDE is disabled without being brought forward
+- **AND** choosing Debug closes the dialog, restores enabled states and activates the IDE
+
+#### Scenario: Keys while a running form has focus
+- **WHEN** a desktop running form has focus
+- **THEN** Find and Immediate shortcuts do not open IDE windows
+- **AND** Ctrl+Break requests a pause and the IDE comes forward when the statement gate enters break mode
+
+
 ### Requirement: Failed breakpoint conditions explain the stop
 
 The interpreter SHALL pause when a breakpoint condition cannot be evaluated. The stop SHALL retain
@@ -79,6 +99,7 @@ Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` 
 #### Scenario: Breaking into a running program
 - **WHEN** the developer presses Ctrl+Break, or chooses Run ▸ Break, while the project is running
 - **THEN** the program suspends at the next executed statement and enters break mode
+- **AND** between events it enters break mode immediately with no current statement
 
 #### Scenario: Breaking a DoEvents loop from the IDE
 - **WHEN** a running form has focus and its event handler loops with `DoEvents`
@@ -90,11 +111,25 @@ Break mode is entered from a breakpoint, a step, an explicit pause, or a `Stop` 
 - **WHEN** the developer presses F5 while paused
 - **THEN** the program resumes, the current-statement bar clears, the inspection windows blank, and any frozen event handlers are released
 
+#### Scenario: Continue restores the program window active at Pause
+- **WHEN** a Pause stop brings the IDE forward while a running program's window is active
+- **THEN** the IDE SHALL remember that window, including a modal form
+- **AND** Continue through the interpreter runner SHALL activate it once if still shown
+- **AND** Step Into and Step Over SHALL leave the IDE in front and retain that window for a later Continue
+- **AND** ending or starting the run SHALL forget the window
+
 #### Scenario: A step returns to event idle
-- **WHEN** Step Into, Over or Out returns from the outermost event handler without another stop
-- **THEN** the pending step clears and the shell shows running mode
-- **AND** the current-statement bar clears, inspection windows blank, and frozen event handlers are released
-- **AND** Break is available again and the next unrelated event runs without the leftover step
+- **WHEN** Step Into or Step Over runs off the outermost event handler
+- **THEN** break-mode chrome clears and frozen events are released
+- **AND** the step remains armed for the next event's handler declaration, before any statement executes
+- **AND** events raised inside the still-running chain retain its stepping depth rules
+
+#### Scenario: Stepping from idle break mode
+- **WHEN** a program is paused between events with no current statement
+- **THEN** Continue resumes with no step armed
+- **AND** Step Into and Step Over resume with a step armed for the next handler's declaration
+- **AND** stepping from that declaration stops at the first statement with the handler on the call stack
+- **AND** Show Next Statement, Set Next Statement, Step Out, Run To Cursor and Call Stack are disabled until a statement exists
 
 #### Scenario: Ending the run from break mode
 - **WHEN** the developer chooses End while paused
@@ -322,10 +357,57 @@ Watches persist an expression across breaks, so the developer does not re-type i
 - **WHEN** the developer chooses Debug ▸ Add Watch, or presses Shift+F9 with the caret on an identifier
 - **THEN** the Add Watch dialog opens, pre-filled with that identifier where one was under the caret
 
+#### Scenario: Choosing a watch context
+- **WHEN** the developer adds or edits an interpreter watch
+- **THEN** the dialog SHALL offer the project's code modules in project order and the selected module's collected procedures, preceded by `(All Procedures)`
+- **AND** changing Module SHALL refill Procedure
+- **AND** OK SHALL store `Module` for `(All Procedures)` or `Module.Procedure` for a chosen procedure, displayed verbatim in the Watches Context column
+- **AND** Edit Watch SHALL initially select and retain its stored choice, including a stored procedure the collected list does not name
+
+#### Scenario: Procedure lists without server symbols
+- **WHEN** Add Watch collects the project's procedure choices
+- **THEN** an open code window SHALL supply its outline symbols, or its current text if the outline is empty
+- **AND** an unopened module SHALL supply declarations from its loaded code without a server request
+- **AND** each Property accessor SHALL be an entry of its own, written `Name(Get)`, `Name(Let)` or `Name(Set)` as VB6 writes it, and the list SHALL be sorted rather than in source order (measured, #4401)
+- **AND** a watch stored as `Module.Name(Get)` SHALL evaluate only while that accessor runs, reading `<Out of context>` while another accessor of the same property runs (measured, #4401)
+- **AND** the shared VB-family collector SHALL collect Sub, Function, Property Get/Let/Set, Enum and Type headers without binding names or selecting conditional-compilation branches
+
+#### Scenario: A watch scoped to another module
+- **WHEN** the program is paused in one module and a watch is scoped to another
+- **THEN** a watch scoped to a procedure SHALL read that procedure's frame below the paused one, in whichever module it is, and SHALL read `<Out of context>` with no such frame (measured one frame down across modules, #4481)
+- **AND** a watch scoped to a class or form SHALL read the instance whose procedure is on the call stack below the paused one, and SHALL read `<Out of context>` with none there (measured for a class, #4481)
+- **AND** a watch scoped to a standard module SHALL evaluate at that module's scope wherever the program is paused, the module on the call stack or not (measured, #4481)
+- **AND** it SHALL never evaluate in the paused frame instead, where a name of the same spelling could give another variable's value
+
+#### Scenario: A watch on (All Modules)
+- **WHEN** the developer opens Add Watch
+- **THEN** the Module list SHALL start with `(All Modules)`, which offers `(All Procedures)` alone, and SHALL default to it when no code window is active and no program is paused (measured, #4452)
+- **AND** a watch added there SHALL show a blank Context column
+- **AND** while paused it SHALL evaluate against the project's Public module-level names only, so a module's Private variable, a class's Private variable or a procedure's local SHALL read `<Expression not defined in context>`, even where the program is paused in its scope (measured, #4452)
+- **AND** that text SHALL come from a name missing as the expression is evaluated, never from checking its names up front
+- **AND** outside break mode it SHALL read `<Out of context>`, as every watch does, where VB6 evaluates it (divergence D34)
+
+#### Scenario: Adding a watch from declarations
+- **WHEN** the active code window's caret is in the module's declarations
+- **THEN** Add Watch SHALL default to that module and `(All Procedures)` ([measured context](../../../docs/vb6-fidelity-oracle/a-watch-and-its-context.md), #4354)
+- **AND** with the caret inside a procedure, or no active code window, a paused program SHALL give the paused frame's `Module.Procedure` whole, which is unmeasured and retains the earlier choice
+- **AND** otherwise the unmeasured fallback SHALL choose the active module, then the project's first code module, with `(All Procedures)`
+- **AND** existing bare `(All Procedures)` watch contexts SHALL retain their existing behaviour
+- **AND** an external session's watch dialog SHALL stay expression-only, showing the selected frame's context as fixed text
+
 #### Scenario: Localizing a watch context
 - **WHEN** the IDE language changes
 - **THEN** the all-procedures context label SHALL refresh in existing Watches rows and the Add/Edit Watch dialog
 - **AND** named module/procedure contexts SHALL remain unchanged
+
+#### Scenario: The Watches window's row order
+- **WHEN** interpreter watch rows are rebuilt after adding, editing or deleting a watch
+- **THEN** the window SHALL sort by displayed Context, then Expression, both ordinal, with a blank Context first
+- **AND** equal Context and Expression SHALL retain added order, without reordering the watch store
+- **AND** `get_watches` SHALL return interpreter watches in that same order while retaining their stored context fields
+- **AND** external debugger watches SHALL retain their existing order
+- **AND** the measured rows SHALL be `m`, `v`, `g` for contexts `Class1`, `Class1.X(Let)`, `Module1`, and `1 + 1`, `Loc`, `g`, `p`, `zq` within a blank Context ([measurement](../../../docs/vb6-fidelity-oracle/a-watch-and-its-context.md), #4543)
+- **NOTE** Equal-row stability is HexIDE's retained behaviour; VB6 ties, Contexts differing only in case, and immediate re-sorting on add remain unmeasured.
 
 #### Scenario: Watching a value across breaks
 - **WHEN** an expression watch exists and the program breaks

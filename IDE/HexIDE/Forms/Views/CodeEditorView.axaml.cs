@@ -497,7 +497,7 @@ public partial class CodeEditorView : UserControl
                 command => vm.RunCodeLensAsync(command).ListenErrors());
 
             _inlayHintRenderer = new InlayHintRenderer(TextEditor);
-            TextEditor.TextArea.TextView.BackgroundRenderers.Add(_inlayHintRenderer);
+            TextEditor.TextArea.TextView.ElementGenerators.Add(_inlayHintRenderer);
             _inlaySettingsChanged = (_, e) =>
             {
                 if (e.PropertyName != nameof(vm.Settings.ShowInlayHints)) return;
@@ -823,7 +823,7 @@ public partial class CodeEditorView : UserControl
         ++_inlayRevision;
         if (_inlayHintRenderer is not null)
         {
-            TextEditor.TextArea.TextView.BackgroundRenderers.Remove(_inlayHintRenderer);
+            TextEditor.TextArea.TextView.ElementGenerators.Remove(_inlayHintRenderer);
             _inlayHintRenderer = null;
         }
         if (_markerService is not null)
@@ -995,7 +995,6 @@ public partial class CodeEditorView : UserControl
         if (_inlayHintRenderer is not null)
         {
             _inlayHintRenderer.Brush = brush;
-            TextEditor.TextArea.TextView.InvalidateLayer(_inlayHintRenderer.Layer);
         }
         TextEditor.TextArea.TextView.Redraw();
     }
@@ -1517,6 +1516,8 @@ public partial class CodeEditorView : UserControl
 
         // GetPosition expects document coordinates, while pointer events are relative to the viewport.
         var tvPos = TextEditor.TextArea.TextView.GetPosition(point + TextEditor.TextArea.TextView.ScrollOffset);
+        if (tvPos is { } hovered)
+            _languageFeatures?.Hover?.ConfigurePlacement(new Position(hovered.Line - 1, hovered.Column - 1));
         switch (CurrentRoute(tvPos is not null))
         {
             case HoverRoute.NotOverText:

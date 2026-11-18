@@ -29,6 +29,7 @@ internal static class DesktopStartup
         // hard-false), so a distributed binary cannot enter developer mode at all.
 #if DEBUG
         HexIDE.Static.DeveloperMode = ServerOptions.DeveloperMode;
+        HexIDE.Static.WithoutVb6 = ServerOptions.NoVb6;
 
         // Before any project is read, because a document takes the host code page when it is created.
         if (ServerOptions.AnsiCodePage is { } codePage)
@@ -37,7 +38,7 @@ internal static class DesktopStartup
 
         var startupProject = new StartupProjectOpen();
         if (ServerOptions.NewProjectUnsaved)
-            HexIDE.Static.StartupProjectHook = (ps, _) => ps.CreateNewProject(IProjectTemplate.StandardEXE);
+            HexIDE.Static.StartupProjectHook = (ps, _) => ps.CreateDefaultProject();
         else if (ServerOptions.NewProject)
             HexIDE.Static.StartupProjectHook = async (ps, pm) =>
             {
@@ -45,7 +46,7 @@ internal static class DesktopStartup
                 // just before stays the startup project, and saving that instead wrote its recovered work over its
                 // files (hexide-io/HexIDE#499).
                 var before = pm.LoadedProjects.ToList();
-                await ps.CreateNewProject(IProjectTemplate.StandardEXE);
+                await ps.CreateDefaultProject();
                 if (pm.LoadedProjects.FirstOrDefault(p => !before.Contains(p)) is { } project)
                 {
                     // Through the shared helper, NOT a second copy of the same path rule. This line
@@ -66,7 +67,7 @@ internal static class DesktopStartup
             // The registry also guards loading in recovery sessions.
             var loader = setup.AddinLoader;
             loader.LoadAll(setup.HexIdeHost);
-            desktop.ShutdownRequested += (_, _) => loader.Dispose();
+            DisposeOnShutdown(desktop, loader);
 
             startupProject.Attach(desktop.MainWindow!, setup.ContributedProjects, loader.PromptPendingConsentAsync);
 
@@ -75,7 +76,7 @@ internal static class DesktopStartup
             if (ServerOptions.Port is not { } port)
                 return;
 
-            var ctx = new IdeContext(setup.ProjectManager, setup.DocumentDockService, setup.LspClient, setup.EditorService, setup.ProjectRunnerService, setup.ProjectService, setup.EventBus, setup.BookmarkService, setup.BreakpointService, setup.DebugController, HexIDE.Static.RootViewModel!, setup.ToolBoxViewModel, setup.ProfileService, setup.AddinProjectTemplateService, setup.LanguageSwitchService, setup.Capture, setup.Pseudonyms, setup.LocalizationService, setup.SettingsService, setup.ProjectFileFormat, setup.ReadOnlyRegionReader, setup.ReadOnlyRegionRules, setup.ArchiveProjects);
+            var ctx = new IdeContext(setup.ProjectManager, setup.DocumentDockService, setup.LspClient, setup.EditorService, setup.ProjectRunnerService, setup.ProjectService, setup.EventBus, setup.BookmarkService, setup.BreakpointService, setup.DebugController, HexIDE.Static.RootViewModel!, setup.ToolBoxViewModel, setup.ProfileService, setup.AddinProjectTemplateService, setup.LanguageSwitchService, setup.Capture, setup.Pseudonyms, setup.LocalizationService, setup.SettingsService, setup.ArchiveProjects);
             var cts = new CancellationTokenSource();
             var termination = OperatingSystem.IsWindows() ? null :
                 PosixSignalRegistration.Create(PosixSignal.SIGTERM, signal =>
@@ -135,6 +136,16 @@ internal static class DesktopStartup
                 cts.Cancel();
             };
 #endif
+        };
+    }
+
+    internal static void DisposeOnShutdown(IClassicDesktopStyleApplicationLifetime desktop, IAddinLoader loader)
+    {
+        // App's handlers run first: this hook is invoked at the end of OnFrameworkInitializationCompleted.
+        // Keep this on ShutdownRequested so disposal precedes closing any consent dialog (#547).
+        desktop.ShutdownRequested += (_, e) =>
+        {
+            if (!e.Cancel) loader.Dispose();
         };
     }
 }

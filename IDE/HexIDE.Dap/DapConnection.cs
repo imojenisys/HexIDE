@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Channels;
 
@@ -25,6 +26,10 @@ public sealed class DapConnection : IAsyncDisposable
     private bool _closed;
     private Exception? _failure;
     private int _sequence;
+    private long _lastMessage;
+    // #4580 measured debugpy 1.8.22 sending its trailing event immediately, but waiting for stdin EOF
+    // before ending stdout. Give it 250 ms of quiet, bounded by the caller's drain timeout.
+    private static readonly TimeSpan DisconnectQuietWindow = TimeSpan.FromMilliseconds(250);
 
     /// <param name="input">Adapter output; must support cancellation or be unblocked by disposal.</param>
     /// <param name="output">Adapter input; must support cancellation or be unblocked by disposal.</param>
@@ -42,7 +47,7 @@ public sealed class DapConnection : IAsyncDisposable
         _events = Channel.CreateBounded<DapEvent>(new BoundedChannelOptions(_options.EventCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
-            SingleWriter = true,
+            SingleWriter = false, // The delivery barrier writes alongside the wire reader.
             AllowSynchronousContinuations = false,
         });
         _capture?.Note("DAP connection opened.");
@@ -129,6 +134,15 @@ public sealed class DapConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>Enqueues a local barrier behind events already read, for the final consumer to acknowledge.</summary>
+    public async Task QueueDeliveryBarrierAsync()
+    {
+        var delivered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await _events.Writer.WriteAsync(new(0, "", JsonSerializer.SerializeToElement(new { }))
+            { DeliveryBarrier = delivered }, _lifetime.Token).ConfigureAwait(false);
+        await delivered.Task.WaitAsync(_lifetime.Token).ConfigureAwait(false);
+    }
+
     private void ThrowIfClosed()
     {
         if (_closed) throw new IOException("DAP connection is closed.", _failure);
@@ -155,6 +169,7 @@ public sealed class DapConnection : IAsyncDisposable
             while (true)
             {
                 var (message, bytes) = await _framing.ReadAsync(_lifetime.Token).ConfigureAwait(false);
+                Interlocked.Exchange(ref _lastMessage, Stopwatch.GetTimestamp());
                 unclassified = bytes;
                 void RecordFrame()
                 {
@@ -265,5 +280,39 @@ public sealed class DapConnection : IAsyncDisposable
     {
         Close(null);
         await _reader.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits for bounded quiet before ending what this side sends, then goes on reading what the adapter writes until it
+    /// closes its output or <paramref name="drain"/> passes; then closes the connection. An adapter may write after its
+    /// last response: debugpy answers <c>disconnect</c> and then sends a <c>debugpySockets</c> event. Closing the read
+    /// side on the response made that write fail with a broken pipe, and debugpy exit 1 (#3894).
+    /// </summary>
+    public async Task CloseAfterDrainAsync(TimeSpan drain)
+    {
+        // A duplex stream can't be half-closed, so it closes as before.
+        if (!ReferenceEquals(_input, _output))
+        {
+            // Mitigate debugpy's race: it writes after its disconnect response and fails if stdin ends
+            // in between (#4580, #3894). DAP has no "done writing" signal, so quiet is only a mitigation.
+            var started = Stopwatch.GetTimestamp();
+            while (!_reader.IsCompleted)
+            {
+                var quietRemaining = DisconnectQuietWindow - Stopwatch.GetElapsedTime(
+                    Math.Max(started, Interlocked.Read(ref _lastMessage)));
+                var boundRemaining = drain - Stopwatch.GetElapsedTime(started);
+                if (quietRemaining <= TimeSpan.Zero || boundRemaining <= TimeSpan.Zero) break;
+                var wait = quietRemaining < boundRemaining ? quietRemaining : boundRemaining;
+                try { await _reader.WaitAsync(wait).ConfigureAwait(false); }
+                catch (TimeoutException) { }
+            }
+            await _writer.WaitAsync().ConfigureAwait(false);
+            try { _output.Dispose(); }
+            catch (IOException) { }
+            finally { _writer.Release(); }
+            try { await _reader.WaitAsync(drain).ConfigureAwait(false); }
+            catch (TimeoutException) { }
+        }
+        await DisposeAsync().ConfigureAwait(false);
     }
 }

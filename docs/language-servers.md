@@ -25,13 +25,14 @@ It does not exist until you create it or save an entry in the window. **Deleting
 to undo an experiment that went wrong: the bundled server is compiled in, so no edit to this file can
 leave you without VB6 support permanently.
 
-Changes take effect on restart. Data applies live in HexIDE — themes, keymaps, languages — and code does
-not; a language server is a process, so it belongs to the second group.
+Connection changes take effect on IDE restart. Server-owned `settings` apply as soon as an entry is
+saved in Language & Debug Servers, without restarting the server. An edit made to the file outside
+HexIDE applies at the next start, or when an entry is next saved in that window.
 
 Each server row offers **Restart**, including a stopped or failed server. It stops that entry if
 necessary, starts it with the registration loaded when HexIDE started, and sends it the open documents
 it claims. Other entries keep running. The protocol inspector records that you requested the restart.
-Restart does not reload `lsp-servers.json`; configuration edits still take effect when HexIDE next starts.
+Restart does not reload `lsp-servers.json`; connection edits still take effect when HexIDE next starts.
 
 ## Editing in the window
 
@@ -55,7 +56,7 @@ a field preserves its value. The form shows the full
 command with arguments and environment, resolving pipe placeholders against the current project. Without
 a project folder, workspace placeholders stay visible with an explanation. Nothing starts from the form.
 **Save** is consent to the displayed command and remembers its command identity, including arguments and
-environment. Changes take effect on restart.
+environment. Connection changes take effect on IDE restart; `settings` changes apply on Save.
 
 A bundled entry is read-only. Customize writes only the fields changed from its defaults, plus its id;
 normal layering rules still apply. Saving patches only changed values: other entries, unknown fields,
@@ -120,12 +121,14 @@ and the JSON path. Non-ASCII text before the fault counts as characters, rather 
 | `websocketRole` | for `websocket` | `connect` (default) dials the server; `listen` waits for the server to dial HexIDE. |
 | `displayName` | no | Shown wherever servers are listed. Defaults to the id. |
 | `initializationOptions` | no | Server-specific JSON passed unchanged in the `initialize` request. Omitted or null means the field is absent from the handshake; an empty object is sent as `{}`. |
+| `settings` | no | Server-owned JSON object. `workspace/configuration` resolves sections by dotted path; empty or absent sections return the whole object. Missing paths return `null`; `editor.tabSize` always comes from Tab Width. Saving or reloading entries sends changed settings to that server only. |
 | `trace` | no | How much this server should say about its own work: `off` (default), `messages` or `verbose`. It travels in the handshake, so it sets what the server *starts* at; changing it on a running server is a separate thing the IDE does for you. Misspell it and the server still starts, with tracing off and a warning. |
 | `priority` | no | Breaks ties for features that cannot merge two answers, such as formatting and rename. Higher wins. The bundled server sits *below* the default, so your own server wins without you having to know this field exists. |
 | `enabled` | no | `false` switches an entry off entirely — no process, no registration. |
 | `capture` | no | How much of this server's conversation the protocol capture may hold. See *Giving one server a bigger record* below. |
 | `restartOnProjectChange` | no | `true` restarts this connection when projects join or leave the group, reopening its documents. Off by default; use for servers that ignore workspace-folder notifications. |
 | `workspaceArtifact` | no | A workspace-relative `path`, registered `provider` id and provider-owned `settings`. Generation requires consent; see [Generated workspace files](#generated-workspace-files). |
+| `chatTools` | no | Whether AI Chat may use tools and context this server offers: `hints` (default) asks before each call unless the tool says it only reads, `ask` asks before every call and takes no context, `off` uses none. See [Tools for AI Chat](#tools-for-ai-chat). A misspelled value asks before every call, with a warning. |
 
 Use the array form when quoting matters: `"arguments": ["host", "server --stdio"]` passes two arguments
 exactly as written, including spaces, quotes and empty strings. The legacy string form still uses .NET
@@ -401,6 +404,32 @@ a fact about a program the IDE did not start.
 Nothing is refused — refusing to run what you typed into your own file would be theatre. The launch is
 simply not silent.
 
+## Tools for AI Chat
+
+A server can offer AI Chat tools and a context fragment (#4257). The assistant sees them beside AI Chat's own
+tools, named `lsp1_…`, `lsp2_…` and so on, with a description that names the server. A server offers them by
+declaring `experimental.hexide.chatTools` in its capabilities; [the client document](lsp-client.md#tools-for-ai-chat)
+has the wire shape.
+
+- **Only servers HexIDE runs for you count:** HexIDE's own, one in this file, or one an add-in you allowed
+  contributed. Each request goes only to the server that offered the tool, and only while it runs.
+- **A call asks first** unless the tool says it only reads (`readOnlyHint: true` and `destructiveHint: false`)
+  and doesn't say it runs code. `"chatTools": "ask"` makes every call ask and takes no context from the server;
+  `"off"` uses nothing from it.
+- **What is sent:** what those tools return, and the context fragment, go to the AI service AI Chat is set up
+  for, as AI Chat's privacy notice says. The context, and results of tools that say they only read, go without
+  asking.
+- **Limits:** 32 tools per server, a description of 1,024 characters, an input schema of 8 KB, a result of
+  16 KB and a context fragment of 8 KB. A tool name is letters, digits, `_`, `-`, `.` and `/`, up to 64
+  characters; a tool with any other name is left out, and the log says so.
+
+**Your choice in Tools → Options → AI Chat Tools wins** over a server's `chatTools`, for an add-in's server too,
+whose entry the add-in writes: *On* (ask unless the tool only reads), *Ask before every call*, *Off*, or *As
+configured*, which follows the entry. It can't turn on a server whose route can't offer tools at all.
+
+Only HexIDE's own add-ins, AI Chat among them, can use these tools. Another add-in sees none, because the
+add-in that uses them is the one that shows the question.
+
 ## Servers start when they are needed
 
 Nothing starts at launch. A server starts when the first document with an extension it claims is opened, so
@@ -621,6 +650,25 @@ its default location, add `"environment": { "DOTNET_ROOT": "<that folder>" }` to
 its own helper processes, which find .NET through `DOTNET_ROOT` or the default location, never through
 PATH. Put it on the entry rather than on HexIDE's own environment: a `DOTNET_ROOT` without the runtime
 HexIDE itself needs stops HexIDE from starting, with .NET's "install .NET" message.
+
+For servers contributed by an add-in, settings live in the user's settings and can be reset on the
+add-in's Options page; see [contributed server settings](lsp-client.md#contributed-server-settings).
+
+**Server settings.** Put the server's settings section inside `settings` (#4255). RDCore asks for the
+`rdcore` section, so this turns off its block-end inlay hints (`[Main]` after `End Sub`) and keeps the
+others:
+
+```json
+"settings": { "rdcore": { "InlayHints": { "BlockEnds": false } } }
+```
+
+That shape was measured against RDCore `3cab50ab`, whose other hint kinds under `InlayHints` are
+`Arguments`, `NextVariables`, `ImplicitModifiers` and `ImplicitTypes`. The setting names are RDCore's,
+so check them against the RDCore build in use.
+
+The Language & Debug Servers entry editor accepts this object as raw JSON. Saving an edit sends
+`workspace/didChangeConfiguration` with the new object to this server only, and RDCore then asks for its
+section again. Connection fields still require an IDE restart.
 
 HexIDE writes RDCore's `.rdproj` before RDCore starts, only when the folder has none and artefact
 consent is granted; the import then rewrites it as RDCore's own file. This is a first-open bridge until

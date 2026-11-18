@@ -159,6 +159,7 @@ public static class AvaloniaInteroperability
         RegisterTabOrder<VBFrame>(tabStop: false);
         RegisterTabOrder<VBLabel>(tabStop: false);
         RegisterTabOrder<VBProgressBar>(tabStop: false);
+        RegisterTabOrder<VBSlider>(tabStop: true);
         RegisterTabOrder<VBUpDown>(tabStop: true);
         RegisterTabOrder<VBAnimation>(tabStop: true);
         RegisterTabOrder<VBDTPicker>(tabStop: true);
@@ -177,6 +178,7 @@ public static class AvaloniaInteroperability
         // because without it the assignment was a trappable 461 that On Error Resume Next swallowed, and the
         // transparent-Label rule then dropped the BackColor that followed, a wrong value with no error.
         Register<VBLabel, BackStyles>(VBProperties.BackStyleProperty, VBLabel.BackStyleProperty);
+        Register<VBLabel, VBTextAlignment>(VBProperties.AlignmentProperty, VBLabel.AlignmentProperty);
         Register<VBLabel, VBAppearance>(VBProperties.AppearanceProperty, VBLabel.AppearanceProperty);
         Register<VBCheckBox, VBCheckValue>(VBProperties.CheckValueProperty, VBCheckBox.ValueProperty);
 
@@ -184,6 +186,9 @@ public static class AvaloniaInteroperability
         // raises error 461, which is the whole interface of an option button unreachable from VB6 code.
         Register<VBOptionButton, VBAppearance>(VBProperties.AppearanceProperty, VBOptionButton.AppearanceProperty);
         Register<VBOptionButton, bool>(VBProperties.OptionValueProperty, VBOptionButton.ValueProperty);
+
+        Register<VBCommandButton, bool>(VBProperties.DefaultProperty, button => button.Default, (button, value) => button.Default = value);
+        Register<VBCommandButton, bool>(VBProperties.CancelProperty, button => button.Cancel, (button, value) => button.Cancel = value);
 
         Register<VBCommandButton, bool>(VBProperties.CommandValueProperty, _ => false, (button, value) =>
         {

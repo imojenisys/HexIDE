@@ -12,11 +12,6 @@ agent that wrote the code can open the IDE, drive it, and look at the result.
 > opens no port. Making it a supported opt-in feature for end users is a decided direction rather than
 > current behaviour, and the requirements below describe what ships today.
 
-> **Temporary leaf-node divergence (#3869).** Avalonia is pinned back to 12.1.4 while macOS Integration
-> instability is investigated. It supplies no native `LeafNode` provider, so expanding or collapsing a leaf
-> reports that the element does not support the action, rather than the explanation below. The 12.1.5
-> provider guards remain in place for when the pin is lifted.
-
 ## Requirements
 
 ### Requirement: Ask running programs through the engine contract
@@ -36,6 +31,19 @@ This separation SHALL preserve automation replies and the existing settle timing
 - **WHEN** an action starts work on a running form
 - **THEN** automation observes activity through the contract at the existing dispatcher priority and polling interval
 - **AND** printed text and the resulting reply retain their existing contents
+
+### Requirement: Select a closed dropdown in one call
+
+`interact` with `action: "select"` and an item value on a closed ComboBox SHALL open it through its expand provider, select through the existing item path, close it, and report that it opened the list first. A miss SHALL list available items and restore the closed state. Already-open lists SHALL retain their existing behaviour; disabled or hidden controls SHALL be refused before opening.
+
+#### Scenario: Select from a closed list
+- **WHEN** a caller selects an available item by text on a closed ComboBox
+- **THEN** the item is selected and the list is closed, with the opening reported
+
+#### Scenario: No item matches
+- **WHEN** a caller selects missing text on a closed ComboBox
+- **THEN** the refusal lists available items and the list remains closed
+
 
 ### Requirement: Discover archive projects and each project's own file
 `get_project_info` SHALL include open archive projects in `projects`, with their container path, their
@@ -1182,6 +1190,11 @@ a control in it SHALL have no `boundingRect`, rather than a position that reads 
 - **WHEN** `interact` clicks a button in a window set in from its surface by a title bar and shadow
 - **THEN** the button is pressed, and its `boundingRect` is where `take_snapshot` shows it
 
+#### Scenario: Popup geometry on native Wayland
+- **WHEN** a menu or tooltip is open under `--platform wayland` with Avalonia 12.1.5 or later
+- **THEN** `take_snapshot` includes the popup at its reported position, `inspect_element` reports `boundingRect` inside it,
+  and `hover` reports the open tooltip's `tipBounds` in the selected window's coordinates
+
 ### Requirement: A DPI-unaware IDE's window state SHALL say why its scale is 1
 An IDE started with `--dpi-unaware` SHALL give every window-state rectangle in the pixels Windows reports to it, the
 frame included, and its window-state reply SHALL carry a `note` saying why `scale` is 1 on a scaled display.
@@ -1405,6 +1418,16 @@ leave new documents pathless and explain the null path and how to save them in i
 - **WHEN** the IDE starts with `--newproject-unsaved`
 - **THEN** its initial form and project have no file paths
 - **AND** opening the form's code uses its `untitled:` URI until it is saved
+
+#### Scenario: A write needs a folder for the unsaved project
+- **WHEN** a write tool refuses a pathless document's unarmed save picker and its project has no folder
+- **THEN** the refusal SHALL name the missing project folder before suggesting file-dialog answers
+- **AND** it SHALL explain that a document answer alone cannot help, and give the Save Project route:
+  arm one absolute destination per unsaved form, then module, then project file (and group file last
+  when needed) in an existing directory, then invoke the File menu's Save Project item with `invoke_menu_item` (`File/Save Project1`
+  for the default project in English), discovering its actual localized name with `dump_visual_tree`
+- **AND** the refusal SHALL leave the answer queue and document unchanged
+- **AND** an armed destination refused for the missing project folder SHALL give the same route and keep the answer
 
 ### Requirement: Explicit automation names SHALL keep structural controls in the control view
 The control-view collector shared by discovery and path resolution SHALL keep an element whose own
@@ -2245,6 +2268,10 @@ While an external session is active, `get_call_stack`, `get_locals`, `evaluate`,
 as the IDE windows. Replies SHALL preserve the tools' result shapes, omit unavailable source or
 project fields and explain the adapter frame context. Running inspection SHALL refuse with guidance
 to use `break_program` or a breakpoint. External watches SHALL support Expression watches only.
+External `evaluate` SHALL report adapter refusals as `success: false` with the adapter message as
+`error`. Its successful result SHALL concatenate output delivered during the evaluation and the
+response result, preserving text. Before building the reply it SHALL wait for UI delivery of events
+already read, including output read before the response but dispatched after it.
 `set_breakpoints` and `clear_all_breakpoints` SHALL edit the editor's external breakpoint set and
 report adapter verification, relocation, refusal and unsupported conditions after awaiting its replies.
 `get_breakpoints` SHALL read that same external set, with its conditions, so it agrees with the editor.
@@ -2259,8 +2286,44 @@ report adapter verification, relocation, refusal and unsupported conditions afte
 - **WHEN** an inspection tool is called while the external session runs
 - **THEN** its reply explains that inspection requires a stop and names `break_program` or a breakpoint
 
+#### Scenario: External REPL prints its result
+
+- **WHEN** the adapter sends output before an empty evaluate response, with UI delivery still queued
+- **THEN** `evaluate` waits for that delivery and returns the printed text
+- **AND** a nonempty response result is appended after the output when both have text
+
+#### Scenario: External REPL refuses a line
+
+- **WHEN** the adapter answers evaluate with `success: false`
+- **THEN** the tool returns `success: false` and the adapter message as `error`
+- **AND** the Immediate window continues to display the adapter message
+
 #### Scenario: Replace external breakpoints
 
 - **WHEN** `set_breakpoints` replaces a saved document's lines and conditions
 - **THEN** the adapter receives the editor's setBreakpoints request and the reply reports its verification and relocated lines
 - **AND** `get_breakpoints` for that document returns the same lines and conditions
+
+### Requirement: Click scrolls a clipped press point into view
+
+`interact` with `click` SHALL bring a clipped press point into view and wait for layout and a frame
+before pressing. Its reply SHALL name scroll viewers that moved. If the point remains clipped, it
+SHALL refuse without pressing and name the clipping ancestor (#4558).
+
+#### Scenario: A scrolled-out target has a cover at its old point
+
+- **WHEN** a single or double `click`, or the press of a drag or hold, targets a control whose centre or supplied `x,y` is outside its scroll viewport
+- **THEN** the target is brought into view before hit-testing and pressing
+- **AND** the reply names the scroll viewers that moved
+
+#### Scenario: A panel cannot reveal the press point
+
+- **WHEN** `click` targets a point clipped by a panel that cannot scroll it into view
+- **THEN** no pointer press is sent
+- **AND** the refusal names what clips the point and says it could not be brought into view
+
+#### Scenario: An in-view cover retains pointer behaviour
+
+- **WHEN** another control covers an in-view target's press point
+- **THEN** the click retains its existing success reply naming the cover it pressed
+- **AND** this change leaves drag release targets, `wheel`, `hover`, `double_click` and non-pointer verbs unchanged

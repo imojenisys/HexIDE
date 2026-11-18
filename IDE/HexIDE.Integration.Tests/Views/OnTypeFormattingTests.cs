@@ -411,13 +411,13 @@ public class OnTypeFormattingTests
         {
             var server = new Server(trigger);
             var (local, remote) = FullDuplexStream.CreatePair();
-            var rpc = new JsonRpc(new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()), server);
+            var rpc = new JsonRpc(new LspMessageHandler(remote, remote, new SystemTextJsonFormatter()), server);
             rpc.StartListening();
             var transport = Substitute.For<ILspTransport>();
             transport.IsAlive.Returns(true);
             transport.LeaveServerRunning.Returns(true);
             transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
-                .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(local, local, c.Arg<IJsonRpcMessageFormatter>())));
+                .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(new LspMessageHandler(local, local, c.Arg<IJsonRpcMessageFormatter>())));
             var client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6");
             await client.StartAsync(TestContext.Current.CancellationToken);
             var localization = new LocalizationService();
@@ -427,7 +427,7 @@ public class OnTypeFormattingTests
             var vm = new CodeEditorViewModel(Substitute.For<IWindowManager>(), Substitute.For<IEditorService>(),
                 Substitute.For<IProjectService>(), Substitute.For<IEventBus>(), client, settings,
                 Substitute.For<IStatusBarService>(), new BookmarkService(), new BreakpointService(),
-                Substitute.For<IDebugController>(), new RunScope(), localization, new Vb6ProjectFileFormat(), new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader());
+                Substitute.For<IDebugController>(), new RunScope(), localization);
             var module = new FormDefinition(new ProjectDefinition(VBProjectType.EXE, "P"),
                 HexIDE.Runtime.Components.FormComponentClass.Instance, "Module1");
             module.AbsolutePath = Path.Combine(Path.GetTempPath(), "HexIDE-on-type", "Module1.frm");

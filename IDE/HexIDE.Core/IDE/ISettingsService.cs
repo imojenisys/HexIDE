@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Collections.Generic;
 
@@ -51,6 +52,13 @@ public interface ISettingsService : INotifyPropertyChanged
 
     /// <summary>Per-theme lexical colours. Getters and setters use detached snapshots.</summary>
     Dictionary<string, Dictionary<string, EditorTokenColors>> EditorColorOverrides { get; set; }
+
+    /// <summary>
+    /// Per language server, by its id: whether AI Chat may use the tools it offers, as <c>on</c>, <c>ask</c> or <c>off</c>,
+    /// over what the server's own entry says (#4257). A server with no value here follows its entry. Getters and setters use
+    /// detached snapshots.
+    /// </summary>
+    Dictionary<string, string> ServerChatTools { get; set; }
 
     /// <summary>Remove a theme's overrides, or just one token's overrides.</summary>
     void ResetEditorColors(string theme, string? token = null);
@@ -157,6 +165,13 @@ public interface ISettingsService : INotifyPropertyChanged
     /// Window position, size, and state for the next launch.
     /// </summary>
     WindowData Window { get; set; }
+
+    /// <summary>Resolved settings: the user's whole object, otherwise the profile's, otherwise null.</summary>
+    JsonElement? GetLanguageServerSettings(string id);
+    bool HasLanguageServerSettings(string id);
+    /// <summary>Stores a user object and raises PropertyChanged for LanguageServerSettings.</summary>
+    void SetLanguageServerSettings(string id, JsonElement settings);
+    void RemoveLanguageServerSettings(string id);
 
     // ── Language server ─────────────────────────────────────────
 

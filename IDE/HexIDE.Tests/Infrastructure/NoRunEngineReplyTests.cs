@@ -21,7 +21,7 @@ public class NoRunEngineReplyTests : CompositionTestBase
     private HexIdeTools ToolsOver(IProjectRunnerService runner, IProjectManager projects) =>
         new(new IdeContext(projects, Substitute.For<IDocumentDockService>(), Substitute.For<ILspClient>(), null!, runner, null!,
             null!, null!, null!, Composition.DebugController, Composition.Root, null!, null!, null!, null!, Composition.Capture,
-            null!, Composition.LocalizationService, null!, new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader()));
+            null!, Composition.LocalizationService, null!));
 
     private HexIdeTools Tools() => ToolsOver(Composition.ProjectRunnerService, Composition.ProjectManager);
 
@@ -88,6 +88,26 @@ public class NoRunEngineReplyTests : CompositionTestBase
     }
 
     [AvaloniaFact]
+    public async Task Interpreter_watches_reply_uses_window_order_and_retains_stored_context()
+    {
+        var watches = Composition.Root.Watches;
+        foreach (var (expression, context) in new[]
+        {
+            ("v", "Class1.X(Let)"), ("m", "Class1"), ("g", "Module1"),
+            ("p", "(All Modules)"), ("Loc", "(All Modules)"), ("zq", "(All Modules)"),
+            ("g", "(All Modules)"), ("1 + 1", "(All Modules)"),
+        })
+            watches.Service.Add(new HexIDE.Debugging.WatchExpression(expression, HexIDE.Debugging.WatchType.Expression, context));
+
+        var reply = await Tools().GetWatchesAsync(Ct);
+
+        reply.Watches.Select(w => w.Expression).Should().Equal("1 + 1", "Loc", "g", "p", "zq", "m", "v", "g");
+        reply.Watches.Take(5).Select(w => w.Context).Should().OnlyContain(c => c == "(All Modules)");
+        reply.Watches.Select(w => w.Expression).Should().Equal(watches.Rows.Select(r => r.Expression));
+        watches.Service.Watches.Select(w => w.Expression).Should().Equal("v", "m", "g", "p", "Loc", "zq", "g", "1 + 1");
+    }
+
+    [AvaloniaFact]
     public async Task With_no_launch_the_reply_says_so_and_names_the_external_session()
     {
         AnAddInsProjectAtStartup();
@@ -128,9 +148,7 @@ public class NoRunEngineReplyTests : CompositionTestBase
         strings.GetString("Str.Menu.Run.RunWith.Launch").Returns("{0} (von {1})");
         var tools = new HexIdeTools(new IdeContext(Composition.ProjectManager, Substitute.For<IDocumentDockService>(),
             Substitute.For<ILspClient>(), null!, Composition.ProjectRunnerService, null!, null!, null!, null!,
-            Composition.DebugController, Composition.Root, null!, null!, null!, null!, Composition.Capture, null!, strings, null!,
-                new Vb6ProjectFileFormat(),
-                new Vb6ReadOnlyRegionReader()));
+            Composition.DebugController, Composition.Root, null!, null!, null!, null!, Composition.Capture, null!, strings, null!));
 
         var reply = await tools.RunProjectAsync(Ct);
 

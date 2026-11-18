@@ -43,14 +43,14 @@ public class ServerApplyEditModifiedTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var (local, remote) = FullDuplexStream.CreatePair();
         var server = new EditServer();
-        using var rpc = new JsonRpc(new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()), server);
+        using var rpc = new JsonRpc(new LspMessageHandler(remote, remote, new SystemTextJsonFormatter()), server);
         server.Rpc = rpc;
         rpc.StartListening();
         var transport = Substitute.For<ILspTransport>();
         transport.IsAlive.Returns(true);
         transport.LeaveServerRunning.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>()).Returns(call =>
-            Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(local, local, call.Arg<IJsonRpcMessageFormatter>())));
+            Task.FromResult<IJsonRpcMessageHandler?>(new LspMessageHandler(local, local, call.Arg<IJsonRpcMessageFormatter>())));
         EditorService editors = null!;
         await using var client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6",
             applyEdit: (edit, documentFor, token) => Dispatcher.UIThread.InvokeAsync(
@@ -67,7 +67,7 @@ public class ServerApplyEditModifiedTests
             Substitute.For<IProjectService>(), new EventBus(), client, settings,
             Substitute.For<IStatusBarService>(), Substitute.For<IBookmarkService>(),
             Substitute.For<HexIDE.Debugging.IBreakpointService>(), Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
-            Substitute.For<HexIDE.Debugging.IRunScope>(), localization, new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader());
+            Substitute.For<HexIDE.Debugging.IRunScope>(), localization);
         editors = new EditorService(dock, NewEditor,
             () => new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(), localization, settings),
             () => throw new InvalidOperationException(), () => throw new InvalidOperationException(), () => manager, localization);
@@ -116,8 +116,7 @@ public class ServerApplyEditModifiedTests
             ApplicationCommands.SaveCommand.CanExecute(null, textEditor.TextArea).Should().BeTrue();
 
             using var context = new IdeContext(manager, dock, client, null!, Substitute.For<IProjectRunnerService>(),
-                null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!,
-                new Vb6ProjectFileFormat(), new Vb6ReadOnlyRegionReader());
+                null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!, null!);
             var tools = new HexIdeTools(context);
             var tabs = JsonSerializer.SerializeToElement(await tools.GetDocumentTabsAsync(timeout.Token), ReplyJson.Options).GetProperty("tabs");
             tabs.EnumerateArray().Single(tab => tab.GetProperty("title").GetString() == target.Title)

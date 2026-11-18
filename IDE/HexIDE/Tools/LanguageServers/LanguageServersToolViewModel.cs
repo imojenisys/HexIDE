@@ -97,6 +97,7 @@ public partial class LanguageServersToolViewModel : Document
         Definitions.Clear();
         try
         {
+            _editorStore.Load();
             var text = _editorStore.Read();
             var userIds = _editorStore.UserIds(text);
             foreach (var id in _editorStore.Defaults.Select(e => e.Id!).Concat(userIds).Distinct(StringComparer.Ordinal))
@@ -146,6 +147,15 @@ public partial class LanguageServersToolViewModel : Document
     /// where trouble is reported, and this is where trouble is reported.
     /// </remarks>
     public System.Windows.Input.ICommand ShowAllMessagesCommand { get; }
+
+    /// <summary>
+    /// The language servers whose route lets them offer AI Chat tools, running or not, with what their entries say: what
+    /// Options → AI Chat Tools lists for the person to choose over (#4257).
+    /// </summary>
+    internal IReadOnlyList<HexIDE.Lsp.ServerChatToolsCandidate> ChatToolsCandidates() =>
+        _registry.Connections.Where(c => c.ChatTools is not null)
+            .Select(c => new HexIDE.Lsp.ServerChatToolsCandidate(c.Id, c.DisplayName, c.Origin, c.ChatTools!.Value))
+            .ToList();
 
     public LanguageServersToolViewModel(
         ILanguageConnectionRegistry registry, ILocalizationService localization, ConversationLog capture,

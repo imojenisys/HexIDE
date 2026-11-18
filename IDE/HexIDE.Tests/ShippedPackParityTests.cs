@@ -519,11 +519,14 @@ public class ShippedPackParityTests
         galician.Strings!.Where(pair => pair.Value == canonical.Strings![pair.Key])
             .Select(pair => pair.Key).Should().BeEquivalentTo(new[]
             {
+                "Str.Office.ProjectCaption", // Project and file placeholders only.
                 "Str.Options.Keymap.Break", // The keyboard key label.
                 "Str.Tool.FindReferences.Error",
                 "Str.Options.Addin.Status.Incompatible",
                 "Str.CodeEditor.ViewAs.Vb6", "Str.Tool.Locals.Ellipsis",
                 "Str.Dialog.AddProcedure.Type.Sub", "Str.Dialog.MenuEditor.Visible",
+                "Str.Dialog.MenuEditor.Shortcut.CtrlFormat", "Str.Dialog.MenuEditor.Shortcut.AltFormat",
+                "Str.Dialog.MenuEditor.Shortcut.FunctionFormat", "Str.Dialog.MenuEditor.Shortcut.InsertKey",
                 "Str.Tool.ProtocolInspector.DetailHeader", "Str.StatusBar.Insert",
                 "Str.StatusBar.Automation.Text", "Str.StatusBar.Automation.TextSession",
                 "Str.StatusBar.LanguageServerProgress", "Str.Options.Node.Editor",

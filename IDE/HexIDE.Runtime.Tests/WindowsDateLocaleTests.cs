@@ -6,6 +6,34 @@ namespace HexIDE.Runtime.Tests;
 
 public partial class WindowsDateLocaleTests : BaseVBTestFixture
 {
+    // #4463 records Windows NLS data; these are not vb6.exe measurements.
+    [Theory]
+    [InlineData("tzm-Latn-DZ", "23:59:59")]
+    [InlineData("en-US", "11:59:59 PM")]
+    [InlineData("en-GB", "23:59:59")]
+    public async Task CStr_time_uses_the_Windows_pattern_and_round_trips(string name, string expected)
+    {
+        using var locale = VbLocale.Use(new CultureInfo(name, false));
+        await Run("Dim s As String\ns = CStr(TimeSerial(23, 59, 59))\nDebug.Print s\nDebug.Print Hour(CDate(s)) & \":\" & Minute(CDate(s)) & \":\" & Second(CDate(s))\n");
+        AssertDebugLog([new Vb6Value(expected), new Vb6Value("23:59:59")]);
+    }
+
+    [Fact]
+    public void Table_time_format_reaches_the_managed_pattern()
+    {
+        var culture = new CultureInfo("tzm-Latn-DZ", false);
+        WindowsDateTable.Apply(culture);
+        culture.DateTimeFormat.LongTimePattern.Should().Be("H:mm:ss");
+    }
+
+    [Fact]
+    public void Time_pattern_literals_are_converted_through_the_reader()
+    {
+        var dates = (DateTimeFormatInfo)CultureInfo.InvariantCulture.DateTimeFormat.Clone();
+        WindowsDateLocale.Apply(dates, type => type == 0x1003 ? "H:mm 'o''clock'" : "fixture", () => "era");
+        dates.LongTimePattern.Should().Be("H:mm 'o\\'clock'");
+    }
+
     [Fact]
     public void ForProgram_reads_the_calendar_once_per_culture()
     {
@@ -21,6 +49,47 @@ public partial class WindowsDateLocaleTests : BaseVBTestFixture
         for (var i = 0; i < 100; i++)
             VbLocale.ForProgram(culture, calendars.AppliesTo);
         reads.Should().Be(1);
+    }
+
+    // #4378: synthetic reader data tests NLS plumbing, not new VB6 measurements.
+    [Theory]
+    [InlineData(false, "en-GB")]
+    [InlineData(true, "en-gb")]
+    [InlineData(true, "en-US")]
+    public void Designators_obey_the_user_override_rule(bool useUserOverride, string userName)
+    {
+        var culture = new CultureInfo("en-GB", useUserOverride);
+        var isUser = useUserOverride && userName == "en-gb";
+        WindowsDateLocale.Apply(culture, userName, (_, type) =>
+            (type & 0x7fffffffu) is 0x28 or 0x29
+                ? ((type & 0x80000000u) == 0 ? "user" : "default") : "fixture");
+        culture.DateTimeFormat.AMDesignator.Should().Be(isUser ? "user" : "default");
+        culture.DateTimeFormat.PMDesignator.Should().Be(isUser ? "user" : "default");
+    }
+
+    [Fact]
+    public void Empty_Nls_designators_stay_empty()
+    {
+        var dates = (DateTimeFormatInfo)CultureInfo.InvariantCulture.DateTimeFormat.Clone();
+        WindowsDateLocale.Apply(dates, type => type is 0x28 or 0x29 ? "" : "fixture",
+            () => throw new InvalidOperationException());
+        dates.AMDesignator.Should().BeEmpty();
+        dates.PMDesignator.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("en-GB")]
+    [InlineData("de-DE")]
+    public async Task Designator_output_matches_Windows_data(string name)
+    {
+        // #4378: data plumbing; only en-GB is measured against vb6.exe.
+        using var locale = VbLocale.Use(new CultureInfo(name, false));
+        var entry = WindowsDateTable.Data.GetProperty("locales").GetProperty(name);
+        var am = OperatingSystem.IsWindows() ? NativePattern(name, 0x28) : entry.GetProperty("amDesignator").GetString()!;
+        var pm = OperatingSystem.IsWindows() ? NativePattern(name, 0x29) : entry.GetProperty("pmDesignator").GetString()!;
+        await Run("Debug.Print Format$(TimeSerial(9, 0, 0), \"AMPM\")\n" +
+                  "Debug.Print Format$(TimeSerial(13, 0, 0), \"AMPM\")\n");
+        AssertDebugLog([new Vb6Value(am), new Vb6Value(pm)]);
     }
 
     [Theory]
@@ -41,16 +110,18 @@ public partial class WindowsDateLocaleTests : BaseVBTestFixture
     }
 
     [Fact]
-    public void Nls_fields_map_to_the_date_format_without_changing_time_or_calendar()
+    public void Nls_fields_map_to_date_and_long_time_without_changing_short_time_or_calendar()
     {
         var dates = (DateTimeFormatInfo)CultureInfo.InvariantCulture.DateTimeFormat.Clone();
         var calendar = dates.Calendar;
-        var time = dates.LongTimePattern;
+        var time = dates.ShortTimePattern;
         WindowsDateLocale.Apply(dates, type => $"'field{type:X}'", () => throw new InvalidOperationException());
 
         dates.ShortDatePattern.Should().Be("'field1F'");
         dates.LongDatePattern.Should().Be("'field20'");
         dates.DateSeparator.Should().Be("'field1D'");
+        dates.AMDesignator.Should().Be("'field28'");
+        dates.PMDesignator.Should().Be("'field29'");
         for (var i = 0; i < 12; i++)
         {
             dates.MonthNames[i].Should().Be($"'field{0x38 + i:X}'");
@@ -65,7 +136,8 @@ public partial class WindowsDateLocaleTests : BaseVBTestFixture
             dates.AbbreviatedDayNames[(i + 1) % 7].Should().Be($"'field{0x31 + i:X}'");
         }
         dates.Calendar.Should().BeSameAs(calendar);
-        dates.LongTimePattern.Should().Be(time);
+        dates.LongTimePattern.Should().Be("'field1003'");
+        dates.ShortTimePattern.Should().Be(time);
     }
 
     [Theory]

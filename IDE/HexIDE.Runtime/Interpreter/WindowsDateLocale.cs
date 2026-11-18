@@ -55,6 +55,9 @@ internal static partial class WindowsDateLocale
     {
         string? era = null;
         string Era() => era ??= readEra();
+        dates.AMDesignator = read(0x28); // LOCALE_S1159
+        dates.PMDesignator = read(0x29); // LOCALE_S2359
+        dates.LongTimePattern = ManagedPattern(read(0x1003), Era); // LOCALE_STIMEFORMAT
         dates.DateSeparator = read(0x1d); // LOCALE_SDATE
         dates.ShortDatePattern = ManagedPattern(read(0x1f), Era); // LOCALE_SSHORTDATE
         dates.LongDatePattern = ManagedPattern(read(0x20), Era); // LOCALE_SLONGDATE

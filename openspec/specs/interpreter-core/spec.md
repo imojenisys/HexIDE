@@ -30,6 +30,95 @@ worse than one that is obviously incomplete.
 
 ## Requirements
 
+### Requirement: A running form accepts Icon assignments
+
+A running form's default instance SHALL accept icon pictures or Nothing through Set or Let on Icon, bare or through Me or the form's name, without reading the picture's default Handle, following [#4603's SP6 measurements](https://github.com/hexide-io/HexIDE/issues/4603). Native handles and New instances remain outside this slice.
+
+#### Scenario: Assign an icon or a bitmap
+- **WHEN** a program assigns an icon picture to the form's Icon
+- **THEN** Icon returns the same picture, Type 3, and the window displays it, replacing any previous icon hook
+- **WHEN** it then assigns a bitmap picture
+- **THEN** trappable error 380, Invalid property value, leaves Icon unchanged
+
+#### Scenario: Empty pictures and Nothing clear the property differently on screen
+- **WHEN** a program assigns LoadPicture() to Icon
+- **THEN** Icon returns that empty picture, Type 0, and the window keeps its previous icon state
+- **WHEN** a program assigns Nothing to Icon
+- **THEN** Icon returns an empty Picture, Type 0, not Nothing, and the window takes the saved (None) state: Windows' generic icon on a sizable form and no caption icon on a Fixed Dialog
+- **AND** a subsequent LoadPicture() leaves that window state unchanged
+
+#### Scenario: Reads before assignment
+- **WHEN** a program reads Icon before assigning it
+- **THEN** the interpreter SHALL refuse it as not implemented
+
+
+### Requirement: Measured 32-bit VBA7 integer support
+
+The runtime SHALL start projects targeting `VbaBitness.Bit32` with the Excel x86 behaviour recorded in
+[#4399](https://github.com/hexide-io/HexIDE/issues/4399) (measuring PR #4398). LongPtr declarations,
+parameters, results, Consts and UDT fields SHALL use Long, CLngPtr SHALL convert as CLng, and DefLngPtr
+SHALL select Long. LongLong and CLngLng SHALL retain the VB6 unknown-name errors; DefLngLng SHALL
+retain the VB6 refusal (its x86 diagnostic text is unmeasured). The lexer SHALL keep ^ solely as the
+power operator and Declare SHALL accept either presence or absence of PtrSafe (measured without PtrSafe
+for an As Long result and with it for As Long and As LongPtr; As LongPtr without it is reasoned).
+
+#### Scenario: 32-bit constants
+- **WHEN** a project targets 32-bit VBA7
+- **THEN** VBA6, VBA7 and Win32 are numeric 1, and Win64, Win16 and Mac are numeric 0
+
+#### Scenario: 32-bit pointer integer
+- **WHEN** a LongPtr variable holds 5 in a 32-bit project
+- **THEN** TypeName is Long, VarType is 3 and LenB is 4
+- **AND** CLngPtr(2.5) returns Long 2, while CLngPtr("2147483648") raises 6
+
+### Requirement: Measured 64-bit VBA7 integer support
+
+The runtime SHALL implement the 64-bit VBA7 rows measured in
+[#4302](https://github.com/hexide-io/HexIDE/issues/4302) (measuring PRs #3965 and #4383), selected by `VbaBitness.Bit64`.
+VB6 SHALL retain its measured errors and user-name precedence (measuring PR #4247), at execution where
+necessary. Unmeasured LongLong array bounds, For counters and UDT layouts SHALL refuse naming #1548.
+
+#### Scenario: Single with LongLong
+- **WHEN** a 64-bit project adds CLngLng(5) and CSng(1)
+- **THEN** the value is Double 6
+
+#### Scenario: Variant overflow
+- **WHEN** a Variant holding LongLong 9223372036854775807 is incremented
+- **THEN** it becomes Double without error, while the measured typed overflow raises 6
+
+#### Scenario: Adjacent type character in a 64-bit project
+- **WHEN** a 64-bit project evaluates `5^-1`
+- **THEN** it subtracts 1 from LongLong 5 and returns LongLong 4
+- **AND** `2^3` is a syntax error, while `2 ^ 3` returns Double 8
+
+#### Scenario: Decimal comparison retains precision
+- **WHEN** a 64-bit project compares CLngLng("9007199254740993") with CDec("9007199254740992")
+- **THEN** equality is False, through the exact Decimal domain
+
+#### Scenario: Unmeasured operand coercion range
+- **WHEN** a 64-bit project uses an operand whose rounded value is outside the signed 64-bit range with LongLong in integer division, Mod or a bitwise operation
+- **THEN** the runtime refuses the unmeasured coercion naming #1548 rather than guessing a value or diagnostic
+
+#### Scenario: User-defined conversion name
+- **WHEN** either a VB6 or a 64-bit VBA7 project defines Function CLngLng
+- **THEN** a call uses the user function before the built-in
+
+### Requirement: Control event declarations are checked when a form starts
+
+Before a form's declarations or Initialize run, the interpreter SHALL compare its collected control event Subs with the control class's event argument counts, plus one for an array element. An element's first parameter SHALL be ByRef Integer by effective type, including suffixes and DefType. Names and the event's own argument types/passing SHALL NOT be checked.
+
+
+#### Scenario: An element retains a scalar handler
+Measurements: [#4205](https://github.com/hexide-io/HexIDE/issues/4205), oracle PR #4358.
+- **WHEN** execution enters a form with `Command1` carrying `Index = 0` and `Sub Command1_Click()`
+- **THEN** it raises `Procedure declaration does not match description of event or procedure having the same name` as a compile error before the form's own code runs
+- **AND** the error carries the form module and the handler declaration's line, and the log names the procedure
+
+#### Scenario: A renamed or implicitly Integer index parameter
+- **WHEN** the element's Click handler takes `i As Integer`, `Index%`, or `Index` under `DefInt I`, by reference
+- **THEN** the handler accepts the event and receives Integer 0 when that element is clicked
+
+
 ### Requirement: Source-class default members SHALL resolve at async value boundaries
 
 The engine SHALL collect the name and kind of a source class's default member and read its Function,
@@ -52,9 +141,28 @@ SHALL keep the object itself. Measurements are recorded in
 - **AND** a Function Case value against Empty or Null raises the IDE's 450
 
 #### Scenario: Unmeasured default-member uses
-- **WHEN** a default is a Sub, requires arguments, returns an object, a typed Function default reaches Format or Abs, or a default reaches a later Format argument
+- **WHEN** a scalar default is a Sub, requires arguments but is given none, returns an object, a typed Function default reaches Format or Abs, or a default reaches a later Format argument
 - **THEN** execution refuses untrappably naming #174
-- **AND** default writes, array bounds, control-array indexes and synchronous helper reads retain their refusals
+- **AND** default writes without arguments, array bounds, control-array indexes and synchronous helper reads retain their refusals
+
+### Requirement: Parameterized source-class default members
+
+The interpreter SHALL route arguments on a source-class instance to its default Function/Get on a read
+or Property Let on a write, preserving the returned value without scalar coercion (#4606).
+
+#### Scenario: Measured receivers
+- **WHEN** arguments reach an instance in a local/module variable, class field, Variant/Object slot, indexed result or parameterless project-class-returning procedure
+- **THEN** the default member receives them
+- **AND** a typed class variable holding Nothing raises runtime error 91 on indexed reads and writes
+- **AND** the results match [#4606](https://github.com/hexide-io/HexIDE/issues/4606) and `docs/vb6-fidelity-oracle/with-new-default-instances-and-set-through-members.md`
+
+#### Scenario: Indexing a parameterless Get's result
+- **WHEN** Holder.State is a parameterless Get returning a Bag with default Item(key)
+- **THEN** `h.State("k")` reads Item("k") and `h.State("k") = "w"` runs its Property Let
+
+#### Scenario: Unmeasured parameterized defaults
+- **WHEN** arguments reach a class without a default, a Variable/Sub default, or a write without a default Property Let
+- **THEN** execution refuses untrappably naming #4606
 
 ### Requirement: Trailing argument and declared array type refusals
 
@@ -129,6 +237,24 @@ lookup rules below; ambiguous unmatched languages SHALL refuse as not implemente
 
 - **WHEN** the counted string for an ID has length zero
 - **THEN** the reader reports no string for that ID
+
+### Requirement: LoadPicture recognises measured file content and errors
+
+`LoadPicture` SHALL load BMP, ICO, JPEG and GIF content, independent of extension, following the
+[#4597 measurements](https://github.com/hexide-io/HexIDE/issues/4597). JPEG and GIF SHALL return Picture
+objects with Integer Type 1; the measured 20×10 images SHALL report Long Width 529 and Height 265 HiMetric.
+PNG, empty files and unknown content SHALL raise trappable 481, `Invalid picture`.
+Missing files in existing folders SHALL raise 53, missing folders 76 and directory paths 75, with descriptions
+`File not found: '<path>'`, `Path not found: '<path>'` and `Path/File access error: '<path>'` respectively.
+The description SHALL preserve the passed path; relative-path spelling remains unmeasured.
+Metafiles and file cursors SHALL refuse as unmeasured, and recognised but undecodable images and other I/O
+failures SHALL retain their not-implemented refusals. No-argument clearing and other argument refusals remain unchanged.
+
+#### Scenario: A program falls back after a picture error
+
+- **WHEN** a program calls LoadPicture on a PNG or a missing file, folder or directory path
+- **THEN** On Error Resume Next exposes the measured Err.Number and Err.Description
+- **AND** On Error GoTo reaches its handler so the program can use its fallback
 
 ### Requirement: Resource intrinsics read the project snapshot
 
@@ -407,7 +533,8 @@ by value will run such a program to completion while producing the wrong answer.
 The interpreter SHALL accept the intrinsic parameter names and required omissions measured in
 [#4145](https://github.com/hexide-io/HexIDE/issues/4145), placing arguments in parameter order and
 retaining positional values and optional defaults. Financial flags SHALL be named Due, arrays ValueArray,
-and pointer operands Ptr. Existing ChrB, IRR and MIRR execution refusals SHALL remain.
+and pointer operands Ptr. ChrB SHALL accept the conversions and odd-byte String uses scoped by
+[#4576](https://github.com/hexide-io/HexIDE/issues/4576), refusing other uses with #1510; IRR and MIRR SHALL use the cash-flow models below.
 Wrong names SHALL raise "Named argument not found" and omitted required arguments "Argument not optional"
 as the statement runs. Named InStrB SHALL raise "Syntax error", named CallByName "Argument in ParamArray
 may not be named", and named IMEStatus "Wrong number of arguments or invalid property assignment".
@@ -421,7 +548,18 @@ may not be named", and named IMEStatus "Wrong number of arguments or invalid pro
 The interpreter SHALL implement positional `SLN` and `SYD` calls with Double results matching
 all measured rows in [#2524](https://github.com/hexide-io/HexIDE/issues/2524) bit for bit.
 It SHALL accept their measured named parameters (#4145) and refuse unmeasured positional argument counts as not implemented.
-`DDB` remains unimplemented until every measured row can be reproduced.
+`DDB` SHALL use #2524's approved closest model: exact rate, a Double spill at
+`1 - rate`, financial-number power and exact book value and amount, returning the nearest Double
+to the smaller of amount and book value minus salvage. It SHALL default Factor to 2, raise error 5
+for zero life or period outside 1 to life, and refuse unmeasured argument counts and power domains.
+It SHALL take the named arguments `Cost`, `Salvage`, `Life`, `Period` and `Factor`, as measured on SP6.
+
+#### Scenario: Approved DDB rounding divergence
+- **WHEN** a program evaluates `DDB(2400, 300, 10, 10)`
+- **THEN** it returns Double with bits `40361F5F40D83791`
+- **AND** Debug.Print displays `22.1225472000002`
+- **AND** this is the documented exception approved in #2524 issuecomment-6954532512 to the [measured](../../../docs/vb6-fidelity-oracle/ddb-sln-and-syd.md) bits `40361F5F40D83797`
+
 
 #### Scenario: Straight-line depreciation
 - **WHEN** a program evaluates `SLN(30000, 7500, 10)`
@@ -1391,7 +1529,7 @@ to 2 when omitted. Values outside 0–9 SHALL raise 5. These styles and defaults
 Empty paths, directories and recognisable ASCII text documents (including associated documents) SHALL raise 5, missing programs
 53 and Null arguments 94. Unix SHALL retain direct process launching and map non-executable document
 failures to 5 where distinguishable. Non-string PathName conversions, access denied to executables,
-programs that exist but cannot start, and ambiguous/binary document classification SHALL refuse explicitly as not implemented pending measurement (#4146).
+programs that exist but cannot start, and ambiguous/binary document classification SHALL refuse explicitly as not implemented pending measurement (#4406).
 
 #### Scenario: A program launches a helper
 - **WHEN** code calls `Shell` with a quoted executable path, arguments and an accepted explicit style
@@ -1450,6 +1588,28 @@ as not implemented.
 - **WHEN** Print # or Write # receives CVErr(5)
 - **THEN** Print # writes "Error 5" and Write # writes "#ERROR 5#"
 - **AND** implicit string coercion still raises 13
+
+### Requirement: New on a form creates a separate instance
+
+Explicit `New Form2` SHALL create an instance distinct from the form's default instance, from any executing
+module. Its declarations and Initialize SHALL run inside that statement. Its own Public members and calls
+through an implemented interface SHALL leave it unloaded; controls and built-in members SHALL load it.
+A loaded instance SHALL be retained by Forms until Unload, and an unloaded instance SHALL terminate at
+its last reference's release, including statement temporaries. Forms SHALL receive the same interface
+conformance check as classes when constructed. Without a forms program, construction SHALL refuse with
+NotImplementedException naming #4598. These are #4598's measured VB6 SP6 rows, native and p-code agreeing;
+`As New Form2` remains outside this change.
+
+#### Scenario: A temporary instance does not become the default
+
+- **WHEN** a statement reads `TypeName(New Form2)`
+- **THEN** Initialize runs, TypeName is "Form2", and Terminate runs at statement end without loading it
+- **AND** a later read of the name Form2 creates its own default instance
+
+#### Scenario: Unload preserves a referenced instance
+
+- **WHEN** an instance created by New is loaded, unloaded and then used through a built-in member
+- **THEN** Load runs again without Initialize, and the instance rejoins Forms
 
 ### Requirement: Forms SHALL hold the program's loaded forms as VB6's does
 `Forms` SHALL be a program global, reached where nothing the program declares claims the name. It SHALL hold the loaded
@@ -1732,7 +1892,8 @@ letters, top-row digits, Space, navigation/editing keys, F1–F9/F11/F12 and key
 keys mapped by #2325's [keyboard sweep](https://github.com/hexide-io/HexIDE/issues/2325#issuecomment-6454480155),
 using its measured KeyCode and held-modifier Shift mask. KeyPreview SHALL retain
 the existing form-first delivery. Host-translated keypad navigation SHALL use
-the navigation key received from the host. Enter/Esc, Tab arbitration, punctuation
+the navigation key received from the host. Plain Enter/Esc SHALL deliver 13/27
+when no eligible Default/Cancel receiver takes them (#4371). Tab arbitration, punctuation
 and unmeasured combinations remain outside this additional code-mapping slice.
 
 #### Scenario: Home reaches a handler before TextBox navigation
@@ -1749,6 +1910,111 @@ and unmeasured combinations remain outside this additional code-mapping slice.
 - **AND** the control or KeyPreview form handler can swallow it with 0 or replace it with an ASCII character
 - **AND** KeyUp still receives KeyCode 8 with Shift 2
 - **AND** the default editing action remains the host's behavior pending measurement
+
+### Requirement: CommandButton Default and Cancel
+
+CommandButton SHALL expose saved and runtime Boolean Default and Cancel properties, initially False.
+Setting either to True SHALL clear that role on the other CommandButtons of the form; the last holder
+in file order SHALL win on load. A button MAY hold both roles. An enabled, visible holder SHALL take
+plain Enter or Esc in the tunnel phase, before any control or KeyPreview key event, including KeyUp.
+Enter on a focused CommandButton SHALL click that button instead. An open ComboBox list SHALL retain
+both keys. A hidden or disabled holder SHALL retain True without taking keys. With no receiver, a
+TextBox SHALL raise KeyDown, KeyPress and KeyUp with 13 or 27, leaving single-line text unchanged;
+Enter in a multi-line box SHALL insert its CRLF. These are [#4371's measured rows](https://github.com/hexide-io/HexIDE/issues/4371),
+including oracle PR #4376, and the [key-event oracle](../../../docs/vb6-fidelity-oracle/key-events-keydown-keypress-and-keyup.md).
+Nested-container roles, focus-time role changes and Properties-grid exclusivity remain outside this slice.
+The focused CommandButton SHALL display the default frame; otherwise only the eligible Enter receiver,
+if it is a CommandButton, SHALL display it. Changing Default in code SHALL refresh the frame.
+The frame SHALL occupy the outermost one DIP in the WindowFrame brush, moving the button edge inward
+one DIP without changing bounds or caption position ([#4391](https://github.com/hexide-io/HexIDE/issues/4391),
+including its pixel measurements from oracle PR #4577).
+
+#### Scenario: The default frame follows focus
+- **WHEN** focus moves from a TextBox to Default, Cancel, and an ordinary CommandButton
+- **THEN** the frame marks the Default button initially, then only the focused button at each step
+
+#### Scenario: A dialog takes Enter before KeyPreview
+- **WHEN** a TextBox or ListBox has focus, KeyPreview is True and an eligible Default CommandButton exists
+- **THEN** Enter raises only that button's Click, with no form or control key event
+
+#### Scenario: Moving the role and disabling its holder
+- **WHEN** a program sets Command2.Default True while Command1 holds Default
+- **THEN** Command1.Default reads False and Enter clicks Command2
+- **WHEN** Command2 is disabled or hidden
+- **THEN** Command2.Default still reads True and Enter reaches the focused TextBox's key events
+
+### Requirement: Measured keyboard events on buttons, lists and empty forms
+
+CommandButton, CheckBox, OptionButton, ListBox and ComboBox Styles 0 and 2 SHALL declare
+KeyDown, KeyPress and KeyUp and deliver the measured keys using the shared TextBox key-code
+mapping and form-first KeyPreview path. Registration SHALL preserve their existing default
+designer event. A form's zero KeyCode SHALL suppress only the
+control's KeyDown. Zero KeyAscii SHALL swallow the character. A changed KeyAscii for
+printable ASCII text SHALL reach the control and its character effect. Non-ASCII replacements SHALL refuse as
+not implemented until conversion is measured. Nonzero replacements for synthesized Space/Ctrl+A
+SHALL also refuse until their effects are measured. The authority is #2325's
+[console measurements](../../../docs/vb6-fidelity-oracle/key-events-keydown-keypress-and-keyup.md).
+Enter and Esc on a form holding controls SHALL follow the CommandButton Default and Cancel requirement.
+
+#### Scenario: A button's Space Click follows KeyUp
+- **WHEN** Space is pressed and released on a CommandButton or CheckBox
+- **THEN** KeyDown 32, KeyPress 32 and KeyUp 32 precede Click
+- **AND** an already-selected OptionButton raises the same key events without Click
+
+#### Scenario: A list selection is between the key events
+- **WHEN** Down selects the first ListBox item or k selects the item beginning with k
+- **THEN** KeyDown and any KeyPress precede Click, which sees the new ListIndex
+- **AND** KeyUp follows Click
+
+#### Scenario: A combo retains keyboard delivery with its list open
+- **WHEN** Alt+Down opens a Style 0 or Style 2 ComboBox and Down advances its selection
+- **THEN** DropDown follows KeyDown 40 with Shift 4 and precedes its KeyUp
+- **AND** each subsequent Down raises Click between KeyDown and KeyUp only if selection moves
+- **AND** focus moving among the combo and its popup items raises no extra GotFocus
+
+#### Scenario: KeyPreview interleaves form first
+- **WHEN** a key is typed into one of these controls with KeyPreview True
+- **THEN** each form key event precedes its control event, before the character effect
+- **AND** a form KeyAscii replacement is the value received by the control
+
+#### Scenario: Tab and button arrows navigate
+- **WHEN** Tab moves focus or an unmodified button arrow navigates
+- **THEN** neither raises key events on the button
+- **AND** a ComboBox receiving focus from CheckBox Down raises only KeyUp 40
+
+#### Scenario: An empty form receives keys directly
+- **WHEN** a key is pressed on a form with no controls
+- **THEN** its measured KeyDown, character KeyPress and KeyUp reach the form's handlers
+- **AND** unmodified Enter and Esc use 13 and 27, and Tab raises KeyDown 9 and KeyPress 9 without KeyUp
+- **AND** unmeasured modified Enter/Esc/Tab remain unmapped
+
+### Requirement: PictureBox and scroll-bar keyboard delivery
+
+PictureBox, HScrollBar and VScrollBar SHALL declare KeyDown, KeyPress and KeyUp using the
+shared control delivery path, preserving their default designer event. The measured a, Space,
+Enter and Esc sequences SHALL follow [#4575](https://github.com/hexide-io/HexIDE/issues/4575)
+(oracle PR #4574). Tab SHALL navigate without control key events; eligible Default/Cancel
+buttons SHALL take Enter/Esc before the control. Child controls SHALL retain their own routing.
+
+#### Scenario: Scroll-bar navigation follows writable KeyDown
+- **WHEN** an unmodified arrow, PageUp, PageDown, Home or End reaches a focused scroll bar
+- **THEN** KeyDown precedes any Change and KeyUp follows, without Scroll
+- **AND** Left/Up and PageUp move toward Min by SmallChange and LargeChange respectively,
+  while Right/Down and PageDown move toward Max, clamped to the range through VbValue
+- **AND** Home goes to the lower endpoint and End to the higher, including reversed ranges
+- **AND** unchanged Value raises no Change
+- **AND** KeyCode 0 in the control or preview form suppresses the move, with the key handled
+  before Avalonia can move it; a nonzero replacement retains the originally pressed key's move
+- **AND** modified navigation retains Avalonia's existing movement
+
+#### Scenario: A preview form suppresses only KeyDown
+- **WHEN** Form KeyPreview is True and Form_KeyDown sets KeyCode to 0 on a bar
+- **THEN** the control raises no KeyDown and does not move
+- **AND** Form KeyUp precedes control KeyUp, and a/Space still raise form then control KeyPress
+
+#### Scenario: PictureBox remains usable outside the tab order
+- **WHEN** a PictureBox has TabStop False
+- **THEN** Tab passes it by, but clicking it gives it focus and subsequent key events
 
 ### Requirement: Runtime parsing has a sized synchronous stack
 
@@ -1884,7 +2150,7 @@ it, and SHALL NOT raise Scroll (measured on vb6.exe, #4229).
 - **THEN** TopIndex becomes 49 and Scroll is raised only if that changes the top row
 - **AND** assigning 60 or -1 raises 380 without changing the row or raising Scroll
 
-### Requirement: Measured net present value and explicit cash-flow refusals
+### Requirement: Measured net present value and authorized cash-flow models
 
 The interpreter SHALL execute all five positional NPV rows measured in
 [#2525](https://github.com/hexide-io/HexIDE/issues/2525), preserving Double subtypes,
@@ -1893,8 +2159,11 @@ each cumulative discount power to Double as described in
 [Cash-flow precision](../../../docs/financial-precision-2525.md).
 Named NPV calls SHALL accept Rate and ValueArray (#4145).
 Unmeasured conversions, empty/multidimensional arrays and unsupported arithmetic
-domains SHALL refuse as unimplemented. IRR and MIRR SHALL explicitly refuse as unimplemented
-until a precision model matches every measured row for the function.
+domains SHALL refuse as unimplemented. IRR and MIRR SHALL execute the closest 64-bit models
+recorded in the precision note (Horner masks 9 and 84), authorized by Jen’s 2026-11-17 decision
+in #2525, preserving their documented computed bits and measured error numbers. Their
+unmeasured conversions, argument shapes, nonconvergence, other flows without a sign change,
+ReinvestRate -1 and unsupported power domains SHALL refuse as unimplemented.
 
 #### Scenario: Every cash flow is discounted
 - **WHEN** NPV is called with rate 0.1 and the measured five-element Double array a
@@ -1904,9 +2173,18 @@ until a precision model matches every measured row for the function.
 - **WHEN** NPV is called with the measured rate -1 or unallocated Double array
 - **THEN** it raises error 5
 
-#### Scenario: A cash-flow function has no matching precision model
-- **WHEN** IRR or MIRR is called
-- **THEN** execution stops with HexIDE's not-implemented error rather than returning guessed bits
+#### Scenario: Authorized approximate cash-flow results
+- **WHEN** IRR(a) or MIRR(b, 0.1, 0.12) is called with the measured Double arrays
+- **THEN** the Double result has bits `3FC875EFF17028E0` or `3FB94260ED23798E`, respectively
+- **AND** the documented differences from VB6 remain explicit
+
+#### Scenario: Measured cash-flow errors
+- **WHEN** IRR(cs), MIRR(cs, 0.1, 0.12), or MIRR(b, -1, 0.12) is called
+- **THEN** the error number is 5, 11, or 5, respectively
+
+#### Scenario: Unmeasured cash-flow domain
+- **WHEN** IRR does not converge or MIRR is called with ReinvestRate -1
+- **THEN** execution stops with HexIDE's not-implemented error naming #2525
 
 ### Requirement: Windows program dates use Windows locale data
 On Windows, for a locale whose default calendar is Gregorian, the interpreter SHALL take
@@ -2053,3 +2331,56 @@ measuring PR #4241).
 #### Scenario: Noncanonical Boolean bits cannot be represented
 - **WHEN** copying bytes would put `01 00` into a Boolean field
 - **THEN** the statement explicitly refuses as not implemented rather than normalising the bits
+
+### Requirement: CommonDialog Color follows runtime binding
+The interpreter SHALL return a Long for early-bound CommonDialog Color reads and an unsigned Automation Long
+(VarType 19) through Object or Variant, using the measured conversions and assignment rows in
+[#4513](https://github.com/hexide-io/HexIDE/issues/4513) (oracle PR #4508). It SHALL retain explicit refusals for
+unmeasured unsigned numeric uses. CallByName remains outside this support (#4520).
+
+#### Scenario: The same system colour is read through different bindings
+- **WHEN** Color is `&H80000005`
+- **THEN** an early-bound Double store receives -2147483643, while a late-bound Double store receives 2147483653
+- **AND** a late-bound Long store or CLng wraps to -2147483643
+
+#### Scenario: Minus one is assigned through different bindings
+- **WHEN** the Integer -1 is assigned to Color
+- **THEN** early binding raises 380 and late binding raises 6, leaving Color unchanged
+
+#### Scenario: Unsupported Automation operations are measured
+- **WHEN** TypeName, addition, multiplication or equality uses a late-bound Color
+- **THEN** error 458 is raised
+- **AND** IsNumeric on that Color is False
+
+### Requirement: A running form and PictureBox own their coordinate system
+
+The interpreter SHALL expose ScaleMode as Integer and ScaleLeft, ScaleTop, ScaleWidth and ScaleHeight as
+Single on each running form and PictureBox, initialized from the saved scale. Setting an origin or extent
+SHALL select User mode; selecting mode 0 SHALL retain the current mapping, and modes 1–7 SHALL map the
+client area in the chosen unit. Child positions SHALL use their container’s mapping, with assigned positions
+retained as whole twips rounded half to even. Left and Top SHALL use the signed unit and origin; Width and
+Height SHALL use the unit’s magnitude even in flipped user scales. Negative CommandButton sizes SHALL still
+raise 380 from a property assignment and 5 from Move, before anything moves (issue #990 round-2 measurements).
+Form and PictureBox mouse coordinates SHALL use the object’s
+own mapping; other controls retain their existing mouse units. A form resize SHALL retain the size
+of a user unit. UserControl scales and PictureBox resize are outside this slice (part of #990).
+
+The interpreter and bundled LSP grammars SHALL parse the bare and qualified Scale statement with either
+two points or no arguments. ScaleX and ScaleY SHALL default from HiMetric to the current scale, returning
+Single lengths. Container-position/container-size units and vbUser outside a user scale SHALL raise 5.
+The measured metric factor and its accepted last-place precision difference are recorded in
+[#990](https://github.com/hexide-io/HexIDE/issues/990); the other values come from the
+[coordinate oracle](../../../docs/vb6-fidelity-oracle/the-coordinate-system-scalemode-scale-scalex-and-scaley.md).
+
+#### Scenario: An upward user scale
+
+- **WHEN** a form executes `Scale (0, 100)-(10, 0)`
+- **THEN** ScaleMode is 0, ScaleLeft is 0, ScaleTop is 100, ScaleWidth is 10 and ScaleHeight is -100
+- **AND** a later bare Scale returns the form to its client-area twip mapping
+
+#### Scenario: Invalid scales leave the mapping intact
+
+- **WHEN** a program sets an invalid ScaleMode or a zero ScaleWidth/ScaleHeight
+- **THEN** the interpreter raises 380
+- **WHEN** a Scale statement supplies a zero extent
+- **THEN** it raises 11 and retains the previous scale

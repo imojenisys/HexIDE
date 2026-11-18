@@ -233,18 +233,20 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
     // ── Faults: failures that are not a request's outcome (#945) ────────────
 
     [Fact]
-    public async Task A_frame_repaired_after_a_null_params_is_a_fault_and_its_repair_is_not()
+    public async Task A_null_params_frame_decodes_as_a_request_without_a_fault_or_repair()
     {
         using var formatter = Formatter();
 
-        formatter.Deserialize(new ReadOnlySequence<byte>(
-            Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","method":"window/logMessage","params":null}""")));
+        var message = formatter.Deserialize(new ReadOnlySequence<byte>(
+            Encoding.UTF8.GetBytes("""{"jsonrpc":"2.0","id":1,"method":"workspace/diagnostic/refresh","params":null}""")));
 
-        var notes = (await EntriesAsync()).Where(e => e.Kind == ConversationEntryKind.Note).ToList();
-        notes.Should().HaveCount(2);
-        notes[0].Fault.Should().BeTrue("the server sent a frame JSON-RPC does not permit");
-        notes[1].Detail.Should().StartWith("recovered:");
-        notes[1].Fault.Should().BeFalse("the repair is the capture's remark, not a second failure");
+        message.Should().BeAssignableTo<JsonRpcRequest>();
+        var entries = await EntriesAsync();
+        entries.Should().ContainSingle();
+        entries[0].Kind.Should().Be(ConversationEntryKind.Request);
+        entries[0].Method.Should().Be("workspace/diagnostic/refresh");
+        entries.Should().NotContain(e => e.Fault);
+        entries.Should().NotContain(e => e.Detail != null && e.Detail.StartsWith("recovered:"));
     }
 
     [Fact]
@@ -310,6 +312,43 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
 
         (await gone).Fault.Should().BeFalse();
         await stopping;
+        await _log.DrainAsync();
+        connection.Entries().Count(e => e.Detail?.StartsWith("disconnected:", StringComparison.Ordinal) == true)
+            .Should().Be(1);
+    }
+
+    [Fact]
+    public async Task A_failed_wait_lists_only_this_connections_entries_in_order()
+    {
+        await using var connection = await Connected("vb6");
+        await using var other = await Connected("other");
+        connection.Transport.Say(TransportNoticeKind.StandardOutput, "first line");
+        other.Transport.Say(TransportNoticeKind.StandardError, "another connection");
+        connection.Transport.Say(TransportNoticeKind.StandardError, "second line");
+
+        // A short wait: this test is about what a failed wait says, not about how long it waits.
+        Func<Task> wait = () => connection.WaitForAsync(_ => false, "missing entry", TimeSpan.FromSeconds(1));
+        var failure = await wait.Should().ThrowAsync<InvalidOperationException>();
+        failure.Which.Message.Should().StartWith("no missing entry reached the record for 'vb6'")
+            .And.Contain("StandardOutput: first line; StandardError: second line")
+            .And.NotContain("another connection");
+    }
+
+    [Fact]
+    public async Task A_stop_that_finishes_before_the_hangup_callback_records_one_non_fault_disconnection()
+    {
+        var transport = new NoticingFakeTransport { HoldShutdown = true };
+        await using var connection = await Connected("vb6", transport);
+        var stopping = connection.Client.StopAsync();
+        await transport.ShutdownArrived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        transport.Release.TrySetResult();
+        await stopping;
+        transport.Hangup();
+        await _log.DrainAsync();
+
+        connection.Entries().Where(e => e.Detail?.StartsWith("disconnected:", StringComparison.Ordinal) == true)
+            .Should().ContainSingle().Which.Fault.Should().BeFalse();
     }
 
     [Fact]
@@ -357,10 +396,10 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
                 $"{kind} entry{(detail is null ? "" : $" saying '{detail}'")}");
 
         /// <summary>Waits for one entry that <paramref name="match"/> accepts, as the overload by kind does.</summary>
-        public async Task<ConversationEnvelope> WaitForAsync(Func<ConversationEnvelope, bool> match, string what)
+        public async Task<ConversationEnvelope> WaitForAsync(Func<ConversationEnvelope, bool> match, string what, TimeSpan? within = null)
         {
             // 30s to match the rest of this suite: 10s was the outlier that flaked on CI (#503).
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            var deadline = DateTime.UtcNow + (within ?? TimeSpan.FromSeconds(30));
             while (DateTime.UtcNow < deadline)
             {
                 await Log.DrainAsync();
@@ -369,7 +408,9 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
                 await Task.Delay(10, TestContext.Current.CancellationToken);
             }
 
-            throw new InvalidOperationException($"no {what} reached the record for '{Id}'");
+            throw new InvalidOperationException(
+                $"no {what} reached the record for '{Id}'. Entries in order: " +
+                string.Join("; ", Entries().Select(e => $"{e.Kind}: {e.Detail}")));
         }
 
         public async ValueTask DisposeAsync() => await Client.DisposeAsync();
@@ -425,13 +466,13 @@ public class TheRecordSeesTheProcessTests : IAsyncDisposable
             _clientSide = clientSide;
 
             var serverRpc = new JsonRpc(
-                new HeaderDelimitedMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
+                new LspMessageHandler(serverSide, serverSide, new SystemTextJsonFormatter()),
                 new AnswersTheHandshake(this));
             _rpcs.Add(serverRpc);
             serverRpc.StartListening();
 
             return Task.FromResult<IJsonRpcMessageHandler?>(
-                new HeaderDelimitedMessageHandler(clientSide, clientSide, formatter));
+                new LspMessageHandler(clientSide, clientSide, formatter));
         }
 
         public ValueTask DisposeAsync()

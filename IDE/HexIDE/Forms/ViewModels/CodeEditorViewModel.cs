@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -174,11 +175,16 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// save the form discards code edits too. Gating only the designer would leave the more likely loss
     /// — someone typing a procedure — completely unprotected.
     /// </summary>
-    public bool IsReadOnly => formDefinition is { CanSaveFaithfully: false };
+    public bool IsModuleReadOnly => moduleDefinition is { CanSaveFaithfully: false };
+    public bool IsFormReadOnly => !IsModuleReadOnly && formDefinition is { CanSaveFaithfully: false };
+    public bool IsReadOnly => IsModuleReadOnly || IsFormReadOnly;
 
     public bool IsReadOnlyDocument => IsReadOnly;
 
-    public string? ReadOnlyReason => formDefinition?.UnfaithfulSaveReason;
+    public string? ReadOnlyReason => moduleDefinition is { CanSaveFaithfully: false } module
+        ? string.Format(localization.GetString("Str.ContributedProject.DesignerModuleReadOnly"),
+            Path.GetFileName(module.AbsolutePath) ?? module.Name, module.Owner.ContributorTitle ?? module.Owner.Name)
+        : formDefinition?.UnfaithfulSaveReason;
 
     public ObservableCollection<string> ObjectNames    { get; } = new();
     public ObservableCollection<string> ProcedureNames { get; } = new();
@@ -229,23 +235,18 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     /// <summary>What says where this module's parentheses are, or null where nothing does, and then none is coloured.</summary>
     public HexIDE.Language.IBracketReader? Brackets { get; }
 
-    private readonly IProjectFileFormat format;
-    /// <summary>Says where this window's read-only regions are.</summary>
-    private readonly IReadOnlyRegionReader regionReader;
-    private readonly IReadOnlyRegionRules? regionRules;
-    private readonly IReadOnlyRegionWriter? regionWriter;
-
-    // The project this code belongs to, whose format reads and guards it (#4053); null for code no project owns, which
-    // the injected format and regions still serve until #3411's slice 10b.
+    // The project this code belongs to, whose format reads and guards it (#4053, #3411 slice 10b). Code no project owns has
+    // no format, and nothing guards it.
     private ProjectDefinition? OwnerProject => moduleDefinition?.Owner ?? formDefinition?.Owner;
 
-    private IProjectFileFormat Format => OwnerProject is { } p ? ProjectFormats.Of(p, format) : format;
+    private IProjectFileFormat Format => ProjectFormats.Of(OwnerProject
+        ?? throw new InvalidOperationException("No project owns this code, so no project file format reads it."));
 
-    private IReadOnlyRegionReader RegionReader => OwnerProject is { } p ? ProjectFormats.ReaderOf(p, regionReader) : regionReader;
+    private IReadOnlyRegionReader RegionReader => ProjectFormats.ReaderOf(OwnerProject);
 
-    private IReadOnlyRegionRules? RegionRules => OwnerProject is { } p ? ProjectFormats.RulesOf(p, regionRules) : regionRules;
+    private IReadOnlyRegionRules? RegionRules => ProjectFormats.RulesOf(OwnerProject);
 
-    private IReadOnlyRegionWriter? RegionWriter => OwnerProject is { } p ? ProjectFormats.WriterOf(p, regionWriter) : regionWriter;
+    private IReadOnlyRegionWriter? RegionWriter => ProjectFormats.WriterOf(OwnerProject);
 
     public CodeEditorViewModel(IWindowManager windowManager,
         IEditorService editorService,
@@ -259,22 +260,14 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         HexIDE.Runtime.Debugging.IDebugController debugController,
         HexIDE.Debugging.IRunScope runScope,
         ILocalizationService localization,
-        IProjectFileFormat format,
-        IReadOnlyRegionReader regionReader,
         HexIDE.Debugging.ExternalDebugService? externalDebugger = null,
         HexIDE.Tools.CallStackToolViewModel? callStack = null,
         HexIDE.Tools.RecentEditHistory? recentEditHistory = null,
         HexIDE.Language.IConditionalCodeReader? conditionalCode = null,
-        HexIDE.Language.IBracketReader? brackets = null,
-        IReadOnlyRegionRules? regionRules = null,
-        IReadOnlyRegionWriter? regionWriter = null)
+        HexIDE.Language.IBracketReader? brackets = null)
     {
-        this.format = format;
         ConditionalCode = conditionalCode;
         Brackets = brackets;
-        this.regionReader = regionReader;
-        this.regionRules = regionRules;
-        this.regionWriter = regionWriter;
         this.recentEditHistory = recentEditHistory;
         CanFloat = false;
         this.windowManager = windowManager;
@@ -301,7 +294,11 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // Refresh the tab title (its "(Code)" suffix is localized) when the language changes. Unsubscribe on Dispose
         // (tab close) — a raw `+=` kept every closed code-editor VM (each holding a full document buffer) reachable
         // from the singleton localization service, so none were collected and a language switch replayed on all of them.
-        Action onLanguageChanged = () => Title = ComputeTitle();
+        Action onLanguageChanged = () =>
+        {
+            Title = ComputeTitle();
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
+        };
         localization.LanguageChanged += onLanguageChanged;
         AutoDispose(new ActionDisposable(() => localization.LanguageChanged -= onLanguageChanged));
 
@@ -322,16 +319,17 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
                 else
                 {
                     Log.Debug("CodeEditorViewModel: 'Sub {SubName}' not found, creating event stub", e.Sub);
-                    // Private, as VB6 writes an event procedure (measured, #1532). Add Procedure's own default is Public.
-                    AddProcedureViewModel vm = new AddProcedureViewModel();
-                    vm.IsPublic = false;
-                    vm.IsSub = true;
-                    vm.Name = e.Sub;
-                    var code = vm.GenerateCode();
-                    InsertAtEnd(code.beginCode, code.endCode);
+                    InsertEventHandlerStub(e.ObjectName, e.EventName);
                 }
                 FocusWindowRequest?.Invoke();
             }
+        }));
+        AutoDispose(this.eventBus.Subscribe<NavigateToDeclarationsEvent>(e =>
+        {
+            if (e.Form != formDefinition) return;
+            SelectedObject = GeneralObject;
+            SelectedProcedure = DeclarationsProc;
+            NavigateToDeclarations();
         }));
         AutoDispose(this.eventBus.Subscribe<ApplyAllUnsavedChangesEvent>(e =>
         {
@@ -402,6 +400,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         {
             if (formDefinition is null || !ReferenceEquals(e.Designer, formDefinition)) return;
             OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
+            OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsFormReadOnly)));
             OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
         }));
         AutoDispose(this.eventBus.Subscribe<FormMovedEvent>(e =>
@@ -444,7 +443,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             // document BEFORE the buffer above was written back to the definition.
             RefreshModelModified();
             if (session is { } closing)
-                ProjectLspDocument.CloseWindow(lspClient, Identity, closing, eventBus, Format, IsModified && !unloading);
+                ProjectLspDocument.CloseWindow(lspClient, Identity, closing, eventBus, IsModified && !unloading);
         }));
     }
 
@@ -1000,6 +999,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     public CodeEditorViewModel Initialize(FormDefinition formElement)
     {
         this.formDefinition = formElement;
+        ConditionalTargetIndex = formElement.Owner.VbaBitness switch { VbaBitness.Bit32 => 1, VbaBitness.Bit64 => 2, _ => 0 };
         this.identity = DocumentIdentity.For(formElement);
         // Both subscriptions also reconcile the wire name. A document with no file is named
         // untitled:<Project>/<Name>, so BOTH its own rename and its project's change what servers should
@@ -1029,6 +1029,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     public CodeEditorViewModel Initialize(ModuleDefinition moduleElement)
     {
         this.moduleDefinition = moduleElement;
+        ConditionalTargetIndex = moduleElement.Owner.VbaBitness switch { VbaBitness.Bit32 => 1, VbaBitness.Bit64 => 2, _ => 0 };
         // BOTH halves, because a UserControl or PropertyPage HAS both and they are one file.
         //
         // This used to set only the module, while the designer's View Code went through
@@ -1190,6 +1191,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // designer block can flip the verdict while leaving the code byte-identical. The section provider
         // reads the verdict live; this is for the banner (#475).
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsReadOnly)));
+        OnPropertyChanged(new PropertyChangedEventArgs(nameof(IsFormReadOnly)));
         OnPropertyChanged(new PropertyChangedEventArgs(nameof(ReadOnlyReason)));
         // The tab's marker follows the model just replaced: clean after a reload from disk, edited after crash
         // recovery restores unsaved work into it (#499).
@@ -1220,12 +1222,13 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         // takes that return, and it still needs "(General)" selected rather than left null.
         SelectedObject = GeneralObject;
         if (formDefinition is null) return;
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var component in formDefinition.Components)
         {
             var name = ReferenceEquals(component, formDefinition.Components[0]) && RootEventPrefix is { } prefix
                 ? prefix
                 : component.GetPropertyOrDefault(VBProperties.NameProperty);
-            if (name is { Length: > 0 })
+            if (name is { Length: > 0 } && names.Add(name))
                 ObjectNames.Add(name);
         }
     }
@@ -1328,28 +1331,39 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         FocusWindowRequest?.Invoke();
     }
 
+    private bool refreshingProcedureNames;
+
     private void RefreshProcedureNames()
     {
-        var current = SelectedProcedure;
-        ProcedureNames.Clear();
-
-        if (SelectedObject == GeneralObject || SelectedObject is null)
+        refreshingProcedureNames = true;
+        try
         {
-            ProcedureNames.Add(DeclarationsProc);
-            foreach (var s in FlattenedSymbols())
-                if (s.Kind is SymbolKind.Method or SymbolKind.Function or SymbolKind.Property)
-                    ProcedureNames.Add(s.Name);
-        }
-        else
-        {
-            // Show events for the selected form/control
-            var component = FindComponent(SelectedObject);
-            if (component is not null)
-                foreach (var ev in component.BaseClass.Events)
-                    ProcedureNames.Add(ev.Name);
-        }
+            var current = SelectedProcedure;
+            ProcedureNames.Clear();
 
-        SelectedProcedure = (current is not null && ProcedureNames.IndexOf(current) >= 0) ? current : null;
+            if (SelectedObject == GeneralObject || SelectedObject is null)
+            {
+                ProcedureNames.Add(DeclarationsProc);
+                foreach (var s in FlattenedSymbols())
+                    // A form's controls can arrive as Property symbols too (RDCore, #4526); they belong in the Object
+                    // box. Only Property symbols are filtered: a procedure keeps its place even if it shares a name
+                    // FindComponent knows, such as the root's "Form".
+                    if (s.Kind is SymbolKind.Method or SymbolKind.Function ||
+                        (s.Kind is SymbolKind.Property && FindComponent(s.Name) is null))
+                        ProcedureNames.Add(s.Name);
+            }
+            else
+            {
+                // Show events for the selected form/control
+                var component = FindComponent(SelectedObject);
+                if (component is not null)
+                    foreach (var ev in component.BaseClass.Events)
+                        ProcedureNames.Add(ev.Name);
+            }
+
+            SelectedProcedure = (current is not null && ProcedureNames.IndexOf(current) >= 0) ? current : null;
+        }
+        finally { refreshingProcedureNames = false; }
     }
 
     private string? RootEventPrefix => formDefinition?.RootVBTypeName switch
@@ -1897,7 +1911,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
                     if (target is not null) await target.FlushDocumentAsync(ct);
                 }
             }
-            if (await TryRunClientCommandAsync(command)) return null;
+            if (await TryRunClientCommandAsync(command, action.IsClaimed?.Invoke(command) == true)) return null;
             if (action.CanExecute?.Invoke(command) != true || action.Execute is not { } execute)
                 return string.Format(localization.GetString("Str.CodeEditor.QuickFix.UnsupportedCommand"), command.CommandName);
             try { await execute(command, ct); }
@@ -1947,11 +1961,11 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             var editor = identity == Identity ? this : editorService.FindOpenCode(identity);
             var module = identity.Module;
             var form = module is not null ? module.FormPart : identity.Form;
-            if (form is { CanSaveFaithfully: false }) return Refuse(target.Uri);
+            if (module is { CanSaveFaithfully: false } || form is { CanSaveFaithfully: false }) return Refuse(target.Uri);
             // The target's own project decides its prefix and its regions, and it needn't be this window's (#4053).
-            var targetFormat = ProjectFormats.Of(identity.Project, format);
-            var targetReader = ProjectFormats.ReaderOf(identity.Project, regionReader);
-            var targetRules = ProjectFormats.RulesOf(identity.Project, regionRules);
+            var targetFormat = ProjectFormats.Of(identity.Project);
+            var targetReader = ProjectFormats.ReaderOf(identity.Project);
+            var targetRules = ProjectFormats.RulesOf(identity.Project);
             var prefix = editor?.bufferPrefix ?? (module is not null ? targetFormat.CodePrefix(module) : targetFormat.CodePrefix(form!));
             var document = editor?.Document ?? new TextDocument(prefix + (module?.Code ?? form!.Code));
             var (local, server) = versions[i];
@@ -2295,7 +2309,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     {
         try
         {
-            if (!await TryRunClientCommandAsync(command))
+            if (!await TryRunClientCommandAsync(command, lspClient.IsClaimedCodeLensCommand(command)))
                 await lspClient.ExecuteCodeLensCommandAsync(command);
         }
         catch (HexIDE.Addins.AddinCommandException ex)
@@ -2304,8 +2318,9 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         }
     }
 
-    private async Task<bool> TryRunClientCommandAsync(Command command)
+    private async Task<bool> TryRunClientCommandAsync(Command command, bool claimed)
     {
+        if (claimed && command.CommandName is "rdcore.rename" or "rdcore.showReferences") return false;
         if (command.CommandName is "rdcore.rename" or "editor.action.rename")
         {
             try
@@ -2314,15 +2329,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
                 var uri = args[0].GetString();
                 if (uri is null) return false;
                 var position = new Position(args[1].GetProperty("line").GetInt32(), args[1].GetProperty("character").GetInt32());
-                var target = LspDocumentUri.AreSame(uri, GetDocumentUriPublic()) ? this : editorService.OpenCodeForUri(uri);
-                if (target is null || position.Line < 0 || position.Line >= target.Document.LineCount
-                    || position.Character < 0 || position.Character > target.Document.GetLineByNumber(position.Line + 1).Length) return false;
-                var offset = target.Document.GetOffset(position.Line + 1, position.Character + 1);
-                target.NavigateToOffset(offset);
-                if (WordAt(target.Document, offset) is not { } name) return true;
-                if (target.RenameRefusalAt(offset, name) is { } refusal) await target.ShowRefusalAsync(refusal);
-                else await target.RenameSymbolAsync(position, name);
-                return true;
+                return await CodeEditorClientActions.StartRenameAsync(editorService, this, uri, position);
             }
             catch (Exception error) when (error is System.Text.Json.JsonException or InvalidOperationException
                 or KeyNotFoundException or FormatException)
@@ -2348,7 +2355,7 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
                     return new Location(item.GetProperty("uri").GetString()!,
                         new HexIDE.Lsp.Messages.Range(ReadPosition("start"), ReadPosition("end")));
                 }).ToArray();
-                eventBus.Publish(new ShowReferenceLocationsEvent(locations));
+                CodeEditorClientActions.ShowReferences(eventBus, locations);
             }
             catch (Exception error) when (error is System.Text.Json.JsonException or InvalidOperationException
                 or KeyNotFoundException or FormatException)
@@ -2358,6 +2365,18 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
             return true;
         }
         return false;
+    }
+
+    internal async Task<bool> StartRenameAtAsync(Position position)
+    {
+        if (position.Line < 0 || position.Line >= Document.LineCount
+            || position.Character < 0 || position.Character > Document.GetLineByNumber(position.Line + 1).Length) return false;
+        var offset = Document.GetOffset(position.Line + 1, position.Character + 1);
+        this.NavigateToOffset(offset);
+        if (WordAt(Document, offset) is not { } name) return true;
+        if (RenameRefusalAt(offset, name) is { } refusal) await ShowRefusalAsync(refusal);
+        else await RenameSymbolAsync(position, name);
+        return true;
     }
 
     public bool CanShowCallHierarchy => LiveDocumentUri is { } uri && lspClient.SupportsCallHierarchy(uri);
@@ -2624,7 +2643,13 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
     private void OnSelectedProcedureChanged(string? oldValue, string? newValue)
     {
-        if (newValue is null or DeclarationsProc) return;
+        // Clear and reselection update the bound ComboBox synchronously; restoring its item is not a choice (#4480).
+        if (refreshingProcedureNames || newValue is null) return;
+        if (newValue == DeclarationsProc)
+        {
+            NavigateToDeclarations();
+            return;
+        }
 
         if (SelectedObject == GeneralObject || SelectedObject is null)
         {
@@ -2656,6 +2681,12 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         FocusWindowRequest?.Invoke();
     }
 
+    private void NavigateToDeclarations()
+    {
+        this.NavigateToOffset(PastReadOnlyRegion(0));
+        FocusWindowRequest?.Invoke();
+    }
+
     private int FindEventHandler(string handlerName)
     {
         var searchText = $"Sub {handlerName}";
@@ -2680,11 +2711,13 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
 
         var sb = new StringBuilder();
         sb.Append($"Private Sub {objectName}_{eventName}(");
+        var element = component?.IsControlArrayElement == true;
+        if (element) sb.Append("Index As Integer");
         if (ev is not null)
         {
             for (int i = 0; i < ev.Arguments.Length; i++)
             {
-                if (i > 0) sb.Append(", ");
+                if (i > 0 || element) sb.Append(", ");
                 sb.Append($"{ev.Arguments[i].DefaultName} As {ev.Arguments[i].Type}");
             }
         }

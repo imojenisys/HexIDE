@@ -59,6 +59,28 @@ public class LspClientRegistryTests
 
     private static LspRange Span(int line) => new(new Position(line, 0), new Position(line, 1));
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task InlayHintsUseFirstNonemptyProvider(bool topIsEmpty)
+    {
+        var high = FakeServer(capabilitiesJson: "{\"inlayHintProvider\":true}");
+        var low = FakeServer(capabilitiesJson: "{\"inlayHintProvider\":true}");
+        var range = new LspRange(new Position(0, 0), new Position(0, 23));
+        var first = new InlayHint(new Position(0, 18), JsonDocument.Parse("\"[first:]\"").RootElement.Clone()) { Kind = 2 };
+        var second = new InlayHint(new Position(0, 21), JsonDocument.Parse("\"[second:]\"").RootElement.Clone()) { Kind = 2 };
+        high.RequestInlayHintsAsync(Vb6Doc, range, Arg.Any<CancellationToken>()).Returns(topIsEmpty ? [] : [first, second]);
+        low.RequestInlayHintsAsync(Vb6Doc, range, Arg.Any<CancellationToken>()).Returns([second]);
+        await using var sut = Registry(Registration("low", low), Registration("high", high, priority: 10));
+        await sut.OpenDocumentAsync(Vb6Doc, "    total = AddUp(1, 2)", TestContext.Current.CancellationToken);
+
+        InlayHint[] expected = topIsEmpty ? [second] : [first, second];
+        (await sut.RequestInlayHintsAsync(Vb6Doc, range, TestContext.Current.CancellationToken))
+            .Should().Equal(expected);
+        if (!topIsEmpty)
+            await low.DidNotReceive().RequestInlayHintsAsync(Vb6Doc, range, Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task UserRestartKeepsLoadedRegistrationAfterConfigurationFileChanges()
     {
@@ -595,6 +617,40 @@ public class LspClientRegistryTests
         received.Select(p => p.Kind).Should().Equal("begin", "end");
         received.Should().OnlyContain(p => p.Name == "VB tools");
         received.Should().OnlyContain(p => ReferenceEquals(p.Sender, server));
+    }
+
+    [Fact]
+    public async Task StoppingStopsEveryServerAtOnce()
+    {
+        // #4484: a stop can wait on its server for a second or more (shutdown, exit, the end of its output). Three
+        // such servers stopped one after another took three times as long; stopped together, about as long as one.
+        var servers = Enumerable.Range(0, 3).Select(_ => FakeServer()).ToArray();
+        var started = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        foreach (var server in servers)
+            server.StopAsync().Returns(_ =>
+            {
+                if (Interlocked.Increment(ref started) == servers.Length) allStarted.TrySetResult();
+                return release.Task;
+            });
+        await using var sut = Registry(servers.Select((server, i) => Registration($"server{i}", server, priority: i)).ToArray());
+        await sut.OpenDocumentAsync(Vb6Doc, "Sub Main()\nEnd Sub", TestContext.Current.CancellationToken);
+
+        var stopping = sut.StopAsync();
+        try
+        {
+            await allStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            stopping.IsCompleted.Should().BeFalse("no server has finished stopping yet");
+        }
+        finally
+        {
+            // Release the stops even when the assertion fails, or disposing the registry waits on them for good.
+            release.TrySetResult();
+        }
+        await stopping.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        foreach (var server in servers) await server.Received(1).StopAsync();
     }
 
     [Fact]

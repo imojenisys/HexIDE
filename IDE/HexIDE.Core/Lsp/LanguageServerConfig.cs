@@ -225,6 +225,10 @@ public sealed class LanguageServerEntry
     [JsonPropertyName("pipeRole")]
     public string? PipeRole { get; set; }
 
+    /// <summary>Server-owned settings, answered by section without interpreting their schema.</summary>
+    [JsonPropertyName("settings")]
+    public JsonElement? Settings { get; set; }
+
     /// <summary>Server-specific JSON passed unchanged in the initialize request.</summary>
     [JsonPropertyName("initializationOptions")]
     public JsonElement? InitializationOptions { get; set; }
@@ -267,6 +271,14 @@ public sealed class LanguageServerEntry
     /// <summary>Restart on project membership changes for servers that ignore folder notifications.</summary>
     [JsonPropertyName("restartOnProjectChange")]
     public bool? RestartOnProjectChange { get; set; }
+
+    /// <summary>
+    /// Whether AI Chat may use the tools and context this server offers under <c>experimental.hexide.chatTools</c>
+    /// (#4257): <c>"hints"</c>, the default, asks before each call unless the tool says it only reads; <c>"ask"</c> asks
+    /// before every call and takes no context; <c>"off"</c> uses none. See <see cref="ServerChatToolsSetting"/>.
+    /// </summary>
+    [JsonPropertyName("chatTools")]
+    public string? ChatTools { get; set; }
 
     /// <summary>A command and argument template for importing the in-memory project.</summary>
     [JsonPropertyName("projectImport")]

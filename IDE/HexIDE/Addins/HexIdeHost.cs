@@ -30,6 +30,7 @@ internal sealed class HexIdeHost(
     public IProjectAccess Project { get; } = projectService;
     public IDiagnosticsAccess Diagnostics { get; } = diagnosticsService;
     public IOptionsPageContributor Options { get; } = optionsService;
+    public IServerChatTools ServerChatTools => languageServers.ChatTools;
 
     public IDisposable RegisterCommand(string id, string label, Action onInvoke, string? gesture = null, Func<bool>? canExecute = null) =>
         commandService.Register(id, label, onInvoke, gesture, canExecute);
@@ -84,7 +85,8 @@ internal sealed class HexIdeHost(
                 },
             };
         }
-        var connection = languageServers.Register(server, origin.Title);
+        var connection = languageServers.Register(server, origin.Title, origin.Id, origin.PublisherNamespaces);
+        optionsService.TrackServer(origin.Id, string.IsNullOrWhiteSpace(server.Entry.DisplayName) ? connection.Id : server.Entry.DisplayName, connection);
         if (Registry is AddinRegistry owner) owner.TrackContribution(origin.Id, connection);
         AddinInitializationScope.Record(connection.Dispose);
         return connection;

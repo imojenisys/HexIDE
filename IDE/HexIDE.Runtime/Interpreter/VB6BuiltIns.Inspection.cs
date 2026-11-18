@@ -16,7 +16,9 @@ public partial class VB6BuiltIns
 {
     private static void RegisterInspection(Dictionary<string, BuiltinFn> d)
     {
-        d["TypeName"]  = (_, a, _) => new Vb6Value(TypeNameOf(a[0]));
+        d["TypeName"]  = (_, a, _) => a[0].Type == VT.AutomationUnsignedLong
+            ? throw new VBRunTimeException(VBStandardError.VariableUsesATypeNotSupportedInVisualBasic)
+            : new Vb6Value(TypeNameOf(a[0]));
         // Measured: VarType is LONG, despite every vbXxx code fitting an Integer — the comment here used to
         // say Integer and was wrong. Fixed declared return type, so not the magnitude rule. (#193)
         d["VarType"]   = (_, a, _) => new Vb6Value((long)TypeInfo(a[0]).code);
@@ -134,13 +136,15 @@ public partial class VB6BuiltIns
         VTP.Byte              => ("Byte", 17),
         VTP.Integer           => ("Integer", 2),
         VTP.Long              => ("Long", 3),
-        // CommonDialog's TypeName is unmeasured; retain its existing label while correcting VarType.
+        VTP.LongLong          => ("LongLong", 20),
+        // The debugger label; the TypeName intrinsic refuses this Automation type (#4513).
         VTP.AutomationUnsignedLong => ("Long", 19),
         VTP.Single            => ("Single", 4),
         VTP.Double            => ("Double", 5),
         VTP.Currency          => ("Currency", 6),
         VTP.Decimal           => ("Decimal", 14),
         VTP.Date              => ("Date", 7),
+        VTP.OddByteString     => ("String", 8),
         VTP.String            => ("String", 8),
         VTP.Boolean           => ("Boolean", 11),
         VTP.Null              => ("Null", 1),
@@ -164,13 +168,13 @@ public partial class VB6BuiltIns
     {
         switch (v.Value)
         {
-            case byte or int or long or uint or float or double or decimal:
+            case byte or int or long or float or double or decimal:
             case bool:
                 return true;
         }
         if (v.Type == VT.EmptyVariant || v.Type == VT.Color) return true;
         if (v.Type == VT.Date) return false;
-        if (v.Value is string s) return IsNumericString(s);
+        if (v.WithoutOddBytes("VB6BuiltIns.Inspection text use").Value is string s) return IsNumericString(s);
         return false;
     }
 
@@ -214,7 +218,7 @@ public partial class VB6BuiltIns
     private static bool IsDateValue(Vb6Value v)
     {
         if (v.Type == VT.Date) return true;
-        if (v.Value is string s)
+        if (v.WithoutOddBytes("VB6BuiltIns.Inspection text use").Value is string s)
             return TryReadDate(s, out _);
         return false;
     }

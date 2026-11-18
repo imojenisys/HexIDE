@@ -22,7 +22,21 @@ public class PictureExportTests
 
     private static PropertyViewModel Row(IWindowManager windows, PropertyClass property, object? bytes) =>
         new(new PropertiesToolViewModel(Substitute.For<IDocumentDockService>(), Substitute.For<IEventBus>(),
-            windows, Substitute.For<ILocalizationService>(), new Vb6ProjectFileFormat()), property, bytes);
+            windows, Substitute.For<ILocalizationService>()), property, bytes);
+
+    [Theory]
+    [InlineData("FFD8FF", "jpg")]
+    [InlineData("474946383761", "gif")]
+    [InlineData("474946383961", "gif")]
+    public async Task JpegAndGifExportUseTheirContentExtension(string signature, string extension)
+    {
+        var windows = Substitute.For<IWindowManager>();
+        windows.SaveFilePickerAsync(Arg.Any<FilePickerSaveOptions>()).Returns((string?)null);
+        var row = Row(windows, VBProperties.PictureProperty, Record(Convert.FromHexString(signature)));
+        await row.ExportPictureCommand.ExecuteAsync(null);
+        await windows.Received(1).SaveFilePickerAsync(Arg.Is<FilePickerSaveOptions>(options =>
+            options.DefaultExtension == extension && options.SuggestedFileName == "Picture." + extension));
+    }
 
     [Theory]
     [InlineData("Picture")]
@@ -74,7 +88,7 @@ public class PictureExportTests
         {
             File.WriteAllBytes(path, [99]);
             var parent = new PropertiesToolViewModel(Substitute.For<IDocumentDockService>(),
-                Substitute.For<IEventBus>(), windows, localization, new Vb6ProjectFileFormat());
+                Substitute.For<IEventBus>(), windows, localization);
             await parent.ExportPictureAsync(VBProperties.PictureProperty, Record([42]));
             File.ReadAllBytes(path).Should().Equal(answer == MessageBoxResult.Yes ? new byte[] { 42 } : [99]);
             await windows.Received(1).MessageBox($"{path} already exists. Do you want to replace it?",

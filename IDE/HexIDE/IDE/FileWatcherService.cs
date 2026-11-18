@@ -43,6 +43,13 @@ public sealed class FileWatcherService : IFileWatcherService
     private readonly IDisposable savedSubscription;
 
     private readonly ChangeCoalescer coalescer;
+
+    /// <summary>
+    /// Whether a change the watchers reported is still waiting to be processed. Tests wait for this to clear: on macOS a
+    /// write made just before a watch starts can still reach it a few milliseconds later (#3650, #4573).
+    /// </summary>
+    internal bool HasPendingChanges => coalescer.HasPending;
+
     private readonly DirtyDetector dirtyDetector;
     private readonly FileReloader reloader;
     private readonly ConflictGate conflictGate;
@@ -66,8 +73,7 @@ public sealed class FileWatcherService : IFileWatcherService
         IStatusBarService statusBar,
         ILocalizationService localization,
         IClock clock,
-        IHeaderRefresher headerRefresher,
-        IProjectFileFormat format)
+        IHeaderRefresher headerRefresher)
     {
         this.projectManager = projectManager;
         this.dock = dock;
@@ -76,8 +82,8 @@ public sealed class FileWatcherService : IFileWatcherService
         this.baselineStore = baselineStore;
 
         coalescer = new ChangeCoalescer(clock);
-        dirtyDetector = new DirtyDetector(baselineStore, projectService, format);
-        reloader = new FileReloader(projectService, eventBus, statusBar, localization, headerRefresher, format);
+        dirtyDetector = new DirtyDetector(baselineStore, projectService);
+        reloader = new FileReloader(projectService, eventBus, statusBar, localization, headerRefresher);
         conflictGate = new ConflictGate(windowManager, ReloadConflictsAsync, KeepConflictsAsync);
 
         projectManager.ProjectLoaded += OnProjectLoaded;

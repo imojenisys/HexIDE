@@ -107,6 +107,7 @@ internal static class VbRecordFormat
     /// <summary>A scalar of type <paramref name="type"/>. A String has its length first where <paramref name="prefixed"/>.</summary>
     public static void WriteTyped(Writer w, Vb6Value value, Vb6Value.ValueType type, bool prefixed)
     {
+        value.RefuseOddBytes("Put");
         if (type == Vb6Value.ValueType.String)
         {
             var bytes = VbFiles.Ansi().GetBytes(VbDisplay.ToText(value));
@@ -152,6 +153,7 @@ internal static class VbRecordFormat
     /// <summary>A Variant: its type, then its value.</summary>
     public static void WriteVariant(Writer w, Vb6Value value)
     {
+        value.RefuseOddBytes("Put");
         if (value.Value is VBArray array)
         {
             var elementVt = VariantType(array.ElementType is { } type && type != Vb6Value.ValueType.EmptyVariant ? type : null);
@@ -258,6 +260,7 @@ internal static class VbRecordFormat
     /// <summary>A user-defined Type: its fields in order, packed.</summary>
     public static void WriteUdt(Writer w, VbUdt udt)
     {
+        udt.RefuseUnmeasuredLongLongLayout();
         foreach (var (name, value) in udt.EnumerateFields())
         {
             if (value.Value is VBArray)
@@ -504,6 +507,7 @@ internal static class VbRecordFormat
     /// </summary>
     public static void ReadUdtInto(IRecordSource source, VbUdt udt)
     {
+        udt.RefuseUnmeasuredLongLongLayout();
         foreach (var (name, current) in udt.EnumerateFields().ToList())
         {
             if (current.Value is VBArray)

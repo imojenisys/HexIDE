@@ -38,7 +38,9 @@ public static class VbDisplay
     public static string? ToTextOrNull(Vb6Value value) => value.Value is null ? null : ToText(value);
 
     /// <summary>The text VB6 makes of <paramref name="value"/>, in <paramref name="culture"/>.</summary>
-    public static string ToText(Vb6Value value, CultureInfo culture) => value.Type == Vb6Value.ValueType.Error
+    public static string ToText(Vb6Value value, CultureInfo culture) => value.IsOddByteString
+        ? throw Vb6Value.OddBytesNotImplemented("Display")
+        : value.Type == Vb6Value.ValueType.Error
         ? throw new VBRunTimeException(VBStandardError.TypeMismatch)
         : value.Value switch
     {
@@ -53,7 +55,7 @@ public static class VbDisplay
         decimal m => Exact(m, culture),
         VbDate dt => Date(dt.Instant, culture),
         // The integer types have no separator to take from the locale, only a sign, which is always ASCII.
-        byte or short or int or long => ((IFormattable)value.Value).ToString(null, CultureInfo.InvariantCulture),
+        byte or short or int or long or uint => ((IFormattable)value.Value).ToString(null, CultureInfo.InvariantCulture),
         _ => value.Value.ToString() ?? "",
     };
 

@@ -45,11 +45,12 @@ Tests, also from the repo root:
 
 ```sh
 cd IDE
-dotnet test HexIDE.Runtime.Tests/                        # VB6 interpreter
-dotnet test HexIDE.Tests/                                # IDE view-models
-dotnet test HexIDE.Integration.Tests/                    # headless Avalonia UI
-dotnet test HexIDE.Runtime.Integration.Tests/            # headless Avalonia, the runtime as a made program runs it
-cd ../LspServer && dotnet test HexIDE.VbLspServer.Tests/ # LSP server
+dotnet test --project HexIDE.Runtime.Tests/HexIDE.Runtime.Tests.csproj  # VB6 interpreter
+dotnet test --project HexIDE.Tests/HexIDE.Tests.csproj  # IDE view-models
+dotnet test --project HexIDE.Integration.Tests/HexIDE.Integration.Tests.csproj  # headless Avalonia UI
+dotnet test --project HexIDE.Runtime.Integration.Tests/HexIDE.Runtime.Integration.Tests.csproj  # headless Avalonia, the runtime as a made program runs it
+dotnet test --project HexIDE.TwinBasic.Tests/HexIDE.TwinBasic.Tests.csproj  # twinBASIC container reader
+cd ../LspServer && dotnet test --project HexIDE.VbLspServer.Tests/HexIDE.VbLspServer.Tests.csproj # LSP server
 ```
 
 Test assemblies that reference the IDE or runtime redirect `UserDataPath` in a module initializer to a
@@ -281,10 +282,34 @@ larger organisations. Run this from PowerShell; in Git Bash, MSYS rewrites `/rep
 ```powershell
 podman run --rm -v "C:\path\to\HexIDE:/repo" -v hexide-nuget:/root/.nuget -w /repo/IDE `
   mcr.microsoft.com/dotnet/sdk:11.0-resolute `
-  dotnet test HexIDE.Tests/ --artifacts-path /repo/artifacts/container
+  dotnet test --project HexIDE.Tests/HexIDE.Tests.csproj --artifacts-path /repo/artifacts/container
 ```
 
 The container has no Node, so the three JSON-server tests skip there.
+
+### Changing the add-in API
+
+`HexIDE.Core` guards the public API declared under `Addins/` and every Core type its signatures reach,
+with PublicApiAnalyzers. Today that includes the project model (`ProjectElements`), the component model
+(`Components`), the region types (`Language`), the project and form file interfaces, the serializer
+interfaces, the language-server entry and the LSP records the SDK reaches. A change to any of them is an
+add-in API change.
+
+The project, component and serializer types are covered because the SDK reaches them today, not because
+they have been settled as add-in contract. Whether they stay in the contract or become provider-fed is
+decided under [#3411](https://github.com/hexide-io/HexIDE/issues/3411). If that narrows the SDK, the guard
+makes it a visible, reviewed break.
+
+Put additions in `PublicAPI.Unshipped.txt`; `PublicAPI.Shipped.txt` records the API already shipped. A
+change or removal breaks compiled add-ins, RDCore's included, and needs the maintainer's decision. On SDK
+records, add init-only properties, never new positional parameters: those replace the constructor and
+`Deconstruct` (#4566). The Debug-only host-code-page probe's entry is in
+`PublicAPI.Debug/PublicAPI.Shipped.txt`.
+
+`AddinPublicApiTests` walks the public signatures transitively. It fails when a signature reaches a new
+Core type without both an API type entry and an RS0016 `error` section for its declaring source file in
+`.editorconfig`, or reaches a type from another non-BCL assembly. Types unrelated to the SDK remain
+outside the guard; the SDK-reachable LSP messages live in `Lsp/Messages/AddinMessages.cs` (#4609).
 
 ### Add-ins without the signing key
 

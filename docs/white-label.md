@@ -40,11 +40,21 @@ The design is in [`design/white-label.md`](design/white-label.md).
 A member that isn't in this table stops the IDE from starting. So does anything else wrong with the file: the IDE
 reports the file and the problem, and doesn't fall back to being HexIDE, because that would open HexIDE's settings
 and recovery files inside your product. `--help` still answers on a broken installation, and exits with code 2.
+All startup refusals a person reads use the operating system’s language before settings load (#4065), including
+the descriptor’s detailed reasons, command-line flag errors and native dialog caption. Field names, paths, sizes
+and limits stay unchanged. With `--help`, a broken installation prints the localized refusal before the help
+text. Descriptor exceptions keep their English messages for programs and logs.
 
 Logo capture checks every PNG chunk's length and CRC, the header's format, and the final IEND. Its IDAT
 stream must inflate to exactly the scanline bytes required by the dimensions, including Adam7 passes.
 Validation runs before the UI toolkit starts, within the existing 1 MiB file and 1024×1024 pixel limits;
 a corrupt logo refuses startup with both the descriptor and logo file named (#4063).
+
+A running program belongs to its author, not to the IDE's brand. In every distribution, a form with
+no `Icon` line uses the runner's neutral `form.ico` at F5, with or without a brand logo, just as in its
+made EXE (#4187). This is HexIDE's choice: the default is big only; a form's own icon and `Icon = (None)`
+keep their existing behaviour. The IDE keeps its own or the brand's icon. The measured VB6 behaviour is in
+[the form-icon oracle](vb6-fidelity-oracle/a-forms-window-icon-no-icon-line.md).
 
 ## Translating your tagline and credits
 
@@ -243,6 +253,9 @@ yourself. As on Windows, the tool never touches a key or a trust anchor, and the
 
 ## Making the macOS build your own
 
+The app menu's About item uses your product's name and opens your About dialog, just as Help → About does.
+Avalonia supplies the remaining standard app-menu items in English, independently of the IDE language.
+
 On macOS a product's identity is its bundle, so the tool renames the bundle and the executable and rewrites the bundle's
 `Info.plist` and icon. Run it on macOS, from a clone of the tag you're repacking, because it checks the result with
 macOS's own tools:
@@ -258,24 +271,20 @@ and the input is never changed.
 | In the output | Comes from |
 |---|---|
 | `<name>.app` | Your `name`. |
-| `Contents/MacOS/<id>` | Stock's `HexIDE`, renamed from your `id`. Its bytes don't change. |
+| `Contents/MacOS/<id>` | Stock's `HexIDE`, renamed from your `id`, then ad-hoc signed with the bundle. |
 | `Contents/Info.plist` | Stock's, with the bundle's name, display name, identifier, executable and icon changed. The version numbers stay the build's. |
-| `Contents/Resources/<id>.icns` | Your `logo`, which is required here, at every size from 16 to 1024 pixels. Nothing of stock's icon stays. |
+| `Contents/Resources/<id>.icns` | Your `logo`, which is required here, at every size from 16 to 1024 pixels. The 16- and 32-pixel images use Apple's ARGB encoding (#4493). Nothing of stock's icon stays. |
 | `Contents/MacOS/brand.json`, your logo and a `defaultProfile` folder | Copied from beside your `brand.json`. |
 
 The bundle identifier is `io.hexide.distribution.<id>`, so it installs alongside HexIDE and can't be stock's. It comes
 from `id`, so don't change that once you've shipped. To install the product, move the `.app` to `Applications`, and to
 remove it, delete the `.app`. Each user's settings and logs stay where macOS keeps them for the `id`.
+The app menu and Dock show your `name`.
 
 The run stops if your name can't be a bundle's name, or if the build is missing `LICENSE` or `THIRD-PARTY-NOTICES.md`.
 Every other file is copied unchanged, including the helper programs such as `HexIDE.VbLspServer`, which keep their
-names. It also stops if macOS doesn't accept the executable's signature or the `Info.plist` afterwards.
+names. It also stops if macOS doesn't accept the rewritten `Info.plist`, the ad-hoc re-sealing, or strict deep bundle verification.
 
-**The output has no signing identity.** Its programs keep the ad-hoc signatures stock shipped with, which Apple Silicon
-needs in order to run them at all and which identify nobody. Signing with your own Developer ID and notarizing are
-yours to do, and [the macOS signing notes](macos-signing.md) describe what that takes. The tool never touches a key
+**The output has no signing identity.** The rewritten bundle is re-sealed ad hoc on macOS, which identifies nobody.
+Signing with your own Developer ID and notarizing are yours to do, and [the macOS signing notes](macos-signing.md) describe what that takes. The tool never touches a key
 or a trust anchor, and there's no update service.
-
-## Not done yet
-
-Some diagnostics written in English. See the issues linked from #2042.

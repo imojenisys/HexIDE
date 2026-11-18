@@ -105,11 +105,28 @@ public sealed record AddinLanguageServer(LanguageServerEntry Entry)
 /// </summary>
 public interface IAddinServerConnection : IDisposable
 {
+    /// <summary>Reads this server's resolved settings, or null when none exist.</summary>
+    JsonElement? GetSettings();
+
+    /// <summary>Stores this server's object in the user's settings and notifies its running server.</summary>
+    /// <exception cref="ArgumentException">Settings is not a JSON object.</exception>
+    /// <exception cref="ObjectDisposedException">The server has been taken out.</exception>
+    Task SetSettingsAsync(JsonElement settings, CancellationToken cancellationToken = default);
+
     /// <summary>The id the server was registered under.</summary>
     string Id { get; }
 
     /// <summary>Applies a checked workspace edit while this connection's claimed command is running.</summary>
     Task<HexIDE.Lsp.Messages.ApplyWorkspaceEditResult> ApplyEditAsync(HexIDE.Lsp.Messages.WorkspaceEdit edit, CancellationToken cancellationToken);
+
+    /// <summary>Starts a rename or shows its refusal while this connection's claimed command is running.</summary>
+    /// <returns>False if the document cannot be opened or the position is out of range; otherwise true.</returns>
+    /// <exception cref="InvalidOperationException">No claimed-command handler is running on this connection.</exception>
+    Task<bool> StartRenameAsync(string uri, HexIDE.Lsp.Messages.Position position, CancellationToken cancellationToken = default);
+
+    /// <summary>Shows locations in Find References while this connection's claimed command is running.</summary>
+    /// <exception cref="InvalidOperationException">No claimed-command handler is running on this connection.</exception>
+    Task ShowReferencesAsync(IReadOnlyList<HexIDE.Lsp.Messages.Location> locations, CancellationToken cancellationToken = default);
 
     /// <summary>Whether the server is running now. It starts on the first document it claims, not when it is registered.</summary>
     bool IsRunning { get; }

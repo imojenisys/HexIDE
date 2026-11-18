@@ -31,16 +31,18 @@ public class MakeOutcomesTests : IDisposable
         localization.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         windows.MessageBox(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<MessageBoxButtons>(), Arg.Any<MessageBoxIcon>())
             .ReturnsForAnyArgs(unanswered.Task);
+        // Agree to replacement so this test reaches the behavior it checks (#4505).
+        windows.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning,
+            layout: MessageBoxLayout.SecondButtonDefault).Returns(MessageBoxResult.Yes);
     }
 
     public void Dispose() => Directory.Delete(ide, true);
 
     private ProjectService Service() => new(
-        new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
         () => throw new InvalidOperationException(), windows, events, Substitute.For<IProjectManager>(),
         Substitute.For<IRecentProjectsService>(), Substitute.For<IReferenceLibraryService>(),
         Substitute.For<IUserSidecarService>(), new FileBaselineStore(), localization,
-        Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry()) { RuntimeDirectory = ide };
+        Substitute.For<IHeaderRefresher>(), new ComponentRegistry()) { RuntimeDirectory = ide };
 
     private void Runner(string content = "the runner")
     {

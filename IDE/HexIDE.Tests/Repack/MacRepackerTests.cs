@@ -97,9 +97,12 @@ public sealed class MacRepackerTests : IDisposable
     private void WriteStock(byte[]? executable = null, UnixFileMode executableMode = Executable)
     {
         WriteFile(Path.Combine(Programs, MacRepacker.StockExecutable), executable ?? MachO, executableMode);
-        WriteFile(Path.Combine(Programs, "HexIDE.VbLspServer"), [1, 2, 3], Executable);
-        WriteFile(Path.Combine(Programs, "standalone", "HexIDE.Standalone"), [4, 5, 6], Executable);
-        WriteFile(Path.Combine(Programs, "HexIDE.Desktop.dll"), "managed"u8.ToArray(), PlainFile);
+        WriteFile(Path.Combine(Programs, "HexIDE.VbLspServer"), OperatingSystem.IsMacOS() ? MachO : [1, 2, 3], Executable);
+        WriteFile(Path.Combine(Programs, "standalone", "HexIDE.Standalone"), OperatingSystem.IsMacOS() ? MachO : [4, 5, 6], Executable);
+        WriteFile(Path.Combine(Programs, "HexIDE.Desktop.dll"),
+            OperatingSystem.IsMacOS() ? File.ReadAllBytes(typeof(MacRepacker).Assembly.Location) : "managed"u8.ToArray(), PlainFile);
+        if (OperatingSystem.IsMacOS())
+            RunTool("/usr/bin/codesign", "--force", "-s", "-", Path.Combine(Programs, "HexIDE.Desktop.dll"));
         WriteFile(Path.Combine(Programs, "LICENSE"), "licence text"u8.ToArray(), PlainFile);
         WriteFile(Path.Combine(Programs, "THIRD-PARTY-NOTICES.md"), "notices text"u8.ToArray(), PlainFile);
         WriteFile(Path.Combine(Input, "Contents", "Info.plist"), Encoding.UTF8.GetBytes(StockPlist), PlainFile);
@@ -331,13 +334,15 @@ public sealed class MacRepackerTests : IDisposable
     }
 
     [UnixOnlyFact]
-    public void A_bundle_signed_as_a_whole_is_refused_rather_than_broken()
+    public void A_bundle_signed_as_a_whole_is_accepted_for_resealing()
     {
         WriteStock();
         WriteBrand();
         Directory.CreateDirectory(Path.Combine(Input, "Contents", "_CodeSignature"));
 
-        ShouldRefuse("signed as a whole");
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        File.Exists(RepackedExecutable).Should().BeTrue();
     }
 
     [UnixOnlyFact]
@@ -399,8 +404,11 @@ public sealed class MacRepackerTests : IDisposable
         var result = MacRepacker.Run(Input, BrandFile, Output);
 
         result.ExecutableName.Should().Be("acme-ide");
-        result.RemovedSignature.Should().BeFalse("a macOS executable's bytes aren't touched");
-        File.ReadAllBytes(RepackedExecutable).Should().Equal(MachO);
+        result.RemovedSignature.Should().BeFalse("the macOS output is re-signed rather than stripped");
+        // On macOS, sealing the bundle signs its executable afresh; macOS_accepts_the_property_list_signature_and_icon
+        // checks that seal. Elsewhere nothing signs, so the bytes are stock's.
+        if (!OperatingSystem.IsMacOS())
+            File.ReadAllBytes(RepackedExecutable).Should().Equal(MachO);
         Payload.ModeOf(RepackedExecutable).Should().Be(Executable);
         File.Exists(Path.Combine(Bundle, "Contents", "MacOS", MacRepacker.StockExecutable)).Should().BeFalse();
     }
@@ -486,25 +494,147 @@ public sealed class MacRepackerTests : IDisposable
         ValueOf(plist, "CFBundleName").Should().Be("Acme &amp; &lt;Co&gt;");
     }
 
-    [Fact]
-    public void The_icon_has_every_entry_stocks_has_at_its_size()
-    {
-        var icon = MacIcon.FromLogo(Png(64, 32));
+    private static readonly (string Type, int Size)[] IconEntries =
+    [
+        ("ic04", 16), ("ic05", 32), ("ic11", 32), ("ic12", 64), ("ic07", 128),
+        ("ic13", 256), ("ic08", 256), ("ic14", 512), ("ic09", 512), ("ic10", 1024),
+    ];
 
+    private static string Root()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null && !Directory.Exists(Path.Combine(directory.FullName, "LspServer")))
+            directory = directory.Parent;
+        return directory!.FullName;
+    }
+
+    private static Dictionary<string, byte[]> Elements(byte[] icon)
+    {
         Encoding.ASCII.GetString(icon, 0, 4).Should().Be("icns");
         BinaryPrimitives.ReadInt32BigEndian(icon.AsSpan(4)).Should().Be(icon.Length);
-
-        var found = new List<(string Type, int Size)>();
+        var elements = new Dictionary<string, byte[]>();
         for (var at = 8; at < icon.Length;)
         {
             var length = BinaryPrimitives.ReadInt32BigEndian(icon.AsSpan(at + 4));
-            using var frame = SKBitmap.Decode(icon.AsSpan(at + 8, length - 8));
-            frame.Width.Should().Be(frame.Height, "a logo that isn't square sits in a transparent square");
-            found.Add((Encoding.ASCII.GetString(icon, at, 4), frame.Width));
+            length.Should().BeGreaterThanOrEqualTo(8);
+            (at + length).Should().BeLessThanOrEqualTo(icon.Length);
+            elements.Add(Encoding.ASCII.GetString(icon, at, 4), icon[(at + 8)..(at + length)]);
             at += length;
         }
+        return elements;
+    }
 
-        found.Should().Equal(MacIcon.Entries);
+    private static byte[][] DecodeArgb(byte[] data, int size)
+    {
+        data.AsSpan(0, 4).ToArray().Should().Equal("ARGB"u8.ToArray());
+        var channels = new byte[4][];
+        var at = 4;
+        for (var channel = 0; channel < 4; channel++)
+        {
+            channels[channel] = new byte[size * size];
+            var pixel = 0;
+            while (pixel < size * size)
+            {
+                var control = data[at++];
+                var count = control < 128 ? control + 1 : control - 128 + 3;
+                (pixel + count).Should().BeLessThanOrEqualTo(size * size);
+                if (control < 128)
+                {
+                    Array.Copy(data, at, channels[channel], pixel, count);
+                    at += count;
+                }
+                else
+                    Array.Fill(channels[channel], data[at++], pixel, count);
+                pixel += count;
+            }
+        }
+        at.Should().Be(data.Length);
+        return channels;
+    }
+
+    private static void CompareArgb(byte[] data, int size, byte[] png)
+    {
+        var channels = DecodeArgb(data, size);
+        using var bitmap = SKBitmap.Decode(png);
+        bitmap.Width.Should().Be(size);
+        bitmap.Height.Should().Be(size);
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var color = bitmap.GetPixel(x, y);
+            var i = y * size + x;
+            channels[0][i].Should().Be(color.Alpha);
+            if (color.Alpha == 0) continue;
+            Math.Abs(channels[1][i] - color.Red).Should().BeLessThanOrEqualTo(1);
+            Math.Abs(channels[2][i] - color.Green).Should().BeLessThanOrEqualTo(1);
+            Math.Abs(channels[3][i] - color.Blue).Should().BeLessThanOrEqualTo(1);
+        }
+    }
+
+    private static void CheckIcon(byte[] icon, byte[] logo)
+    {
+        var elements = Elements(icon);
+        elements.Keys.Should().BeEquivalentTo(IconEntries.Select(e => e.Type));
+        var rendered = IconResources.Render(logo, IconEntries.Select(e => e.Size).Distinct().ToArray())
+            .ToDictionary(e => e.Size, e => e.Png);
+        foreach (var (type, size) in IconEntries)
+        {
+            if (type is "ic04" or "ic05")
+                CompareArgb(elements[type], size, rendered[size]);
+            else
+            {
+                using var actual = SKBitmap.Decode(elements[type]);
+                using var expected = SKBitmap.Decode(rendered[size]);
+                actual.Width.Should().Be(size);
+                actual.Height.Should().Be(size);
+                actual.Pixels.Should().Equal(expected.Pixels);
+            }
+        }
+    }
+
+    [Fact]
+    public void Apple_iconutil_fixture_decodes_to_the_stock_images()
+    {
+        var fixtures = Path.Combine(Root(), "IDE", "HexIDE.Tests", "Repack", "Fixtures");
+        var elements = Elements(File.ReadAllBytes(Path.Combine(fixtures, "apple-iconutil-ic04-ic05.icns")));
+        CompareArgb(elements["ic04"], 16, File.ReadAllBytes(Path.Combine(fixtures, "stock-16.png")));
+        CompareArgb(elements["ic05"], 32, File.ReadAllBytes(Path.Combine(fixtures, "stock-32.png")));
+    }
+
+    // Stock's small images are almost all opaque or clear, so they can't show whether Apple stores colour straight or
+    // premultiplied by alpha. This one can: every pixel is (200, 100, 50), with alpha 17 * x along each row. Apple keeps
+    // the colour, within a rounding error that grows as alpha falls (measured at most 255 / alpha). Premultiplied
+    // storage would scale it, to (13, 7, 3) at alpha 17.
+    [Fact]
+    public void Apple_iconutil_stores_colour_straight_beside_alpha()
+    {
+        var fixtures = Path.Combine(Root(), "IDE", "HexIDE.Tests", "Repack", "Fixtures");
+        var elements = Elements(File.ReadAllBytes(Path.Combine(fixtures, "apple-iconutil-alpha-ramp-ic04.icns")));
+        var channels = DecodeArgb(elements["ic04"], 16);
+        for (var i = 0; i < 16 * 16; i++)
+        {
+            var alpha = 17 * (i % 16);
+            channels[0][i].Should().Be((byte)alpha);
+            if (alpha == 0)
+                continue;
+            Math.Abs(channels[1][i] - 200).Should().BeLessThanOrEqualTo(255 / alpha);
+            Math.Abs(channels[2][i] - 100).Should().BeLessThanOrEqualTo(255 / alpha);
+            Math.Abs(channels[3][i] - 50).Should().BeLessThanOrEqualTo(255 / alpha);
+        }
+    }
+
+    [Fact]
+    public void The_generated_icon_decodes_at_every_size()
+    {
+        var logo = Png(64, 32);
+        CheckIcon(MacIcon.FromLogo(logo), logo);
+    }
+
+    [Fact]
+    public void The_stock_icon_decodes_at_every_size()
+    {
+        var icon = File.ReadAllBytes(Path.Combine(Root(), "IDE", "HexIDE", "Icons", "AppIcon", "hexide.icns"));
+        CheckIcon(icon, Elements(icon)["ic10"]);
     }
 
     // --- What macOS itself says ---
@@ -519,10 +649,7 @@ public sealed class MacRepackerTests : IDisposable
 
         RunTool("/usr/bin/plutil", "-lint", Path.Combine(Bundle, "Contents", "Info.plist"));
 
-        // codesign answers for the bundle when asked about its main executable, and this bundle isn't sealed.
-        var outside = Path.Combine(_root, "acme-ide");
-        File.Copy(RepackedExecutable, outside);
-        RunTool("/usr/bin/codesign", "--verify", outside);
+        RunTool("/usr/bin/codesign", "--verify", "--strict", "--deep", Bundle);
 
         var iconset = Path.Combine(_root, "acme.iconset");
         RunTool("/usr/bin/iconutil", "-c", "iconset", "-o", iconset, Path.Combine(Bundle, "Contents", "Resources", "acme-ide.icns"));
@@ -530,13 +657,22 @@ public sealed class MacRepackerTests : IDisposable
     }
 
     [MacOnlyFact]
-    public void A_signature_macOS_rejects_stops_the_run_and_leaves_nothing()
+    public void A_sealed_bundle_is_resealed_after_branding()
     {
-        var damaged = MachO;
-        damaged[damaged.Length / 2] ^= 0xFF;
-        WriteStock(executable: damaged);
+        WriteStock();
         WriteBrand();
+        // Sealed as scripts/macos-bundle.sh seals a published build: each file first, then the bundle, which signs the
+        // executable, since codesign resolves the executable's own path to the bundle.
+        foreach (var file in Directory.EnumerateFiles(Path.Combine(Input, "Contents", "MacOS"), "*", SearchOption.AllDirectories))
+        {
+            if (Path.GetFileName(file) != "HexIDE")
+                RunTool("/usr/bin/codesign", "--force", "-s", "-", file);
+        }
+        RunTool("/usr/bin/codesign", "--force", "-s", "-", Input);
+        RunTool("/usr/bin/codesign", "--verify", "--strict", "--deep", Input);
 
-        ShouldRefuse("doesn't accept the signature");
+        MacRepacker.Run(Input, BrandFile, Output);
+
+        RunTool("/usr/bin/codesign", "--verify", "--strict", "--deep", Bundle);
     }
 }

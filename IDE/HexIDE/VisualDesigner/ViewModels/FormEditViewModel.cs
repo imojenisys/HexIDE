@@ -42,7 +42,6 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     private readonly IWindowManager windowManager;
     private readonly ISettingsService settingsService;
     private readonly ILocalizationService localization;
-    private readonly IProjectFileFormat format;
     public ToolBoxToolViewModel ToolsBoxToolViewModel { get; }
     public ISettingsService Settings => settingsService;
     protected override string ComputeTitle()
@@ -109,7 +108,8 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     {
         OnSelectedComponentChanged();
         SetSelectedComponents(SelectedComponents);
-        var selectable = AllComponents.Where(c => c.HasDesignerPreview).ToList();
+        var selectable = AllComponents.Where(c => c.HasDesignerPreview)
+            .OrderBy(c => c.AddressedName, StringComparer.InvariantCultureIgnoreCase).ToList();
         foreach (var item in SelectableComponents.Except(selectable).ToList())
             SelectableComponents.Remove(item);
         for (var i = 0; i < selectable.Count; i++)
@@ -240,6 +240,12 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     /// </summary>
     internal ILocalizationService Localization => localization;
 
+    public string? ControlDoubleClickProcedure(ComponentInstanceViewModel control) =>
+        control.Instance.BaseClass.DesignerDoubleClickEvent is { } eventName ? $"{control.Name}_{eventName}" : null;
+
+    public void RequestControlDoubleClickCode(ComponentInstanceViewModel control) =>
+        RequestCode(ControlDoubleClickProcedure(control), control.Name, control.Instance.BaseClass.DesignerDoubleClickEvent);
+
     public ObservableCollection<ComponentInstanceViewModel> TopLevelMenu { get; } = new();
 
     public IEventBus EventBus => eventBus;
@@ -283,10 +289,8 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         IEditorService editorService,
         IWindowManager windowManager,
         ISettingsService settingsService,
-        ILocalizationService localization,
-        IProjectFileFormat format) : this()
+        ILocalizationService localization) : this()
     {
-        this.format = format;
         this.eventBus = eventBus;
         this.projectService = projectService;
         this.editorService = editorService;
@@ -389,9 +393,9 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
     /// <summary>
     /// The order the canvas draws a form's components in, the last on top, from the order the file holds them in, where
-    /// the first block in each container is the control on top (measured, #1481). Each container's contents go last in
-    /// the file first, each followed by what it holds. A VB6 file lists a container's windowed controls before its
-    /// windowless ones, so the windowless come out under them, as VB6 draws them. Menus are not drawn and go last, in
+    /// the first block in each plane is the control on top (measured, #1481). Each container draws its windowless
+    /// controls first, then its windowed controls, regardless of file order (#1517). Each plane runs last block first,
+    /// each followed by what it holds. Menus are not drawn and go last, in
     /// the file's order. <see cref="ComponentsAsSaved"/> is the inverse.
     /// </summary>
     private List<ComponentInstance> DrawOrder(IReadOnlyList<ComponentInstance> fileOrder)
@@ -413,12 +417,16 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         {
             if (!contents.TryGetValue(container, out var list))
                 return;
-            for (var i = list.Count - 1; i >= 0; i--)
+            // Nonvisual designer icons keep their slots: their plane is not measured by #1517.
+            var visual = list.Where(c => c.BaseClass.IsVisual).OrderBy(c => IsWindowless(c.BaseClass)).ToArray();
+            var at = 0;
+            var siblings = list.Select(c => c.BaseClass.IsVisual ? visual[at++] : c).ToArray();
+            foreach (var component in siblings.Reverse())
             {
-                if (!drawn.Add(list[i]))
+                if (!drawn.Add(component))
                     continue;
-                order.Add(list[i]);
-                Draw(list[i]);
+                order.Add(component);
+                Draw(component);
             }
         }
         Draw(Form.Instance);
@@ -524,7 +532,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     /// <summary>The children a container's block holds, in the order a save writes them, as the writer reads them.</summary>
     private IReadOnlyList<ComponentInstance> WrittenChildren(ComponentInstance container, IReadOnlyList<ComponentInstance> fileOrder) =>
         ReferenceEquals(container, Form.Instance)
-            ? (formDefinition is { } own ? ProjectFormats.Of(own.Owner, format) : format).RootChildren(fileOrder, container)
+            ? formDefinition is { } own ? ProjectFormats.Of(own.Owner).RootChildren(fileOrder, container) : container.ContainedControls
             : container.ContainedControls;
 
     /// <summary>
@@ -579,7 +587,8 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             if (formDefinition is not { } form)
                 return false;
             var ordered = ComponentsAsSaved().Ordered;
-            return !ordered.SequenceEqual(form.Components)
+            // A hand-ordered file has the same stacking after its planes are partitioned (#1517).
+            return !DrawOrder(ordered).SequenceEqual(DrawOrder(form.Components))
                 || CarriedPlacement(ordered).Any(p => !p.Ordinals.SequenceEqual(p.Container.PreservedChildSubtrees.Select(b => b.Ordinal)));
         }
     }
@@ -737,7 +746,6 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
             .SetProperty(VBProperties.CaptionProperty, "Form1"));
         AllComponents.Add(Form);
         eventBus = null!;
-        format = null!;
         projectService = null!;
         editorService = null!;
         windowManager = null!;
@@ -1694,8 +1702,16 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
     public async Task EditMenu()
     {
         var vm = new MenuEditorViewModel(this, localization);
-        if (!await windowManager.ShowDialog(vm))
+        if (!await windowManager.ShowDialog(vm) || !vm.HasChanges)
             return;
+
+        if (!vm.HasLayoutChanges)
+        {
+            foreach (var item in vm.ItemsToApply)
+                item.Apply(item.Menu!);
+            CommitLayout();
+            return;
+        }
 
         foreach (var deleted in vm.Deleted)
         {
@@ -1705,7 +1721,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
 
         List<ComponentInstanceViewModel> topLevel = new();
         Stack<(int level, ComponentInstance component)> stack = new();
-        foreach (var menuViewModel in vm.FlatMenu)
+        foreach (var menuViewModel in vm.ItemsToApply)
         {
             if (menuViewModel.Menu != null)
             {
@@ -1714,7 +1730,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
                     subItems.Clear();
             }
         }
-        foreach (var menuViewModel in vm.FlatMenu)
+        foreach (var menuViewModel in vm.ItemsToApply)
         {
             var menu = menuViewModel.Menu;
             if (menu == null)
@@ -1750,18 +1766,17 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         CommitLayout();
     }
 
-    public void RequestCode(string? subName)
+    public void RequestCode(string? subName, string? objectName, string? eventName)
     {
         Log.Debug("FormEditViewModel: RequestCode({SubName}) for form {FormName}", subName ?? "(null)", formDefinition?.Name);
         editorService.EditCode(formDefinition);
-        if (subName == null)
-            return;
-
         // this is a hack, the following line can be executed only after the window is created, it should be solved in a better way.
         DispatcherTimer.RunOnce(() => LoggedTimerCallback.Run("designer code navigation", () =>
         {
-            Log.Debug("FormEditViewModel: Dispatching CreateOrNavigateToSubEvent({SubName})", subName);
-            eventBus.Publish(new CreateOrNavigateToSubEvent(formDefinition!, subName));
+            if (subName is null || objectName is null || eventName is null)
+                eventBus.Publish(new NavigateToDeclarationsEvent(formDefinition!));
+            else
+                eventBus.Publish(new CreateOrNavigateToSubEvent(formDefinition!, subName, objectName, eventName));
         }), TimeSpan.FromMilliseconds(16));
     }
 }

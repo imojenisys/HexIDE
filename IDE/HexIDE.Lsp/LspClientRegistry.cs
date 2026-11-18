@@ -240,7 +240,8 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
             e.Client?.DeclinedCapabilities,
             (e.Client as VBLspClient)?.OpenDocumentCount ?? 0,
             (e.Client as VBLspClient)?.SentWorkspaceRootUri,
-            e.Registration.Origin)).ToList();
+            e.Registration.Origin,
+            e.Registration.ChatTools)).ToList();
 
     /// <summary>
     /// What a connection's state is <em>now</em>, rather than what it was when something last wrote it down.
@@ -287,6 +288,10 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
 
     public async Task StopAsync()
     {
+        // Every server stops at once. Each stop can wait on its own server (for the answer to shutdown, for exit
+        // to go out, and for its output to end, #4484), and run one after another those waits added up: N slow
+        // servers cost N times one at IDE exit. Run together, the whole stop takes about as long as the slowest.
+        var stopping = new List<Task>();
         foreach (var e in _entries)
         {
             if (e.Client is not { } client) continue;
@@ -298,13 +303,20 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
             client.MessageLogged -= OnInnerLogMessage;
             client.TraceReceived -= OnInnerTrace;
             client.StateChanged -= OnInnerStateChanged;
-            try { await client.StopAsync(); } catch (Exception ex) { _logger.LogDebug(ex, "Stop failed for {Id}", e.Registration.Id); }
-            client.ProgressReceived -= OnInnerProgress;
-            e.Client = null;
-            e.State = LanguageConnectionState.Stopped;
-            e.StateSince = DateTimeOffset.UtcNow;
+            stopping.Add(StopOneAsync(e, client));
         }
+        await Task.WhenAll(stopping);
         ConnectionsChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async Task StopOneAsync(Entry e, ILspClient client)
+    {
+        try { await client.StopAsync(); } catch (Exception ex) { _logger.LogDebug(ex, "Stop failed for {Id}", e.Registration.Id); }
+        // After the stop, so a server's last progress report (its "end") still reaches the IDE.
+        client.ProgressReceived -= OnInnerProgress;
+        e.Client = null;
+        e.State = LanguageConnectionState.Stopped;
+        e.StateSince = DateTimeOffset.UtcNow;
     }
 
     public Task OpenDocumentAsync(string uri, string text, CancellationToken cancellationToken = default) =>
@@ -827,6 +839,31 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         await TopClaimantAdvertisingAsync(uri, "documentFormattingProvider", ct) is { } c ? await c.RequestFormattingAsync(uri, options, ct) : [];
 
     /// <summary>
+    /// The running servers AI Chat may take tools and a context fragment from (#4257): those whose registration allows
+    /// it and which declare <c>experimental.hexide.chatTools</c> with methods HexIDE can send.
+    /// </summary>
+    /// <remarks>
+    /// Only running servers, for the reason <see cref="RequestWorkspaceSymbolsAsync"/> gives: nothing here is a reason to
+    /// start one. Each carries the methods its own capability names, so a request can only ever go to the server that
+    /// named its method.
+    /// </remarks>
+    /// <param name="userPolicy">The person's own setting for a server, by id, which wins over its entry's; null for none.</param>
+    internal IReadOnlyList<ChatToolsServer> ChatToolsServers(Func<string, ServerChatToolsPolicy?>? userPolicy = null)
+    {
+        var found = new List<ChatToolsServer>();
+        foreach (var e in _entries)
+        {
+            var policy = ServerChatToolsSetting.Effective(e.Registration.ChatTools, userPolicy?.Invoke(e.Registration.Id));
+            if (policy == ServerChatToolsPolicy.Off) continue;
+            if (e.Client is not VBLspClient { IsRunning: true } client) continue;
+            if (ServerChatToolsCapability.Read(client.AdvertisedCapabilities) is not { } capability) continue;
+            found.Add(new ChatToolsServer(e.Registration.Id, e.Registration.DisplayName, policy, capability,
+                (method, parameters, timeout, ct) => client.SendCustomRequestAsync(method, parameters, timeout, ct)));
+        }
+        return found;
+    }
+
+    /// <summary>
     /// Routed by advertised capability rather than by language, because it has no document to route by.
     /// The server that declares <c>experimental.vbBuiltinSymbols</c> is the one that can answer it.
     /// </summary>
@@ -933,6 +970,29 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         && value.ValueKind != JsonValueKind.Null
         && value.ValueKind != JsonValueKind.Undefined;
 
+    public async Task<InlayHint[]> RequestInlayHintsAsync(string uri, HexIDE.Lsp.Messages.Range range, CancellationToken ct = default) =>
+        await FirstAnswerAsync(uri, async client =>
+        {
+            var hints = await client.RequestInlayHintsAsync(uri, range, ct);
+            return hints.Length > 0 ? hints : null;
+        }, ct) ?? [];
+
+    // Identity matters: two servers can return equal ranges and data with different meanings.
+    // Weak keys let discarded document/viewport results release their connection provenance.
+    private readonly ConditionalWeakTable<CodeLens, ILspClient> _codeLensOwners = new();
+    private readonly ConditionalWeakTable<Command, ILspClient> _lensCommandOwners = new();
+
+    public bool IsClaimedCodeLensCommand(Command command) =>
+        _lensCommandOwners.TryGetValue(command, out var client) && client.IsRunning
+        && _entries.Any(e => ReferenceEquals(e.Client, client)) && client.IsClaimedCodeLensCommand(command);
+
+    public async Task ExecuteCodeLensCommandAsync(Command command, CancellationToken cancellationToken = default)
+    {
+        if (_lensCommandOwners.TryGetValue(command, out var client) && client.IsRunning
+            && _entries.Any(e => ReferenceEquals(e.Client, client)))
+            await client.ExecuteCodeLensCommandAsync(command, cancellationToken);
+    }
+
     /// <summary>
     /// Every claimant's lenses, concatenated.
     /// </summary>
@@ -942,21 +1002,6 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
     /// produce two genuinely different offers — "Run test" from one and "Show references" from another —
     /// and a client that dropped either would be hiding a thing the user could have done.
     /// </remarks>
-    public Task<InlayHint[]> RequestInlayHintsAsync(string uri, HexIDE.Lsp.Messages.Range range, CancellationToken ct = default) =>
-        GatherAsync(uri, c => c.RequestInlayHintsAsync(uri, range, ct), ct);
-
-    // Identity matters: two servers can return equal ranges and data with different meanings.
-    // Weak keys let discarded document/viewport results release their connection provenance.
-    private readonly ConditionalWeakTable<CodeLens, ILspClient> _codeLensOwners = new();
-    private readonly ConditionalWeakTable<Command, ILspClient> _lensCommandOwners = new();
-
-    public async Task ExecuteCodeLensCommandAsync(Command command, CancellationToken cancellationToken = default)
-    {
-        if (_lensCommandOwners.TryGetValue(command, out var client) && client.IsRunning
-            && _entries.Any(e => ReferenceEquals(e.Client, client)))
-            await client.ExecuteCodeLensCommandAsync(command, cancellationToken);
-    }
-
     public Task<CodeLens[]> RequestCodeLensesAsync(string uri, CancellationToken ct = default) =>
         GatherAsync(uri, async client =>
         {
@@ -1489,6 +1534,8 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
                 await beforeLaunch(starting);
 
             var client = e.Registration.CreateClient();
+            if (client is VBLspClient configured)
+                await configured.UpdateServerSettingsAsync(e.Registration.Settings);
 
             // Heard only while it is listed. A removal takes the server out of the list and stops hearing its client under
             // the same lock, so a client made after that, by a start the removal has not yet called off, is let go unheard.
@@ -1716,9 +1763,23 @@ public sealed class LspClientRegistry : ILspClient, ILanguageConnectionRegistry
         return DiagnosticOwner.LanguageServer;
     }
 
+    /// <summary>Applies reloaded settings to the named server, retaining them for its next start too.</summary>
+    public async Task UpdateServerSettingsAsync(string id, JsonElement? settings, bool forceNotification = false)
+    {
+        var entry = _entries.FirstOrDefault(e => e.Registration.Id == id);
+        if (entry is null) return;
+        await entry.Gate.WaitAsync();
+        try
+        {
+            entry.Registration = entry.Registration with { Settings = settings?.Clone() };
+            if (entry.Client is VBLspClient client) await client.UpdateServerSettingsAsync(settings, forceNotification);
+        }
+        finally { entry.Gate.Release(); }
+    }
+
     internal sealed class Entry(LanguageServerRegistration registration)
     {
-        public LanguageServerRegistration Registration { get; } = registration;
+        public LanguageServerRegistration Registration { get; set; } = registration;
         public ILspClient? Client;
         public bool WarnedWaitingForWorkspace;
         public LanguageConnectionState State = LanguageConnectionState.NotStarted;

@@ -48,9 +48,7 @@ public class QuickFixTests : IDisposable
         settings.TabWidth.Returns(4);
         vm = new CodeEditorViewModel(messages, editors, Substitute.For<IProjectService>(),
             Substitute.For<IEventBus>(), client, settings, Substitute.For<IStatusBarService>(), new BookmarkService(),
-            new BreakpointService(), Substitute.For<IDebugController>(), new RunScope(), localization,
-                new Vb6ProjectFileFormat(),
-                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader(), regionRules: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionRules(), regionWriter: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter());
+            new BreakpointService(), Substitute.For<IDebugController>(), new RunScope(), localization);
         var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "Module1", ModuleKind.StandardModule);
         module.AbsolutePath = OperatingSystem.IsWindows() ? @"C:\HexIDE-quick-fix\Module1.bas"
             : Path.Combine(Path.GetTempPath(), "HexIDE-quick-fix", "Module1.bas");
@@ -218,9 +216,7 @@ public class QuickFixTests : IDisposable
     {
         using var target = new CodeEditorViewModel(messages, editors, Substitute.For<IProjectService>(),
             Substitute.For<IEventBus>(), client, vm.Settings, Substitute.For<IStatusBarService>(), new BookmarkService(),
-            new BreakpointService(), Substitute.For<IDebugController>(), new RunScope(), new LocalizationService(),
-                new Vb6ProjectFileFormat(),
-                new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader(), regionRules: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionRules(), regionWriter: new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter());
+            new BreakpointService(), Substitute.For<IDebugController>(), new RunScope(), new LocalizationService());
         var module = new ModuleDefinition(new ProjectDefinition(VBProjectType.EXE, "Other"), "Other", ModuleKind.StandardModule);
         module.UpdateCode("Public Sub OtherName()\r\nEnd Sub\r\n");
         target.Initialize(module);
@@ -254,12 +250,12 @@ public class QuickFixTests : IDisposable
     {
         var peer = new OrderingPeer();
         var (local, remote) = FullDuplexStream.CreatePair();
-        using var server = new JsonRpc(new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()), peer);
+        using var server = new JsonRpc(new LspMessageHandler(remote, remote, new SystemTextJsonFormatter()), peer);
         server.StartListening();
         var transport = Substitute.For<ILspTransport>();
         transport.IsAlive.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(local, local, call.Arg<IJsonRpcMessageFormatter>())));
+            .Returns(call => Task.FromResult<IJsonRpcMessageHandler?>(new LspMessageHandler(local, local, call.Arg<IJsonRpcMessageFormatter>())));
         await using var wire = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6");
         await wire.StartAsync(ct);
         await wire.OpenDocumentAsync(uri, before, ct);
@@ -279,12 +275,12 @@ public class QuickFixTests : IDisposable
     {
         var peer = new RefactorPeer { Edit = Edit() };
         var (local, remote) = FullDuplexStream.CreatePair();
-        using var server = new JsonRpc(new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()), peer);
+        using var server = new JsonRpc(new LspMessageHandler(remote, remote, new SystemTextJsonFormatter()), peer);
         server.StartListening();
         var transport = Substitute.For<ILspTransport>();
         transport.IsAlive.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
-            .Returns(call => Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(local, local, call.Arg<IJsonRpcMessageFormatter>())));
+            .Returns(call => Task.FromResult<IJsonRpcMessageHandler?>(new LspMessageHandler(local, local, call.Arg<IJsonRpcMessageFormatter>())));
         await using var wire = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6");
         await using var registry = new LspClientRegistry([
             new LanguageServerRegistration("scripted", "Scripted server", [".bas"], "vb6", () => wire)],

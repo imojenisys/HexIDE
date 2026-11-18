@@ -62,6 +62,10 @@ public class WindowManager : IWindowManager
         return lifetime.MainWindow ?? throw new Exception("No main window and trying to open a window, fatal error");
     }
 
+    private Window GetIdeDialogOwner(IClassicDesktopStyleApplicationLifetime desktop)
+        => desktop.MainWindow is { IsVisible: true, WindowState: not WindowState.Minimized } main
+            ? main : GetTopWindow(desktop);
+
     public Task ShowManagedWindow(MDIWindow window) => ShowManagedWindow(window, blockBehind: true);
 
     public Task ShowManagedWindow(MDIWindow window, bool blockBehind)
@@ -176,7 +180,7 @@ public class WindowManager : IWindowManager
             var inputBox = new InputBox { Prompt = prompt, Text = defaultText };
             var window = MakeDialogWindow(caption, inputBox);
             inputBox.TextRequest += r => { result = r; window.Close(); };
-            await window.ShowDialog(GetTopWindow(desktop));
+            await window.ShowDialog(GetIdeDialogOwner(desktop));
             return result;
         }
         else
@@ -191,6 +195,12 @@ public class WindowManager : IWindowManager
     internal async Task<MessageBoxResult> TaskModalMessageBox(IClassicDesktopStyleApplicationLifetime desktop, string text, string? caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner)
     {
         owner ??= GetTopWindow(desktop);
+        return await HoldDesktopWindows(desktop,
+            () => ShowDesktopMessageBox(desktop, text, caption ?? Distribution.DisplayName, buttons, icon, owner));
+    }
+
+    private static async Task<T> HoldDesktopWindows<T>(IClassicDesktopStyleApplicationLifetime desktop, Func<Task<T>> show)
+    {
         var held = desktop.Windows.Select(window => (Window: window, WasEnabled: window.IsEnabled)).ToArray();
         try
         {
@@ -200,7 +210,7 @@ public class WindowManager : IWindowManager
                 // IsEnabled holds Avalonia input; the native window must also refuse activation and clicks (#1366).
                 if (window.PlatformImpl is { } platform) SetNativeEnabled(platform, false);
             }
-            return await ShowDesktopMessageBox(desktop, text, caption ?? Distribution.DisplayName, buttons, icon, owner);
+            return await show();
         }
         finally
         {
@@ -214,9 +224,17 @@ public class WindowManager : IWindowManager
         }
     }
 
-    private Task<MessageBoxResult> ShowDesktopMessageBox(IClassicDesktopStyleApplicationLifetime desktop, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner)
+    // Only the default button is read from the layout: the IDE's own boxes are laid out as the IDE lays them out.
+    private static int DefaultButtonOf(MessageBoxLayout layout) => layout.HasFlag(MessageBoxLayout.SecondButtonDefault) ? 1 : 0;
+
+    private Task<MessageBoxResult> ShowDesktopMessageBox(IClassicDesktopStyleApplicationLifetime desktop, string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, Window? owner,
+        MessageBoxLayout layout = MessageBoxLayout.None)
     {
-        var messageBox = new MessageBox { Text = text, Buttons = buttons, Icon = icon };
+        var messageBox = new MessageBox
+        {
+            Text = text, Buttons = buttons, Icon = icon, DefaultButton = DefaultButtonOf(layout),
+            IsSecurityPrompt = layout.HasFlag(MessageBoxLayout.SecurityPrompt),
+        };
         var window = MakeDialogWindow(caption, messageBox);
         return messageBox.ShowAndWait(window, owner ?? GetTopWindow(desktop));
     }
@@ -232,7 +250,9 @@ public class WindowManager : IWindowManager
             {
                 Text = text,
                 Buttons = buttons,
-                Icon = icon
+                Icon = icon,
+                DefaultButton = DefaultButtonOf(layout),
+                IsSecurityPrompt = layout.HasFlag(MessageBoxLayout.SecurityPrompt),
             };
             var task = ShowManagedWindow(out var window, caption, messageBox, false);
 
@@ -256,7 +276,7 @@ public class WindowManager : IWindowManager
         {
             // A person's close answers as Windows' does, or is refused where the box has none, and a box hidden with
             // its owner keeps waiting (see ShowAndWait).
-            return await ShowDesktopMessageBox(desktop, text, caption, buttons, icon, owner);
+            return await ShowDesktopMessageBox(desktop, text, caption, buttons, icon, owner ?? GetIdeDialogOwner(desktop), layout);
         }
         else
             throw new NotImplementedException();
@@ -278,7 +298,7 @@ public class WindowManager : IWindowManager
         {
             var window = MakeDialogWindow(title, dialog);
             vm.CloseRequested += window.Close;
-            await window.ShowDialog(GetTopWindow(desktop));
+            await window.ShowDialog(GetIdeDialogOwner(desktop));
         }
         else
             throw new NotImplementedException();
@@ -337,7 +357,7 @@ public class WindowManager : IWindowManager
         return dialog;
     }
 
-    public async Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null)
+    public async Task<FontDialogResult?> ShowFontDialog(FontDialogResult? initial = null, bool isProgramDialog = false)
     {
         var vm = new FontDialogViewModel(initial);
         var dialog = CreateFontDialog(vm);
@@ -355,7 +375,7 @@ public class WindowManager : IWindowManager
             var window = MakeDialogWindow(_localization.GetString("Str.WindowManager.FontTitle"), dialog);
             vm.AcceptRequested += r => { result = r; window.Close(); };
             vm.CancelRequested += window.Close;
-            await window.ShowDialog(GetTopWindow(desktop));
+            await window.ShowDialog(isProgramDialog ? GetTopWindow(desktop) : GetIdeDialogOwner(desktop));
         }
         else
             throw new NotImplementedException();
@@ -438,7 +458,7 @@ public class WindowManager : IWindowManager
 
     internal async Task<bool> ShowDialog(IClassicDesktopStyleApplicationLifetime desktop, IDialog dialog)
     {
-        var owner = GetTopWindow(desktop);
+        var owner = dialog is RuntimeErrorViewModel ? GetTopWindow(desktop) : GetIdeDialogOwner(desktop);
         if (dialog is LanguageRevertGateViewModel)
         {
             // Activation can still point at the main window while Options is open (#623).
@@ -461,6 +481,13 @@ public class WindowManager : IWindowManager
         {
             // Let the window measure itself at content size, then unlock for user resizing
             window.Opened += (_, _) => window.SizeToContent = SizeToContent.Manual;
+        }
+        if (dialog is RuntimeErrorViewModel runtimeError)
+        {
+            // The active form owns the error, but VB6 also holds the IDE (#1297, measured SP6).
+            var result = await HoldDesktopWindows(desktop, () => window.ShowDialog<bool>(owner));
+            if (!result && runtimeError.CanDebug(null)) desktop.MainWindow?.Activate();
+            return result;
         }
         return await window.ShowDialog<bool>(owner);
     }

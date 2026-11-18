@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using HexIDE.Addins;
+using HexIDE.IDE;
 using Microsoft.Extensions.Logging;
 
 namespace HexIDE.Lsp;
@@ -22,11 +23,13 @@ namespace HexIDE.Lsp;
 /// </para>
 /// </remarks>
 public sealed class LanguageServerContributions(
+    ISettingsService settings,
     LspClientRegistry router,
     LanguageServerRegistrationFactory factory,
     LanguageServerConfigLoader loader,
     IReadOnlyCollection<string> configuredIds,
     ILogger<LanguageServerContributions> logger,
+    IAddinCodeEditorActions? codeEditorActions,
     LanguageServerCommandStore? seen = null,
     IWorkspaceArtifactProviderRegistry? artifactProviders = null,
     TimeProvider? clock = null)
@@ -46,6 +49,12 @@ public sealed class LanguageServerContributions(
     /// </summary>
     /// <param name="server">The server, as the add-in describes it.</param>
     /// <param name="origin">Who contributed it, for the Language Servers window: the add-in's title.</param>
+    /// <param name="originId">The add-in's id, which keys the one notice about a publisher record without namespaces.</param>
+    /// <param name="publisherNamespaces">
+    /// The namespaces the add-in's verified publisher record issues (<see cref="PublisherNamespaces"/>). When given, the
+    /// message prefix must be <c>&lt;ns&gt;/</c> and the command prefix <c>&lt;ns&gt;.</c> for one of them. Null for a record
+    /// issued before the field existed, or an add-in with no verified record: today's rule applies, with a notice.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// The entry fails the checks a file entry gets, is switched off, or its prefix or one of its methods is not the
     /// add-in's to use. What was wrong with the entry is also a configuration problem.
@@ -53,7 +62,23 @@ public sealed class LanguageServerContributions(
     /// <exception cref="InvalidOperationException">
     /// The id is taken: the configuration names it, and keeps its own entry, or another add-in contributed it first.
     /// </exception>
-    public AddinServerConnection Register(AddinLanguageServer server, string? origin)
+    private ServerChatToolsService? _chatTools;
+
+    /// <summary>
+    /// AI Chat's tools and context from the running servers that offer them (#4257). Held here, beside the servers an add-in
+    /// contributes, because the host reaches the registry through this.
+    /// </summary>
+    public IServerChatTools ChatTools =>
+        _chatTools ??= new ServerChatToolsService(() => router.ChatToolsServers(ChatToolsSetting), logger);
+
+    /// <summary>
+    /// The person's own setting for a server's AI Chat tools, by its id, which wins over its entry's (#4257). Read on every
+    /// list, call and context request, so a change in Options applies to the next one.
+    /// </summary>
+    public Func<string, ServerChatToolsPolicy?>? ChatToolsSetting { get; init; }
+
+    public AddinServerConnection Register(AddinLanguageServer server, string? origin, string? originId = null,
+        IReadOnlyList<string>? publisherNamespaces = null)
     {
         ArgumentNullException.ThrowIfNull(server);
         ArgumentNullException.ThrowIfNull(server.Entry);
@@ -64,6 +89,7 @@ public sealed class LanguageServerContributions(
         CheckMessages(server.MessagePrefix, claimed);
         var commands = new Dictionary<string, AddinClientCommand>(server.ClientCommands, StringComparer.Ordinal);
         CheckCommands(server.CommandPrefix, commands);
+        CheckNamespaces(server.MessagePrefix, server.CommandPrefix, publisherNamespaces, origin);
         if (server.BeforeLaunchTimeout <= TimeSpan.Zero || server.BeforeLaunchTimeout > AddinLanguageServer.MaxBeforeLaunchTimeout)
             throw new ArgumentException(
                 $"The wait for a gate before launch must be positive and at most {AddinLanguageServer.MaxBeforeLaunchTimeout}.",
@@ -99,6 +125,14 @@ public sealed class LanguageServerContributions(
             throw new ArgumentException($"The language server '{id}' is switched off, so there is nothing to add.", nameof(server));
         }
 
+        // A record issued before publisher namespaces existed binds no prefix: say so, once for each add-in.
+        if (publisherNamespaces is null && (server.MessagePrefix is not null || server.CommandPrefix is not null)
+            && NoticeOnce(originId ?? origin ?? id))
+            problems.Add(new LanguageServerConfigProblem(id,
+                $"{origin ?? "An add-in"} uses the prefix {string.Join(" and ", new[] { server.MessagePrefix, server.CommandPrefix }.OfType<string>().Select(p => $"'{p}'"))}, "
+                + "and its publisher's record names no namespaces, so the prefix isn't checked against its publisher. "
+                + "Records issued before v1 don't carry them.", false));
+
         // What was worth saying about an entry that is used all the same: a launch command not run before, a misspelt field.
         router.ReportContributionProblems(id, problems);
 
@@ -112,6 +146,8 @@ public sealed class LanguageServerContributions(
                 ? token => WithinAsync(gate, server.BeforeLaunchTimeout, origin, id, token)
                 : null,
             Origin = origin,
+            // The user's object, then the profile's default, then what the add-in's own entry carries (#4255).
+            Settings = settings.GetLanguageServerSettings(id) ?? made.Settings,
             CreateClient = claimed.Count == 0 && commands.Count == 0 && afterStart is null ? made.CreateClient : () =>
             {
                 var client = made.CreateClient();
@@ -133,7 +169,7 @@ public sealed class LanguageServerContributions(
         };
 
         logger.LogInformation("{Origin} contributes the language server '{Id}'.", origin ?? "An add-in", id);
-        var added = new AddinServerConnection(router.Add(registration), server.MessagePrefix, logger);
+        var added = new AddinServerConnection(router.Add(registration), server.MessagePrefix, logger, settings, router, codeEditorActions, made.Settings);
         connection.SetResult(added);
         return added;
     }
@@ -204,6 +240,28 @@ public sealed class LanguageServerContributions(
         }
     }
 
+    private readonly HashSet<string> _noticed = new(StringComparer.OrdinalIgnoreCase);
+
+    private bool NoticeOnce(string key)
+    {
+        lock (_noticed) return _noticed.Add(key);
+    }
+
+    // #4258 part D: with a verified publisher record that issues namespaces, the prefixes must be under one of them.
+    private static void CheckNamespaces(string? messagePrefix, string? commandPrefix, IReadOnlyList<string>? namespaces,
+        string? origin)
+    {
+        const string server = "server";
+        if (namespaces is null) return;
+        string Issued() => namespaces.Count == 0 ? "none" : string.Join(", ", namespaces.Select(ns => $"'{ns}'"));
+        if (messagePrefix is { } message && !PublisherNamespaces.AllowsMessagePrefix(namespaces, message))
+            throw new ArgumentException($"{origin ?? "The add-in"}'s message prefix '{message}' isn't under a namespace its "
+                + $"publisher was issued ({Issued()}): it must be '<namespace>/' for one of them.", server);
+        if (commandPrefix is { } command && !PublisherNamespaces.AllowsCommandPrefix(namespaces, command))
+            throw new ArgumentException($"{origin ?? "The add-in"}'s command prefix '{command}' isn't under a namespace its "
+                + $"publisher was issued ({Issued()}): it must be '<namespace>.' for one of them.", server);
+    }
+
     // The prefix, and the methods claimed under it, checked before anything is added.
     private static void CheckMessages(string? messagePrefix, IReadOnlyDictionary<string, AddinServerMethod> claimed)
     {
@@ -223,6 +281,10 @@ public sealed class LanguageServerContributions(
         if (ProtocolNamespaces.Any(ns => prefix.StartsWith(ns, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException($"'{prefix}' is a namespace the Language Server Protocol uses, so it is not an add-in's.",
                 server);
+
+        // Core's own (hexide/projectProperties, #4024), whatever a publisher record says.
+        if (prefix.StartsWith("hexide/", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException($"'{prefix}' is a reserved message namespace, so it is not an add-in's.", server);
 
         foreach (var method in claimed.Keys)
         {
@@ -266,12 +328,41 @@ public sealed class AddinServerConnection : IAddinServerConnection, IAsyncDispos
     private readonly LspClientRegistry.Contribution _contribution;
     private readonly string? _prefix;
     private readonly ILogger _logger;
+    private readonly ISettingsService _settings;
+    private readonly LspClientRegistry _router;
+    private readonly IAddinCodeEditorActions? _codeEditorActions;
 
-    internal AddinServerConnection(LspClientRegistry.Contribution contribution, string? prefix, ILogger logger)
+    private readonly JsonElement? _entrySettings;
+
+    internal AddinServerConnection(LspClientRegistry.Contribution contribution, string? prefix, ILogger logger, ISettingsService settings, LspClientRegistry router,
+        IAddinCodeEditorActions? codeEditorActions, JsonElement? entrySettings = null)
     {
+        _entrySettings = entrySettings?.Clone();
         _contribution = contribution;
         _prefix = prefix;
         _logger = logger;
+        _settings = settings;
+        _router = router;
+        _codeEditorActions = codeEditorActions;
+    }
+
+    public JsonElement? GetSettings() => _settings.GetLanguageServerSettings(Id) ?? _entrySettings?.Clone();
+
+    public async Task SetSettingsAsync(JsonElement settings, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(Lifetime.IsCancellationRequested, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (settings.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Language server settings must be a JSON object.", nameof(settings));
+        _settings.SetLanguageServerSettings(Id, settings);
+        await _router.UpdateServerSettingsAsync(Id, GetSettings());
+    }
+
+    /// <summary>Removes the user's object and notifies the server with the resolved fallback.</summary>
+    public async Task ResetSettingsAsync()
+    {
+        _settings.RemoveLanguageServerSettings(Id);
+        await _router.UpdateServerSettingsAsync(Id, GetSettings(), forceNotification: true);
     }
 
     public string Id => _contribution.Id;
@@ -283,6 +374,9 @@ public sealed class AddinServerConnection : IAddinServerConnection, IAsyncDispos
 
     /// <summary>Cancelled when the server is taken out.</summary>
     internal CancellationToken Lifetime => _contribution.Lifetime;
+
+    /// <summary>Whether the server has been taken out, as when its add-in is disabled.</summary>
+    public bool IsTakenOut => Lifetime.IsCancellationRequested;
 
     /// <summary>The router's client for the server, once it has started.</summary>
     internal ILspClient? Client => _contribution.Client;
@@ -300,6 +394,29 @@ public sealed class AddinServerConnection : IAddinServerConnection, IAsyncDispos
             ? client.ApplyClaimedEditAsync(edit, cancellationToken)
             : Task.FromResult(new HexIDE.Lsp.Messages.ApplyWorkspaceEditResult(false,
                 HexIDE.IDE.Distribution.DisplayName + " applies a server's edits only while a command the user started is running."));
+
+    public async Task<bool> StartRenameAsync(string uri, HexIDE.Lsp.Messages.Position position,
+        CancellationToken cancellationToken = default)
+    {
+        using var lifetime = ActionLifetime(cancellationToken);
+        return await _codeEditorActions!.StartRenameAsync(uri, position, lifetime.Token);
+    }
+
+    public async Task ShowReferencesAsync(IReadOnlyList<HexIDE.Lsp.Messages.Location> locations,
+        CancellationToken cancellationToken = default)
+    {
+        using var lifetime = ActionLifetime(cancellationToken);
+        await _codeEditorActions!.ShowReferencesAsync(locations, lifetime.Token);
+    }
+
+    private CancellationTokenSource ActionLifetime(CancellationToken cancellationToken)
+    {
+        if (_contribution.Client is not VBLspClient client)
+            throw new InvalidOperationException("Code-window actions require a running claimed-command handler.");
+        var handler = client.ClaimedCommandLifetime();
+        if (_codeEditorActions is null) throw new InvalidOperationException("No code-window host is available.");
+        return CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, handler);
+    }
 
     private VBLspClient Running(string method)
     {

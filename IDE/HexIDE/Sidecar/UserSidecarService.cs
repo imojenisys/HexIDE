@@ -56,8 +56,6 @@ public partial class UserSidecarService : IUserSidecarService
 
     private readonly IBookmarkService bookmarkService;
     private readonly IBreakpointService breakpointService;
-    private readonly IProjectFileFormat format;
-    private readonly HexIDE.Language.IReadOnlyRegionReader reader;
     private readonly IProjectManager projectManager;
     private readonly IRunChoiceStore? runChoices;
 
@@ -81,13 +79,11 @@ public partial class UserSidecarService : IUserSidecarService
     };
 
     public UserSidecarService(IBookmarkService bookmarkService, IBreakpointService breakpointService,
-        IProjectManager projectManager, IProjectFileFormat format, HexIDE.Language.IReadOnlyRegionReader reader, IRunChoiceStore? runChoices = null)
+        IProjectManager projectManager, IRunChoiceStore? runChoices = null)
     {
         this.bookmarkService = bookmarkService;
         this.breakpointService = breakpointService;
         this.projectManager = projectManager;
-        this.format = format;
-        this.reader = reader;
         this.runChoices = runChoices;
         // The personal-state stores persist to the same per-user sidecar, on the same debounced save.
         bookmarkService.BookmarksChanged += OnSidecarStateChanged;
@@ -174,6 +170,8 @@ public partial class UserSidecarService : IUserSidecarService
 
         /// <summary>A change has been made, or a write attempted, that has not yet reached the file.</summary>
         public bool Owed;
+
+        public LastRunExe? PendingLastRunExe;
 
         /// <summary>The debounce the latest change is waiting on, if one is.</summary>
         public CancellationTokenSource? Pending;
@@ -423,6 +421,7 @@ public partial class UserSidecarService : IUserSidecarService
             HeaderBreakpointConditions = data.HeaderBreakpointConditions,
             HeaderBookmarks = data.HeaderBookmarks,
             HeaderBreakpoints = data.HeaderBreakpoints,
+            LastRunExe = data.LastRunExe,
             Extra = data.Extra,
         };
         return (migrated, new Entries(consumedBookmarks, consumedBreakpoints),
@@ -452,7 +451,7 @@ public partial class UserSidecarService : IUserSidecarService
             {
                 if (!IsCollected(collected, document)
                     && AddReorderedLines(into, document, lines, first, what, path, codeRelative: true)) continue;
-                var shift = DocumentContent.TextOf(document, null, format, reader).HeaderLineCount;
+                var shift = DocumentContent.TextOf(document, null).HeaderLineCount;
                 // Check before adding, so a negative or overflowing offset cannot become a valid file line.
                 var invalid = lines.Where(line => line < first || (long)line + shift > int.MaxValue).ToList();
                 if (invalid.Count > 0)
@@ -489,7 +488,7 @@ public partial class UserSidecarService : IUserSidecarService
     {
         if (!collected && AddReorderedLines(into, document, lines, first, what, path, codeRelative: false)) return;
         var valid = WithinDocument(document, lines, first, what, path);
-        var count = DocumentContent.TextOf(document, null, format, reader).HeaderLineCount;
+        var count = DocumentContent.TextOf(document, null).HeaderLineCount;
         AddTo(into, document, valid.Where(line => line - first < count));
         AddTo(into, document, OffReadOnlyLines(document,
             valid.Where(line => line - first >= count).ToList(), first, what, path));
@@ -521,8 +520,8 @@ public partial class UserSidecarService : IUserSidecarService
             foreach (var document in byName[name])
             {
                 if (AddReorderedLines(into, document, lines, first, what, path, codeRelative: true)) continue;
-                var shift = FormCodeText.LineBreaks(document.Module is { } module ? ProjectFormats.Of(document.Project, format).CodePrefix(module)
-                    : ProjectFormats.Of(document.Project, format).CodePrefix(document.Form!));
+                var shift = FormCodeText.LineBreaks(document.Module is { } module ? ProjectFormats.Of(document.Project).CodePrefix(module)
+                    : ProjectFormats.Of(document.Project).CodePrefix(document.Form!));
                 var moving = WithinOldCode(document, lines, first, what, path).Select(line => line + shift);
                 AddTo(into, document, OffReadOnlyLines(document, moving.ToList(), first, what, path));
             }
@@ -620,7 +619,7 @@ public partial class UserSidecarService : IUserSidecarService
     private IReadOnlyList<int> WithinDocument(
         DocumentIdentity document, IReadOnlyCollection<int> lines, int first, string what, string path)
     {
-        var text = DocumentContent.TextOf(document, null, format, reader);
+        var text = DocumentContent.TextOf(document, null);
         var (kept, dropped) = MarkLineRules.Within(text, lines, first);
         if (dropped.Count > 0)
             Log.Warning("Dropped {What:l}s on {Lines} from {Path}: {Document} has {Count} line(s), numbered {First}..{Last}",
@@ -637,7 +636,7 @@ public partial class UserSidecarService : IUserSidecarService
     {
         if (lines.Count == 0) return lines;
 
-        var text = DocumentContent.TextOf(document, null, format, reader);
+        var text = DocumentContent.TextOf(document, null);
         var regions = text.Regions;
         var dropped = lines.Where(line => ReadOnlyRegions.IsReadOnlyLine(text.Text, regions, line - first + 1))
             .Distinct().ToList();
@@ -676,6 +675,34 @@ public partial class UserSidecarService : IUserSidecarService
         lock (gate)
             Save(project);
         return Task.CompletedTask;
+    }
+
+    public LastRunExe? GetLastRunExe(ProjectDefinition project)
+    {
+        lock (gate)
+        {
+            try
+            {
+                var path = SidecarPath(project);
+                return path != null && File.Exists(path) ? TryRead(File.ReadAllText(path))?.LastRunExe : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Warning(ex, "Could not read last VB6 run for {Path}", project.AbsolutePath);
+                return null;
+            }
+        }
+    }
+
+    public void RecordLastRunExe(ProjectDefinition project, LastRunExe exe)
+    {
+        lock (gate)
+        {
+            var state = StateOf(project);
+            state.PendingLastRunExe = exe;
+            state.Owed = true;
+            Save(project);
+        }
     }
 
     /// <summary>Writes every change still owed to any project's sidecar.</summary>
@@ -770,6 +797,8 @@ public partial class UserSidecarService : IUserSidecarService
             var extra = source?.Extra is { Count: > 0 } unrecognised ? unrecognised : null;
             var runWith = runChoices is null ? source?.RunWith : runChoices.Get(project) ?? (runChoices.HasChoice(project) ? "" : null);
 
+            var lastRunExe = state.PendingLastRunExe ?? source?.LastRunExe;
+
             // A sidecar is created only when there is something to record, and content this build does not
             // understand is something, as are the entries it keeps without understanding where they go. One that
             // exists is rewritten even when its last mark has gone, rather than deleted: it may hold what this build
@@ -777,7 +806,7 @@ public partial class UserSidecarService : IUserSidecarService
             if (!exists && bookmarks.Count == 0 && breakpoints.Count == 0 && oldBookmarks == null &&
                 oldBreakpoints == null && fileBookmarks == null && fileBreakpoints == null &&
                 headerBookmarks.Count == 0 && headerBreakpoints.Count == 0 &&
-                codeConditions.Count == 0 && headerConditions.Count == 0 && extra == null && runWith == null &&
+                codeConditions.Count == 0 && headerConditions.Count == 0 && extra == null && runWith == null && lastRunExe == null &&
                 version == CurrentVersion)
             {
                 // Nothing lies here, so the place is the project's own from now on: a sidecar that appears here
@@ -804,6 +833,7 @@ public partial class UserSidecarService : IUserSidecarService
                 Bookmarks = oldBookmarks,
                 Breakpoints = oldBreakpoints,
                 RunWith = runWith,
+                LastRunExe = lastRunExe,
                 Extra = extra,
             };
 
@@ -815,6 +845,7 @@ public partial class UserSidecarService : IUserSidecarService
             }
 
             Adopt(state, path, data, ours, oursHeader);
+            state.PendingLastRunExe = null;
         }
         catch (Exception ex)
         {
@@ -945,7 +976,7 @@ public partial class UserSidecarService : IUserSidecarService
         var map = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
         foreach (var document in DocumentLookup.DocumentsOf(project))
         {
-            var shift = DocumentContent.TextOf(document, null, format, reader).HeaderLineCount;
+            var shift = DocumentContent.TextOf(document, null).HeaderLineCount;
             var lines = getLines(document).Where(line => (line - first < shift) == header)
                 .Select(line => header ? line : line - shift).ToList();
             if (lines.Count == 0) continue;
@@ -1085,6 +1116,9 @@ internal class UserSidecarData
     /// <summary>What F5 runs for the project, for this user: a launch's key, empty for an explicit interpreter choice, absent for the default.</summary>
     [JsonPropertyName("runWith")]
     public string? RunWith { get; set; }
+
+    [JsonPropertyName("lastRunExe")]
+    public LastRunExe? LastRunExe { get; set; }
 
     /// <summary>Everything this build does not recognise, written back as it was read.</summary>
     [JsonExtensionData]

@@ -20,6 +20,62 @@ operations do.
 
 ## Requirements
 
+### Requirement: Windowless controls draw below windowed siblings regardless of file order
+
+Within each container, the designer SHALL draw Label, Shape, Line and Image below windowed siblings,
+regardless of their block order in the file. The existing first-block-on-top rule SHALL remain within
+each plane. An unedited form SHALL remain clean and SHALL NOT be rewritten. A save after an edit SHALL
+write windowed blocks before windowless blocks, preserving each plane's order and every property,
+including TabIndex, as measured in [#1517](https://github.com/hexide-io/HexIDE/issues/1517) and
+[oracle PR #4518](https://github.com/hexide-io/HexIDE/pull/4518).
+
+#### Scenario: A Label precedes a button in a hand-edited form
+
+- **WHEN** the form opens with a Label block before a CommandButton block in the same container
+- **THEN** the Label draws underneath the button and the form has no unsaved changes
+- **WHEN** the developer edits the code and saves
+- **THEN** the button block precedes the Label block, with their property lines unchanged
+- **AND** the same rule applies independently to nested containers
+
+### Requirement: A control designer double-click writes its measured default event
+
+The designer SHALL use the declared default event independently of event-list order, matching the
+[VB6 SP6 measurements in #4411](https://github.com/hexide-io/HexIDE/issues/4411) from
+[oracle PR #4460](https://github.com/hexide-io/HexIDE/pull/4460).
+
+#### Scenario: Double-click a measured in-box control
+
+- **WHEN** a control in this table is double-clicked
+- **THEN** the code window opens its named handler, creating it if absent
+
+| Controls | Event |
+|---|---|
+| PictureBox, Label, CommandButton, CheckBox, OptionButton, ListBox, Image | Click |
+| TextBox, ComboBox, HScrollBar, VScrollBar | Change |
+| Frame | DragDrop(Source As Control, X As Single, Y As Single) |
+| Timer | Timer |
+| Shape, Line | None: open code without creating a handler |
+
+#### Scenario: An unmeasured control or control-array element
+
+- **WHEN** a control outside the measured table is double-clicked
+- **THEN** its first-event behavior is retained pending measurement
+- **WHEN** a control-array element's handler is created
+- **THEN** its existing `Index As Integer` argument is retained pending measurement
+- **AND** runtime DragDrop delivery is unchanged
+
+#### Scenario: Double-click a TextBox
+
+- **WHEN** the user double-clicks Text1 in the designer
+- **THEN** the code window opens Text1_Change, creating its stub if absent, even if KeyDown is listed first
+
+#### Scenario: Double-click a Frame or Shape
+
+- **WHEN** the user double-clicks Frame1
+- **THEN** the code window creates or navigates to Frame1_DragDrop with the measured arguments
+- **WHEN** the user double-clicks Shape1
+- **THEN** the code window opens without creating an event handler
+
 ### Requirement: Refuse negative designer control sizes
 
 The Properties window and `add_control`, `move_control` and `set_control_property` SHALL refuse a
@@ -552,10 +608,12 @@ or saving. Automation replies SHALL name the resulting element or plain control.
 
 ### Requirement: Designer keyboard selection follows measured tab order
 
-With at most one control selected, Tab and Shift+Tab in the designer SHALL move the selection through the
-form's controls in TabIndex order, wrapping, where every control is a top-level, visible, enabled tab stop,
-as measured in [#3399](https://github.com/hexide-io/HexIDE/issues/3399). Other forms SHALL keep their
-existing Tab behaviour until those cases are measured. Escape SHALL select the form, and focus SHALL stay
+Tab and Shift+Tab in the designer SHALL move the selection through every control with a TabIndex in
+pure TabIndex order across the whole form, wrapping without including the form. TabStop, Visible, Enabled
+and containment SHALL NOT exclude a control or group it with its container; Labels and containers are
+stops too, as measured in [#4211](https://github.com/hexide-io/HexIDE/issues/4211). With several controls
+selected, traversal SHALL start from the primary (last selected) control and produce a single selection.
+Escape SHALL select the form, and focus SHALL stay
 in the designer, except while a mouse button is held: then Escape SHALL leave the selection alone, so a drag
 that is abandoned and let go where it began leaves its control where it was.
 
@@ -566,7 +624,20 @@ that is abandoned and let go where it began leaves its control where it was.
 - **THEN** selection visits Text1, Check1, Command1 and Text1, with focus in the designer
 - **AND** Shift+Tab reverses that cycle, and Shift+Tab from the form selects Command1
 
-#### Scenario: Escape on a form with an unmeasured case
+#### Scenario: Children precede their Frame by TabIndex
+
+- **GIVEN** Command1 (0), Text2 inside Frame1 (1), Text1 (2), Frame1 (3), Command3 (4), Command2 inside Frame1 (5), Label1 (6), hidden Check1 (7) and disabled Option1 (8), with Text1's TabStop False
+- **WHEN** Tab is pressed repeatedly from the form
+- **THEN** each control is selected in that order and the cycle wraps to Command1
+- **AND** Shift+Tab traverses the reverse order
+
+#### Scenario: Tab replaces a multiple selection
+
+- **GIVEN** Command3 (8) then Text1 (1) selected, with Text1 primary
+- **WHEN** Tab is pressed
+- **THEN** Check1 (2) alone is selected
+
+#### Scenario: Escape on a form with TabStop False
 
 - **GIVEN** a form where one control has TabStop False
 - **WHEN** a control is selected and Escape is pressed

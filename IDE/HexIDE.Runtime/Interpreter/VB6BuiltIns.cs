@@ -59,10 +59,21 @@ public partial class VB6BuiltIns
     /// <summary>The program's open files (#1145), which FreeFile and EOF read and the file statements use.</summary>
     internal VbFiles Files { get; } = new();
 
+    // #4302 measures these LongLong inputs only. Other intrinsic uses need #1548's oracle rows.
+    private static readonly HashSet<string> LongLongInputs = new(StringComparer.OrdinalIgnoreCase)
+    { "CLngLng", "CLngPtr", "CInt", "CLng", "CDbl", "CStr", "TypeName", "VarType", "Hex", "Oct", "Str", "Format", "LenB", "Abs", "Int", "Fix", "Sgn" };
+
+    internal VbaBitness VbaBitness { get; init; }
+
     internal Func<Vb6Value, string, Task<Vb6Value>>? ResolveDefaultForUse { get; set; }
 
     public async Task<Vb6Value?> EvaluateBuiltInFunction(string name, List<Vb6Value> args, bool compareText = false)
     {
+        if (IsLongLongConversion(name) && VbaBitness != VbaBitness.Bit64
+            && !(VbaBitness == VbaBitness.Bit32 && name.Equals("CLngPtr", StringComparison.OrdinalIgnoreCase)))
+            return null;
+        if (IsLongLongConversion(name) && args.Count != 1)
+            throw new NotImplementedException("This argument count for a LongLong conversion is unmeasured (#1548)");
         CheckIntrinsicArgumentCount(name, args);
 
         // An unknown name is not a built-in, and its callers say so loudly ("Sub or Function not defined", or not
@@ -73,6 +84,8 @@ public partial class VB6BuiltIns
         if (!isAsync && !Builtins.TryGetValue(name, out fn))
             return null;
 
+        if (name.Equals("ChrB", StringComparison.OrdinalIgnoreCase)) CheckChrBArgument(args[0]);
+        CheckOddByteArguments(name, args);
         CheckValueBeforeObject(name, args);
         for (var i = 0; i < args.Count; i++)
         {
@@ -83,6 +96,12 @@ public partial class VB6BuiltIns
                 arg = await resolve(arg, name.Equals("Format", StringComparison.OrdinalIgnoreCase) ? "Format"
                     : name.Equals("Abs", StringComparison.OrdinalIgnoreCase) ? "Abs" : name);
             args[i] = ArgumentAsUsed(name, i, arg);
+            CheckOddByteArgument(name, i, args.Count, args[i]);
+            if (args[i].Type == Vb6Value.ValueType.LongLong
+                && (i != 0 || !LongLongInputs.Contains(name)
+                    || name.Equals("LenB", StringComparison.OrdinalIgnoreCase)
+                        && args is not IntrinsicArgumentValues { LenVariableSize: 8 }))
+                throw new NotImplementedException($"Use of LongLong by {name} in this argument is unmeasured (#1548)");
         }
 
         // The two async builtins await the standard library; every other builtin is in the sync registry.
@@ -155,6 +174,23 @@ public partial class VB6BuiltIns
             || (index == 3 && string.Equals(name, "GetSetting", StringComparison.OrdinalIgnoreCase)))
             return false;
         return true;
+    }
+
+    private static void CheckOddByteArguments(string name, IReadOnlyList<Vb6Value> args)
+    {
+        for (var i = 0; i < args.Count; i++) CheckOddByteArgument(name, i, args.Count, args[i]);
+    }
+
+    private static void CheckOddByteArgument(string name, int index, int count, Vb6Value arg)
+    {
+        if (arg.IsOddByteString
+            && !(index == 0 && (name.Equals("Len", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("LenB", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("TypeName", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("VarType", StringComparison.OrdinalIgnoreCase)))
+            && !(name.Equals("InStrB", StringComparison.OrdinalIgnoreCase)
+                && (index == (count >= 3 ? 1 : 0) || index == (count >= 3 ? 2 : 1))))
+            throw Vb6Value.OddBytesNotImplemented(name);
     }
 
     private static Vb6Value ArgumentAsUsed(string name, int index, Vb6Value arg)
@@ -243,18 +279,27 @@ public partial class VB6BuiltIns
         };
         d["EOF"] = (self, a, _) => new Vb6Value(self.Files.Eof(AsInt(a[0])));
         // LOF, Loc and Seek are Longs, and Input a String (measured, #1645). Input's file number may be written #n: the
-        // expression executor reads it as a file number. InputB returns a byte string, which HexIDE has not got (#1510).
+        // expression executor reads it as a file number. InputB's byte-input conversion remains unimplemented (#1510).
         d["LOF"] = (self, a, _) => new Vb6Value(self.Files.Length(AsInt(a[0])));
         d["Loc"] = (self, a, _) => new Vb6Value(self.Files.Loc(AsInt(a[0])));
         d["Seek"] = (self, a, _) => new Vb6Value(self.Files.SeekPosition(AsInt(a[0])));
         d["Input"] = (self, a, _) => a.Count == 2
             ? new Vb6Value(self.Files.Read(AsInt(a[1]), AsInt(a[0])))
             : throw new VBCompileErrorException("Syntax error");
-        d["InputB"] = (_, _, _) => throw new NotImplementedException("InputB is not implemented: it returns a byte string, which HexIDE has not got (#1510)");
+        d["InputB"] = (_, _, _) => throw new NotImplementedException("InputB is not implemented (#1510).");
         // DoEvents, for code run with no window, as a module test's is: nothing can be waiting, so it does nothing. A program
         // running in a window reaches BasicInterpreter.CallBuiltIn first, which runs what is waiting, as VB6 does (#766).
         // VB6 returns the open-form count; Integer 0 lets both `DoEvents` and `x = DoEvents` run (documented approximation).
         d["DoEvents"] = (_, _, _) => new Vb6Value(0);
+        foreach (var name in new List<string>(d.Keys))
+        {
+            var function = d[name];
+            d[name] = (self, args, text) =>
+            {
+                CheckOddByteArguments(name, args);
+                return function(self, args, text);
+            };
+        }
         return d;
     }
 

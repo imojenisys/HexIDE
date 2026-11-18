@@ -44,12 +44,11 @@ cd LspServer && dotnet build HexIDE.VbLspServer/
 
 **A test run that could hang carries a hang-dump timeout**, as CI's headless steps do:
 `pwsh scripts/test.ps1 IDE/HexIDE.Integration.Tests/ -- --hangdump --hangdump-timeout 20m`. Set it well above
-the suite's length, as a budget for the whole run. The timer is meant to count only quiet time, minutes in
-which no test starts or finishes, and on Windows it does (#2618). But on macOS it fired 10 to 11 minutes into
-healthy runs once the suite outgrew it (#3874). Only the two headless suites,
-`HexIDE.Integration.Tests` and `HexIDE.Runtime.Integration.Tests`, reference
-`Microsoft.Testing.Extensions.HangDump` today. Another project rejects the option until it has the
-package, with its licence line.
+the suite's length, as a budget for the whole run. The timer counts only quiet time, minutes in which no test
+starts or finishes (#2618). Before #2008 it didn't on macOS: the old HangDump's activity signal never reached it
+there, so it counted the whole run (#3874). The two headless suites and `HexIDE.Tests` (#2128)
+reference `Microsoft.Testing.Extensions.HangDump` today. Another project rejects the option until it has
+the package, with its licence line.
 
 CI runs three build jobs in `.github/workflows/build.yml`: `build-ide` (Linux, working dir `IDE/`), `build-ide-desktop` (a Windows, Windows-on-Arm and macOS matrix, also in `IDE/`) and `build-lsp-server` (working dir `LspServer/`), alongside two guard jobs.
 
@@ -65,7 +64,7 @@ when the suites grow. Both scripts use a floor of one for a filtered run, or acc
 with `pwsh scripts/test.ps1 <project> [arguments]` (Windows PowerShell 5.1 also works via
 `powershell -ExecutionPolicy Bypass -File scripts/test.ps1`). Its final PASS/FAIL follows the exit
 code: MTP can print `Passed!` even when the floor fails. Bare `dotnet test` has no default floor.
-A project default was checked with this tree's MTP 1.9.1 for #2264: filters do not disable it
+A project default was checked with MTP 1.9.1, then this tree's, for #2264: filters do not disable it
 and a later floor is rejected
 as a duplicate, so it would break filtered runs. Argument checks run with
 `pwsh scripts/test.selftest.ps1` and `bash scripts/test-linux.selftest.sh`.
@@ -327,7 +326,8 @@ test case that throws before its test starts as an error, not a failure, and its
 error. The summary, the exit code and a floor with room to spare all see nothing but a smaller total. So
 read xunit's own report: add `--report-xunit --report-xunit-filename x.xml` after the `--`, then run
 `bash scripts/check-xunit-report.sh` on the file. A relative `--results-directory TestResults` puts it in the
-project's own `TestResults/`, on Windows and under WSL alike. CI does both on every step of the two headless
+project's own `TestResults/` when run through `scripts/test.ps1` or `test-linux.sh`, on Windows and under WSL
+alike. A bare `dotnet test` resolves it from the current folder, so CI names `<project>/TestResults`. CI does both on every step of the two headless
 suites, `HexIDE.Integration.Tests` and `HexIDE.Runtime.Integration.Tests`. The cause measured was
 Avalonia.Headless 12.0.2 starting each test on whatever context the dispatcher thread was left holding,
 fixed by moving to 12.0.4. **Keep the headless packages at Avalonia's version.** `HeadlessTestContextTests`
@@ -343,8 +343,8 @@ to fall short of.
 
 **A hung headless run ends with a report naming what was running**
 ([#2530](https://github.com/hexide-io/HexIDE/issues/2530)). Every step of the two headless suites passes
-`--hangdump --hangdump-type Heap` (`Microsoft.Testing.Extensions.HangDump`, kept at the Microsoft.Testing.Platform
-version xunit.v3 brings) with a timeout well above the suite's length: 20 minutes for `HexIDE.Integration.Tests`,
+`--hangdump --hangdump-type Heap` (`Microsoft.Testing.Extensions.HangDump`, pinned with Microsoft.Testing.Platform
+at 2.5.3) with a timeout well above the suite's length: 20 minutes for `HexIDE.Integration.Tests`,
 which takes 11 to 13 minutes on macOS, and 10 for `HexIDE.Runtime.Integration.Tests`, which takes about one. The
 results directory then holds a `*_hang.log` listing each
 test still running and how long it had run, beside a heap dump with managed stacks
@@ -798,6 +798,12 @@ It never licenses approximating a **result**. A wrong answer that runs is worse 
 is the whole of `docs/serialization-outcomes.md`, and it applies here identically. Late error: acceptable.
 Missing error on a path never taken: acceptable, and documented. Wrong value: never.
 
+**One recorded exception** (Jen, 2026-11-17, Team Desk card `q-2524-ddb-precision`): `DDB`, `IRR` and `MIRR` may
+run with the closest evaluation model found, although no model tried reproduces every measured row bit for bit
+(#2524, #2525). Each may differ from VB6 in its last few printed digits at most; the difference must be written down
+in `docs/MISSING_LANGUAGE.md` and the precision notes, and a model that matches every row replaces it. The exception
+covers those three functions only. Any other result that knowingly differs needs its own explicit decision.
+
 **Three limits, not one — do not conflate them.** The CST/AST line is only one of the things that bounds
 this interpreter, and filing everything under it is how `interpreter-gaps.md` came to have nine deferrals
 sitting in its "Walled off (by design)" section, `GoSub` and `Implements` justified identically when
@@ -888,7 +894,7 @@ it's a mitigation.**
 - **Avalonia 12 and Dock 12** — the project is on Avalonia 12. The exact versions live only in `Directory.Packages.props`; read them there rather than from this file. `Classic.Avalonia.Theme 12.0.1-beta1` is kept as a **controls-only** dependency (provides `ClassicBorderDecorator`, `ClassicBorderStyle`). **Do not pin it back to 11.3.0.3**: that build was compiled against Avalonia 11, so `ClassicBorderDecorator.DrawRadioButtonBorder` called a `StreamGeometryContext.ArcTo` overload Avalonia 12 replaced, and **every VB6 option button killed the process on render** (`MissingMethodException`, thrown on the render thread — uncatchable, and nothing reaches the Serilog log; the stack only exists in the Windows Application event log). It is a prerelease because it is the only Avalonia-12 build published. `<ClassicTheme />` remains **NOT loaded** and this change does not re-open that question — do not add it back. The `Classic.Avalonia.Theme.Dock`, `.ColorPicker`, and `.DataGrid` sub-packages have been removed. `Avalonia.Themes.Simple`, at Avalonia's version, is the base theme (`<SimpleTheme />` in App.axaml).
 - **`Classic.CommonControls.Avalonia 12.0.1-beta1` controls** (`ToolBar`, `ToolBarButton`, `RebarHandle`, `ListView`, `ListViewItem`) are **NOT used** — the `TypeLoadException: PseudolassesExtensions` applied to the 11.x build, but they stay unused by design (removing VB6 chrome is intended, not incidental). Use standard Avalonia `StackPanel`/`Button`/`ToggleButton`/`ListBox` instead. The version follows `Classic.Avalonia.Theme` transitively; no project references it directly. `SystemColors` static resource keys from that assembly are still used for color lookups and do not crash.
 - **Anything compiled against Avalonia 11 fails only at render time.** That whole class of bug builds cleanly, passes view-model tests, and then kills the process the first time the control is painted. `HexIDE.Integration.Tests/Controls/ClassicRenderTests.cs` is the guard — it renders the affected controls for real under Skia (`UseHeadlessDrawing = false`) and asserts a frame came back. Add a case there before trusting any new `Classic.*` surface.
-- **`Classic.CommonControls.Dialogs` is fully removed** — `MessageBoxResult`, `MessageBoxButtons`, `MessageBoxIcon` are now in `HexIDE.Core/IDE/MessageBoxEnums.cs` (namespace `HexIDE.IDE`). `FontDialogResult`/`AboutDialogOptions` are in `HexIDE/IDE/`. Program-only dialog controls (`MessageBox`, `InputBox`) are in `HexIDE.Runtime/Dialogs/`; the IDE owns its prompt pair in `HexIDE/Dialogs/`. `AboutDialog`/`FontDialog` views and their ViewModels are in `HexIDE/Forms/Views/` and `HexIDE/Forms/ViewModels/`. `WindowManager` routes all paths (SingleView + desktop) through these managed controls.
+- **`Classic.CommonControls.Dialogs` is fully removed** — `MessageBoxResult`, `MessageBoxButtons`, `MessageBoxIcon` are now in `HexIDE.Core/IDE/MessageBoxEnums.cs` (namespace `HexIDE.IDE`). `FontDialogResult`/`AboutDialogOptions` are in `HexIDE/IDE/`. Program-only dialog controls (`MessageBox`, `InputBox`) are in `HexIDE.Runtime/Dialogs/`; the IDE owns its prompt pair in `HexIDE/Dialogs/`. Both MessageBoxes use `MessageBoxClosePolicy`, in Core beside the button enums. `AboutDialog`/`FontDialog` views and their ViewModels are in `HexIDE/Forms/Views/` and `HexIDE/Forms/ViewModels/`. `WindowManager` routes all paths (SingleView + desktop) through these managed controls.
 - **Native interop uses `LibraryImport`** (#608). `HexIDE`, `HexIDE.Desktop` and `HexIDE.Runtime`
   allow unsafe compilation for generated marshalling only; handwritten unsafe code in these projects
   is forbidden by `NativeInteropTests`. Strings and Boolean values must declare their native marshalling.
@@ -1073,11 +1079,10 @@ widening visibility to `public` just for a test. When a new test project needs r
   xUnit restores test-body execution contexts before the exit hook, so the regression tests invoke the
   hook while their deliberate leak is still active; setup leaks that survive to the hook fail the test.
 - **Avalonia 12 breaking changes** (already migrated, for reference): `GotFocusEventArgs` → `FocusChangedEventArgs`; `CaptionButtons` (chrome control) removed — replaced with custom `MDICaptionButtons : TemplatedControl`; `GetVisualRoot()` → `TopLevel.GetTopLevel(this)`; `RenderOptions.SetTextRenderingMode` → `TextOptions.SetTextRenderingMode`; `RenderOptions.TextRenderingMode="Alias"` in AXAML → `TextOptions.TextRenderingMode="Alias"`; `<CompiledBinding Path="X" />` inside `MultiBinding` → `<Binding Path="X" />`.
-- **Test frameworks are mid-migration** ([#297](https://github.com/hexide-io/HexIDE/issues/297)).
-  All six test projects are on **xunit v3** and the **MTP** runner — the VSTest/MTP split is closed.
-  `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstudio` and `coverlet.collector` are gone from all of
-  them; a v3 project under MTP needs `<OutputType>Exe</OutputType>` and
-  `<TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>` and nothing else. (While
+- **All six test projects are on xunit v3 through `xunit.v3.mtp-v2`, on Microsoft.Testing.Platform 2.5.3,**
+  the SDK's native runner chosen in `global.json` ([#297](https://github.com/hexide-io/HexIDE/issues/297),
+  [#2008](https://github.com/hexide-io/HexIDE/issues/2008)). A project needs `<OutputType>Exe</OutputType>`
+  and nothing else. (While
   `Microsoft.NET.Test.Sdk` was still present it supplied the executable output itself, so the explicit
   `OutputType` only became necessary when that package was removed.)
 - **A custom `FactAttribute` must never throw from its constructor.** xunit v2 reported that as a test
@@ -1086,15 +1091,13 @@ widening visibility to `public` just for a test. When a new test project needs r
   with servers absent the suite went green at 978 instead of red, fourteen tests simply not there.
   Enforcement now lives in `RequiredServersTests` as ordinary `[Fact]`s, which are discovered whatever
   the environment. Put availability checks in a test, not in an attribute.
-- **`xunit.v3` is capped at `[3.2.2,4.0.0)` and that is deliberate.** 4.0.0 (still "Core Framework v3" — the
+- **`xunit.v3.mtp-v2` is capped at `[3.2.2,4.0.0)` and that is deliberate.** 4.0.0 (still "Core Framework v3" — the
   package version and the framework generation are decoupled) breaks `Avalonia.Headless.XUnit` with a
   `MissingMethodException` at test **discovery**: no build error, no restore warning. The package's own
   dependency is an open `>= 3.2.2`, so a routine bump resolves it happily. See the comment in
   `Directory.Packages.props`.
-- **`--filter` is ignored with warning MTP0001. All six projects are on MTP.** Passing VSTest's
-  `--filter "FullyQualifiedName~Foo"` warns that VSTestTestCaseFilter is ignored and runs **every** test
-  in the project, so a run you believe was scoped to one class was actually the whole suite. Measured:
-  153 tests instead of 27.
+- **VSTest's `--filter` is refused, with exit code 5.** Before #2008 it was ignored with warning MTP0001
+  and the whole suite ran: 153 tests instead of 27.
   — Use `-- --filter-class "*Name"`, `-- --filter-method "*Name"`, or `-- --filter-query "/*/*/Class/*"`.
   The `--` matters: everything after it goes to the test executable rather than to `dotnet test`.
   Use `scripts/test.ps1` for local runs: full suites get the CI floor, filtered runs get one,

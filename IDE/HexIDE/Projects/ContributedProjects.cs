@@ -269,7 +269,7 @@ public sealed partial class ContributedProjects
     /// The files HexIDE's own readers read, which a type may take only if it's the reader reserving them. Known from the
     /// start, so a type registered before VB6's is refused its files as one registered after it is (#3411 slice 10b).
     /// </summary>
-    internal IReadOnlyList<ProjectFileReservation> Reserved { get; init; } = [Vb6ProjectType.Reservation, ArchiveProjectService.Reservation];
+    internal IReadOnlyList<ProjectFileReservation> Reserved { get; init; } = [Vb6ProjectType.Reservation, ArchiveProjectService.Reservation, ArchiveProjectService.OfficeReservation];
 
     private readonly object _gate = new();
     private readonly List<ContributedProjectType> _types = [];
@@ -294,6 +294,32 @@ public sealed partial class ContributedProjects
             lock (_gate) return [.. _types];
         }
     }
+
+    // The formats registered for the kinds of member a project holds (#3411 slice 10b-3).
+    private readonly List<(IReadOnlySet<ModuleKind> Modules, bool Forms, IProjectFileFormat Format)> memberFormats = [];
+
+    /// <summary>
+    /// Adds the format that reads members of the kinds named: modules of <paramref name="modules"/>, and forms where
+    /// <paramref name="forms"/> says so. Only HexIDE's own types may, as only they may carry a whole format.
+    /// </summary>
+    /// <returns>What takes it out again.</returns>
+    internal IDisposable RegisterMembers(IReadOnlySet<ModuleKind> modules, bool forms, IProjectFileFormat format, AddinOrigin origin)
+    {
+        ArgumentNullException.ThrowIfNull(format);
+        if (!origin.IsFirstParty)
+            throw new InvalidOperationException($"{origin.Title} registers a format for project members, which only HexIDE's own project types may.");
+        var entry = (Modules: modules, Forms: forms, Format: format);
+        memberFormats.Add(entry);
+        return new HexIDE.Utils.ActionDisposable(() => memberFormats.Remove(entry));
+    }
+
+    /// <summary>
+    /// The format that reads every member of <paramref name="project"/> by its kind, for a project whose own type gives no
+    /// format: an add-in type that opens its projects itself. An <c>.rdproj</c> of VB6 modules, classes and forms, a VBA
+    /// document module among them, gets VB6's. Null when no one registered format reads all its members.
+    /// </summary>
+    internal IProjectFileFormat? FormatForMembers(ProjectDefinition project) => memberFormats.FirstOrDefault(entry =>
+        (entry.Forms || project.Forms.Count == 0) && project.Modules.All(module => entry.Modules.Contains(module.Kind))).Format;
 
     /// <summary>Adds an add-in's project type.</summary>
     /// <returns>What takes it out again.</returns>
@@ -364,6 +390,24 @@ public sealed partial class ContributedProjects
             return _types.FirstOrDefault(known => known.Type.FileNames.Any(name => Matches(name, fileName)));
     }
 
+    /// <summary>
+    /// The files Open Project offers, in its order: the projects and groups of each type that reads its projects whole, VB6's
+    /// first, then the archives', then the projects of each type an add-in reads (#3411 slice 10b).
+    /// </summary>
+    public IReadOnlyList<string> OpenablePatterns
+    {
+        get
+        {
+            var types = Types;
+            return
+            [
+                .. types.Where(t => t.Type.Format is not null).SelectMany(t => t.Type.FileNames.Concat(t.Type.GroupFileNames)),
+                .. ArchiveProjectService.FilePatterns,
+                .. types.Where(t => t.Type.Format is null).SelectMany(t => t.Type.FileNames),
+            ];
+        }
+    }
+
     /// <summary>The type whose format reads this project group file, or null when none does.</summary>
     public ContributedProjectType? FindGroup(string path)
     {
@@ -432,6 +476,9 @@ public sealed partial class ContributedProjects
                 problems.Add($"{member.Path}: {ex.Message}");
             }
         }
+        // Its members are read and written by the format registered for their kind: VB6's, for an .rdproj of VB6 files
+        // (#3411 slice 10b-3). Its forms and its file stay its type's.
+        project.Format = FormatForMembers(project);
         return (project, problems);
     }
 
@@ -472,12 +519,16 @@ public sealed partial class ContributedProjects
             throw new MemberNameTakenException(string.Format(localization.GetString("Str.ContributedProject.NameTaken"),
                 Path.GetFileName(member.Path), name, project.Name));
         fileRead?.Invoke(member.Path, bytes);
-        var (header, body) = ModuleFileFormat.SplitHeader(read.Text, kind);
+        var designerAsModule = ModuleFileFormat.IsDesignerFile(read.Text);
+        var (header, body) = designerAsModule ? ("", read.Text) : ModuleFileFormat.SplitHeader(read.Text, kind);
         var module = new ModuleDefinition(project, name, kind)
         {
             AbsolutePath = member.Path,
             TextEncoding = read.Encoding,
         };
+        if (designerAsModule)
+            module.MarkUnfaithfulToSave(UnfaithfulSaveCause.DesignerFileAsModule,
+                $"{project.ContributorTitle} listed '{member.Path}' as a code module, but it is a designer file.");
         module.RecordOriginalHeader(header);
         module.UpdateCode(body);
         project.AddModule(module);

@@ -60,8 +60,7 @@ public class SourceEncodingPersistenceTests : IDisposable
         localization.GetString("Str.Dialog.SourceEncoding.ReadByteForByte").Returns(ReadByteForByteText);
         localization.GetString("Str.Dialog.SourceEncoding.ReadByteForByte.Many").Returns(ReadByteForByteManyText);
 
-        return new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
-            () => throw new InvalidOperationException("new-project dialog must not be reached"),
+        return new ProjectService(            () => throw new InvalidOperationException("new-project dialog must not be reached"),
             windowManager,
             eventBus,
             projectManager,
@@ -70,8 +69,7 @@ public class SourceEncodingPersistenceTests : IDisposable
             sidecar,
             new FileBaselineStore(),
             localization,
-            Substitute.For<IHeaderRefresher>(),
-            new Vb6ProjectFileFormat(), new ComponentRegistry());
+            Substitute.For<IHeaderRefresher>(), new ComponentRegistry());
     }
 
     private string WriteProject()
@@ -163,6 +161,9 @@ public class SourceEncodingPersistenceTests : IDisposable
     [Fact]
     public async Task Making_twice_to_the_same_path_replaces_the_archive_with_the_second_build()
     {
+        // Agree to replacement so this test reaches the behavior it checks (#4505).
+        windowManager.MessageBox(Arg.Any<string>(), buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Warning,
+            layout: MessageBoxLayout.SecondButtonDefault).Returns(MessageBoxResult.Yes);
         var svc = MakeService();
         await svc.OpenProject(WriteProject());
         var project = loaded.Single();

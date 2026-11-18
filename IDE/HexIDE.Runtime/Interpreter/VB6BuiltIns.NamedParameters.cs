@@ -15,9 +15,13 @@ public partial class VB6BuiltIns
     /// other intrinsic leaving out a required one is "Argument not optional".</param>
     internal sealed record IntrinsicParameters(string[] Names, int Required, bool OmittedIsSyntaxError = false);
 
-    // #4145 measured named-call signatures; leave unmeasured positional count errors to each intrinsic.
+    // #4145 measured named-call signatures (DDB with #2524); leave unmeasured positional count errors to each intrinsic.
     private static readonly HashSet<string> NamedOnlySignatures = new(StringComparer.OrdinalIgnoreCase)
-    { "AscB", "ChrB", "CurDir", "LeftB", "RightB", "MidB", "Dir", "FileAttr", "FileDateTime", "FileLen", "GetAttr", "FormatCurrency", "FormatNumber", "FormatPercent", "FormatDateTime", "Partition", "SLN", "SYD", "FV", "PV", "Pmt", "IPmt", "PPmt", "NPer", "Rate", "IRR", "MIRR", "NPV", "StrPtr", "VarPtr", "ObjPtr" };
+    { "AscB", "ChrB", "CurDir", "LeftB", "RightB", "MidB", "Dir", "FileAttr", "FileDateTime", "FileLen", "GetAttr", "FormatCurrency", "FormatNumber", "FormatPercent", "FormatDateTime", "Partition", "DDB", "SLN", "SYD", "FV", "PV", "Pmt", "IPmt", "PPmt", "NPer", "Rate", "IRR", "MIRR", "NPV", "StrPtr", "VarPtr", "ObjPtr" };
+
+    // #4302: VBA7's LongLong conversions. Their named calls aren't measured (#1548), so they refuse rather than guess.
+    private static readonly HashSet<string> UnmeasuredNamedLongLongConversions = new(StringComparer.OrdinalIgnoreCase)
+    { "CLngLng", "CLngPtr" };
 
     private static readonly Dictionary<string, IntrinsicParameters> NamedParameterTable = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -38,6 +42,8 @@ public partial class VB6BuiltIns
         ["FormatPercent"] = new(["Expression", "NumDigitsAfterDecimal", "IncludeLeadingDigit", "UseParensForNegativeNumbers", "GroupDigits"], 1),
         ["FormatDateTime"] = new(["Expression", "NamedFormat"], 1),
         ["Partition"] = new(["Number", "Start", "Stop", "Interval"], 4),
+        // Measured with #2524's review: Factor is the optional fifth (oracle, "DDB's names").
+        ["DDB"] = new(["Cost", "Salvage", "Life", "Period", "Factor"], 4),
         ["SLN"] = new(["Cost", "Salvage", "Life"], 3),
         ["SYD"] = new(["Cost", "Salvage", "Life", "Period"], 4),
         ["FV"] = new(["Rate", "NPer", "Pmt", "PV", "Due"], 3),
@@ -248,7 +254,7 @@ public partial class VB6BuiltIns
     /// </summary>
     internal static bool SaysHowItTakesNames(string name) =>
         NamedParameterTable.ContainsKey(name) || TakesNoNamedArguments.Contains(name) || NamedIsAParamArray.Contains(name)
-        || NoParameters.ContainsKey(name);
+        || NoParameters.ContainsKey(name) || UnmeasuredNamedLongLongConversions.Contains(name);
 
     /// <summary>
     /// An intrinsic's arguments as positions, named ones placed by name and evaluated in parameter order (#1465). With none
@@ -259,6 +265,8 @@ public partial class VB6BuiltIns
     {
         if (NamedArguments.Any(args))
         {
+            if (UnmeasuredNamedLongLongConversions.Contains(name))
+                throw new NotImplementedException($"Named arguments to {name} are unmeasured (#1548)");
             if (TakesNoNamedArguments.Contains(name))
                 throw new VBCompileErrorException("Syntax error");
             if (NoParameters.TryGetValue(name, out var noParameters))

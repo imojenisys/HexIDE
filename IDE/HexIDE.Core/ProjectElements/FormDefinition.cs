@@ -166,6 +166,9 @@ public partial class FormDefinition : INotifyPropertyChanged
         OwningModule = module;
     }
 
+    /// <summary>A recovered load error allows editing and Save As, but never overwriting the source (#4179).</summary>
+    public bool LoadedWithErrors { get; set; }
+
     public string? AbsolutePath
     {
         get => absolutePath;
@@ -392,6 +395,7 @@ public partial class FormDefinition : INotifyPropertyChanged
     /// </summary>
     public void AdoptFidelityState(FormDefinition fresh)
     {
+        LoadedWithErrors = fresh.LoadedWithErrors;
         UnfaithfulSaveCauses = fresh.UnfaithfulSaveCauses;
         UnfaithfulSaveReason = fresh.UnfaithfulSaveReason;
         MaxUnreproducibleNestingDepth = fresh.MaxUnreproducibleNestingDepth;
@@ -452,7 +456,8 @@ public partial class FormDefinition : INotifyPropertyChanged
     public void RecordLoadedCompanionBlobCount(int count) => LoadedCompanionBlobCount = count;
 
     /// <summary>
-    /// How many distinct companion offsets this form's designer file CITED when it was loaded.
+    /// How many distinct companion offsets this form's designer file CITED when it was loaded. Cleared after a
+    /// successful save without companion content, so the previous file's citations cannot claim an orphan at a new path.
     ///
     /// Distinct from <see cref="LoadedCompanionBlobCount"/> in the case that matters: a companion nothing
     /// cites is read by falling back to a flat walk, so it yields records while this stays zero. That is

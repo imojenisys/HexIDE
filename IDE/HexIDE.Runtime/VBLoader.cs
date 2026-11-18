@@ -26,7 +26,7 @@ namespace HexIDE.Runtime;
 public class VBLoader
 {
     /// <summary>
-    /// The icon a form with no Icon line runs with, where the host has one: the made program's runner gives its own. Null
+    /// The icon a form with no Icon line runs with: the runner and IDE give the neutral window icon (#4187). Null
     /// leaves Avalonia's, the executable's icon on Windows (#1594).
     /// </summary>
     public static Avalonia.Controls.WindowIcon? DefaultFormIcon { get; set; }
@@ -44,6 +44,8 @@ public class VBLoader
         VBProgram? program = null,
         VBWindowContext? windowContext = null)
     {
+        if (windowContext is not null)
+            windowContext.FormDefinition = element;
         var runtimeBlocks = element.Components.Where(c => c.BaseClass is FormComponentClass)
             .SelectMany(c => c.PreservedChildSubtrees)
             .Select(block => (block.Text, Component: (Components.InBox.ToolbarComponentClass.ReadForRuntime(block.Text)
@@ -87,7 +89,7 @@ public class VBLoader
         var arrayGroups = new Dictionary<string, ControlArrayGroup>(StringComparer.OrdinalIgnoreCase);
         foreach (var (nm, list) in componentsByName)
             if (list.Count > 1 || list.Any(c => TryParseControlArrayIndex(c, out _)))
-                arrayGroups[nm] = new ControlArrayGroup(nm);
+                arrayGroups[nm] = new ControlArrayGroup(nm) { Program = program };
 
         // What each block of the form became, for its Controls collection (#1060).
         var placed = new Dictionary<ComponentInstance, Control>();
@@ -318,6 +320,13 @@ public class VBLoader
                 if (control.Parent is Panel parent)
                     ControlStacking.PlaceOver(control, ControlStacking.IsWindowless(control), parent);
         var controls = new FormControls(fileOrder.OrderBy(AvaloniaInterop.UserControlMembers.Windowless), arrayGroups) { Form = form };
+        // #4371 / oracle PR #4376: the last holder in file order wins, independently for each role.
+        var defaultButton = fileOrder.OfType<VBCommandButton>().LastOrDefault(button => button.Default);
+        var cancelButton = fileOrder.OfType<VBCommandButton>().LastOrDefault(button => button.Cancel);
+        if (defaultButton is not null)
+            defaultButton.Default = true;
+        if (cancelButton is not null)
+            cancelButton.Cancel = true;
         foreach (var (block, control) in dialogs)
             if (control is VBUpDown upDown && RuntimeControlBlock(block, "MSComCtl2.UpDown") is { } saved)
                 upDown.LoadBuddy(saved.Properties, controls);
@@ -364,6 +373,8 @@ public class VBLoader
             foreach (var control in controls.All)
                 AvaloniaInterop.UserControlMembers.Align(control);
         };
+        if (form?.FormWindow is Window window)
+            AvaloniaInterop.RuntimeScale.Initialize(window, canvas, element);
         return root;
     }
 
@@ -749,24 +760,13 @@ public class VBLoader
         _ => (1200, 480),
     };
 
-    // An added ListBox's row, in pixels, by the font it takes (measured, fourteen fonts): its height is 60 twips and as many
-    // rows as fit in 480, at least one.
-    private static readonly (string Font, double Size, int Row)[] AddedListBoxRows =
-    [
-        ("MS Sans Serif", 8.25, 13), ("MS Sans Serif", 9.75, 16), ("MS Sans Serif", 12, 20), ("MS Sans Serif", 13.5, 24),
-        ("Microsoft Sans Serif", 8.25, 13), ("Tahoma", 8.25, 13), ("Tahoma", 9.75, 16), ("Verdana", 8.25, 13),
-        ("Arial", 8.25, 14), ("Arial", 9.75, 16), ("Arial", 12, 18), ("Times New Roman", 12, 19), ("Courier New", 9.75, 16),
-        ("Segoe UI", 9, 15),
-    ];
-
     private static double AddedListBoxHeight(VBFont? font)
     {
-        foreach (var (name, size, row) in AddedListBoxRows)
-            if (font is { } f && string.Equals(f.FontFamilyName, name, StringComparison.OrdinalIgnoreCase) && Math.Abs(f.Size - size) < 0.01)
-            {
-                double rowTwips = row * VBScaleModeExtensions.PixelToTwips;
-                return 60 + Math.Max(1, Math.Floor(420 / rowTwips)) * rowTwips;
-            }
+        if (ListBoxRowHeights.Find(font) is { } row)
+        {
+            double rowTwips = row * VBScaleModeExtensions.PixelToTwips;
+            return 60 + Math.Max(1, Math.Floor(420 / rowTwips)) * rowTwips;
+        }
         throw new NotImplementedException(
             $"Controls.Add of a ListBox in {font?.FontFamilyName} {font?.Size} is not implemented: its height follows its font, " +
             "and was measured for fourteen fonts, not this one (#1556)");
@@ -822,6 +822,8 @@ public class VBLoader
         // none, so its children stay in twips.
         if (componentClass.TryGetChildHost(control, out var ownHost) && DeclaredScaleMode(component) is { } scaleMode)
             VBProps.SetScaleMode(ownHost, scaleMode);
+        if (control is VBPictureBox picture)
+            AvaloniaInterop.RuntimeScale.Initialize(picture, component);
         // Where a 3-D bordered TextBox's or ListBox's client area starts, which is where its mouse X and Y count from: 2
         // pixels in, and at the edge when it is flat or has no border (measured with GetClientRect, #974).
         if (componentClass is TextBoxComponentClass or ListBoxComponentClass)

@@ -14,6 +14,7 @@ public partial class BasicInterpreter
             await VB6BuiltIns.ArrangeIntrinsicArguments("CallByName", callArgs); // Measured compile error, #4145.
         foreach (var arg in callArgs)
         {
+            arg.Value.RefuseOddBytes("CallByName");
             if (arg.Omitted)
                 throw new NotImplementedException("CallByName omitted arguments are not implemented (#2519)");
         }
@@ -60,6 +61,7 @@ public partial class BasicInterpreter
             }
             else if (obj.ClassDef.PrePass.PublicVariables.Contains(name))
             {
+                NoteMemberAccess(obj, name);
                 var (_, field) = await ReadVariable(obj.InstanceEnv, name);
                 if (kind is 2 or 3 && memberArgs.Count == 0 && VbNumeric.IsDeclarableScalar(field.Type))
                     return field;

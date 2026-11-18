@@ -24,7 +24,7 @@ public abstract class InBoxComponentClass : ComponentBaseClass
 
     /// <summary>The in-box controls HexIDE implements (#1082), which the toolbox offers from each library declaring one.</summary>
     public static IReadOnlyList<InBoxComponentClass> Implemented =>
-        [ProgressBarComponentClass.Instance, ListViewComponentClass.Instance, FlexGridComponentClass.Instance, StatusBarComponentClass.Instance, ImageListComponentClass.Instance, SSTabComponentClass.Instance,
+        [ProgressBarComponentClass.Instance, ListViewComponentClass.Instance, FlexGridComponentClass.Instance, SliderComponentClass.Instance, StatusBarComponentClass.Instance, ImageListComponentClass.Instance, SSTabComponentClass.Instance,
             CommonDialogComponentClass.Instance, RichTextBoxComponentClass.Instance, UpDownComponentClass.Instance, FlatScrollBarComponentClass.Instance];
 
     /// <summary>Every in-box control with a component model, including those not yet offered in the toolbox.</summary>
@@ -72,9 +72,12 @@ public abstract class InBoxComponentClass : ComponentBaseClass
     /// <summary>Whether a carried own scalar line differs from its measured default.</summary>
     public virtual bool WriteCarriedProperty(ComponentInstance.UnknownRawProperty property) => true;
 
-    /// <summary>The type name <paramref name="instance"/> is written under: the one it was read under, or this class's.</summary>
-    public string TypeNameOf(ComponentInstance instance) =>
-        instance.GetPropertyOrDefault(LoadedTypeNameProperty) ?? VBTypeName;
+    /// <summary>The type name in the loaded library's own spelling (#824), or this class's for a new instance.</summary>
+    public string TypeNameOf(ComponentInstance instance)
+    {
+        var loaded = instance.GetPropertyOrDefault(LoadedTypeNameProperty);
+        return loaded is null ? VBTypeName : ControlLibraries.ForTypeName(loaded)?.TypeName(ControlClassName) ?? loaded;
+    }
 
     /// <summary>The library <paramref name="instance"/> is in, by the type name it is written under.</summary>
     public RuntimeLibrary LibraryOf(ComponentInstance instance) =>

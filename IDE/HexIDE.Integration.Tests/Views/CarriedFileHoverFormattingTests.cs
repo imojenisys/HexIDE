@@ -90,6 +90,44 @@ public sealed class CarriedFileHoverFormattingTests : IDisposable
         await client.Received(1).RequestHoverAsync(Arg.Any<string>(), new Position(0, 0), Arg.Any<CancellationToken>());
     }
 
+    [AvaloniaTheory]
+    [InlineData(1)]
+    [InlineData(1.5)]
+    public async Task WaylandHoverAnchorsToWord(double scaling)
+    {
+        HexIDE.Automation.NativeWayland.ForTest = _ => true;
+        try
+        {
+            var editor = Show();
+            editor.Text = "first alpha last";
+            var host = window!;
+            host.SetRenderScaling(scaling);
+            Dispatcher.UIThread.RunJobs();
+            var view = editor.TextArea.TextView;
+            var middle = view.GetVisualPosition(new TextViewPosition(1, 9), VisualYPosition.TextMiddle) - view.ScrollOffset;
+            host.MouseMove(view.TranslatePoint(middle, host)!.Value);
+            await Until(() => ToolTip.GetIsOpen(editor));
+            ToolTip.GetPlacement(editor).Should().Be(Avalonia.Controls.PlacementMode.Custom);
+            var callback = ToolTip.GetCustomPopupPlacementCallback(editor);
+            callback.Should().NotBeNull();
+            ToolTip.SetIsOpen(editor, false);
+            Rect? actual = null;
+            ToolTip.SetCustomPopupPlacementCallback(editor, placement =>
+            {
+                callback!(placement);
+                actual = placement.AnchorRectangle;
+                placement.Anchor.Should().Be(Avalonia.Controls.Primitives.PopupPositioning.PopupAnchor.BottomLeft);
+                placement.Gravity.Should().Be(Avalonia.Controls.Primitives.PopupPositioning.PopupGravity.BottomRight);
+            });
+            ToolTip.SetIsOpen(editor, true);
+            Dispatcher.UIThread.RunJobs();
+            var start = view.GetVisualPosition(new TextViewPosition(1, 7), VisualYPosition.LineTop) - view.ScrollOffset;
+            var end = view.GetVisualPosition(new TextViewPosition(1, 12), VisualYPosition.LineBottom) - view.ScrollOffset;
+            actual.Should().Be(new Rect(view.TranslatePoint(start, host)!.Value, view.TranslatePoint(end, host)!.Value));
+        }
+        finally { HexIDE.Automation.NativeWayland.ForTest = null; }
+    }
+
     [AvaloniaFact]
     public async Task NoHoverProviderSendsNoRequest()
     {
@@ -222,13 +260,13 @@ public sealed class CarriedFileHoverFormattingTests : IDisposable
     {
         var server = new ScriptedServer(advertised);
         var (local, remote) = FullDuplexStream.CreatePair();
-        using var rpc = new JsonRpc(new HeaderDelimitedMessageHandler(remote, remote, new SystemTextJsonFormatter()), server);
+        using var rpc = new JsonRpc(new LspMessageHandler(remote, remote, new SystemTextJsonFormatter()), server);
         rpc.StartListening();
         var transport = Substitute.For<ILspTransport>();
         transport.IsAlive.Returns(true);
         transport.LeaveServerRunning.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
-            .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(new HeaderDelimitedMessageHandler(local, local, c.Arg<IJsonRpcMessageFormatter>())));
+            .Returns(c => Task.FromResult<IJsonRpcMessageHandler?>(new LspMessageHandler(local, local, c.Arg<IJsonRpcMessageFormatter>())));
         await using var actualClient = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "cpp");
         await actualClient.StartAsync(TestContext.Current.CancellationToken);
         var editor = Show(actualClient);

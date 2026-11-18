@@ -12,6 +12,34 @@ later without the editor noticing.
 
 ## Requirements
 
+### Requirement: Contributed server settings belong to the user's layer
+A contributed server registration SHALL resolve settings per id: the user's whole object, otherwise a
+profile default, otherwise the add-in entry's own `settings`, otherwise none. Profile files SHALL stay untouched. `workspace/configuration` SHALL
+use the existing settings reader, including dotted sections and null for missing paths.
+
+#### Scenario: A user object overrides a profile default
+- **WHEN** a contributed server has both a profile default and a user object
+- **THEN** configuration requests resolve the whole user object without deep merging
+
+### Requirement: An add-in changes only its own server's settings
+The connection SHALL expose `GetSettings()` and `SetSettingsAsync(JsonElement, CancellationToken)` for
+its own id only. Writes SHALL require an object, persist to the user's settings, and use the existing
+registry update path. A write after removal SHALL throw `ObjectDisposedException` without saving.
+
+#### Scenario: An add-in changes its server's settings
+- **WHEN** an add-in writes a changed object through its connection
+- **THEN** only its server receives workspace/didChangeConfiguration
+- **AND** subsequent configuration requests resolve the new object
+
+### Requirement: Options exposes and resets contributed server settings
+Options SHALL show each add-in's own servers by display name, read-only indented JSON, and localized
+(default) or (none) labels. Reset SHALL be enabled only with a user object and SHALL remove it immediately,
+notifying the running server with the resolved fallback or an empty object.
+
+#### Scenario: A user resets the server's settings
+- **WHEN** the user resets a server in the add-in's Options page
+- **THEN** the profile's default or absent settings are restored and the running server is notified
+
 ### Requirement: Diagnostic project attribution in groups
 
 With multiple loaded projects, the Diagnostics tool window SHALL show each diagnostic's
@@ -547,7 +575,12 @@ moves from the editor onto its links.
 ### Requirement: Servers can request the editor tab size
 The client SHALL declare `workspace.configuration` support and SHALL answer `workspace/configuration`
 with one result per item in request order. Section `editor.tabSize` SHALL return the current editor
-Tab Width as a number regardless of scope URI; unknown or absent sections SHALL return null.
+Tab Width as a number regardless of scope URI. Other sections SHALL resolve by dotted path in the
+entry's optional raw JSON `settings` object. Empty or absent sections SHALL return the whole object;
+missing paths SHALL return null. Scope URIs SHALL be accepted and ignored.
+The entry and add-in registration SHALL carry these settings. Saving entries SHALL reload the file and apply
+changed settings to that server only and send `workspace/didChangeConfiguration` with the object.
+Settings SHALL be retained for a server that has not started yet or restarts.
 The client SHALL notify running servers with `workspace/didChangeConfiguration` and empty settings
 when Tab Width changes.
 
@@ -937,7 +970,11 @@ backend under any licence can sit behind the seam without affecting the IDE's ow
 
 ### Requirement: The language client SHALL start and stop with the desktop session
 The client SHALL be started when the desktop IDE starts and stopped when it shuts down, requesting an
-orderly server shutdown before terminating the process. The shutdown request SHALL have a two-second
+orderly server shutdown before terminating the process. Desktop shutdown SHALL first confirm unsaved work,
+then cancel shutdown while awaiting client stop for at most seven seconds, dispose the file watcher before
+the stop, flush logging afterwards, and retry shutdown. Repeated requests during the stop SHALL remain
+cancelled. A failed or timed-out stop SHALL be logged and SHALL NOT prevent exit. A forced close SHALL
+skip the save prompt but SHALL still await the bounded stop. The shutdown request SHALL have a two-second
 deadline, and the client SHALL attempt `exit` whether shutdown answers, fails or times out, but only
 after `initialize` has been answered. An externally owned pipe server SHALL receive neither message;
 teardown SHALL close only its connection. On Windows, a launched pipe server SHALL get two seconds to
@@ -950,6 +987,12 @@ The process exit code SHALL remain observable in the conversation during client 
 except for a timeout termination after a successful `shutdown` answer and a sent `exit`: that end SHALL
 be recorded once as a stop with the elapsed grace period, without a fault or killed-process exit code.
 Natural non-zero exits and kills without a successful shutdown SHALL retain their exit code and fault.
+After a successfully sent `exit`, an owned stdio or TCP connection SHALL end its send side and wait
+at most one second for server output to end before disposing RPC, then disposing the transport.
+The client SHALL skip this wait if sending `exit` times out, half-close is unsupported, or the server
+is externally owned. Each byte-stream connection SHALL use its own read-buffer pool, whose owners
+return each array at most once even when read-loop completion races handler disposal (#4484).
+The registry SHALL stop its servers concurrently, so their stop waits overlap.
 After sending `shutdown`, the client SHALL send no request or notification but `exit` on that connection.
 Pending workspace-folder updates, project imports and cancellations SHALL be dropped for the old
 connection rather than queued for it. Replies to the server's own requests SHALL still be sent. When a connection ends, its unanswered requests SHALL be recorded as Abandoned.
@@ -982,6 +1025,20 @@ the group are outside this guarantee.
 An orphaned server process outliving the IDE would hold file handles and consume memory with nothing to
 serve. Asking first and terminating second means a well-behaved server exits cleanly while a wedged one
 still goes away.
+
+#### Scenario: Desktop exit waits for graceful stop
+- **WHEN** the desktop exits after save confirmation or a forced close
+- **THEN** the first shutdown request is cancelled while the client stops
+- **AND** a server that answers within the exit bound receives `shutdown` and `exit` before the retry
+- **AND** logging is flushed before the retry
+
+#### Scenario: Desktop exit outlasts the stop bound
+- **WHEN** client stop has not completed within seven seconds
+- **THEN** the failure is logged, logging is flushed, and desktop shutdown is retried
+
+#### Scenario: Save-on-exit is cancelled
+- **WHEN** the user cancels the save-on-exit prompt
+- **THEN** the file watcher and language servers remain running
 
 #### Scenario: First save races the project-change debounce
 - **WHEN** the first save moves the workspace root while the old server is awaiting shutdown
@@ -1268,7 +1325,8 @@ independently of other servers.
 The client SHALL route offered actions and lenses to their producing connection, sending declared commands
 to the server before considering an add-in claim. Otherwise a claimed handler SHALL run on the thread pool
 with the original arguments and cancellation on contribution removal or client stop. Core client commands
-SHALL retain precedence. Handler failures SHALL be logged in full but displayed with their message only.
+SHALL retain precedence except for rdcore.rename and rdcore.showReferences when the offering connection
+claims them (#4259). Handler failures SHALL be logged in full but displayed with their message only.
 
 A connection SHALL expose checked edit application only while its claimed handler task remains incomplete.
 It SHALL share the server edit applier and command-window tracking, using the snapshot at handler start
@@ -2450,14 +2508,20 @@ names under a dedicated severity header. Headers SHALL fit their localized capti
 ### Requirement: Inlay hints SHALL render without changing caret columns
 
 The client SHALL declare inlay-hint support and request `textDocument/inlayHint` only from matching servers
-advertising `inlayHintProvider`. It SHALL render string or label-part labels after the corresponding line,
-without changing document text or caret columns. An Editor General option SHALL hide hints and suppress
-requests. Edits SHALL clear stale hints and prevent obsolete replies from restoring them.
+advertising `inlayHintProvider`. It SHALL render string or label-part labels inline at their reported
+positions, honouring left and right padding, without changing document text or adding caret stops. It SHALL
+use only the highest-priority claimant returning nonempty hints, falling back on empty answers. An Editor
+General option SHALL hide hints and suppress requests. Edits SHALL clear stale hints and prevent obsolete replies from restoring them.
 
 #### Scenario: An offering server returns a label
 - **WHEN** a server offering inlay hints returns a label for an open document
-- **THEN** the label appears after its line in the read-only text colour
+- **THEN** the label appears at its reported position in the read-only text colour
 - **AND** the document, undo history and caret columns are unchanged
+
+#### Scenario: Several claimants offer hints
+- **WHEN** matching servers return nonempty hints
+- **THEN** only the highest-priority answer is shown
+- **AND** an empty answer falls back to the next claimant
 
 #### Scenario: Hints are disabled or unsupported
 - **WHEN** the user disables inlay hints or no matching server offers them
@@ -3241,3 +3305,32 @@ and cancel its predecessor on the connection.
 - **WHEN** a document closes on a connection offering workspace diagnostics
 - **THEN** its last findings remain until a workspace answer replaces them
 - **AND** a connection without that capability retains its existing close-clearing behaviour
+### Requirement: Claimed commands can request shared code-window actions
+
+The host SHALL expose StartRenameAsync and ShowReferencesAsync only within a running claimed handler
+on that connection, marshalled to the UI thread through core's shared actions. Outside that window both
+SHALL throw InvalidOperationException and show nothing. An offering connection's claim SHALL precede
+core's rdcore.rename and rdcore.showReferences cases; editor.action.rename and
+editor.action.showReferences SHALL remain core's.
+
+#### Scenario: An add-in takes over a compatibility command
+- **GIVEN** a server's add-in claims rdcore.rename or rdcore.showReferences
+- **WHEN** the user runs that server's action or lens carrying the command
+- **THEN** the command routes through that connection and core's compatibility case does not run
+
+#### Scenario: A handler requests a rename in another document
+- **WHEN** a running claimed handler calls StartRenameAsync with an available document and valid position
+- **THEN** the document opens, the position is checked, the caret navigates, and the existing rename prompt or refusal is shown
+- **AND** the host returns true
+
+#### Scenario: A rename target is unavailable
+- **WHEN** a running claimed handler calls StartRenameAsync with an unavailable document or out-of-range position
+- **THEN** the host returns false without a rename prompt
+
+#### Scenario: A handler supplies reference locations
+- **WHEN** a running claimed handler calls ShowReferencesAsync
+- **THEN** the supplied locations populate Find References
+
+#### Scenario: A host call outlives its authorization
+- **WHEN** the add-in calls either action without a running claimed handler on its connection
+- **THEN** InvalidOperationException is thrown and no UI is shown

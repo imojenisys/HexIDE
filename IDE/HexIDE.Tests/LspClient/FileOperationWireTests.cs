@@ -55,7 +55,7 @@ public class FileOperationWireTests : IAsyncDisposable
         transport.IsAlive.Returns(true);
         transport.ConnectAsync(Arg.Any<IJsonRpcMessageFormatter>(), Arg.Any<CancellationToken>())
             .Returns(ci => Task.FromResult<IJsonRpcMessageHandler?>(
-                new HeaderDelimitedMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
+                new LspMessageHandler(clientSide, clientSide, ci.Arg<IJsonRpcMessageFormatter>())));
         _client = new VBLspClient(transport, Substitute.For<ILogger<VBLspClient>>(), "vb6");
         if (start) await _client.StartAsync();
         return _client;
@@ -75,13 +75,12 @@ public class FileOperationWireTests : IAsyncDisposable
                 AbsolutePath = directory // Replacing a directory fails on both Windows and Linux.
             };
             project.AddModule(module);
-            var service = new ProjectService(new HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionWriter(),
-                () => throw new InvalidOperationException("No dialog expected"),
+            var service = new ProjectService(                () => throw new InvalidOperationException("No dialog expected"),
                 Substitute.For<IWindowManager>(), Substitute.For<IEventBus>(),
                 Substitute.For<IProjectManager>(), Substitute.For<IRecentProjectsService>(),
                 Substitute.For<IReferenceLibraryService>(), Substitute.For<IUserSidecarService>(),
                 new FileBaselineStore(), Substitute.For<HexIDE.Localization.ILocalizationService>(),
-                Substitute.For<IHeaderRefresher>(), new Vb6ProjectFileFormat(), new ComponentRegistry(), lspClient: () => client);
+                Substitute.For<IHeaderRefresher>(), new ComponentRegistry(), lspClient: () => client);
 
             var save = () => service.SaveModule(module, false);
             (await save.Should().ThrowAsync<Exception>()).Which.Should()

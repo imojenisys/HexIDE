@@ -21,9 +21,11 @@ public class PictureBoxComponentClass : ComponentBaseClass
     FontProperty, ForeColorProperty,
     MousePointerProperty, TabIndexProperty, TabStopProperty,
     ToolTipTextProperty, PictureProperty,
-    ], [ClickEvent, DblClickEvent, GotFocusEvent, LostFocusEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent])
+    ], [ClickEvent, DblClickEvent, GotFocusEvent, LostFocusEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, KeyDownEvent, KeyPressEvent, KeyUpEvent])
     {
     }
+
+    public override string? DesignerDoubleClickEvent => "Click";
 
     public override string Name => "Picture";
     public override string VBTypeName => "VB.PictureBox";

@@ -79,13 +79,9 @@ public class DamagedFormPropertyTests
     }
 
     [Theory]
-    [InlineData("Height", "2147483584", true)]
-    [InlineData("Height", "2147483647", true)]
-    [InlineData("Height", "3.7E+18", true)]
-    [InlineData("Height", "1E+30", true)]
     [InlineData("Left", "2147483648", true)]
     [InlineData("ClientHeight", "3.7E+18", false)]
-    [InlineData("Height", "-1", true)]
+    // A negative Height on a form's control recovers as zero with Save As (#4179): NegativeSizeLoadTests.
     public void RefusedMeasurement_LeavesPropertyAbsentAndRefusesSave(string name, string value, bool button)
     {
         var form = Load($"{name} = {value}\r\n", button);

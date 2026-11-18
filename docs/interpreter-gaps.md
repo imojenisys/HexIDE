@@ -16,10 +16,18 @@
   supplies AccessKeys and the measured form-hosted Ambient reads ([#4149](https://github.com/hexide-io/HexIDE/issues/4149)).
   The designer (`SpawnComponentsForDesigner`), property-page editor and form preview do not attach a UserControl
   interpreter: design-time ReadProperties/Show and build-time callbacks remain unavailable. Runtime UserMode is True
-  and ShowHatching False. Palette, non-form containers, LocaleID outside en-US, and RightToLeft on a right-to-left
-  form explicitly refuse pending measurements. AmbientChanged for form colour changes remains unmeasured.
+  and ShowHatching False. Palette, non-form containers, and RightToLeft on a right-to-left form explicitly refuse
+  pending measurements. LocaleID reads 1033 whatever the user locale, as measured, and refuses where the system
+  locale or an interface language isn't US English, or off Windows, because which of those VB6 follows is unmeasured
+  ([#4266](https://github.com/hexide-io/HexIDE/issues/4266)). A refusal or error raised while a form loads its
+  UserControls is reported as any event's is (#4266). AmbientChanged for a form's colour and font changes is measured but not raised yet, and a PictureBox-hosted
+  UserControl's Ambient reads, measured as the form's, still refuse ([#4448](https://github.com/hexide-io/HexIDE/issues/4448)).
   The remaining UserControl surface and designer/file editing are later work. Part C supplies Container assignment and Count, bottom Align, transparent BackStyle, and measured focus/lifecycle ordering. Align assignments other than 2, BackStyle reads (whose return subtype is unmeasured here), ContainedControls operations other than Count, and PropertyBag operations are still refused. Unmeasured conversions of
   AccessKeys are explicitly refused, rather than assigned invented VB6 semantics.
+  [#4337](https://github.com/hexide-io/HexIDE/issues/4337) also attaches runtime-loaded array elements,
+  with measured Initialize/Resize/ReadProperties, deferred Show, and index-ordered form teardown;
+  PropertyBag operations remain refused, and standalone element Unload and missing saved custom
+  properties have no additional measured semantics.
 - **Clipboard text is now partial (#1156):** Clear, SetText, GetText and GetFormat(vbCFText) use the host clipboard.
   Image/data methods, non-text format queries and RTF/Link text are deferred and explicitly refused. VB6 preserves
   other formats on SetText; the Avalonia host snapshots readable non-text formats and writes them back with the
@@ -39,16 +47,49 @@ not a general rule. The interpreter is unchanged, including #1930's Error 28 gua
 rows (2466, 3139, 3665, 4040, 5891, 6045, 6112) pin that guard in `ExpressionDepthGuardTests`, not VB6 behaviour;
 VB6 refuses those modules before running them. No language-support inventory counts change.
 
+## VBA7 integers (#1548)
+
+[#4302](https://github.com/hexide-io/HexIDE/issues/4302) implements the Excel x64 rows recorded in that issue
+(measuring PR #3965): LongLong/LongPtr declarations, conversions, arithmetic, Variant overflow, literals,
+comparison and formatting, plus DefLngLng/DefLngPtr. VB6 keeps the measured unknown-name errors
+(measuring PR #4247), at execution where necessary, and user-defined names still win.
+
+[#4399](https://github.com/hexide-io/HexIDE/issues/4399) adds the measured Excel x86 target (oracle PR #4398):
+LongPtr and DefLngPtr use Long, CLngPtr uses CLng, and the six built-in compilation constants select
+the measured branches. LongLong/CLngLng remain unknown, ^ remains exponentiation, and PtrSafe is optional.
+DefLngLng retains the VB6 diagnostic as reasoned: its Excel x86 text was not read. LongPtr UDT layouts,
+array bounds and For counters at 32 bits remain unmeasured; this change adds no layout or counter rules.
+
+Still unmeasured and explicitly refused under #1548: LongLong array bounds and For counters;
+Len/LenB/Get/Put of a UDT containing LongLong; and conversions to LongLong from source types other than
+Integer, Long, Byte, LongLong, Single, Double and measured decimal/hexadecimal strings. Named arguments
+and unmeasured argument counts for the conversions also refuse under #1548. These are missing
+measurements, not a language-analysis boundary. Intrinsic arguments containing LongLong are limited to the
+measured first-argument calls listed in MISSING_LANGUAGE; other intrinsics/positions, LenB of a Variant,
+and other conversions still refuse under #1548. The review measurements in [#4302](https://github.com/hexide-io/HexIDE/issues/4302)
+(oracle PR #4383) add Decimal division, Date multiplication, rounded integer/bitwise partners,
+Or/Xor/Eqv/Imp/Not, minimum-value overflow errors, and Abs/Int/Fix/Sgn. Comparisons use exact integer
+or Decimal domains, or Double for Single/Double/String/Date; Currency comparisons and LongLong
+Select Case selectors remain refused. Out-of-range integer/bitwise operand coercions, bitwise Date/Empty partners, and out-of-range or unmeasured `^`
+literal forms and a `^` read on a name declared as another type remain refused under #1548.
+Adjacent `^` is a type character in 64-bit projects and an operator in VB6; after `)` it stays an
+operator (reasoned, unmeasured). The bundled LSP grammar's VBA7 syntax/diagnostics follow-up is #4365.
+
 ## Slot lifetime (#79)
+
+## Slot lifetime (#79, #4375)
 
 Procedure activations reclaim their allocated slots after scope-exit reference releases, including on error
 unwind and failed parameter binding. Static slots pass to the run or instance and remain persistent; ByRef
 aliases never belong to the callee. Freed slot numbers are not reused, and exhausted numbering raises error 7.
 Debugger inspection treats freed slots as out of scope.
 
-Instance fields and instance Statics still retain their storage after termination. Phase 2 is deferred until
-member accesses on terminated instances have been counted across the Runtime suite, Battleship and the #2067
-sweep, as the issue's design note requires. Replacing the module-environment clone is separate performance work.
+Instance fields and instance Statics still retain their storage after termination ([#4375](https://github.com/hexide-io/HexIDE/issues/4375)). Freeing them
+waits until member accesses on terminated instances have been counted, as #79's design note requires: one is a
+holder HexIDE missed, and freeing would turn it into a crash. #4375's in-tree count, on 2026-11-17, found none across
+the Runtime and Runtime integration suites, Battleship and the IDE suite with its 36-project corpus. The #2067 sweep
+of third-party projects is still uncounted: it runs strangers' code, so it needs a container or a throwaway VM.
+The per-call copy of the module environment that #79 also found was removed by #2120.
 
 ## App logging (#2552)
 
@@ -108,16 +149,22 @@ Platform: 5 · Partial: 11 · Other: 1. An entry fixed since the audit is not co
 >   parse, so an inactive branch is never parsed; oracle-pinned).
 > - **→ Deferred:** Load/Unload (since built, for control-array elements and for whole forms, #822/#973) · chained
 >   index groups (`Split(s)(0)`; since fixed, #1476) · AddressOf · unmeasured String/number comparison domains (#211) · **Declare … Lib** (no longer
->   fails the module load — the declaration (including VBA7 `PtrSafe`, #1548) is skipped, so the module runs; an actual
+>   fails the module load — a compatible declaration is skipped, so the module runs;
+>   [#4245](https://github.com/hexide-io/HexIDE/issues/4245) rejects `PtrSafe` for VB6 and requires it for
+>   64-bit VBA7 before that skip, using the issue's measured rows; an actual
 >   call raises the clean "Sub or Function not defined") · selection/system/financial intrinsics (IIf, Choose and Switch
->   have since been added, and of the financials only IRR, MIRR and DDB remain).
+>   have since been added, and of the financials only IRR and MIRR remain refused).
+
+>   have since been added, and of the financials only DDB remains unregistered).
+
+>   have since been added, and every financial now runs: DDB, IRR and MIRR with the closest evaluation models).
 > - **→ Platform limits:** AppActivate / SendKeys (OS automation). The array-element/call-result lead in a member
 >   chain, once walled here, has since been fixed: see its entry below.
 
 _Original per-item findings (retained for detail; dispositions above supersede the "Undocumented" notes):_
 
 - **Beep / AppActivate / SendKeys** — all three visitors throw `NotImplementedException` (StatementExecutor.cs:101-114, 911-914); real VB6 statements (system tone / activate another app / send keystrokes). Undocumented.
-- **Load / Unload** — a form's `Load`, and `Unload` of any form, are implemented (#973, #822): a run is one program of every form, a form's name makes its default instance on first use, and a use of its control or built-in member loads it, as VB6 does. `Load` and `Unload` of a control-array element are as before. `Show vbModal` and a `Sub Main` that shows forms followed in slice 2a.2. `Forms`, the loaded forms in load order, followed in #2496. What is still to come is #822's `New Form2`.
+- **Load / Unload** — a form's `Load`, and `Unload` of any form, are implemented (#973, #822): a run is one program of every form, a form's name makes its default instance on first use, and a use of its control or built-in member loads it, as VB6 does. `Load` and `Unload` of a control-array element are as before. `Show vbModal` and a `Sub Main` that shows forms followed in slice 2a.2. `Forms`, the loaded forms in load order, followed in #2496. Explicit `New Form2` now creates a separate instance with its own window context, without changing the default name ([#4598](https://github.com/hexide-io/HexIDE/issues/4598), measured VB6 SP6, native and p-code). `As New Form2` remains #435's refusal.
 - **DoEvents** — wholly absent from the interpreter (0 hits); VB6 intrinsic that yields to the message queue and returns the open-form count. Undocumented.
 - **Erase** — `VisitEraseStmt` throws (StatementExecutor.cs:253-255); VB6 reinitialises fixed arrays / frees dynamic-array storage. Undocumented.
 - **Mid statement** (`Mid(s,i,n) = ...`) — `VisitMidStmt` throws (StatementExecutor.cs:675); VB6 replaces chars in place without lengthening. Every doc reference is to the Mid *function*. Undocumented.
@@ -142,7 +189,10 @@ _Original per-item findings (retained for detail; dispositions above supersede t
   - **A character outside cp1252 is unmeasured.** It sorts after every measured one, by its invariant lower case.
   `Like` keeps its own per-character fold (#1547), which nothing has measured against the compare. A different comparer was weighed and refused: .NET's ICU collation, and Windows' NLS mode, which is process-wide. Measured on the same pairs, ICU got 6,337 of the 212,956 wrong, against the rows' 0.
 - **Static local variables / Static procedure modifier** — **done (#1491).** A Static's slot is kept per declaration, for the run in a standard module and per instance in a class or form, and a `Static` procedure makes its Dim locals Static (oracle, "Static"). Collected at procedure entry like any local; nothing relates one declaration to another.
-- **Selection/system/financial intrinsics** — DDB remains unregistered; IRR and MIRR explicitly refuse as not implemented because no tested precision model matches every #2525 row. NPV now matches all five measured rows; unmeasured conversions and domains refuse. The [precision note](financial-precision-2525.md) records the models and nearest misses. The rest of this group now runs, measured: IIf and Choose (#1461, #1464), Command (#742), RGB and QBColor (#826), Switch, Environ and Error() (#1560), Partition (#2526), and SLN and SYD (#2524).
+- **Selection/system/financial intrinsics** — DDB (#2524, issuecomment-6954532512), IRR and MIRR (#2525) run with the closest evaluation models found, by Jen's 2026-11-17 decision; their documented numerical differences remain, and unmeasured argument and domain cases refuse. NPV now matches all five measured rows; unmeasured conversions and domains refuse. The [precision note](financial-precision-2525.md) records the models and nearest misses. The rest of this group now runs, measured: IIf and Choose (#1461, #1464), Command (#742), RGB and QBColor (#826), Switch, Environ and Error() (#1560), Partition (#2526), and SLN and SYD (#2524).
+  - **DDB runs, with one measured rounding divergence** (#2524). Jen approved the closest model (issuecomment-6954532512): `scripts/probes/depreciation-2524.py` mask 2 rounds only the base to Double. Nine of ten [measured rows](vb6-fidelity-oracle/ddb-sln-and-syd.md) match exactly, including all error-5 rows; period 10 computes `40361F5F40D83791` versus measured `40361F5F40D83797`, six ULPs below, but both print `22.1225472000002`. Unmeasured argument counts and financial-power domains refuse; named arguments run by DDB's measured names (oracle PR #4469). A model matching every row can replace this one. SLN's and SYD's exact intermediates do not establish VB6's algorithm. Measurements belong to hexide-int.
+
+- **Selection/system/financial intrinsics** — DDB remains unregistered; IRR and MIRR now run with the closest tested evaluation models, authorized by Jen’s 2026-11-17 decision (#2525); their documented numerical differences remain, and unmeasured argument/domain cases refuse. NPV now matches all five measured rows; unmeasured conversions and domains refuse. The [precision note](financial-precision-2525.md) records the models and nearest misses. The rest of this group now runs, measured: IIf and Choose (#1461, #1464), Command (#742), RGB and QBColor (#826), Switch, Environ and Error() (#1560), Partition (#2526), and SLN and SYD (#2524).
   - **DDB stays refused because no evaluation model matches its measured bits** (#2524). `scripts/probes/depreciation-2524.py` tries Double spills at rate, base, power, book value and amount, 32 variants with exact intermediates otherwise; none gives period 10's measured `40361F5F40D83797`. The closest is `…3791`, with the base rounded to a Double; `…3764` has no spills and `…3790` has every one. SLN's and SYD's rows don't pin their spills either, since their intermediates are exact, so the model that matches them isn't proof of VB6's algorithm. The measurements are hexide-int's, on `docs/vb6-fidelity-oracle/ddb-sln-and-syd.md`.
 
 ## Deferred
@@ -155,9 +205,9 @@ _Original per-item findings (retained for detail; dispositions above supersede t
 - **Project resource functions (#2626)** — LoadResString and LoadResData read the project's snapshot; LoadResPicture loads measured 24-bit bitmaps and icon/cursor groups. Named arguments and program-locale selection run, including a sole other-language block and no fallback for empty string slots. Ambiguous unmatched languages, animated cursors, other image layouts and other argument conversions remain explicitly refused. Picture Type is Integer and Width/Height are Long HiMetric, including LoadPicture; native Handle and default Long handle conversion remain unimplemented. Group image selection (32×32 if present, otherwise largest scaled) is rendering policy, not a measured VB6 choice. Provenance: [original resource measurements](vb6-fidelity-oracle/loadresstring-loadresdata-and-loadrespicture.md) and [#2626's 2026-11-14 measurement comment](https://github.com/hexide-io/HexIDE/issues/2626).
 - **SavePicture statement** — throws (StatementExecutor.cs:810-812); VB6 runtime-library statement writing a Picture to a bitmap file. Deferred family-level (graphics/VB-objects; sibling LoadPicture accepts a BMP/ICO file for StatusBar panels in #1087 and PictureBox in #922, with LoadPicture() clearing a PictureBox; its remaining surface is deferred) but not named individually.
 - **Type-hint suffixes & $-typed string twins** (`Left$`, `Mid$`, `Format$`, `x%`, `s$`) — tracked by [#742](https://github.com/hexide-io/HexIDE/issues/742). A read through a character is the variable of the bare name, checked against its type, for all six, since #742 (measured, oracle "A name read with a type character"), and a declaration with one, `Dim n$`, takes its type since #2409. **#739 fixed:** a suffixed assignment now reaches the bare variable, checks its declared type and implicitly creates a typed variable on first use. The oracle's 2026-10-11 assignment probes measure all six characters, module and local, with and without Option Explicit. A `For` counter through any of `% & ! # @` is the variable of the bare name at every scope, and `Next i%` runs, measured on 2026-10-27 ("A For counter written with a type character"); an undeclared `$` counter is refused, unmeasured. A module-qualified read checks the character too. A `Function` declared with one (`Function GetName$()`) parses, and returns the type the character declares; a call may carry the character, checked against that type, and the body may assign the return through it, `GetName$ = …` ([#740](https://github.com/hexide-io/HexIDE/issues/740), measured for all six). VB6 core syntax, $-intrinsics return String not Variant. A call written with a `$` now runs (#1071): `Trim$(s)` and the other 22 library `$` forms answer as their plain form with a String, a Null raising 94, and a user `Function Trim` declared `As String` answers `Trim$` (oracle, "The library's `$` forms"). A `$` the oracle has not measured on that name stops the run naming #742. What is deferred is a `$` call the oracle has not measured, `Date$` and `Time$` read bare, and a character on a form's member (#742); #739 fixed assignment targets and #740 the Function declaration, and neither waited on it. `MISSING_FEATURES.md`'s "VB6 built-in functions" row records what remains.
-- **Named arguments** (`:=`) — **Done for procedures, methods and intrinsics (#1465):** a named argument binds to the parameter of its name, in a call to the program's own Sub, Function or class method and to the 118 intrinsics with measured parameter names (#4145 measured the remaining names; ChrB, IRR and MIRR still refuse execution), and named arguments are evaluated in parameter order, not the order written (measured; oracle, "Named arguments"). VB6's compile errors ("Named argument not found", "Named argument already specified", and the rest) are raised as the statement runs. **Still refused:** a control's, a form's or an object's method, whose parameter names HexIDE has no table of ([#1474](https://github.com/hexide-io/HexIDE/issues/1474)). It is not a wall: it is a table to measure.
+- **Named arguments** (`:=`) — **Done for procedures, methods and intrinsics (#1465):** a named argument binds to the parameter of its name, in a call to the program's own Sub, Function or class method and to the 118 intrinsics with measured parameter names (#4145 measured the remaining names; ChrB runs its measured conversions (#4576); IRR and MIRR run with documented precision differences (#2525)), and named arguments are evaluated in parameter order, not the order written (measured; oracle, "Named arguments"). VB6's compile errors ("Named argument not found", "Named argument already specified", and the rest) are raised as the statement runs. **Still refused:** a control's, a form's or an object's method, whose parameter names HexIDE has no table of ([#1474](https://github.com/hexide-io/HexIDE/issues/1474)). It is not a wall: it is a table to measure.
 - **Const semantics** (type hints, read-only enforcement, cross-module ordering, a procedure's Consts) — measured (#873): within a module, and within a procedure, a Const may read only what is declared above it, at every scope probed; across modules the order is free, but the modules' Consts must not form a cycle ("Circular dependencies between modules", checked per module). VB6 also accepts type characters and rejects reassignment. **Done in #873:** a module-level Const is checked against those rules as it runs, and a Const's `As` type converts its value as a store does, at both levels. **Done in #893:** another module's Const read initialises that module's declarations on demand, with the measured per-module cycle error; the startup module completes its declarations before harness statements create a class that reads them. **Done in #894:** forward-local-Const reads are checked at procedure entry; other procedure constant-expression checks remain unchanged. Reassignment is refused (#1003). Type characters are done in [#1614](https://github.com/hexide-io/HexIDE/issues/1614): one is the As clause it stands for, measured.
-- **Missing string/format intrinsics** — StrConv, StrComp, LenB, AscB, MidB, LeftB, RightB and InStrB are registered and run (`VB6BuiltIns.Strings.cs`). ChrB refuses an odd byte count and InputB is refused ([#1510](https://github.com/hexide-io/HexIDE/issues/1510)). AscW and ChrW landed with #1134. FormatDateTime landed with #2516. FormatNumber, FormatCurrency and FormatPercent landed with #2515; named calls are accepted (#4145); unmeasured positional argument counts, decimal widths and tri-state values remain explicitly refused (the precise limits are in MISSING_LANGUAGE.md).
+- **Missing string/format intrinsics** — StrConv, StrComp, LenB, AscB, MidB, LeftB, RightB and InStrB are registered and run (`VB6BuiltIns.Strings.cs`). ChrB and odd MidB/LeftB/RightB results run with the measured uses in [#4576](https://github.com/hexide-io/HexIDE/issues/4576); other odd-String uses and InputB remain refused ([#1510](https://github.com/hexide-io/HexIDE/issues/1510)). AscW and ChrW landed with #1134. FormatDateTime landed with #2516. FormatNumber, FormatCurrency and FormatPercent landed with #2515; named calls are accepted (#4145); unmeasured positional argument counts, decimal widths and tri-state values remain explicitly refused (the precise limits are in MISSING_LANGUAGE.md).
 - **Collection object, For Each over non-array enumerables, CreateObject/GetObject** — **Collection and For Each over a Collection are done ([#1471](https://github.com/hexide-io/HexIDE/issues/1471)),** measured on vb6.exe as native and p-code (oracle, "Collection"). `Dim c As New Collection` works since [#435](https://github.com/hexide-io/HexIDE/issues/435). An array `As Collection` runs since [#1482](https://github.com/hexide-io/HexIDE/issues/1482), and keys compare as `vbTextCompare` compares since [#1479](https://github.com/hexide-io/HexIDE/issues/1479), through `VbTextCompare`'s measured rows (#1567). Calling the hidden `_NewEnum` member directly is still unsupported. CreateObject/GetObject is a documented COM wall.
 - **Resume granularity (fault nested in a construct)** — nested-granular Resume is a stated 5b limitation (needs CFG/bytecode). interpreter-core Subset 5b. **Narrowed by #839:** under `On Error Resume Next` a fault in a block statement's condition or header now resumes into the block, as VB6 does, because the trap sits where the condition is evaluated and never needs to jump. What remains is a handler's `Resume` or `Resume Next` for a fault nested in a construct, which must get back inside the block. For `Resume Next`, VB6 measurably gives the same answers as Resume Next there (the If's branch, the raising Case's body, the loop's body), and HexIDE resumes after the whole top-level statement, since getting back inside the block from the handler is exactly the jump a tree-walk cannot make. **Measured by #877:** a `Resume` for an `Err.Raise` inside a one-line `If` retries the `Err.Raise` itself, not the `If`, so it raises again whatever the handler changed. HexIDE retries the `If`, re-reading its condition.
   - **Raised For Each collection declarations (#969):** the fallback reads project Functions, early-bound class Functions and Property Gets,
@@ -255,7 +305,7 @@ Now **Deferred**, with the real work named. None needs a bound AST; each is unim
   Standard-module indexed Let dispatches through the procedure binder (#977); standard-module indexed Set
   remains unmeasured and refused. Mismatched accessor signatures run here but are refused at compile time
   by VB6; the consistency diagnostic requires binding and is not implemented. Optional/ParamArray indexes
-  and default-member indexed writes (#174) are outside #177. A class's parameterized `Property Get` now
+  remain refused; parameterized default-member reads and writes run separately (#4606). A class's parameterized `Property Get` now
   passes its index arguments through the ordinary procedure binder (#741), including the surplus-argument
   compile error. A Collection's `Item` is separately implemented as an in-box object's member (#1471).
 - **Fixed-length strings** (`Dim s As String * n`) — scalar module/local/Static slots now initialise to N NULs
@@ -314,8 +364,13 @@ Now **Deferred**, with the real work named. None needs a bound AST; each is unim
   Case values against Empty/Null, raise 450. `CVar`, TypeName, IsObject and ByVal Variant keep the object.
   [Value measurements](vb6-fidelity-oracle/an-object-used-as-a-value.md),
   [CVar](vb6-fidelity-oracle/cvar.md), [subscripts](vb6-fidelity-oracle/subscripts-bounds-and-a-method-called-from-class_initialize.md).
-  Still refused naming #174: a Sub default, a member requiring arguments, nested defaults, typed Function
-  Format/Abs and later Format arguments (unmeasured), default-member writes and parameterized access. Synchronous Join/Filter reads,
+  Parameterized Function/Get default reads and Property Let writes now run through variables, class fields,
+  indexed results and parameterless class-returning procedures ([#4606 measurements](https://github.com/hexide-io/HexIDE/issues/4606)).
+  Classes without defaults, Variable/Sub defaults given arguments and defaults without a Property Let on a write
+  remain unmeasured and refuse naming #4606. Nothing in Variant/Object slots and object argument/value evaluation
+  order retain today's behaviour, unmeasured.
+  Still refused naming #174: a Sub default used as a scalar, a member requiring arguments used without them,
+  nested scalar defaults, typed Function Format/Abs and later Format arguments (unmeasured), and default-member writes without arguments. Synchronous Join/Filter reads,
   `IndexResult` and `FieldElement` subscript conversion retain their refusals; the Immediate window still
   refuses calls into the program. Array bounds and control-array indexes remain unmeasured with defaults.
 
@@ -463,4 +518,4 @@ moves it here (#3364). The *Missed* section keeps its own fixed entries, as the 
   elements and another module's Public UDT included, and a chained `Set` stores the final object reference. A field
   store through a UDT-returning property or function writes only the returned copy, calls the getter once, and never
   calls its Let, as [measured](vb6-fidelity-oracle/chained-writes-qualified-set-and-udt-returning-members.md) natively
-  and as p-code. `Set` through a class-typed UDT field is supported by #3924, including module-qualified chains; other recognised object field types beyond Object and Collection remain explicitly refused pending measurements.
+  and as p-code. `Set` through a class-typed UDT field is supported by #3924, including module-qualified chains. Object, Collection and project-class array fields allocate and take element `Set` since [#4596](https://github.com/hexide-io/HexIDE/issues/4596), with independent array copies sharing object references and measured Erase/scope-exit release timing; other recognised object field types beyond Object and Collection remain explicitly refused pending measurements.

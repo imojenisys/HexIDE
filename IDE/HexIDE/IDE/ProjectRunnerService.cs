@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Interactivity;
 using Avalonia.Labs.Input;
 using Avalonia.Platform;
@@ -26,6 +28,19 @@ namespace HexIDE.IDE;
 
 public partial class ProjectRunnerService : IProjectRunnerService
 {
+    // The program window that was active when a Pause stop brought the IDE forward, for Continue to restore (#4262).
+    private Window? _pauseWindow;
+    // Every open window. The desktop lifetime lists them too, but a headless session has no desktop lifetime.
+    private static readonly HashSet<Window> opened = TrackWindows();
+
+    private static HashSet<Window> TrackWindows()
+    {
+        var windows = new HashSet<Window>();
+        Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) => windows.Add(window));
+        Window.WindowClosedEvent.AddClassHandler<Window>((window, _) => windows.Remove(window));
+        return windows;
+    }
+
     private readonly IEventBus eventBus;
     private readonly IProjectManager projectManager;
     private readonly ILocalizationService localization;
@@ -39,6 +54,7 @@ public partial class ProjectRunnerService : IProjectRunnerService
     private readonly IRunChoiceStore? runChoices;
     private readonly ChosenLaunchAnswer? chosenLaunch;
     private readonly IStatusBarService? statusBar;
+    private readonly CodeTrust? trust;
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<ProjectDefinition, object> defaultNotices = new();
 
     // A Run-To-Cursor target requested while IDLE — applied AFTER the run-start Reset (which clears the controller's
@@ -103,6 +119,7 @@ public partial class ProjectRunnerService : IProjectRunnerService
         get => runScope.RunningProject;
         private set
         {
+            _pauseWindow = null;
             runScope.RunningProject = value;
             if (value is null) runScope.End();
             else
@@ -127,8 +144,11 @@ public partial class ProjectRunnerService : IProjectRunnerService
         HexIDE.Projects.ArchiveProjectService? archives = null,
         DebugLaunchService? debugLaunches = null,
         IRunChoiceStore? runChoices = null,
-        IStatusBarService? statusBar = null)
+        IStatusBarService? statusBar = null,
+        CodeTrust? trust = null)
     {
+        _ = opened;   // registers the tracker's handlers before a program opens its first window
+        this.trust = trust;
         this.debugLaunches = debugLaunches;
         this.runChoices = runChoices;
         if (debugLaunches is not null && runChoices is not null)
@@ -172,7 +192,19 @@ public partial class ProjectRunnerService : IProjectRunnerService
             };
         // Break/Continue toggle the debug state without touching `runningProject`, so re-query the run commands
         // when the controller pauses/resumes (otherwise the Break/Continue buttons stay stale).
-        debugController.Stopped += _ => CommandManager.InvalidateRequerySuggested();
+        // This subscription precedes the view model's Pause notification, which raises the IDE (#4262).
+        debugController.Stopped += info =>
+        {
+            if (info.Reason == StopReason.Pause && externalDebugger?.IsActive != true)
+            {
+                var windows = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows ?? [];
+                var active = windows.Concat(opened).FirstOrDefault(window => window.IsActive);
+                _pauseWindow = active is not null && RunningProgram.Current.Form(active) is { IsRunning: true }
+                    ? active : null;
+            }
+            else if (info.Reason != StopReason.Step) _pauseWindow = null;
+            CommandManager.InvalidateRequerySuggested();
+        };
         debugController.Continued += CommandManager.InvalidateRequerySuggested;
 
         // A breakpoint toggled (in the gutter or via MCP) while a run is live takes effect immediately, matching
@@ -261,6 +293,10 @@ public partial class ProjectRunnerService : IProjectRunnerService
                 projectDefinition.Name, projectDefinition.ContributedBy);
             return;
         }
+        // Code from outside this computer runs only once the developer says so, asked before anything is claimed or
+        // built (#1121). The start resumes from here on a Yes.
+        if (AskFirst(projectDefinition, () => RunProject(projectDefinition, stepInto)))
+            return;
         externalDebugger?.ClearSessionResult();
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
 
@@ -337,6 +373,35 @@ public partial class ProjectRunnerService : IProjectRunnerService
             Report(RunFailed, failure);
     }
 
+    /// <inheritdoc />
+    public async Task<bool> MayRunFileAsync(string path) =>
+        trust?.Unapproved(path) is not { } file || await trust.AskAsync(System.IO.Path.GetFileName(path), [file]);
+
+    /// <summary>The files HexIDE is asking whether to run, while it asks; null otherwise. For automation to report.</summary>
+    public IReadOnlyList<UntrustedFile>? AskingToRun => trust?.Asking;
+
+    /// <summary>
+    /// Whether <paramref name="project"/>'s start waits on the question <see cref="CodeTrust"/> asks: true when its code
+    /// came from outside this computer and hasn't been allowed. <paramref name="start"/> runs again on a Yes. A No, or a
+    /// start while the question is already up, starts nothing, and leaves no idle Run To Cursor armed.
+    /// </summary>
+    private bool AskFirst(ProjectDefinition project, Action start)
+    {
+        if (trust?.Unapproved(project) is not { Count: > 0 } files)
+            return false;
+        if (trust.Asking is null)
+            Ask().ListenErrors();
+        return true;
+
+        async Task Ask()
+        {
+            if (await trust.AskAsync(project.Name, files) && !IsRunning)
+                start();
+            else
+                _pendingRunTo = null;
+        }
+    }
+
     /// <summary>Whether an idle Run To Cursor is still waiting for a start. For tests.</summary>
     internal bool HasPendingRunToCursor => _pendingRunTo is not null;
 
@@ -366,6 +431,8 @@ public partial class ProjectRunnerService : IProjectRunnerService
     public void StartContributedLaunch(ContributedDebugLaunch launch, ProjectDefinition project)
     {
         if (debugLaunches is null || archives?.IsActive == true || IsRunning) return;
+        if (AskFirst(project, () => StartContributedLaunch(launch, project)))
+            return;
         externalDebugger?.ClearSessionResult();
         eventBus.Publish(new ApplyAllUnsavedChangesEvent());
         debugLaunches.StartAsync(launch, project).ListenErrors();
@@ -391,7 +458,7 @@ public partial class ProjectRunnerService : IProjectRunnerService
     public void BreakCurrentProject()
     {
         if (externalDebugger?.IsActive == true) { _ = externalDebugger.CommandAsync("pause"); return; }
-        // Request a break: the next statement gate suspends (a no-op if the program is idle-between-events).
+        // Break immediately while idle, otherwise at the next statement gate.
         debugController.Pause();
     }
 
@@ -470,13 +537,18 @@ public partial class ProjectRunnerService : IProjectRunnerService
     public void ContinueProject()
     {
         if (externalDebugger?.IsActive == true) { _ = externalDebugger.CommandAsync("continue"); return; }
-        // Resume from a break (F5 in break mode).
+        // Steps retain the Pause window; only F5 restores it, once, before releasing the interpreter gate.
+        var window = _pauseWindow;
+        _pauseWindow = null;
+        if (window is { IsVisible: true } && debugController.State == DebugState.Paused)
+            window.Activate();
         debugController.Continue();
     }
 
     public void EndProject()
     {
         if (externalDebugger?.IsActive == true) { _ = externalDebugger.StopAsync(); return; }
+        _pauseWindow = null;
         // Abort first so a paused interpreter unwinds via StopExecutionSignal, then cancel the token (closes the
         // window). Order matters: Stop() releases the break gate that Dispose()'s cancel alone cannot.
         debugController.Stop();
@@ -523,9 +595,11 @@ public partial class ProjectRunnerService : IProjectRunnerService
     // F8 works from idle (start-and-step, needs a startup project) or any running/paused state.
     public bool CanStepIntoProject => externalDebugger?.IsActive == true ? CanContinueProject : CanRunStartupProject || IsRunning;
     public bool CanStepOverProject => CanStepIntoProject;
-    public bool CanStepOutProject => CanStepIntoProject;
+    public bool CanStepOutProject => CanStepIntoProject
+        && (externalDebugger?.IsActive == true || debugController.CurrentStop is not { HasStatement: false });
     public bool CanRunToCursor => externalDebugger?.IsActive == true
-        ? externalDebugger.CanRunToCursor : CanRunStartupProject || IsRunning;
+        ? externalDebugger.CanRunToCursor
+        : (CanRunStartupProject || IsRunning) && debugController.CurrentStop is not { HasStatement: false };
     public bool CanEndProject => IsRunning;
     public bool CanRestartProject => IsRunning && externalDebugger?.IsActive != true;
 

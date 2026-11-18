@@ -16,7 +16,7 @@ public abstract class ScrollBarComponentClass : ComponentBaseClass
         ValueProperty,
         MaxProperty,
         TabStopProperty,
-        TabIndexProperty], [ChangeEvent, GotFocusEvent, LostFocusEvent])
+        TabIndexProperty], [ChangeEvent, GotFocusEvent, LostFocusEvent, KeyDownEvent, KeyPressEvent, KeyUpEvent])
     {
     }
 
@@ -42,6 +42,8 @@ public abstract class ScrollBarComponentClass : ComponentBaseClass
 
 public class HScrollBarComponentClass : ScrollBarComponentClass
 {
+    public override string? DesignerDoubleClickEvent => "Change";
+
     public override string Name => "HScroll";
     public override string VBTypeName => "VB.HScrollBar";
     public override (int Width, int Height) AddedSize => (1215, 255);

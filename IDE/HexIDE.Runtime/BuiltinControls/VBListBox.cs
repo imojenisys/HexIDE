@@ -51,9 +51,13 @@ public class VBListBox : ListBox
 
     private int? pointerTop;
     private bool scrollIntoViewOnLayout;
+    private bool rowsNeedPadding;
 
     static VBListBox()
     {
+        AttachedProperties.FontProperty.Changed.AddClassHandler<VBListBox>((list, _) => list.UpdateRows());
+        ControlKeyEvents.Attach<VBListBox>();
+        IsTextSearchEnabledProperty.OverrideDefaultValue<VBListBox>(true);
         // VB6 selects nothing for a right or middle press, where Avalonia's ListBox selects on a right one. Handled on
         // the way down, its own press handler never sees it; the mouse events take handled presses too. A left press on
         // a multi-select list is VB6's to handle, for the same reason.
@@ -106,6 +110,11 @@ public class VBListBox : ListBox
         AutoScrollToSelectedItem = false;
         LayoutUpdated += (_, _) =>
         {
+            if (rowsNeedPadding)
+            {
+                rowsNeedPadding = false;
+                UpdateRows();
+            }
             if (!scrollIntoViewOnLayout || !CanScrollNow())
                 return;
             scrollIntoViewOnLayout = false;
@@ -125,6 +134,52 @@ public class VBListBox : ListBox
             else if (focusIndex >= ItemCount)
                 focusIndex = Math.Max(0, ItemCount - 1);
         };
+    }
+
+    protected override void PrepareContainerForItemOverride(Control container, object? item, int index)
+    {
+        base.PrepareContainerForItemOverride(container, item, index);
+        if (container is ListBoxItem listItem && ListBoxRowHeights.Find(AttachedProperties.GetFont(this)) is { } height)
+        {
+            listItem.UseLayoutRounding = false;
+            listItem.Height = height;
+            rowsNeedPadding = true;
+        }
+        else
+            ApplyRowHeight(container);
+    }
+
+    private void UpdateRows()
+    {
+        // VB6's first row starts at the list's inner edge: the theme's top padding pushed the last of 1,425 twips' seven
+        // rows partly out of view (#4073, seen live). The bottom padding stays: it is the scroll slack that lets
+        // SetTopIndexFromCode reach the measured last page when the viewport isn't a whole number of rows.
+        // Horizontal padding is unmeasured and left as it is.
+        ClearValue(PaddingProperty);
+        if (ListBoxRowHeights.Find(AttachedProperties.GetFont(this)) is not null)
+            Padding = new Thickness(Padding.Left, 0, Padding.Right, Padding.Bottom);
+        foreach (var container in GetRealizedContainers())
+            ApplyRowHeight(container);
+    }
+
+    private void ApplyRowHeight(Control container)
+    {
+        if (container is not ListBoxItem item)
+            return;
+        if (ListBoxRowHeights.Find(AttachedProperties.GetFont(this)) is { } height)
+        {
+            item.UseLayoutRounding = false;
+            item.Height = height;
+            item.ClearValue(PaddingProperty);
+            var padding = item.Padding;
+            item.Padding = new Thickness(padding.Left, 0, padding.Right, 0);
+        }
+        else
+        {
+            item.ClearValue(UseLayoutRoundingProperty);
+            item.ClearValue(HeightProperty);
+            item.ClearValue(PaddingProperty);
+        }
     }
 
     // #3275: TopIndex assignments raise Scroll only when the resulting top row changes.
@@ -210,6 +265,7 @@ public class VBListBox : ListBox
         init
         {
             multiSelect = value;
+            IsTextSearchEnabled = value == VBMultiSelect.None;
             if (value != VBMultiSelect.None)
                 SelectionMode = SelectionMode.Multiple;
         }
@@ -330,6 +386,14 @@ public class VBListBox : ListBox
         }
         // A double click's second release raises no Click (#1031).
         if (click)
+            this.ExecuteSub(ComponentBaseClass.ClickEvent);
+    }
+
+    protected override void OnTextInput(TextInputEventArgs e)
+    {
+        var before = SelectedIndex;
+        base.OnTextInput(e);
+        if (SelectedIndex != before)
             this.ExecuteSub(ComponentBaseClass.ClickEvent);
     }
 

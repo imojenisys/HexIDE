@@ -49,6 +49,58 @@ public class DapProcessTests
     }
 
     [Fact]
+    public async Task Disconnect_reads_what_the_adapter_writes_after_its_reply()
+    {
+        // debugpy answers disconnect and then sends one more event (#3894). Closing the adapter's output on the reply made
+        // that write fail with a broken pipe, and debugpy exit 1. The fixture writes the same event after a pause, and
+        // the capture shows whether it was still read.
+        await using var log = new ConversationLog();
+        await using var session = DapSession.Start(Options("disconnect-late-event") with { Capture = new(log, "dap:late") });
+        await session.LaunchAsync("fixture", JsonSerializer.SerializeToElement(new { }), [], TestToken)
+            .WaitAsync(Patience, TestToken);
+        await session.DisconnectAsync(TestToken).WaitAsync(Patience, TestToken);
+        var result = await session.ProcessCompletion!.WaitAsync(Patience, TestToken);
+        result.ExitCode.Should().Be(0);
+        result.ForcedTermination.Should().BeFalse("the adapter exits by itself once its input ends");
+        session.Snapshot.State.Should().Be(DapSessionState.Ended);
+        await log.DrainAsync();
+        log.Snapshot("dap:late").Should().Contain(e => e.Kind == ConversationEntryKind.Notification
+            && e.Direction == ConversationDirection.Received && e.Method == "debugpySockets",
+            "the adapter's output stays open, and read, until the adapter closes it");
+    }
+
+    [Fact]
+    public async Task Disconnect_keeps_stdin_open_for_the_adapters_trailing_event()
+    {
+        await using var log = new ConversationLog();
+        await using var session = DapSession.Start(Options("disconnect-channel-event") with { Capture = new(log, "dap:channel") });
+        await session.LaunchAsync("fixture", JsonSerializer.SerializeToElement(new { }), [], TestToken)
+            .WaitAsync(Patience, TestToken);
+        await session.DisconnectAsync(TestToken).WaitAsync(Patience, TestToken);
+        var result = await session.ProcessCompletion!.WaitAsync(Patience, TestToken);
+        result.ExitCode.Should().Be(0, "stdin must stay open until the trailing send (#4580)");
+        result.ForcedTermination.Should().BeFalse();
+        await log.DrainAsync();
+        log.Snapshot("dap:channel").Should().Contain(e => e.Kind == ConversationEntryKind.Notification
+            && e.Direction == ConversationDirection.Received && e.Method == "debugpySockets");
+    }
+
+    [Fact]
+    public async Task Disconnect_closes_a_quiet_adapter_without_waiting_for_the_drain_bound()
+    {
+        await using var session = DapSession.Start(Options("disconnect-quiet") with { ShutdownTimeout = TimeSpan.FromSeconds(10) });
+        await session.LaunchAsync("fixture", JsonSerializer.SerializeToElement(new { }), [], TestToken)
+            .WaitAsync(Patience, TestToken);
+        var elapsed = Stopwatch.StartNew();
+        await session.DisconnectAsync(TestToken).WaitAsync(Patience, TestToken);
+        elapsed.Elapsed.Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(250));
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3), "a quiet adapter needs only the quiet window, not the 10 s drain bound");
+        var result = await session.ProcessCompletion!.WaitAsync(Patience, TestToken);
+        result.ExitCode.Should().Be(0);
+        result.ForcedTermination.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task Launch_preserves_argument_boundaries_working_directory_and_environment()
     {
         var directory = Path.Combine(Path.GetTempPath(), "dap fixture " + Guid.NewGuid());

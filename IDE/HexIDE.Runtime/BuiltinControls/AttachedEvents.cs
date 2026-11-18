@@ -23,7 +23,7 @@ public static class AttachedEvents
         InputElement.GotFocusEvent.AddClassHandler<T>((control, e) =>
         {
             if (e is FocusChangedEventArgs moved
-                && OwnsThePointerEvent(control, moved.NewFocusedElement) && !OwnsThePointerEvent(control, moved.OldFocusedElement))
+                && OwnsTheFocus(control, moved.NewFocusedElement) && !OwnsTheFocus(control, moved.OldFocusedElement))
             {
                 if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
                     form.ControlFocused(control);
@@ -34,7 +34,7 @@ public static class AttachedEvents
         InputElement.LostFocusEvent.AddClassHandler<T>((control, e) =>
         {
             if (e is FocusChangedEventArgs moved
-                && OwnsThePointerEvent(control, moved.OldFocusedElement) && !OwnsThePointerEvent(control, moved.NewFocusedElement))
+                && OwnsTheFocus(control, moved.OldFocusedElement) && !OwnsTheFocus(control, moved.NewFocusedElement))
             {
                 if (control.FindLogicalAncestorOfType<VBFormRuntime>() is { Context.Program: not null } form)
                 {
@@ -48,6 +48,17 @@ public static class AttachedEvents
                     control.ExecuteSub(ComponentBaseClass.LostFocusEvent);
             }
         }, handledEventsToo: true);
+    }
+
+    private static bool OwnsTheFocus(Control control, object? source)
+    {
+        if (OwnsThePointerEvent(control, source))
+            return true;
+        // A combo's popup items belong to the same control despite living outside its visual tree (#1101, #2325).
+        if (control is not VBComboBox || source is not Visual visual)
+            return false;
+        var item = visual as ComboBoxItem ?? visual.FindAncestorOfType<ComboBoxItem>();
+        return item is not null && ReferenceEquals(ItemsControl.ItemsControlFromItemContainer(item), control);
     }
 
     public static void AttachClick<T>(ClickRelease release = ClickRelease.Anywhere) where T : Control
@@ -290,8 +301,8 @@ public static class AttachedEvents
                     args.Add(new Vb6Value(i));
                 args.Add(new Vb6Value(button));
                 args.Add(new Vb6Value(shift));
-                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(x, mode, vertical: false)));
-                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(y, mode, vertical: true)));
+                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(x, mode, vertical: false, origin as Control)));
+                args.Add(new Vb6Value(ControlPositions.MouseCoordinate(y, mode, vertical: true, origin as Control)));
                 return args;
             }, coalescing, when);
     }

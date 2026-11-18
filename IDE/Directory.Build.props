@@ -4,8 +4,6 @@
         <DotNetVersion>net11.0</DotNetVersion>
         <DotNetVersionDesktop>net11.0</DotNetVersionDesktop>
         <DotNetVersionBrowser>net11.0-browser</DotNetVersionBrowser>
-        <DotNetVersionAndroid>net11.0-android</DotNetVersionAndroid>
-        <DotNetVersioniOS>net11.0-ios</DotNetVersioniOS>
         <ImplicitUsings>enable</ImplicitUsings>
     </PropertyGroup>
 
@@ -19,7 +17,7 @@
          (NB: an XML comment may not contain a double hyphen, so the literal git flag is not spelled
          out here.) -->
     <PropertyGroup>
-        <Version>0.6.0</Version>
+        <Version>0.6.2</Version>
         <Product>HexIDE</Product>
         <Company>The HexIDE Authors</Company>
         <Copyright>© The HexIDE Authors</Copyright>
