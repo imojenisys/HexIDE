@@ -71,6 +71,9 @@ public sealed class WatchedFileBatchTests : IDisposable
         Register();
         await Task.Delay(50, TestContext.Current.CancellationToken);
         File.WriteAllText(_path, "new");
+        // Windows can tunnel the deleted file's birth time when its name is reused (#3650).
+        // This scenario needs a genuinely new birth time, as measured on APFS.
+        File.SetCreationTimeUtc(_path, DateTime.UtcNow);
         Disk(2); Disk(1);
         (await Batch()).Should().Equal(1);
         Disk(2); Disk(1);
@@ -79,6 +82,7 @@ public sealed class WatchedFileBatchTests : IDisposable
         Disk(3);
         (await Batch()).Should().Equal(3);
         File.WriteAllText(_path, "recreated");
+        File.SetCreationTimeUtc(_path, DateTime.UtcNow);
         Disk(2); Disk(1);
         (await Batch()).Should().Equal(1);
     }
