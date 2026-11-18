@@ -289,11 +289,20 @@ The container has no Node, so the three JSON-server tests skip there.
 
 ### Changing the add-in API
 
-`HexIDE.Core` guards the public API declared under `Addins/` with PublicApiAnalyzers. Put additions in
-`PublicAPI.Unshipped.txt`; `PublicAPI.Shipped.txt` records the existing SDK. A change or removal breaks
-compiled add-ins, RDCore's included, and needs the maintainer's decision. On SDK records, add init-only
-properties, never new positional parameters: those replace the constructor and `Deconstruct` (#4566).
-Types exposed from other Core namespaces are not baselined by this guard (#4567).
+`HexIDE.Core` guards the public API declared under `Addins/` and every Core type its signatures reach
+with PublicApiAnalyzers. That contract includes the project model (`ProjectElements`), component model
+(`Components`), region types (`Language`), project and form file interfaces, serializer interfaces,
+language-server entry and the LSP records the SDK reaches. A change to any of them is an add-in API change.
+Put additions in `PublicAPI.Unshipped.txt`; `PublicAPI.Shipped.txt` records the existing SDK. A change or
+removal breaks compiled add-ins, RDCore's included, and needs the maintainer's decision. On SDK records,
+add init-only properties, never new positional parameters: those replace the constructor and
+`Deconstruct` (#4566). The Debug-only host-code-page probe has its configuration-specific entry in
+`PublicAPI.Debug/PublicAPI.Unshipped.txt`.
+
+`AddinPublicApiTests` walks the public signatures transitively. It fails when a signature reaches a new
+Core type without both an API type entry and an RS0016 `error` section for its declaring source file in
+`.editorconfig`, or reaches a type from another non-BCL assembly. Types unrelated to the SDK remain
+outside the guard; the SDK-reachable LSP messages live in `Lsp/Messages/AddinMessages.cs` (#4609).
 
 ### Add-ins without the signing key
 
