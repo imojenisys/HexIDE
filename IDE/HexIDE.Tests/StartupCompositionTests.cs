@@ -37,6 +37,7 @@ public class StartupCompositionTests : CompositionTestBase
     public void ResolvesEveryStartupRootInApplicationOrder()
     {
         // Keep the order in App.OnFrameworkInitializationCompleted: a different first root can hide a cycle.
+        Composition.RunningProgram.Should().NotBeNull();
         Composition.ThemeService.Should().NotBeNull();
         Composition.SettingsService.Should().NotBeNull();
         Composition.KeymapService.Should().NotBeNull();
@@ -53,6 +54,7 @@ public class StartupCompositionTests : CompositionTestBase
             // DesktopStartupHook also resolves the add-in host and, in Debug, the server context.
             Composition.AddinLoader.Should().NotBeNull();
             Composition.HexIdeHost.Should().NotBeNull();
+            Composition.ContributedProjects.Should().NotBeNull();
             Composition.ProjectManager.Should().NotBeNull();
             Composition.DocumentDockService.Should().NotBeNull();
             Composition.EditorService.Should().NotBeNull();
@@ -68,9 +70,6 @@ public class StartupCompositionTests : CompositionTestBase
             Composition.LanguageSwitchService.Should().NotBeNull();
             Composition.Capture.Should().NotBeNull();
             Composition.Pseudonyms.Should().NotBeNull();
-            Composition.ProjectFileFormat.Should().NotBeNull();
-            Composition.ReadOnlyRegionReader.Should().NotBeNull();
-            Composition.ReadOnlyRegionRules.Should().NotBeNull();
             Composition.ArchiveProjects.Should().NotBeNull();
         }
         finally

@@ -56,8 +56,7 @@ public partial class DISetup
                 ctx.Inject<IWindowManager>(out var windows);
                 ctx.Inject<ISettingsService>(out var settings);
                 ctx.Inject<ILocalizationService>(out var localization);
-                ctx.Inject<IProjectFileFormat>(out var format);
-                return new FormEditViewModel(toolbox, events, projects, editors, windows, settings, localization, format);
+                return new FormEditViewModel(toolbox, events, projects, editors, windows, settings, localization);
             })
             .Bind().As(Singleton).To<PropertiesToolViewModel>()
             .Bind().As(Singleton).To(ctx =>
