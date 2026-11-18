@@ -387,12 +387,16 @@ position, and so does a refused step. What VB6 does with the caret there hasn't 
   Measured in VB6 SP6 on 2026-11-18: [#4449](https://github.com/hexide-io/HexIDE/issues/4449), oracle PR #4651.
 - **HexIDE:** matches those measured positions, pinned through running forms in `FormInstanceTests` and
   `IdleBreakTests`. Module-level variable declarations still run without a step stop. Direct procedure calls retain
-  their existing declaration handling; they were not measured here. Activate is unchanged.
+  their existing declaration handling; they were not measured here.
 - **History:** #1010 fixed a startup split across dispatches that disarmed the starting step before Load. Its
   first-statement expectation, and #2172's startup End exception, were not measurements; #4449 overturns them.
-- **Unmeasured:** a startup form without `Form_Initialize`. #4449's supervisor proposed a Load declaration stop by
-  reasoning from the measured entries, not by measurement. The measured-only implementation retains its previous
-  first-statement start pending a measurement of this case.
+- **Startup form with no Initialize, and after Load:** measured in VB6 SP6 on 2026-11-18
+  ([#4449](https://github.com/hexide-io/HexIDE/issues/4449), oracle PR #4683): F8 stops at `Form_Load`'s
+  declaration, then Over stops at its statement and `End Sub`. With or without Initialize, Over off Load's
+  `End Sub` runs Resize without stopping and breaks at `Form_Activate`'s declaration, then its statement,
+  its `End Sub`, then runs. HexIDE matches these positions and the Load → Resize → Activate output order.
+- **Unmeasured:** Step Into off the startup form's Load `End Sub`, including whether it stops in Resize;
+  its existing stepping path is unchanged. UserControl and other module startup positions remain unchanged.
 
 ### D20. A step from a function's last statement skips `End Function` — FIXED
 - **VB6:** stops there (measured 2026-10-26, #2172; the oracle's [A breakpoint on a procedure's End line or its

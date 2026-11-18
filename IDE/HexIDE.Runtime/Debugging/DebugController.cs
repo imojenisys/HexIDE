@@ -58,6 +58,7 @@ public sealed class DebugController : IDebugGate
     private bool _dispatchIdle;
     private int _dispatchDepth;
     private bool _stepAtNextEvent;
+    private bool _carriedStepWasOver;
     // One-shot step (Into/Over/Out): the next qualifying statement breaks, then disarms. Over/Out compare the
     // executing frame's Depth to the depth captured when the step was armed.
     private StepMode _stepMode;
@@ -490,6 +491,7 @@ public sealed class DebugController : IDebugGate
     // simply MOVES on the next Stopped. Idle/Running ⇒ leaves the step armed (the next gate breaks).
     private void ResumeForStep()
     {
+        _carriedStepWasOver = false;
         if (_state != DebugState.Paused)
             return;
         var bt = _breakTcs;
@@ -508,6 +510,17 @@ public sealed class DebugController : IDebugGate
             rg?.TrySetResult();
         }
         bt?.TrySetResult();   // resume the decider; active-chain newcomers stay frozen
+    }
+
+    public void NotifyStartupShowResize()
+    {
+        if (!_stepAtNextEvent || !_carriedStepWasOver)
+            return;
+        // Only the startup show's Resize: run it below Over's target depth, then its dispatch carries
+        // the step to Activate. Breakpoints, Stop and watches still work inside Resize (#4449).
+        _stepAtNextEvent = false;
+        _stepMode = StepMode.Over;
+        _stepTargetDepth = 0;
     }
 
     public void NotifyDispatchStarted()
@@ -532,6 +545,7 @@ public sealed class DebugController : IDebugGate
             return;
         // #4261/#4269/#4449, measured in VB6's IDE. Only a completed outermost chain
         // carries a step into a fresh event; a nested event must retain the active step's depth rule.
+        _carriedStepWasOver = _stepMode == StepMode.Over;
         _stepAtNextEvent = _stepMode is StepMode.Into or StepMode.Out || (carryOver && _stepMode == StepMode.Over);
         _stepMode = _stepAtNextEvent ? StepMode.Into : StepMode.None;
         var rg = _resumeGate;

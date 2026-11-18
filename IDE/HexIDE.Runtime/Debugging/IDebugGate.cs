@@ -35,6 +35,9 @@ public interface IDebugGate : IDebugController
     /// <summary>Complete startup Main's dispatch: Into and Out carry to the next event, Over does not (#4449).</summary>
     void NotifyMainDispatchIdle() => NotifyDispatchIdle(carryStep: false);
 
+    /// <summary>The startup show's Resize is about to run: carry Step Over through it to Activate (#4449).</summary>
+    void NotifyStartupShowResize() { }
+
     /// <summary>A procedure's declaration, before any statement runs.</summary>
     ValueTask OnProcedureEntryAsync(int line, string module, IDebugFrame frame)
         => OnBreakpointPositionAsync(line, module, frame);

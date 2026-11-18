@@ -182,8 +182,7 @@ Stepping follows VB6's gestures and granularity: one statement at a time, with c
 
 #### Scenario: Starting a run with F8
 - **WHEN** the developer presses F8 while the project is idle
-- **THEN** the project starts and breaks at the startup procedure's declaration for Main or a form with Form_Initialize (#4449)
-- **AND** a startup form without Form_Initialize retains its first-statement stop pending measurement
+- **THEN** the project starts and breaks at the startup procedure's declaration: Main, Form_Initialize when present, or Form_Load otherwise (#4449)
 
 #### Scenario: Stepping over a call
 - **WHEN** the developer presses Shift+F8 while paused on a line that calls a procedure
@@ -569,7 +568,15 @@ Property Get's End line SHALL remain breakpoint-only.
 - **THEN** execution pauses on Initialize's declaration
 - **AND** Step Over advances through its statement, its End Sub, Load's declaration and Load's first statement
 - **WHEN** the form has no Form_Initialize
-- **THEN** the initial step retains its existing Load first-statement stop, pending measurement
+- **THEN** the initial step pauses on Load's declaration (#4449, oracle PR #4683)
+
+#### Scenario: Step Over off startup Load's end
+- **WHEN** Step Over resumes from a startup form's Form_Load End Sub, with or without Form_Initialize
+- **THEN** Form_Resize runs without a step stop, after Load and before Activate
+- **AND** execution pauses on Form_Activate's declaration, before its first statement
+- **AND** subsequent Step Over commands pause on Activate's statement and End Sub, then resume running
+- **AND** this startup-show rule does not change stepping through later window resizes
+- **AND** Step Into off Load's End Sub retains its existing, unmeasured positions
 
 #### Scenario: Step through startup Main
 - **WHEN** Step Into or Step Over starts a project at Sub Main from design mode
