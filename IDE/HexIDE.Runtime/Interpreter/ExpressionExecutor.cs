@@ -599,10 +599,18 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// placed by the member's parameter names and evaluated in parameter order, as an intrinsic's are (#1471); an object
     /// that names no parameters for the member refuses them, as before (#1474).
     /// </summary>
-    public async Task<List<Vb6Value>> EvaluateMemberArgs(object? target, string member, VB6Parser.ArgsCallContext? context)
+    public async Task<List<Vb6Value>> EvaluateMemberArgs(Vb6Value reference, string member, VB6Parser.ArgsCallContext? context)
     {
-        if (target is not INamedParameterSource source || await NamedCallArgs(context) is not { } args)
+        var target = reference.Value;
+        var control = ControlMethodParameters.IsTarget(target);
+        var source = target as INamedParameterSource ?? (control ? new ControlMethodParameters(target!) : null);
+        if (source is null || await NamedCallArgs(context) is not { } args)
             return await EvaluateCallArgs(context);
+        // A control or form held as Object/Variant takes no names, even correct or repeated ones (#1474).
+        // Keep the reference's binding before unwrapping a form, and retain the existing evaluation of positional
+        // prefixes: their side effects before a late-bound refusal were not measured.
+        if (control && (reference.HeldAsVariant || string.Equals(reference.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase)))
+            throw new VBRunTimeException(VBStandardError.NamedArgumentNotFound);
         if (!source.TryGetParameters(member, out var names, out var required))
             throw new NotImplementedException($"Named arguments to {member} are not implemented yet (#1474)");
         var arranged = await NamedArguments.Arrange(args, names, i => i < required);
@@ -1639,7 +1647,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         {
             if (dollar)
                 throw new NotImplementedException($"{name}$ on a Collection is not implemented (#742)");
-            return await AsBound(maybeGroup, "Item", async () => items.Default(await EvaluateMemberArgs(items, "Item", argsCtx)));
+            return await AsBound(maybeGroup, "Item", async () => items.Default(await EvaluateMemberArgs(maybeGroup, "Item", argsCtx)));
         }
         if (named && maybeGroup.Value is StatusBarPanels panels)
             return new Vb6Value(panels.Item(await EvaluateCallArgs(argsCtx)));
@@ -1719,7 +1727,9 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         {
             if (ownHint is not null)
                 throw new NotImplementedException($"{name}{ownHint.GetText()} on a member of the form is not implemented (#742)");
-            var formArgs = await EvaluateCallArgs(argsCtx);
+            var formArgs = formMember.IsMethod
+                ? await EvaluateMemberArgs(Vb6Value.NewObject(form), name, argsCtx)
+                : await EvaluateCallArgs(argsCtx);
             // `Left$("abc", 1)` in a form's code is VBA's Left$, a String, as `Left("abc", 1)` is VBA's Left (measured).
             if (dollar && !FormMembers.CallIsVbas(name, formArgs.Count))
                 throw new NotImplementedException($"{name}$ on a member of the form is not implemented (#742)");
@@ -1871,7 +1881,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             if (name.Equals("Refresh", StringComparison.OrdinalIgnoreCase))
                 throw new NotImplementedException("ListView.Refresh as a value is unmeasured (#1085)");
             if (Components.InBox.ListViewComponentClass.Instance.Member(name) is { Kind: Components.InBox.MemberKind.Method })
-                return listView.CallMember(name, await EvaluateMemberArgs(listView, name, MemberArgs(member)));
+                return listView.CallMember(name, await EvaluateMemberArgs(variable, name, MemberArgs(member)));
         }
         if (variable.Value is BuiltinControls.VBStatusBar statusBar && MemberName(member).Equals("Panels", StringComparison.OrdinalIgnoreCase))
             return MemberArgs(member) is { } panelArgs
@@ -1885,7 +1895,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         }
         else if (variable.Value is ICSharpAsyncProxy proxy)
             return await AsBound(variable, MemberName(member), async () =>
-                await interpreter.CallProxy(proxy, MemberName(member), await EvaluateMemberArgs(proxy, MemberName(member), MemberArgs(member)))
+                await interpreter.CallProxy(proxy, MemberName(member), await EvaluateMemberArgs(variable, MemberName(member), MemberArgs(member)))
                     ?? throw new VBSubOrFunctionNotDefinedException(MemberName(member)));
         // A class instance member (`obj.Method(args)` or `obj.Field`) — method dispatch wins over a field of
         // the same name. Nothing.Member → Error 91.
@@ -1948,7 +1958,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 if (vobj.ClassDef.Kind == InterpreterModuleKind.Form && FormMembers.IsMember(memberName, out var formMember))
                 {
                     if (formMember.IsMethod)
-                        return FormMembers.Call(vobj, memberName, await EvaluateCallArgs(MemberArgs(member)));
+                        return FormMembers.Call(vobj, memberName, await EvaluateMemberArgs(variable, memberName, MemberArgs(member)));
                     if (MemberArgs(member) == null)
                         return FormMembers.Read(vobj, memberName);
                     if (FormMembers.IsControls(memberName))
@@ -2009,7 +2019,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         // Every member of a control Controls.Remove took out is 735, its Name included (measured, #1556).
         VBProps.RefuseIfRemoved(control);
         if (control is VBPictureBox && RuntimeScale.IsConversion(MemberName(member)))
-            return RuntimeScale.ConvertUnits(control, MemberName(member), await EvaluateCallArgs(MemberArgs(member)));
+            return RuntimeScale.ConvertUnits(control, MemberName(member), await EvaluateMemberArgs(variable, MemberName(member), MemberArgs(member)));
 
         if (control is VBShape or VBLine && memberIdentifier.Equals("MousePointer", StringComparison.OrdinalIgnoreCase))
             throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
