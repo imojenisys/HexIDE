@@ -108,6 +108,13 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         var leftValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(leftRaw, callerFrames: stmtFrames), context[0]);
         var rightRaw = await EvaluateValue(context[1]);
         var rightValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(rightRaw, callerFrames: stmtFrames), context[1]);
+        if (leftValue.IsOddByteString || rightValue.IsOddByteString)
+        {
+            if (!(leftRaw.IsOddByteString || leftRaw.Type == Vb6Value.ValueType.String)
+                || !(rightRaw.IsOddByteString || rightRaw.Type == Vb6Value.ValueType.String))
+                throw Vb6Value.OddBytesNotImplemented("Comparison");
+            return (leftValue, rightValue);
+        }
         if (leftValue.Type == Vb6Value.ValueType.LongLong || rightValue.Type == Vb6Value.ValueType.LongLong)
         {
             if (leftValue.IsNull || rightValue.IsNull)
@@ -540,6 +547,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                     : null;
             }
             else if (operand is not VB6Parser.VsStructContext
+                && !values[0].IsOddByteString
                 && (Vb6Value.TryNumericToDouble(values[0], out _)
                     || values[0].Value is bool && name.Equals("LenB", StringComparison.OrdinalIgnoreCase))   // LenB(True), measured
                 && (operand is not VB6Parser.VsICSContext ics
@@ -618,6 +626,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     private async Task<List<Vb6Value>> EvaluatePointerArgs(string name, VB6Parser.ValueStmtContext pointerOperand)
     {
         var arg = await ResolveByRef(pointerOperand);
+        arg.Value.RefuseOddBytes(name);
         var state = interpreter.ExecutionContext.State;
         long identity;
         if (name.Equals("StrPtr", StringComparison.OrdinalIgnoreCase))
@@ -1804,6 +1813,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static void RequireMemberReceiver(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
     {
+        value.RefuseOddBytes("Member access");
         // Measured non-object Variant receivers (#257); other kinds keep their existing dispatch.
         if (value.Type == Vb6Value.ValueType.EmptyVariant || value.Type == Vb6Value.ValueType.Null
             || value.HeldAsVariant && (value.Type.IsArray || value.Type == Vb6Value.ValueType.Integer
@@ -2322,13 +2332,30 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     public override async Task<object?> VisitVsAmp(VB6Parser.VsAmpContext context)
     {
-        var (leftValue, rightValue) = await GetTwoValues(context.valueStmt());
-        return Concatenate(leftValue, rightValue);
+        var leftRaw = await EvaluateValue(context.valueStmt(0));
+        var left = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(leftRaw, callerFrames: stmtFrames), context);
+        var rightRaw = await EvaluateValue(context.valueStmt(1));
+        if (left.IsOddByteString && !leftRaw.IsOddByteString)
+            throw Vb6Value.OddBytesNotImplemented("Concatenation (&)");
+        if (left.IsOddByteString || rightRaw.IsOddByteString)
+            return Concatenate(leftRaw, rightRaw);
+        var right = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(rightRaw, callerFrames: stmtFrames), context);
+        if (right.IsOddByteString) throw Vb6Value.OddBytesNotImplemented("Concatenation (&)");
+        return Concatenate(left, right);
     }
 
     /// <summary><c>&amp;</c> on two values, as <see cref="VisitVsAmp"/> and an <c>#If</c>'s expression apply it.</summary>
     internal static Vb6Value Concatenate(Vb6Value leftValue, Vb6Value rightValue)
     {
+        if (leftValue.IsOddByteString || rightValue.IsOddByteString)
+        {
+            static byte[] Bytes(Vb6Value v) => v.IsNull || v.Type == Vb6Value.ValueType.EmptyVariant ? []
+                : v.IsOddByteString || v.Type == Vb6Value.ValueType.String ? v.StringBytes()
+                : throw Vb6Value.OddBytesNotImplemented("Concatenation (&)");
+            var byteJoined = Vb6Value.FromStringBytes([.. Bytes(leftValue), .. Bytes(rightValue)]);
+            if (leftValue.IsNull || rightValue.IsNull) return byteJoined;
+            return leftValue.HasFixedType && rightValue.HasFixedType ? byteJoined.AsFixedType() : Typed(leftValue, rightValue, byteJoined);
+        }
         if (leftValue.IsNull && rightValue.IsNull)
             return Vb6Value.Null;
         // Null and Empty both concatenate as "" (Empty.Value is null, so the old code NPE'd on it).
@@ -2363,6 +2390,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// <summary><c>+</c> or <c>-</c> on two values, as <see cref="VisitVsAdd"/> and an <c>#If</c>'s expression apply them.</summary>
     internal static Vb6Value AddOrSubtract(Vb6Value leftValue, Vb6Value rightValue, bool subtract, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("AddOrSubtract");
+        rightValue.RefuseOddBytes("AddOrSubtract");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         if (subtract)
@@ -2388,6 +2417,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// <summary><c>*</c> or <c>/</c> on two values, as <see cref="VisitVsMult"/> and an <c>#If</c>'s expression apply them.</summary>
     internal static Vb6Value MultiplyOrDivide(Vb6Value leftValue, Vb6Value rightValue, bool divide, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("MultiplyOrDivide");
+        rightValue.RefuseOddBytes("MultiplyOrDivide");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, divide
@@ -2403,6 +2434,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Modulo(Vb6Value leftValue, Vb6Value rightValue, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("Modulo");
+        rightValue.RefuseOddBytes("Modulo");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, VbNumeric.Modulo(leftValue, rightValue, context));
@@ -2416,6 +2449,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value IntegerDivide(Vb6Value leftValue, Vb6Value rightValue, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("IntegerDivide");
+        rightValue.RefuseOddBytes("IntegerDivide");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, VbNumeric.IntDivide(leftValue, rightValue, context));
@@ -2429,6 +2464,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Power(Vb6Value leftValue, Vb6Value rightValue, Antlr4.Runtime.ParserRuleContext context)
     {
+        leftValue.RefuseOddBytes("Power");
+        rightValue.RefuseOddBytes("Power");
         if (leftValue.Type == Vb6Value.ValueType.Null || rightValue.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         return Typed(leftValue, rightValue, VbNumeric.Power(leftValue, rightValue, context));
@@ -2442,6 +2479,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         {
             // Null on either side is Null; anything else is taken as the text & would make of it (#1547).
             var (text, pattern) = await GetTwoValues(context.valueStmt());
+            text.RefuseOddBytes("Like");
+            pattern.RefuseOddBytes("Like");
             if (text.IsNull || pattern.IsNull)
                 return Vb6Value.Null;
             return new Vb6Value(VbLike.Matches(LikeOperand(text), LikeOperand(pattern),
@@ -2453,6 +2492,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             // and Nothing Is Nothing — NOT Vb6Value equality (which would run numeric coercion).
             var leftObject = await EvaluateValue(context.valueStmt(0));
             var rightObject = await EvaluateValue(context.valueStmt(1));
+            leftObject.RefuseOddBytes("Is");
+            rightObject.RefuseOddBytes("Is");
             if (leftObject.Type == Vb6Value.ValueType.Error || rightObject.Type == Vb6Value.ValueType.Error)
                 throw new VBRunTimeException(context, VBStandardError.ObjectRequired);
             return new Vb6Value(ReferenceEquals(leftObject.Value, rightObject.Value));
@@ -2463,6 +2504,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (context.EQ() != null || context.NEQ() != null)
         {
             var (left, right) = await GetTwoValuesSameTypesOrNull(context.valueStmt());
+            if (left.IsOddByteString || right.IsOddByteString)
+                return new Vb6Value(CompareOddBytes(left, right, compareText, context.EQ() != null ? "=" : "<>") == 0);
             if (left.Type == Vb6Value.ValueType.Null || right.Type == Vb6Value.ValueType.Null)
                 return Vb6Value.Null;
             var equal = StringCompare(left, right, compareText) is int same ? same == 0 : left.Equals(right);
@@ -2473,6 +2516,9 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             : context.LEQ() != null ? Order.LessOrEqual
             : Order.GreaterOrEqual;
         var (leftValue, rightValue) = await GetTwoValuesSameTypesOrNull(context.valueStmt());
+        if (leftValue.IsOddByteString || rightValue.IsOddByteString)
+            return new Vb6Value(CompareOddBytes(leftValue, rightValue, compareText, context.LT() != null ? "<"
+                : context.GT() != null ? ">" : context.LEQ() != null ? "<=" : ">=") < 0);
         // Two strings compare ordinally under Option Compare Binary (oracle-verified: "B" < "a", "10" < "9"), and as text
         // under Option Compare Text. Mixed String/number operands were reconciled above (#211).
         if (StringCompare(leftValue, rightValue, compareText) is int sc)
@@ -2490,6 +2536,15 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (TryUnpack(leftValue, rightValue, out double leftDouble, out double rightDouble))
             return (Vb6Value)Holds(order, leftDouble, rightDouble);
         throw new VBRunTimeException(context, VBStandardError.TypeMismatch);
+    }
+
+    private static int CompareOddBytes(Vb6Value left, Vb6Value right, bool text, string operation)
+    {
+        if (text || operation is not ("=" or "<")
+            || !(left.IsOddByteString || left.Type == Vb6Value.ValueType.String)
+            || !(right.IsOddByteString || right.Type == Vb6Value.ValueType.String))
+            throw Vb6Value.OddBytesNotImplemented(operation + (text ? " (Option Compare Text)" : ""));
+        return left.StringBytes().AsSpan().SequenceCompareTo(right.StringBytes());
     }
 
     private enum Order { Less, Greater, LessOrEqual, GreaterOrEqual }
@@ -2570,6 +2625,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Negation(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
     {
+        value.RefuseOddBytes("Negation");
         if (value.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         var negated = VbNumeric.Negate(value, context);
@@ -2583,6 +2639,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     internal static Vb6Value Not(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
     {
+        value.RefuseOddBytes("Not");
         if (value.Type == Vb6Value.ValueType.Null)
             return Vb6Value.Null;
         // Not keeps its operand's OWN width rather than promoting: Not CByte(5) is 250, an eight-bit
@@ -2686,6 +2743,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 ?? throw new VBCompileErrorException("Expected a type after TypeOf … Is");
         }
 
+        operand.RefuseOddBytes("TypeOf");
         // A live instance matches its own class (or the catch-all `Object`); Nothing / non-object → False.
         // (VB6 raises an error for TypeOf on a non-object — a documented simplification here.)
         // A Collection is a Collection, a VBA.Collection and an Object (measured, #1471).
@@ -2756,6 +2814,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// </summary>
     private static bool TryBitwise(Vb6Value left, Vb6Value right, Func<long, long, long> op, out Vb6Value result)
     {
+        left.RefuseOddBytes("Bitwise operation");
+        right.RefuseOddBytes("Bitwise operation");
         if (left.Type == Vb6Value.ValueType.LongLong || right.Type == Vb6Value.ValueType.LongLong)
         {
             if (left.Type == Vb6Value.ValueType.Date || right.Type == Vb6Value.ValueType.Date
