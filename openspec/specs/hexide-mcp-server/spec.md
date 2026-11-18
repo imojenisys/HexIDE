@@ -1190,6 +1190,11 @@ a control in it SHALL have no `boundingRect`, rather than a position that reads 
 - **WHEN** `interact` clicks a button in a window set in from its surface by a title bar and shadow
 - **THEN** the button is pressed, and its `boundingRect` is where `take_snapshot` shows it
 
+#### Scenario: Popup geometry on native Wayland
+- **WHEN** a menu or tooltip is open under `--platform wayland` with Avalonia 12.1.5 or later
+- **THEN** `take_snapshot` includes the popup at its reported position, `inspect_element` reports `boundingRect` inside it,
+  and `hover` reports the open tooltip's `tipBounds` in the selected window's coordinates
+
 ### Requirement: A DPI-unaware IDE's window state SHALL say why its scale is 1
 An IDE started with `--dpi-unaware` SHALL give every window-state rectangle in the pixels Windows reports to it, the
 frame included, and its window-state reply SHALL carry a `note` saying why `scale` is 1 on a scaled display.
@@ -2298,3 +2303,27 @@ report adapter verification, relocation, refusal and unsupported conditions afte
 - **WHEN** `set_breakpoints` replaces a saved document's lines and conditions
 - **THEN** the adapter receives the editor's setBreakpoints request and the reply reports its verification and relocated lines
 - **AND** `get_breakpoints` for that document returns the same lines and conditions
+
+### Requirement: Click scrolls a clipped press point into view
+
+`interact` with `click` SHALL bring a clipped press point into view and wait for layout and a frame
+before pressing. Its reply SHALL name scroll viewers that moved. If the point remains clipped, it
+SHALL refuse without pressing and name the clipping ancestor (#4558).
+
+#### Scenario: A scrolled-out target has a cover at its old point
+
+- **WHEN** a single or double `click`, or the press of a drag or hold, targets a control whose centre or supplied `x,y` is outside its scroll viewport
+- **THEN** the target is brought into view before hit-testing and pressing
+- **AND** the reply names the scroll viewers that moved
+
+#### Scenario: A panel cannot reveal the press point
+
+- **WHEN** `click` targets a point clipped by a panel that cannot scroll it into view
+- **THEN** no pointer press is sent
+- **AND** the refusal names what clips the point and says it could not be brought into view
+
+#### Scenario: An in-view cover retains pointer behaviour
+
+- **WHEN** another control covers an in-view target's press point
+- **THEN** the click retains its existing success reply naming the cover it pressed
+- **AND** this change leaves drag release targets, `wheel`, `hover`, `double_click` and non-pointer verbs unchanged

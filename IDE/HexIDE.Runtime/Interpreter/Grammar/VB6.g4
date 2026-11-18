@@ -420,6 +420,7 @@ blockStmt
    | inputStmt
    | killStmt
    | timeStmt
+   | setStmt
    | letStmt
    | lineInputStmt
    | lineLabel
@@ -454,7 +455,6 @@ blockStmt
    | selectCaseStmt
    | sendkeysStmt
    | setattrStmt
-   | setStmt
    | stopStmt
    | unloadStmt
    | unlockStmt

@@ -154,3 +154,92 @@ CurrentX and CurrentY read the same every time.
 - `ScaleX` between two modes other than those above;
 - a display other than 96 dpi;
 - a late-bound `o.Scale` at run time.
+
+### Centimetres and millimetres, to the last bit (2026-11-18, #990, SP6)
+
+**The probe.** The same kind of form and run, with Picture1 at 1215 by 615 twips. Each value was also logged as
+`CStr(CDbl(x))`, which prints the Single's exact value. p-code and native code logged the same lines.
+
+| Call | Single, as `CStr` prints it | Its exact value |
+|---|---|---|
+| `ScaleX(1, vbCentimeters, vbTwips)` | 566.9286 | 566.928588867188 |
+| `ScaleY(1, vbCentimeters, vbTwips)` | 566.9286 | 566.928588867188 |
+| `ScaleX(1, vbMillimeters, vbTwips)` | 56.69286 | 56.6928558349609 |
+| `ScaleX(1, vbTwips, vbCentimeters)` | 1.763891E-03 | 1.76389061380178E-03 |
+| `ScaleX(4680, vbTwips, vbCentimeters)` | 8.255008 | 8.25500774383545 |
+| `ScaleX(1, vbInches, vbCentimeters)` | 2.540003 | 2.5400025844574 |
+| `ScaleX(1, vbCentimeters, vbInches)` | 0.3937004 | 0.393700420856476 |
+| `ScaleX(1, vbHimetric, vbTwips)` | 0.5669292 | 0.566929161548615 |
+| `ScaleX(1000, vbHimetric, vbCentimeters)` | 1.000001 | 1.00000095367432 |
+| `ScaleX(1, vbCentimeters, vbHimetric)` | 999.999 | 999.998962402344 |
+| `ScaleX(1, vbPixels, vbCentimeters)` | 2.645836E-02 | 2.64583602547646E-02 |
+| `ScaleX(1, vbPoints, vbCentimeters)` | 3.527781E-02 | 3.52778136730194E-02 |
+| `ScaleX(1, vbInches, vbTwips)` | 1440 | 1440 |
+| `ScaleX(1, vbInches, vbHimetric)` | 2540 | **2539.99975585938** |
+
+| Statement, in the mode named | Kept as | Reads back |
+|---|---|---|
+| `Picture1.Left = 1`, centimetres | 567 twips | 1.000126 |
+| `Picture1.Left = 2.5`, centimetres | 1417 twips | 2.499433 |
+| `Picture1.Left = 10`, millimetres | 567 twips | 10.00126 |
+| `CurrentX = 1`, centimetres | 567 twips | 1.000126 |
+
+- **ScaleWidth at other client widths:** 4695 twips read 8.281466 in centimetres and 82.81467 in millimetres; 6180
+  twips read 10.90084 in centimetres.
+- **VB6's factor is 566.928588867188 twips a centimetre,** a Single. It isn't 567, and it isn't 1440 / 2.54, which is
+  566.92913.
+- **The millimetre factor, 56.6928558349609, isn't a tenth of it to the last bit,** yet
+  `ScaleX(1, vbCentimeters, vbMillimeters)` read exactly 10, and `ScaleX(1, vbInches, vbHimetric)` read 2539.99975585938,
+  not 2540.
+- **A position or CurrentX set in centimetres is kept in whole twips,** rounded half to even, as in every other scale.
+  So 1 cm is 567 twips and reads back 1.000126.
+
+**What fits, and what resisted explanation.**
+- **At printed precision:** 566.928588867188 twips a centimetre, a tenth of that a millimetre, computed in double and
+  rounded to a Single, prints 28 of these 29 rows as VB6 printed them. That includes the ScaleMode table and the
+  120-twip note in `ControlPositions`.
+- **The exception** is `ScaleX(1, vbInches, vbCentimeters)`: 2.540002 against VB6's 2.540003.
+- **At the last bit of a Single, no model tried reproduces all 18 exact values.** Three were tried, and each got 13:
+  - one Single factor a unit, applied as twips per unit;
+  - the same applied as units per twip;
+  - both factors together.
+- **Measured, but no rule defended at the last bit.**
+
+**The maintainer's decision, 2026-11-18:** HexIDE implements the measured factor, accepting that one-digit miss (#990).
+
+### A control's size in a flipped scale, and Scale inside With (2026-11-18, #990, SP6)
+
+**The probe.** A form with a client area of 4560 by 3015 twips, and Command1 at Left 150, Top 150, 1215 by 495 twips. A
+Timer ran each row under `On Error Resume Next`, logging values and errors. The "twips" column is
+`ScaleY(value, vbUser, vbTwips)`, so it carries the scale's sign. p-code and native code logged the same lines. Each
+row continues from the one before.
+
+| Statement | Result |
+|---|---|
+| `Scale (0, 100)-(10, 0)` | ScaleTop 100, ScaleHeight -100 |
+| reading Command1 | Left 0.3289474, Top 95.02487, Width 2.664474, **Height 16.41791**: positive, -495 in twips |
+| `Command1.Height = 10` | ok. Height 10.01658: 302 twips, as 301.5 rounds half to even |
+| `Command1.Height = -10` | **380**, Invalid property value, and Height stays 10.01658 |
+| `Command1.Move 1, 90, 3, 10` | ok. Left 1, Top 89.98341, Width 3, Height 10.01658 |
+| `Command1.Move 1, 90, 3, -10` | **5**, Invalid procedure call or argument, and nothing moves |
+| `Command1.Top = 50` | Top 49.98342: 1508 twips |
+| `Scale (10, 0)-(0, 10)` | ScaleLeft 10, ScaleWidth -10 |
+| reading Command1 | **Left 9**, Top 5.001658, **Width 3**: positive, Height 1.001658 |
+| `Command1.Width = 2`, then `Command1.Left = 5` | Width 2, then Left 5 |
+
+- **A position follows the scale, sign and all.** Left and Top map through the origin and the signed unit, as
+  `Scale (10, 10)-(110, 60)` above showed for an upright scale.
+- **A size is a magnitude.** Width and Height read positive in a flipped scale, and a size set there converts with
+  the unit's absolute size: 10 units of -30.15 twips is 301.5 twips, kept as 302.
+- **A negative size is refused,** as in twips: 380 from the property, 5 from `Move`.
+
+**`Scale` inside `With`**, each in a project of its own, at `/make`:
+
+| Code | Result |
+|---|---|
+| `With Picture1`, then `.Scale (0, 0)-(100, 50)` | **Syntax error** |
+| `With Picture1`, then a bare `.Scale` | **Argument not optional** |
+| `Picture1.Scale` and `Me.Scale`, bare | builds |
+
+So `Scale` with its two points takes its object by name, or none, and not from `With`. Through `With`, even the bare
+`.Scale` that builds by name is refused. Other spellings through `With` weren't tried.

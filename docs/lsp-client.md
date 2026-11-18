@@ -214,6 +214,15 @@ in-memory arm checked 827,000 over 122,000. Both recorded zero bad frames. The r
 as [microsoft/vs-streamjsonrpc#1605](https://github.com/microsoft/vs-streamjsonrpc/issues/1605). These
 measurements support a mitigation, rather than a claim that teardown is race-free.
 
+IDE exit cancels the first desktop shutdown request while the language servers stop, then requests
+shutdown again (#4554). Save-on-exit confirmation comes first: cancelling the save prompt leaves the
+servers running, and a confirmed or forced close does not prompt again. The file watcher is disposed
+before stopping, and logging is flushed afterwards. The exit wait is bounded to **seven seconds**:
+two seconds for a shutdown reply, two for exit, two for the server process to exit before it is ended
+(`LaunchedServerGuard.ExitTimeout`, 1.5 on Linux and macOS), and one of scheduling room. A server whose exit
+is sent waits up to one second for its output to end (#4484) in place of the exit's two. A failed or timed-out stop is logged and exit proceeds. Repeated requests during that wait
+remain cancelled. The bound covers the whole stop, including every configured server.
+
 On stop, once `initialize` has been answered, the client allows two seconds for the parameterless
 `shutdown` request to answer, then attempts the parameterless `exit` notification even if shutdown timed out or failed (#392).
 Once `shutdown` is sent, the common outbound RPC gate permits no request or notification but `exit`, including
@@ -1605,6 +1614,9 @@ catalogue keeps its names. The shapes follow MCP's `tools/list` and `tools/call`
 - **Only HexIDE's own add-ins reach the tools** (`IHexIdeHost.ServerChatTools`): the caller supplies the approval
   callback, so another add-in sees an empty list. A developer-unsigned add-in exists only in a Debug build's
   developer mode.
+- **Refusals HexIDE writes have two readers** (#4332). The AI service receives the existing English text;
+  the chat shows the reason in the IDE's language, with server/tool names and exception messages left as
+  arguments. A server's own error text passes through unchanged. The displayed reason is cut at 300 characters.
 - Control characters and format characters (the bidirectional overrides among them) are removed from what a
   server returns. The limits are in [`language-servers.md`](language-servers.md#tools-for-ai-chat).
 
@@ -2044,6 +2056,12 @@ Three clusters account for nearly all of the gap:
   recursively watch a filesystem root (including a missing base whose existing ancestor is a root) are
   logged and refused with `InvalidParams`, installing nothing. Recursive disk watches feed
   the same matcher as completed project saves and workspace artefact writes, with 150 ms batching.
+  On macOS, disk Created events are corrected to Changed at batch flush when the file was already
+  reported without a subsequent Deleted, or its birth time predates the disk watch
+  ([#3650](https://github.com/hexide-io/HexIDE/issues/3650)).
+  The corrected kind is checked against the registration again. Unreadable files retain the reported type;
+  IDE reports and Windows/Linux disk events retain their existing handling. A file moved in from outside
+  the watched folders retains its birth time and is consequently reported Changed on macOS.
   Direct writes work independently of editor reload watching. Unregistering removes pending matches.
   `showMessageRequest` uses a queued IDE message box (#2908).
 
