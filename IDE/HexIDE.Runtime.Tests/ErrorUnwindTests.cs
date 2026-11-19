@@ -16,6 +16,43 @@ namespace HexIDE.Runtime.Tests;
 public class ErrorUnwindTests : BaseVBTestFixture
 {
     [Fact]
+    public void ARunawayOnTheUiThreadsStack_AllocatesInProportionToItsDepth()
+    {
+        // #4775: GC, rather than a growing amount of per-call allocation, dominates deep recursion.
+        // This guards today's linear allocation growth; it already passes without a runtime change.
+        AllocatedUntilError28(1000); // Warm the parser and JIT before comparing the two runs.
+        var shallow = AllocatedUntilError28(1000);
+        var deep = AllocatedUntilError28(BasicInterpreter.MaxCallDepth);
+
+        deep.Should().BeLessThan(shallow * 6,
+            "five times the calls must not allocate quadratically, including Error 28's unwind");
+    }
+
+    private long AllocatedUntilError28(int depth)
+    {
+        long bytes = 0;
+        UiThread.RunOnNewThread(() =>
+        {
+            var log = new List<Vb6Value>();
+            var code = "On Error Resume Next\nUp 1\nDebug.Print Err.Number\n" +
+                "Sub Up(ByVal n As Long)\n" +
+                $"If n >= {depth} Then Debug.Print n\n" +
+                (depth < BasicInterpreter.MaxCallDepth ? $"If n = {depth} Then Err.Raise 28\n" : "") +
+                "Up n + 1\nEnd Sub\n";
+            var vb = new BasicInterpreter(new MockStdLib(log), new ModuleExecutionContext(), new ExecutionEnvironment(), code);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var run = vb.Execute();
+            run.IsCompleted.Should().BeTrue("the measured walk must stay on the 64 MiB thread");
+            run.GetAwaiter().GetResult();
+            bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            // The depth cap and trappable Error 28 are HexIDE's existing contract (#3250, #4775).
+            log.Should().Equal([new Vb6Value((long)depth), new Vb6Value(28L)]);
+            return 0;
+        }, UiThread.StackBytes);
+        return bytes;
+    }
+
+    [Fact]
     public async Task AnErrorRaisedDeep_ArrivesWithNoMoreTraceThanOneRaisedShallow()
     {
         var shallow = await TraceLinesOfAnErrorRaised(callsDeep: 20);
