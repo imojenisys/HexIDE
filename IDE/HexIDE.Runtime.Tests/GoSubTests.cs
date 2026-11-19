@@ -588,49 +588,177 @@ public class GoSubTests : BaseVBTestFixture
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
     }
 
-    [Theory]
-    [InlineData("GoTo")]
-    [InlineData("GoSub")]
-    public async Task IntegerOverflowSelectorIsExplicitlyUnmeasured(string branch)
+    // Native and p-code measurements: #4880, oracle PR #4986,
+    // docs/vb6-fidelity-oracle/gosub-return-and-on-goto.md.
+    public static IEnumerable<object[]> SelectorRows()
     {
-        Func<Task> run = () => Run($"""
-            Sub Main()
-                On Error Resume Next
-                On 32768 {branch} A
-                Debug.Print "wrong"
-            A:
-            End Sub
-            Main
-            """ + "\n");
-        (await run.Should().ThrowAsync<NotImplementedException>()).Which.Message
-            .Should().Contain("selector outside Integer range").And.Contain("#4880");
-        debug.Should().BeEmpty();
+        foreach (var branch in new[] { "GoTo", "GoSub" })
+        {
+            foreach (var value in new[] { "2", "CByte(2)", "255", "256", "32767", "-32768", "-32768.5",
+                         "32768", "-32769", "65537", "65538", "-65534", "131074", "2147483647",
+                         "2147483648#", "1E+20", "CSng(32768)", "CCur(32768)", "CDec(32768)", "\"32768\"", "32767.5", "32768.4" })
+            {
+                var expected = value is "2" or "CByte(2)" ? "B" : value == "255" ? "fell" :
+                    value is "256" or "32767" or "-32768" or "-32768.5" ? "5" : "6";
+                yield return new object[] { branch, value, false, expected };
+            }
+            yield return new object[] { branch, "32768", true, "next 6" };
+            yield return new object[] { branch, "256", true, "next 5" };
+        }
     }
 
     [Theory]
-    [InlineData("Resume")]
-    [InlineData("Resume Next")]
-    [InlineData("Resume Done")]
-    public async Task ResumeOfEnclosingHandlersErrorIsExplicitlyUnmeasured(string resume)
+    [MemberData(nameof(SelectorRows))]
+    public async Task MeasuredSelector(string branch, string value, bool resumeNext, string expected)
     {
-        Func<Task> run = () => Run($"""
+        await Run($"""
             Sub Main()
-                On Error GoTo H
-                Err.Raise 5
-                Exit Sub
-            H:
-                GoSub A
+                On Error {(resumeNext ? "Resume Next" : "GoTo E")}
+                Dim v As Variant
+                v = {value}
+                On v {branch} A, B
+                Debug.Print {(resumeNext ? "\"next \" & Err.Number" : "\"fell\"")}
                 Exit Sub
             A:
-                {resume}
-                Return
-            Done:
-                Debug.Print "wrong"
+                Debug.Print "A"
+                Exit Sub
+            B:
+                Debug.Print "B"
+                Exit Sub
+            E:
+                Debug.Print CStr(Err.Number)
             End Sub
             Main
             """ + "\n");
-        (await run.Should().ThrowAsync<NotImplementedException>()).Which.Message
-            .Should().Contain("Resume of a handler error").And.Contain("#4880");
-        debug.Should().BeEmpty();
+        AssertDebugLog(new List<Vb6Value> { new(expected) });
+    }
+
+    public static IEnumerable<object[]> HandlerResumeRows()
+    {
+        yield return new object[]
+        {
+            "R1",
+            "Err.Raise 5",
+            "Debug.Print \"after \" & Err.Number",
+            "GoSub A",
+            "Debug.Print \"wrong\"",
+            "Resume Next",
+            new[] { "H 5", "after 0" }
+        };
+        yield return new object[]
+        {
+            "R2",
+            "v = Boom()",
+            "Debug.Print \"v=\" & v & \" err \" & Err.Number",
+            "GoSub A",
+            "Debug.Print \"wrong\"",
+            "Resume",
+            new[] { "H 5", "v=2 err 0" }
+        };
+        yield return new object[]
+        {
+            "R3",
+            "Err.Raise 5",
+            "L1:\nDebug.Print \"L1 \" & Err.Number",
+            "GoSub A",
+            "Debug.Print \"wrong\"",
+            "Resume L1",
+            new[] { "H 5", "L1 0" }
+        };
+        yield return new object[]
+        {
+            "R4",
+            "Err.Raise 5",
+            "Err.Raise 6\nDebug.Print \"after \" & Err.Number",
+            "If Err.Number = 6 Then Resume Next\nGoSub A",
+            "Debug.Print \"wrong\"",
+            "Resume Next",
+            new[] { "H 5", "H 6", "after 0" }
+        };
+        yield return new object[]
+        {
+            "R5",
+            "Err.Raise 5",
+            "Debug.Print \"after \" & Err.Number",
+            "GoSub A",
+            "Debug.Print \"wrong\"",
+            "GoSub B\nReturn\nB:\nResume Next",
+            new[] { "H 5", "after 0" }
+        };
+        yield return new object[]
+        {
+            "R6",
+            "Err.Raise 5",
+            "Debug.Print \"after \" & Err.Number",
+            "On 1 GoSub A",
+            "Debug.Print \"wrong\"",
+            "Resume Next",
+            new[] { "H 5", "after 0" }
+        };
+        yield return new object[]
+        {
+            "R7",
+            "Err.Raise 5",
+            "Return",
+            "GoSub A",
+            "Debug.Print \"back \" & Err.Number",
+            "Resume Next",
+            new[] { "H 5", "back 0" }
+        };
+        yield return new object[]
+        {
+            "R8",
+            "Err.Raise 5",
+            "Return",
+            "If Err.Number = 7 Then Resume Next\nGoSub A",
+            "Err.Raise 7\nDebug.Print \"after7 \" & Err.Number",
+            "Resume Next",
+            new[] { "H 5", "H 7", "after7 0" }
+        };
+        yield return new object[]
+        {
+            "R1b",
+            "Err.Raise 5",
+            "Debug.Print \"after \" & Err.Number\nReturn",
+            "GoSub A",
+            "passes = passes + 1\nDebug.Print \"back \" & Err.Number & \" pass \" & passes\nIf passes = 3 Then Exit Sub\nResume Next",
+            "Resume Next\nDebug.Print \"A after \" & Err.Number & \" pass \" & passes\nReturn",
+            new[] { "H 5", "after 0", "back 0 pass 1", "H 20", "H 20", "A after 0 pass 1", "back 0 pass 2", "H 20", "H 20", "A after 0 pass 2", "back 0 pass 3" }
+        };
+    }
+    [Theory]
+    [MemberData(nameof(HandlerResumeRows))]
+    public async Task MeasuredHandlerResume(string row, string fault, string after, string call, string back, string routine, string[] expected)
+    {
+        await Run($"""
+            Dim calls As Long
+            Function Boom() As Long
+                calls = calls + 1
+                If calls = 1 Then Err.Raise 5
+                Boom = calls
+            End Function
+            Sub {row}()
+                Dim v, passes As Long
+                On Error GoTo H
+                {fault}
+                {after}
+                Exit Sub
+            H:
+                Debug.Print "H " & Err.Number
+                {call}
+                {back}
+                {(row == "R1b" ? "" : "Exit Sub")}
+            A:
+                {routine}
+                Return
+            End Sub
+            Sub Main()
+                On Error Resume Next
+                {row}
+                If Err.Number <> 0 Then Debug.Print "caller " & Err.Number
+            End Sub
+            Main
+            """ + "\n");
+        AssertDebugLog(expected.Select(s => new Vb6Value(s)).ToList());
     }
 }
