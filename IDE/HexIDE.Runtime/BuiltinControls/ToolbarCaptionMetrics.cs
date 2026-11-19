@@ -5,6 +5,23 @@ namespace HexIDE.Runtime.BuiltinControls;
 
 internal static partial class ToolbarCaptionMetrics
 {
+    internal static (Typeface Typeface, double Size) MessageFont()
+    {
+        // NONCLIENTMETRICSW contains five 92-byte LOGFONTW records; lfMessageFont is last.
+        var metrics = new byte[504];
+        BitConverter.GetBytes(metrics.Length).CopyTo(metrics, 0);
+        // Query at 96 DPI: these extents feed Avalonia DIPs, not device pixels (#4802).
+        if (!SystemParametersInfoForDpi(0x29, (uint)metrics.Length, metrics, 0, 96))
+            throw new Win32Exception();
+        var face = System.Text.Encoding.Unicode.GetString(metrics, 436, 64).TrimEnd('\0');
+        return (new Typeface(face, metrics[428] != 0 ? FontStyle.Italic : FontStyle.Normal,
+            (FontWeight)BitConverter.ToInt32(metrics, 424)), Math.Abs(BitConverter.ToInt32(metrics, 408)));
+    }
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SystemParametersInfoForDpi(uint action, uint parameter, [In, Out] byte[] metrics, uint flags, uint dpi);
+
     // #2334: GDI's whole-string extent differs from summed Skia advances.
     internal static double Measure(string caption, Typeface typeface, double size)
     {

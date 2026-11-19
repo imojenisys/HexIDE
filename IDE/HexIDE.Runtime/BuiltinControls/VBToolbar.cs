@@ -296,9 +296,9 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
     internal float ButtonWidth => buttonWidth;
     internal float ButtonHeight => buttonHeight;
     internal bool Wrappable => wrappable;
-    internal float DropdownWidth => style == 1 ? 225 : 195.0237f;
+    internal float DropdownWidth => 225;
     internal float ButtonTop => style == 1 ? 0 : 30;
-    internal float LayoutHeight => Buttons.Items.Count == 0 ? lastHeight : Buttons.RowHeight + (style == 1 ? 0 : 60);
+    internal float LayoutHeight => Buttons.Items.Count == 0 ? lastHeight : Buttons.RowHeight + (style == 1 ? 0 : 60) + (LoadedAlign is 1 or 2 ? 30 : 0);
     private float lastHeight = 660;
 
     internal static string DisplayCaption(string caption) => caption.Replace("\t", "").Replace("\r", "").Replace("\n", "");
@@ -312,7 +312,10 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
     {
         var typeface = new Typeface(FontFamily, FontStyle, FontWeight, FontStretch);
         if (OperatingSystem.IsWindows())
-            return ToolbarCaptionMetrics.Measure(DisplayCaption(caption), typeface, FontSize);
+        {
+            var messageFont = ToolbarCaptionMetrics.MessageFont();
+            return ToolbarCaptionMetrics.Measure(DisplayCaption(caption), messageFont.Typeface, messageFont.Size);
+        }
         return PortableCaptionExtent(DisplayCaption(caption), typeface, FontSize);
     }
 
@@ -354,7 +357,7 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
         ValidateImageGeometry(ImageList, TextBelow);
         buttonWidth = (float)(Math.Max(widest == 0 ? (TextBelow ? 23 : 43) : widest, imageWidth + 7) * 15);
         buttonHeight = (imageHeight + (TextBelow && items.Any(i => i.Caption.Length != 0) ? 22 : 6)) * 15;
-        lastHeight = Buttons.RowHeight + (style == 1 ? 0 : 60);
+        lastHeight = Buttons.RowHeight + (style == 1 ? 0 : 60) + (LoadedAlign is 1 or 2 ? 30 : 0);
     }
 
     public bool TryGetProperty(string name, out Vb6Value value)
@@ -428,7 +431,6 @@ public sealed class VBToolbar : UserControl, ICSharpPropertyBag
                 var alignment = Choice(value, 1);
                 ValidateImageGeometry(ImageList, alignment == 0);
                 textAlignment = alignment;
-                if (!HasHadButtons) buttonHeight = TextBelow ? 569.7643f : 329.9528f;
                 return true;
             case "appearance": appearance = MeasuredChoice(value, 1); return true;
             case "borderstyle": borderStyle = MeasuredChoice(value, 0, 1); return true;
