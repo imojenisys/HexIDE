@@ -447,6 +447,26 @@ size (`add_control`) SHALL keep its own container hold and SHALL NOT add that pi
 - **WHEN** a tool drag spans 45 by 17 pixels with snapping disabled
 - **THEN** the preview and the placed rectangle both measure 46 by 18 pixels
 
+### Requirement: Saved TabIndexes normalize when a form loads
+The form reader SHALL normalize saved TabIndexes in depth-first file order across the whole form,
+including container children, as measured in [#4843](https://github.com/hexide-io/HexIDE/issues/4843)
+(oracle PR #4873). For N saved indices, the first occurrence of each value within 0..N−1 SHALL retain
+its value; duplicates and out-of-range values SHALL take the smallest free numbers in file order.
+The designer, runtime and save SHALL use those same values, including a modelled control's raw
+TabIndex property. Carried controls SHALL count in N and reserve their indices; if any carried
+control would change, the reader SHALL retain every saved index on that form. A missing TabIndex
+line SHALL retain the class default pending measurement of mixed omitted and explicit values.
+
+#### Scenario: A duplicate precedes a valid zero
+- **GIVEN** three controls saved in file order with TabIndexes 1, 1 and 0
+- **WHEN** the form loads
+- **THEN** the designer, runtime and next save use 1, 2 and 0
+
+#### Scenario: A carried control would change
+- **GIVEN** those same saved indices with the second control carried as text
+- **WHEN** the form loads
+- **THEN** all three indices remain 1, 1 and 0
+
 ### Requirement: The designer SHALL offer a read-only tab-order overlay
 The designer SHALL offer a toggle, initially off, that draws each modelled control's existing `TabIndex` over its
 canvas position. Controls without that property SHALL have no badge. A badge SHALL be crossed out with a diagonal slash when the control
