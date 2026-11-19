@@ -1837,6 +1837,19 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         ExecutionEnvironment? baseEnv = null, Vb6Value? me = null, Stack<List<Vb6Value>>? callerFrames = null,
         bool isEntry = false)
     {
+        if (proc.DeclareLibrary is { } library)
+        {
+            if (!proc.HasMissingDeclareLibrary)
+                throw new VBSubOrFunctionNotDefinedException(proc.Name);
+            if (proc.Declaration is VB6Parser.DeclareStmtContext declaration && declaration.ALIAS() != null)
+                throw new NotImplementedException("Declare Alias calls are not implemented (#4820)");
+            if (NamedArguments.Any(args))
+                throw new NotImplementedException("Named arguments on Declare calls are not implemented (#4820)");
+            // ResolveCallArgs has evaluated each argument once, retaining its ByRef target (#4820).
+            throw new VBRunTimeException(new VBStandardError(VBStandardError.FileNotFound.ErrNo,
+                "File not found: " + library));
+        }
+
         var breakpointOnlyEnd = isEntry && (InStartupDispatch || me is null);
         if (me?.Value is VbObject accessedInstance)
             NoteMemberAccess(accessedInstance, proc.Name);
@@ -2114,6 +2127,8 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     internal static bool TryGetModuleProcedure(ModuleInfo module, string name, out ProcedureInfo procedure, bool own = false)
     {
         if (module.PrePass.Procedures.TryGetValue(name, out procedure!))
+            return true;
+        if (module.PrePass.Declares.TryGetValue(name, out procedure!) && procedure.HasMissingDeclareLibrary)
             return true;
         if ((own || module.Kind == InterpreterModuleKind.Standard)
             && module.PrePass.Properties.TryGetValue(name, out var property) && property.Get is { } getter)
