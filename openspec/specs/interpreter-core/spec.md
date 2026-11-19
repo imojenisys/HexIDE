@@ -30,6 +30,58 @@ worse than one that is obviously incomplete.
 
 ## Requirements
 
+### Requirement: InputB reads bytes without code-page conversion
+
+The interpreter SHALL implement InputB and InputB$ for Binary and Input files according to
+[#4895's VB6 SP6 native/p-code measurements](https://github.com/hexide-io/HexIDE/issues/4895)
+([oracle PR #4896](https://github.com/hexide-io/HexIDE/pull/4896)). The result SHALL be a String
+holding exactly the bytes read, including odd byte counts and unchanged CR/LF bytes. File numbers
+SHALL be accepted with or without `#`. InputB SHALL retain the existing refusal of named arguments.
+
+#### Scenario: Binary bytes and positions
+- **WHEN** InputB reads two bytes followed by one byte from `41 42 43` opened for Binary
+- **THEN** the results contain `41 42` and `43`, with LenB/Len of 2/1 and 1/0
+- **AND** Loc/Seek/EOF are 2/3/False and then 3/4/False
+- **AND** a zero count reads nothing, while a negative count raises error 5 without moving or assigning
+
+#### Scenario: Input bytes and end markers
+- **WHEN** InputB reads from an Input file
+- **THEN** it counts bytes, sharing Input's error 62 and positions at physical EOF or Ctrl+Z
+- **AND** a failed read leaves the target unchanged
+- **AND** an Output or Random file raises 54, and an unopened number raises 52
+
+#### Scenario: Unmeasured file reads
+- **WHEN** a Binary read would run past the end, InputB targets an Append file, or the file's size or modification time changed outside the program
+- **THEN** the interpreter SHALL refuse with NotImplementedException naming #4895 before moving the position or assigning the result
+- **AND** it SHALL NOT invent the bytes VB6 fills from its previous buffer contents
+
+### Requirement: Missing Declare libraries off Windows
+
+The interpreter SHALL collect Declare names, Lib strings and Sub/Function kinds without probing native libraries. Off Windows, supported missing-library calls SHALL evaluate arguments once, retaining ByRef targets, then raise trappable error 53, `File not found: ` plus the Lib string. Windows and host-library calls SHALL keep their refusal. In the missing-library path, a call through an Alias SHALL raise the same error 53, since the library fails before its entry point is sought (measured), and a named-argument call SHALL refuse as not implemented until a Declare's parameters are collected (#4869).
+
+#### Scenario: A missing DLL Function evaluates its argument
+
+- **WHEN** a Function declared in `Lib "hexide-nosuch.dll"` is called off Windows with a counted argument under On Error Resume Next
+- **THEN** the argument runs once and Err.Number is 53 with Err.Description `File not found: hexide-nosuch.dll`
+- **AND** the result follows the measurements in [#4820](https://github.com/hexide-io/HexIDE/issues/4820)
+
+#### Scenario: A native call remains deferred
+
+- **WHEN** the host is Windows or the Lib string ends in `.dylib` or `.so`, or contains `.so.` (case-insensitive)
+- **THEN** the call retains the existing "Sub or Function not defined" refusal
+- **AND** no library is loaded or probed
+
+#### Scenario: A call through an Alias
+
+- **WHEN** an off-Windows missing-library call goes through an Alias
+- **THEN** Err.Number is 53 with Err.Description `File not found: ` plus the Lib string, as without an Alias
+
+#### Scenario: A named-argument Declare call
+
+- **WHEN** an off-Windows missing-library call passes a named argument
+- **THEN** it is refused as not implemented until a Declare's parameters are collected (#4869)
+- **AND** an uncalled declaration still loads
+
 ### Requirement: For Each walks control-array indices captured at entry
 
 The interpreter SHALL walk a control array in sorted index order, capturing the indices once and resolving each
@@ -1424,8 +1476,17 @@ TypeName is `Font`, whose default member is Name, and whose Size reads as Curren
 SHALL share that reference and propagate supported mutations to every owning control. Independent form
 and control fonts SHALL start as distinct references. `Set Font = Nothing` SHALL raise 380 without
 replacing the font. Font access on scroll bars, Timer, Shape, Line and Image SHALL raise 438.
-Unmeasured object-member conversions and writes SHALL refuse as not implemented. Standalone StdFont,
-the file controls and Data, and Locals expansion remain outside this implementation slice (#934).
+Unmeasured object-member conversions and writes SHALL refuse as not implemented. The file controls and
+Data, and Locals expansion remain outside this implementation slice (#934).
+
+Standalone `New StdFont` and `New stdole.StdFont`, including auto-instancing, SHALL create an ownerless
+Font with the initial members and supported assignments measured in [#4781](https://github.com/hexide-io/HexIDE/issues/4781).
+It SHALL share the control Font reference and publish later mutations after `Set Text1.Font = f`.
+Assignments SHALL also implement the exact successful and error rows measured in
+[#4807](https://github.com/hexide-io/HexIDE/issues/4807), including name, size and charset substitutions
+and the differing Bold/Weight name results. Failed assignments SHALL preserve every member.
+Other values and conversions SHALL refuse as not implemented, citing #4807. TypeName retains
+the shared object’s `Font` spelling.
 
 #### Scenario: Two controls share one Font
 
@@ -1615,6 +1676,18 @@ Measured in [a form's own ActiveControl](../../../docs/vb6-fidelity-oracle/a-for
 #### Scenario: Form visibility follows Show and Hide
 - **WHEN** a form's Visible property is set to False or True
 - **THEN** it SHALL follow Hide or Show respectively, including the active form's control focus and activation transition
+
+#### Scenario: A control on a loaded or hidden form
+- **WHEN** a program reads a windowed control's Visible on a form that is not shown
+- **THEN** it SHALL read False, using the form view's IsShown on desktop and hosted forms
+- **WHEN** the form is shown
+- **THEN** the control SHALL read its own visibility value
+- **AND** a Label, Image, Shape, Line or menu SHALL keep reading its own value through Load, Show and Hide
+- **AND** a UserControl, windowless or not, SHALL read as a windowed control does
+- **AND** the setter and the hidden-container behavior SHALL remain unchanged
+
+Measured button, Line, ProgressBar and loaded button-array rows: [#4829](https://github.com/hexide-io/HexIDE/issues/4829). Label, Image, Shape, menu and UserControl rows: `docs/vb6-fidelity-oracle/visible-before-a-form-is-shown.md`.
+Hidden Frame/PictureBox ancestry and immediate reads after setting Visible on a hidden form remain unmeasured.
 
 #### Scenario: The active form unloads with another form shown
 - **WHEN** the active form unloads while a previously active form remains shown
@@ -2633,7 +2706,12 @@ Height SHALL use the unit’s magnitude even in flipped user scales. Negative Co
 raise 380 from a property assignment and 5 from Move, before anything moves (issue #990 round-2 measurements).
 Form and PictureBox mouse coordinates SHALL use the object’s
 own mapping; other controls retain their existing mouse units. A form resize SHALL retain the size
-of a user unit. UserControl scales and PictureBox resize are outside this slice ([#4693](https://github.com/hexide-io/HexIDE/issues/4693)).
+of a user unit. A placed UserControl SHALL own the same coordinate properties, Scale statement and conversions,
+initialized from its saved scale over its child canvas. Its saved child positions SHALL remain twips even when
+its .ctl declares pixels. A form or PictureBox saved in User mode with no extents or origins SHALL use one twip
+per unit and zero origins. Origins and extents of a saved UserControl User scale without extents SHALL remain refused as unmeasured.
+Me-qualified coordinate access and Object aliases to the own root SHALL retain their prior refusals pending measurement.
+PictureBox resize and UserControl drawing remain unmeasured (#4693).
 
 The interpreter and bundled LSP grammars SHALL parse the bare and qualified Scale statement with either
 two points or no arguments. ScaleX and ScaleY SHALL default from HiMetric to the current scale, returning
@@ -2641,6 +2719,20 @@ Single lengths. Container-position/container-size units and vbUser outside a use
 The measured metric factor and its accepted last-place precision difference are recorded in
 [#990](https://github.com/hexide-io/HexIDE/issues/990); the other values come from the
 [coordinate oracle](../../../docs/vb6-fidelity-oracle/the-coordinate-system-scalemode-scale-scalex-and-scaley.md).
+
+Late-bound Scale, ScaleX and ScaleY SHALL use a form's or PictureBox's mapping; TextBox and UserControl
+extenders SHALL raise 438. Other objects SHALL retain their existing behaviour. Zero conversion arguments
+SHALL raise "Argument not optional"; four on either axis and five on ScaleX SHALL raise "Wrong number of
+arguments or invalid property assignment" as execution reaches the statement. ScaleY with five and counts
+above five SHALL remain refused as unmeasured. Centimetre PictureBox Line endpoints SHALL load as whole twips
+using the approved factor, with the one-Single-step X1/Y1 difference the maintainer accepted with #990's factor.
+These rows are measured in the coordinate oracle's #4693 sections.
+User-scale PictureBox Lines and other unmeasured Line modes SHALL remain refused naming #4693.
+
+#### Scenario: A pixel-saved UserControl
+- **WHEN** a 2400 by 1800 twip UserControl is saved in pixel mode with a Label at 10, 20, 40 by 17
+- **THEN** its scale reads 160 by 120 and the Label reads 0.6666667, 1.333333, 2.666667 by 1.133333
+- **AND** selecting twips reads the saved Label numbers unchanged
 
 #### Scenario: An upward user scale
 
@@ -2729,10 +2821,10 @@ coordinate system, with the state, syntax, pixels and refusals measured for
 - **AND** a single supplied angle remains refused with #988 because the other angle's default is unmeasured
 
 #### Scenario: Measured finite thick-pen footprints
-- **WHEN** PSet draws with width 2–8 or 10, or a full transparent Circle draws with width 2/3, physical radius 10 pixels, aspect 1 and a whole-pixel centre
-- **THEN** the pixels SHALL match the corresponding grids on the [drawing oracle](../../../docs/vb6-fidelity-oracle/the-drawing-methods-line-pset-circle-cls-and-point.md) and [circle/thick-pen oracle](../../../docs/vb6-fidelity-oracle/circles-arcs-sectors-and-thick-pens-pixel-by-pixel.md), as scoped by [#4813](https://github.com/hexide-io/HexIDE/issues/4813)
+- **WHEN** PSet draws with width 2–12, or a full transparent Circle draws with width 2/3, physical radius 10 pixels, aspect 1 and a whole-pixel centre
+- **THEN** the pixels SHALL match the corresponding grids on the [drawing oracle](../../../docs/vb6-fidelity-oracle/the-drawing-methods-line-pset-circle-cls-and-point.md) and [circle/thick-pen oracle](../../../docs/vb6-fidelity-oracle/circles-arcs-sectors-and-thick-pens-pixel-by-pixel.md), as scoped by [#4813](https://github.com/hexide-io/HexIDE/issues/4813) and [#4841](https://github.com/hexide-io/HexIDE/issues/4841)
 - **AND** PSet ends at its whole-twip point and Circle ends at its centre
-- **WHEN** PSet uses width 9 or above 10, or a thick Circle requests any other shape, width or solid fill
+- **WHEN** PSet uses width above 12, or a thick Circle requests any other shape, width or solid fill
 - **THEN** execution SHALL refuse with NotImplementedException naming #988 before drawing or moving CurrentX/Y
 - **AND** thick Line, B and BF SHALL remain refused together (#4841): neither tried capsule nor stamped-disc model reproduces all measured line grids; width-one drawing is unchanged
 

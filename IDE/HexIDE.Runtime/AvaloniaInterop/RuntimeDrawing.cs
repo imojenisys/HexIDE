@@ -132,7 +132,7 @@ internal sealed class RuntimeDrawing
             case "CURRENTX": drawing.currentX = drawing.Twips(value, false); return true;
             case "CURRENTY": drawing.currentY = drawing.Twips(value, true); return true;
             case "FILLCOLOR": drawing.fillColor = VBColor.FromOle(AvaloniaInteroperability.OleColor(value)); return true;
-            case "HDC": throw new NotImplementedException("Assigning PictureBox.hDC is unmeasured and not implemented (#4849)");
+            case "HDC": throw new NotImplementedException("Assigning PictureBox.hDC is unmeasured and not implemented (#4915)");
             case "AUTOREDRAW":
                 var enabled = (bool)VbNumeric.CoerceOnStore(value, Vb6Value.ValueType.Boolean, null).Value!;
                 if (enabled != drawing.autoRedraw)
@@ -218,7 +218,7 @@ internal sealed class RuntimeDrawing
             return;
         }
         drawing.CheckPen();
-        if (drawing.drawWidth != 1 && (method != "PSet" || drawing.drawWidth is not (>= 2 and <= 8 or 10)))
+        if (drawing.drawWidth != 1 && (method != "PSet" || drawing.drawWidth is not (>= 2 and <= 12)))
             throw Refused("Drawing with DrawWidth above 1");
         var x1 = shortLine ? drawing.currentX : drawing.Twips(args[0], false, firstStep, drawing.currentX);
         var y1 = shortLine ? drawing.currentY : drawing.Twips(args[1], true, firstStep, drawing.currentY);
@@ -355,8 +355,8 @@ internal sealed class RuntimeDrawing
         }
     }
 
-    // #4813: measured finite pen footprints from the two drawing oracle pages. No symmetry or
-    // ideal-circle rule is imposed on these asymmetric pixels. Width 9 has not been measured.
+    // #4813/#4841: measured finite pen footprints from the two drawing oracle pages. No symmetry or
+    // ideal-circle rule is imposed on these asymmetric pixels. PSet widths above 12 remain unmeasured.
     private sealed record PenPixels(int X, int Y, string[] Rows);
 
     private static readonly PenPixels?[] PointPens =
@@ -370,8 +370,10 @@ internal sealed class RuntimeDrawing
         new(-3, -2, ["..###.", ".#####", "######", ".#####", ".#####", "..###."]),
         new(-3, -3, ["..###..", ".#####.", "#######", "#######", "#######", "#######", ".#####.", "..###.."]),
         new(-4, -3, ["..#####.", ".#######", ".#######", "########", "########", ".#######", ".#######", "..#####."]),
-        null,
+        new(-4, -4, ["...###...", ".#######.", ".#######.", "#########", "#########", "#########", "#########", ".#######.", ".#######.", "...###..."]),
         new(-5, -4, ["...#####..", "..#######.", ".#########", ".#########", "##########", "##########", ".#########", ".#########", "..#######.", "...#####.."]),
+        new(-5, -5, ["....###....", "..#######..", ".#########.", ".#########.", "###########", "###########", "###########", "###########", ".#########.", ".#########.", "..#######..", "....###...."]),
+        new(-6, -5, ["....#####...", "..#########.", "..#########.", ".###########", ".###########", "############", "############", ".###########", ".###########", "..#########.", "..#########.", "....#####..."]),
     ];
 
     private static readonly PenPixels[] CirclePens =
@@ -549,7 +551,7 @@ internal sealed class RuntimeDrawing
         using var image = ToolbarImage.Decode(picture, list);
         using var buffer = image.Lock();
         if (buffer.Format != PixelFormat.Bgra8888 && buffer.Format != PixelFormat.Rgba8888)
-            throw new NotImplementedException("ListImage.Draw with this pixel format is not implemented (#4849)");
+            throw new NotImplementedException("ListImage.Draw with this pixel format is not implemented (#4915)");
         var bytes = new byte[buffer.RowBytes * buffer.Size.Height];
         Marshal.Copy(buffer.Address, bytes, 0, bytes.Length);
         var red = buffer.Format == PixelFormat.Bgra8888 ? 2 : 0;

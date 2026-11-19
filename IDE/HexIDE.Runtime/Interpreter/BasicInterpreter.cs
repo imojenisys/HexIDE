@@ -7,6 +7,7 @@ using Antlr4.Runtime;
 using Antlr4.Runtime.Atn;
 using Antlr4.Runtime.Misc;
 using HexIDE.IDE;
+using HexIDE.Runtime.AvaloniaInterop;
 using HexIDE.Runtime.Interpreter.ConditionalCompilation;
 
 namespace HexIDE.Runtime.Interpreter;
@@ -690,6 +691,10 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         return CopyForStore(element, depth);
     }
 
+    internal bool IsStandaloneFont(string name) =>
+        name.Equals("stdole.StdFont", StringComparison.OrdinalIgnoreCase)
+        || name.Equals("StdFont", StringComparison.OrdinalIgnoreCase) && !Modules.TryGet(name, out _);
+
     /// <summary>Instantiate a class or form (<c>New ClassName</c>). A form gets its own window context (#4598).
     /// For a class, build this instance's OWN field env by cloning the
     /// class template env (so the shared <c>Debug</c>/<c>Err</c>/global slots carry over) then re-running the
@@ -704,8 +709,6 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         // deadlock) and mutate state. Blocked here, before construction. Scoped to Paused (see RunProcedure).
         if (SuppressUserProcedureCalls && DebugController?.State == Debugging.DebugState.Paused)
             throw new Debugging.ImmediateEvalException("Creating objects is not available in the Immediate window.");
-        if (className.Equals("StdFont", StringComparison.OrdinalIgnoreCase) && !Modules.TryGet(className, out _))
-            throw new NotImplementedException("New StdFont is not implemented: its initial member values are unmeasured (#934)");
         if (!Modules.TryGet(className, out var classDef) || classDef.Kind is not (InterpreterModuleKind.Class or InterpreterModuleKind.Form) || classDef.HostedControl)
             throw new VBCompileErrorException("User-defined type not defined: " + className);
         // A class that claims an interface must supply all of it. VB6 refuses to BUILD such a program; with no
@@ -1043,7 +1046,7 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             foreach (var read in module.PrePass.EnumLibraryNames)
             {
                 NotImplementedException Unsupported() => new(
-                    $"Enum {read.Enum}, member '{read.Member}': project name '{read.Name}' is not implemented (#4762)");
+                    $"Enum {read.Enum}, member '{read.Member}': project name '{read.Name}' is not implemented (#4914)");
                 if (read.Qualified)
                 {
                     var parts = read.Name.Split('.');
@@ -1660,6 +1663,12 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
             return;
         }
 
+        if (IsStandaloneFont(need.AutoNew.ClassName))
+        {
+            Store(new Vb6Value(ControlFont.CreateStandalone()));
+            return;
+        }
+
         // #4680: a standalone PropertyBag, unless the project declares a class of that name.
         if (need.AutoNew.ClassName.Equals("PropertyBag", StringComparison.OrdinalIgnoreCase) && !Modules.TryGet(need.AutoNew.ClassName, out _))
         {
@@ -1931,6 +1940,20 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
         ExecutionEnvironment? baseEnv = null, Vb6Value? me = null, Stack<List<Vb6Value>>? callerFrames = null,
         bool isEntry = false)
     {
+        if (proc.DeclareLibrary is { } library)
+        {
+            if (!proc.HasMissingDeclareLibrary)
+                throw new VBSubOrFunctionNotDefinedException(proc.Name);
+            // An Alias names the entry point, which a missing library never reaches: vb6.exe raises the same 53 with one
+            // (measured, native and p-code, #4820). Named arguments are VB6's too, but a Declare is collected without its
+            // parameters, so there is nothing to place them against yet (#4869).
+            if (NamedArguments.Any(args))
+                throw new NotImplementedException("Named arguments on Declare calls are not implemented (#4869)");
+            // ResolveCallArgs has evaluated each argument once, retaining its ByRef target (#4820).
+            throw new VBRunTimeException(new VBStandardError(VBStandardError.FileNotFound.ErrNo,
+                "File not found: " + library));
+        }
+
         if (me?.Value is VbObject accessedInstance)
             NoteMemberAccess(accessedInstance, proc.Name);
         // Immediate-window evaluation forbids running USER code — its statements would hit the paused pause-gate on
@@ -2220,6 +2243,8 @@ public partial class BasicInterpreter : IAntlrErrorListener<IToken>, IAntlrError
     internal static bool TryGetModuleProcedure(ModuleInfo module, string name, out ProcedureInfo procedure, bool own = false)
     {
         if (module.PrePass.Procedures.TryGetValue(name, out procedure!))
+            return true;
+        if (module.PrePass.Declares.TryGetValue(name, out procedure!) && procedure.HasMissingDeclareLibrary)
             return true;
         if ((own || module.Kind == InterpreterModuleKind.Standard)
             && module.PrePass.Properties.TryGetValue(name, out var property) && property.Get is { } getter)

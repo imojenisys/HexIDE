@@ -1073,10 +1073,18 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
         var points = new List<Vb6Value>();
         foreach (var point in context.valueStmt())
             points.Add(await expressionExecutor.EvaluateScalarFast(point));
-        if (target.HeldAsVariant || string.Equals(target.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase))
+        var late = target.HeldAsVariant || string.Equals(target.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase);
+        if (late && target.Value is (VBTextBox or VBUserControl))
+            throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
+        if (late && target.Value is not (VbObject { ClassDef.Kind: InterpreterModuleKind.Form } or VBPictureBox))
             throw new NotImplementedException("Late-bound Scale is not implemented (#4693)");
         if (target.Value is VbObject { ClassDef.Kind: InterpreterModuleKind.Form } form)
             await interpreter.Loading(() => RuntimeScale.Statement(form.BuiltInMembersFor("Scale")!, points));
+        else if (context.implicitCallStmt_InStmt() is null
+            && target.Value is VbObject { ClassDef.HostedControl: true, UserControlHost: { } ownControl })
+            RuntimeScale.Statement(ownControl, points);
+        else if (target.Value is VBUserControl.RootObject root)
+            RuntimeScale.Statement(root.Owner, points);
         else if (target.Value is Control control)
             RuntimeScale.Statement(control, points);
         else
@@ -1413,7 +1421,16 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
                 {
                     CaptureError(ex);
                     if (!first)
+                    {
+                        // A later object-store mismatch ends with Nothing under Resume Next (#4878, measured).
+                        if (objectVariable && ex.Error.ErrNo == VBStandardError.TypeMismatch.ErrNo)
+                        {
+                            interpreter.ExecutionContext.TryInspectVariable(currentEnv, varName, out var held);
+                            interpreter.ExecutionContext.TryUpdateVariable(currentEnv, varName, Vb6Value.Nothing);
+                            await interpreter.ReleaseRef(held);
+                        }
                         return ControlFlow.Nothing;
+                    }
                 }
                 first = false;
 
@@ -2393,6 +2410,9 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
         foreach (var arg in args) arg.RefuseOddBytes(member);
         VBFlatScrollBar.RefuseEarlyBound(reference, member);
         UserControlMembers.Check(reference, member);
+        if (reference.Value is (VBTextBox or VBUserControl) && RuntimeScale.IsConversion(member)
+            && (reference.HeldAsVariant || string.Equals(reference.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase)))
+            throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
         return ((Control)reference.Value!).CallAsync(member, args, ModalOwner());
     }
 
@@ -3253,6 +3273,10 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             if (variable.Value is ICSharpAsyncPropertyBag asyncPropertyBag
                 && await asyncPropertyBag.TrySetPropertyAsync(memberIdentifier, value))
                 return default;
+
+            var throughObject = variable.HeldAsVariant || string.Equals(variable.DeclaredAs, "Object", StringComparison.OrdinalIgnoreCase);
+            if (throughObject && variable.Value is VBUserControl.RootObject && FormMembers.IsCoordinateMember(memberIdentifier))
+                throw new NotImplementedException($"UserControl.{memberIdentifier} through an Object variable is not implemented (#4693)");
 
             // Non-control property bags keep their own path; control bags share ControlMembers.
             if (variable.Value is not Control && variable.Value is ICSharpPropertyBag propertyBag
@@ -5258,6 +5282,8 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             made = "Collection";
         else if (interpreter.Modules.TryGet(typeName, out var classMod) && classMod.Kind is InterpreterModuleKind.Class or InterpreterModuleKind.Form)
             made = classMod.Name;
+        else if (interpreter.IsStandaloneFont(typeText))
+            made = typeText;
         else if (qualifier is null && typeName.Equals("PropertyBag", StringComparison.OrdinalIgnoreCase))
             made = "PropertyBag";
         else if (interpreter.TryResolveType(typeName, currentModule, qualifier, out _)
@@ -5858,7 +5884,8 @@ public partial class StatementExecutor : VB6Visitor<Task<ControlFlow>>, Debuggin
             return false;
 
         var module = qualifier.Module!;
-        if (module.PrePass.Procedures.TryGetValue(memberName, out var proc)
+        if ((module.PrePass.Procedures.TryGetValue(memberName, out var proc)
+                || module.PrePass.Declares.TryGetValue(memberName, out proc) && proc.HasMissingDeclareLibrary)
             && (!proc.IsPrivate || ReferenceEquals(module, currentModule)))
         {
             var callArgs = await expressionExecutor.ResolveCallArgs(argsCall);

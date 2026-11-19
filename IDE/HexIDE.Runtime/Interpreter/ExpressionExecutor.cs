@@ -396,16 +396,17 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// <para>Positions come from the separators instead: slots = commas + 1, each holding the argument
     /// written between them or <c>null</c> for a blank.</para>
     /// </summary>
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VB6Parser.ArgsCallContext, List<VB6Parser.ArgCallContext?>> argumentSlots = new();
-    private static readonly List<VB6Parser.ArgCallContext?> noArguments = new();
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VB6Parser.ArgsCallContext, IReadOnlyList<VB6Parser.ArgCallContext?>> argumentSlots = new();
+    private static readonly IReadOnlyList<VB6Parser.ArgCallContext?> noArguments = [];
 
-    private static List<VB6Parser.ArgCallContext?> ArgSlots(VB6Parser.ArgsCallContext? context) =>
+    // Shared by every call through the same argument list, so read-only: a caller that changed it would change every later call.
+    private static IReadOnlyList<VB6Parser.ArgCallContext?> ArgSlots(VB6Parser.ArgsCallContext? context) =>
         context is null ? noArguments : argumentSlots.GetValue(context, ReadArgSlots);
 
-    private static List<VB6Parser.ArgCallContext?> ReadArgSlots(VB6Parser.ArgsCallContext context)
+    private static IReadOnlyList<VB6Parser.ArgCallContext?> ReadArgSlots(VB6Parser.ArgsCallContext context)
     {
         var slots = new List<VB6Parser.ArgCallContext?>();
-        if (context?.children is null) return slots;
+        if (context?.children is null) return noArguments;
 
         VB6Parser.ArgCallContext? pending = null;
         var sawAnything = false;
@@ -431,7 +432,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new VBCompileErrorException("Syntax error");
         // The final slot closes at the end of the list rather than at a separator.
         if (sawAnything) slots.Add(pending);
-        return slots;
+        return slots.ToArray();
     }
 
     public async Task<List<Vb6Value>> EvaluateCallArgs(VB6Parser.ArgsCallContext? context, Func<Task>? beforeLast = null)
@@ -537,8 +538,9 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
                 return await EvaluatePointerArgs(name, assign.valueStmt());
             return arranged;
         }
-        // Input(n, #f): the second argument may be a file number written with its #, `#f` being f's value (#1645).
-        if (name.Equals("Input", StringComparison.OrdinalIgnoreCase) && slots.Count == 2 && slots[0] is { } count
+        // Input/InputB(n, #f): the second argument may be a file number written with its # (#1645, #4895).
+        if ((name.Equals("Input", StringComparison.OrdinalIgnoreCase) || name.Equals("InputB", StringComparison.OrdinalIgnoreCase))
+            && slots.Count == 2 && slots[0] is { } count
             && slots[1]?.valueStmt() is { } file && file.GetText().StartsWith('#'))
         {
             var input = new VB6BuiltIns.IntrinsicArgumentValues(2);
@@ -1431,7 +1433,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
     /// <summary>The library's functions that have a <c>$</c> form, every one measured to compile and answer a String.</summary>
     private static readonly HashSet<string> DollarForms = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Chr", "ChrB", "ChrW", "Command", "CurDir", "Dir", "Environ", "Error", "Format", "Hex", "Input", "LCase", "Left", "LeftB", "LTrim", "Mid",
+        "Chr", "ChrB", "ChrW", "Command", "CurDir", "Dir", "Environ", "Error", "Format", "Hex", "Input", "InputB", "LCase", "Left", "LeftB", "LTrim", "Mid",
         "MidB", "Oct", "Right", "RightB", "RTrim", "Space", "Str", "String", "Trim", "UCase",
     };
 
@@ -1811,7 +1813,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
             throw new NotImplementedException($"{name}$ is not implemented: what VB6 does with a $ on {name} is not measured (#742)");
         // A library function's later index groups: before its one argument, `Split(t)(i)` being i then t, and after its two,
         // `Split(s, d)(i)` being s, d, i (measured, #1476). No rule fits both, so each count does as measured.
-        if (beforeLast is not null && ArgSlots(argsCtx).Count() <= 1)
+        if (beforeLast is not null && ArgSlots(argsCtx).Count <= 1)
             await beforeLast();
         var args = await EvaluateIntrinsicArgs(name, argsCtx);
         if (await EvaluateFunction(name, args) is { } builtInResult)
@@ -2682,8 +2684,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         // would try to resolve a variable and throw). `Dim o As New C1` makes its object where it is read (#435).
         if (call is not null && interpreter.LibraryClassFor(call.GetText()) is { } libraryClass)
             return interpreter.AdoptNewTemp(interpreter.NewLibraryObject(libraryClass), stmtFrames);
-        if (call?.GetText().Equals("stdole.StdFont", StringComparison.OrdinalIgnoreCase) == true)
-            throw new NotImplementedException("New StdFont is not implemented: its initial member values are unmeasured (#934)");
+        if (call is not null && interpreter.IsStandaloneFont(call.GetText()))
+            return new Vb6Value(ControlFont.CreateStandalone());
         // `New Collection`, and `New VBA.Collection`, the library's own (#1471).
         if (call?.iCS_S_MembersCall() is { } qualified && IsCollectionType(qualified.GetText()))
             return interpreter.AdoptNewTemp(new Vb6Value(interpreter.NewCollection()), stmtFrames);

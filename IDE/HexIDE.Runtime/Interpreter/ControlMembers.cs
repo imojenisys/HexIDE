@@ -63,6 +63,15 @@ internal static class ControlMembers
 
         CommonDialogMembers.Check(variable, memberIdentifier);
 
+        if (variable.Value is VBUserControl.RootObject root)
+        {
+            if (throughObject && FormMembers.IsCoordinateMember(memberName))
+                throw new NotImplementedException($"UserControl.{memberIdentifier} through an Object variable is not implemented (#4693)");
+            if (RuntimeScale.IsConversion(memberName))
+                return RuntimeScale.ConvertUnits(root.Owner, memberName,
+                    evaluateMemberArgs is not null ? await evaluateMemberArgs() : await Arguments());
+        }
+
         // A CSharp property bag (e.g. Err.Number) resolves its own properties by name.
         if (variable.Value is ICSharpPropertyBag propertyBag && propertyBag.TryGetProperty(memberIdentifier, out var bagValue))
             return bagValue;
@@ -72,6 +81,8 @@ internal static class ControlMembers
             throw new VBMethodOrDataMemberNotFoundException(memberIdentifier, variable.Type);
         // Every member of a control Controls.Remove took out is 735, its Name included (measured, #1556).
         VBProps.RefuseIfRemoved(control);
+        if (throughObject && control is (VBTextBox or VBUserControl) && RuntimeScale.IsConversion(memberName))
+            throw new VBRunTimeException(VBStandardError.ObjectDoesntSupportThisPropertyOrMethod);
         if (control is VBPictureBox && RuntimeDrawing.IsMethod(memberName))
         {
             if (memberName.Equals("Cls", StringComparison.OrdinalIgnoreCase))
@@ -115,17 +126,11 @@ internal static class ControlMembers
 
         foreach (var prop in props)
         {
+            // Visible before the form is shown, #4520's TextBox among them, is VBVisibility's: windowed controls only (#4829).
             if (AvaloniaInteroperability.TryGet(control, prop, out var value))
-            {
-                // #4520 measured Visible during Form_Load, before the containing form is shown.
-                if (ReferenceEquals(prop, VBProperties.VisibleProperty)
-                    && FormControls.TryOf(control, out var owner) && owner.Form?.FormWindow is { } window
-                    && FormRoot.View(window) is { IsShown: false })
-                    return new Vb6Value(false);
                 return value;
-            }
         }
-        if (RuntimeScale.TryGet(control, memberIdentifier, out var scaleMember))
+        if (control is not VBUserControl && RuntimeScale.TryGet(control, memberIdentifier, out var scaleMember))
             return scaleMember;
         // FontName, which is no property of its own here but the name of the control's font (#1141).
         if (FontMembers.TryGet(control, memberIdentifier, out var fontMember))
@@ -200,7 +205,7 @@ internal static class ControlMembers
             if (AvaloniaInteroperability.TrySet(control, prop, value))
                 return true;
         }
-        if (RuntimeScale.TrySet(control, memberIdentifier, value))
+        if (control is not VBUserControl && RuntimeScale.TrySet(control, memberIdentifier, value))
             return true;
         // FontName sets the control's font by name (#1141).
         if (FontMembers.TrySet(control, memberIdentifier, value))
