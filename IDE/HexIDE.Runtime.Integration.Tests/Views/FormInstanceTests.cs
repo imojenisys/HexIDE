@@ -32,6 +32,9 @@ public class FormInstanceTests
       + "   Caption         =   \"Form1\"\r\n"
       + "   ClientHeight    =   3000\r\n"
       + "   ClientWidth     =   4000\r\n"
+      + "   Begin VB.Timer Timer1\r\n"
+      + "      Left = 3000\r\n"
+      + "   End\r\n"
       + "   Begin VB.TextBox Text1 \r\n"
       + "      Height          =   495\r\n"
       + "      Left            =   120\r\n"
@@ -92,6 +95,70 @@ public class FormInstanceTests
 
     private static Run RunFormLoad(string body, params (string Name, ModuleKind Kind, string Code)[] modules) =>
         RunForm($"Private Sub Form_Load()\n{body}\nEnd Sub\n", modules);
+
+    // VB6 SP6 native/p-code measurements: https://github.com/hexide-io/HexIDE/issues/4864
+    [AvaloniaTheory]
+    [InlineData("Control", "", "Set c = Text1", 0, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1", "Set c = Me", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1", "Set c = New Class1", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1", "Set c = New Collection", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1", "Set c = Text1.Font", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1", "Set c = Controls", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1", "Set c = Form2", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1: Set o = Me", "Set c = o", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1: Set v = Me", "Set c = v", 13, "c Is Text1")]
+    [InlineData("Control", "Set c = Text1: Set v = New Class1", "Set c = v", 13, "c Is Text1")]
+    [InlineData("Control", "Set o = Timer1", "Set c = o", 0, "TypeName(c) = \"Timer\"")]
+    [InlineData("Control", "Set c = Text1", "Set c = Nothing", 0, "c Is Nothing")]
+    [InlineData("Control", "", "Set c = Me", 13, "c Is Nothing")]
+    [InlineData("VB.Control", "", "Set c = Text1", 0, "c Is Text1")]
+    [InlineData("VB.Control", "Set o = Timer1", "Set c = o", 0, "TypeName(c) = \"Timer\"")]
+    [InlineData("VB.Control", "Set c = Text1", "Set c = Me", 13, "c Is Text1")]
+    [InlineData("VB.Control", "Set c = Text1", "Set c = New Class1", 13, "c Is Text1")]
+    [InlineData("VB.Control", "Set c = Text1", "Set c = New Collection", 13, "c Is Text1")]
+    [InlineData("VB.Control", "Set c = Text1: Set o = Me", "Set c = o", 13, "c Is Text1")]
+    public void Control_scalar_store_checks_the_actual_object(string declaration, string setup, string statement,
+        int error, string retained)
+    {
+        var project = new ProjectDefinition(VBProjectType.EXE, "P");
+        project.AddForm(new FormDeserializer().Deserialize(project,
+            (FormHeader.Replace("Form1", "Form2") + "Private Sub Form_Load()\nDebug.Print \"unexpected load\"\nEnd Sub")
+            .ReplaceLineEndings("\r\n"), new NullSink())!);
+        var run = RunFormIn(project, $"""
+            Private Sub Form_Load()
+                Dim c As {declaration}, o As Object, v As Variant
+                {setup}
+                On Error Resume Next
+                Err.Clear
+                {statement}
+                Debug.Print CStr(Err.Number)
+                Debug.Print {retained}
+            End Sub
+            """, ("Class1", ModuleKind.ClassModule, ""));
+        run.Errors.Should().BeEmpty();
+        run.Printed.Should().Equal(error.ToString(System.Globalization.CultureInfo.InvariantCulture), "True");
+    }
+
+    [AvaloniaTheory]
+    [InlineData("", "Set c = Form1", 13, "c Is Nothing")]
+    [InlineData("", "Set c = Form1.Text1", 0, "c Is Form1.Text1")]
+    [InlineData("Set c = Form1.Text1", "Set c = Form1", 13, "c Is Form1.Text1")]
+    public void Control_scalar_store_in_a_standard_module(string setup, string statement, int error, string retained)
+    {
+        var run = RunFormLoad("Probe", ("Module1", ModuleKind.StandardModule, $"""
+            Public Sub Probe()
+                Dim c As Control
+                {setup}
+                On Error Resume Next
+                Err.Clear
+                {statement}
+                Debug.Print CStr(Err.Number)
+                Debug.Print {retained}
+            End Sub
+            """));
+        run.Errors.Should().BeEmpty();
+        run.Printed.Should().Equal(error.ToString(System.Globalization.CultureInfo.InvariantCulture), "True");
+    }
 
     // Measured VB6 SP6, native and p-code: #4598, oracle PR #4613.
     private static ProjectDefinition NewFormProject(string declarations = "", string members = "")
