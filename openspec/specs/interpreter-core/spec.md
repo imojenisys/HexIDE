@@ -1232,8 +1232,11 @@ Data, and Locals expansion remain outside this implementation slice (#934).
 Standalone `New StdFont` and `New stdole.StdFont`, including auto-instancing, SHALL create an ownerless
 Font with the initial members and supported assignments measured in [#4781](https://github.com/hexide-io/HexIDE/issues/4781).
 It SHALL share the control Font reference and publish later mutations after `Set Text1.Font = f`.
-Charset assignments SHALL refuse as not implemented until font substitution is supported. TypeName
-retains the shared object’s `Font` spelling.
+Assignments SHALL also implement the exact successful and error rows measured in
+[#4807](https://github.com/hexide-io/HexIDE/issues/4807), including name, size and charset substitutions
+and the differing Bold/Weight name results. Failed assignments SHALL preserve every member.
+Other values and conversions SHALL refuse as not implemented, citing #4807. TypeName retains
+the shared object’s `Font` spelling.
 
 #### Scenario: Two controls share one Font
 

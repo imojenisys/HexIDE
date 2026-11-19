@@ -13,15 +13,13 @@ public class FontObjectTests : BaseVBTestFixture
     }
 
     [Theory]
-    [InlineData("Charset = 2", "font substitution")]
-    [InlineData("Size = \"10\"", "StdFont.Size")]
+    [InlineData("Charset = 3", "StdFont.Charset")]
     [InlineData("Weight = 500", "StdFont.Weight")]
-    [InlineData("Bold = False", "StdFont.Bold")]
     public async Task Standalone_StdFont_keeps_explicit_refusals_for_unsupported_assignments(string assignment, string reason)
     {
-        // #4781 permits a refusal for Charset even at the measured value; other conversions are unmeasured.
+        // Values outside the measured #4807 rows remain refused.
         Func<Task> run = () => Run("Dim f As Object\nSet f = New StdFont\nf." + assignment);
         var error = (await run.Should().ThrowAsync<NotImplementedException>()).Which;
-        error.Message.Should().Contain(reason).And.Contain("#4781");
+        error.Message.Should().Contain(reason).And.Contain("#4807");
     }
 }
