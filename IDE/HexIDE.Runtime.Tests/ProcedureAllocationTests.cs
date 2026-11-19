@@ -12,6 +12,8 @@ public class ProcedureAllocationTests : BaseVBTestFixture
         // Measured budgets: scripts/probes/4919/README.md.
         Exception? failure = null;
         long bytes = 0;
+        // Windows Debug can reach the stack guard before 5,000 calls on the UI's 64 MiB (#4919).
+        // This measures allocation for a fixed depth, independently of the production stack limit.
         await Task.Run(() => UiThread.RunOnNewThread(() =>
         {
             try
@@ -33,7 +35,7 @@ public class ProcedureAllocationTests : BaseVBTestFixture
             }
             catch (Exception error) { failure = error; }
             return 0;
-        }, UiThread.StackBytes), TestContext.Current.CancellationToken);
+        }, 128 * 1024 * 1024), TestContext.Current.CancellationToken);
         if (failure is not null)
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
 #if DEBUG

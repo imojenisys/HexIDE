@@ -75,6 +75,11 @@ Windows cold timing and the four named classes still need the supervisor's Windo
 
 The structural test measures an ordinary 5,000-level return, on the real procedure-call path, with no
 debugger. Debug measured 14,689 bytes/level after the change; its budget is 18,400 (about 1.25 times).
+The allocation test uses a 128 MiB thread stack: the Windows check of `53579cad9` hit Error 28
+before completing its 5,000-level return on 64 MiB. The issue also records the Windows Debug
+stack guard stopping at 4,819 levels. This test-only stack size lets the fixed-depth allocation
+measurement finish; the standalone probe still uses 64 MiB, and the production stack and guards
+are unchanged. Windows must rerun the test to verify the larger stack there.
 Release measured about 3,975; its budget is 5,000. The same Debug test on main measured 20,680 and fails
 the final budget. No wall-clock limit is asserted. Existing language-correctness tests remain regression
 guards; this change does not introduce any new VB6 result expectations.
