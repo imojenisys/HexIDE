@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -53,18 +52,13 @@ internal sealed class ListItemState
 
     internal static void Load(SelectingItemsControl list, ComponentInstance instance)
     {
-        var items = Decode(instance.GetPropertyOrDefault(VBProperties.ListProperty));
-        var data = Decode(instance.GetPropertyOrDefault(VBProperties.ItemDataProperty));
-        if (data is not null && data.Length != (items?.Length ?? 0))
-            throw Refused();
+        var items = Decode(instance.GetPropertyOrDefault(VBProperties.ListProperty),
+            () => new InvalidOperationException($"Property List in {instance.GetPropertyOrDefault(VBProperties.NameProperty)} could not be set"));
+        var data = Decode(instance.GetPropertyOrDefault(VBProperties.ItemDataProperty), Refused);
         var values = new long[items?.Length ?? 0];
         if (data is not null)
-            for (var i = 0; i < data.Length; i++)
-            {
-                if (!int.TryParse(data[i], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value))
-                    throw Refused();
-                values[i] = value;
-            }
+            for (var i = 0; i < Math.Min(data.Length, values.Length); i++)
+                values[i] = ReadData(data[i]);
         // Validate both records before changing the control. The saved properties themselves stay verbatim for saving.
         var state = For(list);
         if (items is not null)
@@ -75,13 +69,30 @@ internal sealed class ListItemState
         list.SelectedIndex = -1;
     }
 
-    private static string[]? Decode(byte[]? record)
+    // Part of #5127, SP6 native and p-code measurements in the issue (oracle PR #5130).
+    private static int ReadData(string text)
+    {
+        var at = 0;
+        while (at < text.Length && text[at] == ' ') at++;
+        if (at < text.Length && (text[at] == '+' || char.IsWhiteSpace(text[at]))) throw Refused();
+        var negative = at < text.Length && text[at] == '-';
+        if (negative) at++;
+        // Other prefixes before digits are unmeasured; &H10 is the measured non-decimal entry.
+        if (at < text.Length && !char.IsAsciiDigit(text[at]) && text[at..] != "&H10"
+            && text[at..].Any(char.IsAsciiDigit)) throw Refused();
+        var value = 0;
+        while (at < text.Length && text[at] is >= '0' and <= '9')
+            value = unchecked(value * 10 + text[at++] - '0');
+        return negative ? unchecked(-value) : value;
+    }
+
+    private static string[]? Decode(byte[]? record, Func<Exception> truncated)
     {
         if (record is null) return null;
         var at = 0;
         int Word()
         {
-            if (record.Length - at < 2) throw Refused();
+            if (record.Length - at < 2) throw truncated();
             var value = record[at] | record[at + 1] << 8;
             at += 2;
             return value;
@@ -93,7 +104,7 @@ internal sealed class ListItemState
         for (var i = 0; i < count; i++)
         {
             var length = Word();
-            if (length > record.Length - at) throw Refused();
+            if (length > record.Length - at) throw truncated();
             try
             {
                 items[i] = encoding.GetString(record, at, length);
@@ -104,10 +115,9 @@ internal sealed class ListItemState
             }
             at += length;
         }
-        if (at != record.Length) throw Refused();
         return items;
     }
 
     private static NotImplementedException Refused() =>
-        new("Saved List / ItemData record cannot be decoded (#5114)");
+        new("Saved List / ItemData record cannot be decoded (#5127)");
 }

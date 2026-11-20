@@ -2728,9 +2728,18 @@ item index SHALL raise 381; omitting it SHALL raise "Argument not optional".
 The runtime SHALL decode List and ItemData records using
 [#5106 / #5114's measurements](https://github.com/hexide-io/HexIDE/issues/5106): counted ANSI
 strings and decimal Long data. Loading SHALL retain saved order, including on Sorted controls,
-and set NewIndex/ListIndex to -1. Original bytes SHALL remain verbatim for saving. Undecodable
-records or disagreeing counts SHALL refuse before population with NotImplementedException naming
-#5114. The designer's preview of a ListBox SHALL stay empty until it can draw saved items (#5121).
+and set NewIndex/ListIndex to -1. Original bytes SHALL remain verbatim for saving. Per
+[the #5127 measurements](https://github.com/hexide-io/HexIDE/issues/5127) (oracle PR #5130), List
+alone SHALL determine the items, with positional ItemData defaulting missing values to zero and
+ignoring extras. ItemData SHALL skip leading spaces, accept an optional minus and read leading decimal
+digits with 32-bit wrapping; no digits yields zero, as does the measured &H10 entry. Trailing record
+bytes SHALL be ignored.
+Code page 1252 SHALL decode undefined bytes as same-number characters. Truncated ItemData,
+unmeasured prefixes before digits (including plus/other whitespace) and undecodable bytes on other
+code pages SHALL refuse before population with NotImplementedException naming #5127. Truncated List SHALL stop loading with
+`Property List in <control name> could not be set`. A Style 2 ComboBox without ItemData SHALL keep
+all saved items: a deliberate Fidelity Principle divergence from VB6's first-item loss. The designer's
+preview of a ListBox SHALL stay empty until it can draw saved items (#5121).
 
 #### Scenario: Counted records load with no initial selection
 - **WHEN** a ListBox loads s2, s1, s3 with ItemData 20, 10, 30
@@ -2742,7 +2751,7 @@ records or disagreeing counts SHALL refuse before population with NotImplemented
 #### Scenario: The measured loading scope
 - **WHEN** saved items are loaded
 - **THEN** Properties-window list/data editing, record writing and CallByName remain outside this change
-- **AND** late-bound differences are tracked by #5117 and non-ASCII saved-text fidelity remains unmeasured
+- **AND** late-bound differences are tracked by #5117 and non-ASCII saved-text fidelity outside code page 1252 remains unmeasured
 
 ### Requirement: ListBox TopIndex assignments report a changed top row
 
