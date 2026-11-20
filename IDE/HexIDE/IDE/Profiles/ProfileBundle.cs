@@ -122,7 +122,7 @@ internal static class ProfileBundleLoader
                 "requireVariableDeclaration" or "autoListMembers" or "listMembersAsYouType" or "autoQuickInfo" or "autoIndent"
                     or "formatOnSave" or "showGrid" or "alignToGrid" or "promptForProjectOnStartup"
                     or "isStandardToolbarVisible" or "isEditToolbarVisible" or "isDebugToolbarVisible"
-                    or "isFormEditorToolbarVisible" or "isMinimapVisible" =>
+                    or "isFormEditorToolbarVisible" or "isMinimapVisible" or "rdcoreWin64OnlySetOnWindows" =>
                     kind is JsonValueKind.True or JsonValueKind.False,
                 _ => throw Error(file, field, "DisallowedSetting")
             };

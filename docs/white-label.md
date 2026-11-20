@@ -119,7 +119,7 @@ Every file a profile names is a path inside its folder. A `settingsDefaults` fil
 - the names `activeTheme`, `activeKeymap` and `activeLanguage`;
 - `true` or `false` for `requireVariableDeclaration`, `autoListMembers`, `listMembersAsYouType`, `autoQuickInfo`, `autoIndent`,
   `formatOnSave`, `showGrid`, `alignToGrid`, `promptForProjectOnStartup`, `isStandardToolbarVisible`,
-  `isEditToolbarVisible`, `isDebugToolbarVisible`, `isFormEditorToolbarVisible` and `isMinimapVisible`.
+  `isEditToolbarVisible`, `isDebugToolbarVisible`, `isFormEditorToolbarVisible`, `isMinimapVisible` and `rdcoreWin64OnlySetOnWindows` (RDCore constants only, default false).
 
 A profile sets where each user starts, and anything a user has chosen and saved wins over it. A member or setting
 not listed here, or a file the profile can't read, stops the IDE from starting with exit code 2, and the refusal
