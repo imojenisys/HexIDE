@@ -53,7 +53,7 @@ public class SymbolFontTests : WindowTestFixture
 
     // What the control draws: the label's own text, or the text a button's template made for its caption.
     private static string? Drawn(Control control) =>
-        control.GetVisualDescendants().OfType<TextBlock>().Single().Text;
+        control.GetVisualDescendants().OfType<TextBlock>().Single(t => t.IsEffectivelyVisible).Text;
 
     // Tables chosen in #1133; WG2 N4384 (UTC L2/12-368), section 7 supplies the four Wingdings/Webdings tables.
     [AvaloniaTheory]
