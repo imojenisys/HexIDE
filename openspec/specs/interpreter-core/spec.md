@@ -2731,7 +2731,7 @@ strings and decimal Long data. Loading SHALL retain saved order, including on So
 and set NewIndex/ListIndex to -1. Original bytes SHALL remain verbatim for saving. Undecodable
 records or disagreeing counts SHALL refuse before population with NotImplementedException naming
 #5114. The designer SHALL draw saved ListBox and Simple ComboBox items in file order, including
-Sorted lists, using the runtime font and row height, with no selection or focus rectangle
+Sorted lists, using the runtime font, row height and text insets, with no selection or focus rectangle
 ([#5121's designer measurements](https://github.com/hexide-io/HexIDE/issues/5121), oracle PR #5131).
 An empty ListBox SHALL show its current Name on the first row only in the designer. Overflowing
 ListBoxes SHALL show a vertical scroll bar. Simple ComboBoxes SHALL show Text above the list.
@@ -2741,6 +2741,7 @@ is unchanged.
 #### Scenario: Saved items appear in the designer picture
 - **WHEN** the designer draws a ListBox saved with s2, s1, s3
 - **THEN** all three appear from the top in saved order without selection or focus
+- **AND** each row’s text has the same top, bottom and horizontal insets as a run
 - **AND** row heights match a run: 13 pixels at MS Sans Serif 8 and 18 at Arial 12 at 96 dpi
 - **WHEN** it draws a 645-twip ListBox saved with item1 through item12
 - **THEN** item1 through item3 and a vertical scroll bar are visible

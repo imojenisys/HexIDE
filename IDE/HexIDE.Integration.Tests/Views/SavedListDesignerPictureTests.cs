@@ -1,12 +1,14 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
 using HexIDE.Controls;
@@ -92,6 +94,52 @@ public class SavedListDesignerPictureTests
                 if (picture.Pixels[at] + picture.Pixels[at + 1] + picture.Pixels[at + 2] < 600) count++;
             }
         return count;
+    }
+
+    // Compare geometry, not antialiasing: designer pictures deliberately use greyscale text (#5121 round 2).
+    private static (int Top, int Bottom, int Left, int Right) Ink(byte[] pixels, int width, int top, int bottom)
+    {
+        var points = Enumerable.Range(top, bottom - top).SelectMany(y =>
+            Enumerable.Range(3, 62).Where(x =>
+            {
+                var at = (y * width + x) * 4;
+                return pixels[at] + pixels[at + 1] + pixels[at + 2] < 600;
+            }).Select(x => (X: x, Y: y))).ToArray();
+        points.Should().NotBeEmpty();
+        return (points.Min(p => p.Y), points.Max(p => p.Y), points.Min(p => p.X), points.Max(p => p.X));
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false, 1)]
+    [InlineData(false, 1.5)]
+    [InlineData(true, 1)]
+    [InlineData(true, 1.5)]
+    public void Designer_text_has_the_running_rows_ink_extents(bool arial, double scaling)
+    {
+        var instance = List(false, "s2", "s1", "s3");
+        if (arial) instance.SetProperty(VBProperties.FontProperty, new VBFont("Arial", 12));
+        Draw(instance, 90, (picture, _) =>
+        {
+            var runtime = (VBListBox)ListBoxComponentClass.Instance.Instantiate(instance);
+            var window = new Window { Content = runtime, Width = 160, Height = 90 };
+            window.SetRenderScaling(scaling);
+            window.Show();
+            try
+            {
+                runtime.UpdateLayout();
+                using var target = new RenderTargetBitmap(new PixelSize(160, 90), new Vector(96, 96));
+                target.Render(runtime);
+                var pixels = new byte[160 * 90 * 4];
+                var pin = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+                try { target.CopyPixels(new PixelRect(0, 0, 160, 90), pin.AddrOfPinnedObject(), pixels.Length, 160 * 4); }
+                finally { pin.Free(); }
+                var height = arial ? 18 : 13;
+                for (var row = 0; row < 3; row++)
+                    Ink(picture.Pixels, picture.PixelWidth, 2 + row * height, 2 + (row + 1) * height).Should()
+                        .Be(Ink(pixels, 160, 2 + row * height, 2 + (row + 1) * height), $"row {row}, Arial={arial}, scaling={scaling}");
+            }
+            finally { window.Close(); }
+        }, scaling);
     }
 
     [AvaloniaTheory]
