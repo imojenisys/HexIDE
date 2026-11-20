@@ -96,6 +96,19 @@ internal static class ListMembers
         value = default;
         if (control is not SelectingItemsControl list || !IsList(control))
             return false;
+        if (control is VBListBox savedList)
+        {
+            if (member.Equals("Style", StringComparison.OrdinalIgnoreCase))
+            {
+                value = new Vb6Value(savedList.SavedStyle);
+                return true;
+            }
+            if (member.Equals("Columns", StringComparison.OrdinalIgnoreCase))
+            {
+                value = new Vb6Value(savedList.Columns);
+                return true;
+            }
+        }
         if (control is VBListBox topList && member.Equals("TopIndex", StringComparison.OrdinalIgnoreCase))
         {
             value = new Vb6Value(topList.TopIndex);

@@ -2550,6 +2550,26 @@ Measured by [#3349's oracle](../../../docs/vb6-fidelity-oracle/a-public-array-in
 - **WHEN** a declaration is Private, Dim, or in a standard module
 - **THEN** this refusal does not apply and its existing implementation or refusal is retained
 
+### Requirement: Saved ListBox checks and columns
+
+A ListBox SHALL read saved Style and Columns at runtime (part of #4209, measured in
+[the oracle](../../../docs/vb6-fidelity-oracle/a-listboxs-page-up-checkboxes-and-columns.md)).
+For Style 1 without MultiSelect, Selected(i) SHALL read check state, and Space SHALL toggle
+that state with Click then ItemCheck(Item As Integer). Selected(i) = True on an unchecked item SHALL check,
+select and scroll the item into view, raising ItemCheck then Click without Scroll. Unmeasured
+Selected False and repeated True writes SHALL refuse as not implemented. Checkbox fonts beyond
+the measured default SHALL retain their existing row heights.
+Columns above zero SHALL arrange items down each column then across. TopIndex SHALL snap
+to a column start and clamp to the last page. Measured navigation SHALL raise Click then
+Scroll when the top changes; code selection SHALL scroll without Scroll.
+Unmeasured mouse checkbox toggling, Style 1 with MultiSelect, runtime Style/Columns
+assignments, horizontal-bar dragging and designer drawing retain their existing behaviour.
+
+#### Scenario: Two columns of nine rows
+- **WHEN** a 60-item Columns 2 list showing nine rows per column receives TopIndex = 25 then TopIndex = 59
+- **THEN** the resulting top items are 18 and 45, each with one Scroll
+- **AND** ListIndex = 50 from TopIndex 0 scrolls to TopIndex 36 with Click only
+
 ### Requirement: ListBox TopIndex assignments report a changed top row
 
 A populated ListBox with measurable rows SHALL expose TopIndex and coerce assignments through the standard Integer store
