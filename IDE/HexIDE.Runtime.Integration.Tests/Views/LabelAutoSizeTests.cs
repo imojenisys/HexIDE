@@ -29,12 +29,29 @@ public class LabelAutoSizeTests : WindowTestFixture
                  Size = {{size.ToString(System.Globalization.CultureInfo.InvariantCulture)}}
                  Weight = {{weight}}
                  Charset = 0
+                 Italic = 0
               EndProperty
               {{properties}}
            End
         End
         Attribute VB_Name = "Form1"
         """;
+
+    [AvaloniaTheory]
+    [InlineData("MS Sans Serif", 8.25, 400)]
+    [InlineData("Arial", 9.75, 400)]
+    [InlineData("MS Sans Serif", 18, 400)]
+    [InlineData("Tahoma", 8.25, 400)]
+    [InlineData("MS Sans Serif", 8.25, 700)]
+    public void Measured_caption_fixture_loads_requested_font(string family, double size, int weight)
+    {
+        var (_, canvas, _, _) = ContainerRuntimeHarness.Spawn(Form(family: family, size: size, weight: weight));
+        var font = AttachedProperties.GetFont(canvas.Children.OfType<VBLabel>().Single());
+        font.Should().NotBeNull();
+        font!.Value.FontFamilyName.Should().Be(family);
+        font.Value.Size.Should().Be(size);
+        font.Value.Weight.Should().Be(weight);
+    }
 
     // Preserve HexIDE's existing behaviour: identical font assignments have not been measured in VB6.
     [AvaloniaTheory]
