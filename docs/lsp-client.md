@@ -33,6 +33,12 @@ If deferred result deserialization fails, the protocol inspector marks the excha
 
 ---
 
+Linked editing (`textDocument/linkedEditingRange`, #5015) is opt-in through Options → Editor → General.
+It defaults to off; profiles may set `linkedEditing`. The client accepts static and dynamic offers,
+requests ranges after a 500 ms caret/edit debounce and a document flush, and mirrors only identical, validated ranges supplied
+by the server. Escape, leaving the ranges, an outside change or a failed `wordPattern` ends the link.
+Each mirrored edit is one undo step. The separate carried-file editor does not use this code-window path.
+
 ## The design claim this document is accountable to
 
 > The backend is replaceable. Any conformant language server should work, and where one does not, that is a
@@ -1839,7 +1845,7 @@ specification's own [`metaModel.json`](https://raw.githubusercontent.com/microso
 the canonical machine-readable list, so the method names and directions are the specification's rather than
 this document's recollection of them.
 
-**HexIDE implements 62 of the 93.** That is not a deficiency in itself — no client implements them all, and
+**HexIDE implements 63 of the 93.** That is not a deficiency in itself — no client implements them all, and
 most of the remainder are features no VB6 IDE needs. It is here so the shape of the gap is visible rather
 than inferred.
 
@@ -1861,7 +1867,7 @@ than inferred.
 | ✅ | `initialized` | → |  |
 | ✅ | `shutdown` | → |  |
 
-### `textDocument/*` — 29 of 41
+### `textDocument/*` — 30 of 41
 
 | | Method | Dir | Notes |
 |---|---|---|---|
@@ -1887,7 +1893,7 @@ than inferred.
 | ✅ | `textDocument/inlayHint` | → | Inline labels at their positions; first nonempty provider; bundled syntactic block ends |
 | ○ | `textDocument/inlineCompletion` | → |  |
 | ○ | `textDocument/inlineValue` | → |  |
-| ○ | `textDocument/linkedEditingRange` | → |  |
+| ✅ | `textDocument/linkedEditingRange` | → | Opt-in code-window linked editing; static and dynamic providers (#5015) |
 | ○ | `textDocument/moniker` | → |  |
 | ✅ | `textDocument/onTypeFormatting` | → | Claimed typing triggers, guarded edits, caret mapping and one-step undo (#2672) |
 | ✅ | `textDocument/prepareCallHierarchy` | → | Shows the server's call hierarchy; computes none |
@@ -2097,7 +2103,7 @@ Three clusters account for nearly all of the gap:
 - **Server-to-client courtesy** — `window/*` and `client/*` are 7 of 8 between them. Alongside work-done progress (#360), the messages that landed
   are the ones that cost no analysis depth and buy diagnosability: a server can now explain its own
   problems instead of appearing broken ([#289](https://github.com/hexide-io/HexIDE/issues/289)). Dynamic registration is honoured for
-  `workspace/didChangeWatchedFiles` only (#456); other methods remain logged and refused (#288).
+  `workspace/didChangeWatchedFiles` (#456) and `textDocument/linkedEditingRange` (#5015); other methods remain logged and refused (#288).
   Registrations belong to one connection and are discarded on disconnect. Both string globs and relative
   patterns (URI or WorkspaceFolder bases) support create/change/delete masks. String globs follow workspace
   folder additions and removals; relative patterns retain their registered base. Registrations that would

@@ -40,6 +40,7 @@ public sealed class VBLspClient : ILspClient
     // OpenedOn reserves an open before it is sent; requests need the completed write instead (#2920).
     private ConcurrentDictionary<string, TaskCompletionSource> _writtenOpens = new();
 
+    private readonly ConcurrentDictionary<string, JsonElement> _linkedRegistrations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, JsonElement> _progressTokens = new();
     private readonly SemaphoreSlim _changeGate = new(1, 1);
     // What each source currently says about each document. This connection's server is one source; an
@@ -625,6 +626,7 @@ public sealed class VBLspClient : ILspClient
         _initialized = false;
         ClearWorkspaceDiagnosticState();
         _capabilities = null;
+        _linkedRegistrations.Clear();
         _warnedCapabilities.Clear();
         _semanticWarnings.Clear();
         _prioritySkips.Clear();
@@ -770,7 +772,10 @@ public sealed class VBLspClient : ILspClient
                          "parameter", "variable", "property", "enumMember", "event", "function", "method",
                          "macro", "keyword", "modifier", "comment", "string", "number", "regexp", "operator", "decorator"],
                         ["declaration", "definition", "readonly", "static", "deprecated", "abstract",
-                         "async", "modification", "documentation", "defaultLibrary"], ["relative"])),
+                         "async", "modification", "documentation", "defaultLibrary"], ["relative"]))
+                {
+                    LinkedEditingRange = new LinkedEditingRangeClientCapabilities(),
+                },
                 new WorkspaceClientCapabilities(
                     ExecuteCommand: new ExecuteCommandClientCapabilities(),
                     ApplyEdit: true,
@@ -2025,7 +2030,31 @@ public sealed class VBLspClient : ILspClient
         }
     }
 
-    public bool SupportsCapability(string uri, string capability) => IsRunning && CanServeQuietly(capability);
+    public bool SupportsCapability(string uri, string capability) => IsRunning &&
+        (ServerCapabilities.Supports(_capabilities?.Value, capability)
+         || capability == "linkedEditingRangeProvider" && _linkedRegistrations.Values.Any(options => LinkedSelectorMatches(options, uri)));
+
+    private bool LinkedSelectorMatches(JsonElement options, string uri)
+    {
+        try
+        {
+            if (options.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null) return true;
+            if (options.ValueKind != JsonValueKind.Object) return false;
+            if (!options.TryGetProperty("documentSelector", out var selector) || selector.ValueKind == JsonValueKind.Null) return true;
+            if (selector.ValueKind != JsonValueKind.Array || !Uri.TryCreate(uri, UriKind.Absolute, out var parsed)) return false;
+            return selector.EnumerateArray().Any(filter => filter.ValueKind == JsonValueKind.Object
+                && (!filter.TryGetProperty("language", out var language) || language.GetString() == _languageId)
+                && (!filter.TryGetProperty("scheme", out var scheme) || scheme.GetString() == parsed.Scheme)
+                && (!filter.TryGetProperty("pattern", out var glob) || glob.ValueKind == JsonValueKind.String
+                    && System.Text.RegularExpressions.Regex.IsMatch(Uri.UnescapeDataString(parsed.AbsolutePath),
+                        "\\A" + FileOperationFilters.Glob(glob.GetString()!) + "\\z",
+                        System.Text.RegularExpressions.RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100))));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or System.Text.RegularExpressions.RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
 
     public Task<Location[]?> RequestImplementationAsync(string uri, Position position, CancellationToken cancellationToken = default) =>
         CanServe("implementationProvider") ? RequestNavigationAsync(uri, position, "implementation", cancellationToken) : Task.FromResult<Location[]?>(null);
@@ -2112,6 +2141,23 @@ public sealed class VBLspClient : ILspClient
         if (!element.TryGetProperty("uri", out var uri) || uri.ValueKind != JsonValueKind.String) return null;
         if (!element.TryGetProperty("range", out var r) || ReadRange(r) is not { } plain) return null;
         return new Location(uri.GetString()!, plain);
+    }
+
+    public async Task<LinkedEditingRanges?> RequestLinkedEditingRangesAsync(string uri, Position position, CancellationToken cancellationToken = default)
+    {
+        if (_rpc is null || !_initialized || !CanServe("linkedEditingRangeProvider")
+            || !SupportsCapability(uri, "linkedEditingRangeProvider")) return null;
+        var p = new TextDocumentPositionParams(new TextDocumentIdentifier(uri), position);
+        try
+        {
+            return await InvokeRequestAsync<LinkedEditingRanges?>(_rpc,
+                "textDocument/linkedEditingRange", p, cancellationToken, documentUri: uri);
+        }
+        catch (Exception ex)
+        {
+            WarnRequestFailedOnce("textDocument/linkedEditingRange", ex, cancellationToken);
+            return null;
+        }
     }
 
     public async Task<DocumentHighlight[]?> RequestDocumentHighlightAsync(string uri, Position position, CancellationToken cancellationToken = default)
@@ -2754,6 +2800,7 @@ public sealed class VBLspClient : ILspClient
         _initialized = false;
         ClearWorkspaceDiagnosticState();
         _capabilities = null;
+        _linkedRegistrations.Clear();
         _identity = null;
         _warnedCapabilities.Clear();
         _semanticWarnings.Clear();
@@ -2797,6 +2844,7 @@ public sealed class VBLspClient : ILspClient
         _initialized = false;
         ClearWorkspaceDiagnosticState();
         _capabilities = null;
+        _linkedRegistrations.Clear();
         _warnedCapabilities.Clear();
         _semanticWarnings.Clear();
         _prioritySkips.Clear();
@@ -3072,8 +3120,27 @@ public sealed class VBLspClient : ILspClient
         {
             try
             {
-                if (unregister) WatchedFiles.Unregister(p);
-                else WatchedFiles.Register(p);
+                var name = unregister ? "unregisterations" : "registrations";
+                var entries = p.GetProperty(name).EnumerateArray().ToArray();
+                if (entries.Any(entry => entry.GetProperty("method").GetString() is not
+                    (WatchedFileRegistrations.Method or "textDocument/linkedEditingRange")))
+                    throw new LocalRpcException("Only watched-file and linked-editing dynamic registrations are supported.")
+                    { ErrorCode = (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.MethodNotFound };
+                foreach (var entry in entries)
+                    if (entry.GetProperty("id").GetString() is null)
+                        throw new InvalidOperationException("Missing registration id.");
+                var watched = entries.Where(entry => entry.GetProperty("method").GetString() == WatchedFileRegistrations.Method).ToArray();
+                using var watchedDocument = JsonDocument.Parse("{\"" + name + "\":[" + string.Join(",", watched.Select(entry => entry.GetRawText())) + "]}");
+                var watchedParams = watchedDocument.RootElement;
+                if (unregister) WatchedFiles.Unregister(watchedParams);
+                else WatchedFiles.Register(watchedParams);
+                foreach (var entry in entries.Where(entry => entry.GetProperty("method").GetString() == "textDocument/linkedEditingRange"))
+                {
+                    var id = entry.GetProperty("id").GetString()!;
+                    if (unregister) _client._linkedRegistrations.TryRemove(id, out _);
+                    else _client._linkedRegistrations[id] = entry.TryGetProperty("registerOptions", out var options)
+                        ? options.Clone() : default;
+                }
             }
             catch (LocalRpcException)
             {
@@ -3084,8 +3151,8 @@ public sealed class VBLspClient : ILspClient
             }
             catch (Exception ex)
             {
-                _client._logger.LogWarning(ex, "Invalid watched-file registration: {What}", Describe(p));
-                throw new LocalRpcException("Invalid watched-file registration: " + ex.Message)
+                _client._logger.LogWarning(ex, "Invalid dynamic registration: {What}", Describe(p));
+                throw new LocalRpcException("Invalid dynamic registration: " + ex.Message)
                 { ErrorCode = (int)StreamJsonRpc.Protocol.JsonRpcErrorCode.InvalidParams };
             }
         }
@@ -3242,6 +3309,7 @@ public sealed class VBLspClient : ILspClient
         "documentOnTypeFormattingProvider",
         "documentRangeFormattingProvider",
         "documentHighlightProvider",
+        "linkedEditingRangeProvider",
         "documentSymbolProvider",
         // Read by the command-routing reader rather than a gate: a command is routed to the server that
         // named it, so the question is never "does any server offer this" but "which one declared it".
@@ -3303,13 +3371,13 @@ public sealed class VBLspClient : ILspClient
 
     private bool CanServe(string capabilityName)
     {
-        if (ServerCapabilities.Supports(_capabilities?.Value, capabilityName)) return true;
+        if (CanServeQuietly(capabilityName)) return true;
         WarnUnavailableOnce(capabilityName);
         return false;
     }
 
     /// <summary>
-    /// True when the server advertised this capability, and <b>silent</b> when it did not.
+    /// True when the server advertised or registered this capability, and <b>silent</b> when it did not.
     /// </summary>
     /// <remarks>
     /// <b>For the capabilities whose absence is an answer rather than a shortfall.</b> Every other gate warns,
@@ -3326,7 +3394,8 @@ public sealed class VBLspClient : ILspClient
     /// </para>
     /// </remarks>
     private bool CanServeQuietly(string capabilityName) =>
-        ServerCapabilities.Supports(_capabilities?.Value, capabilityName);
+        ServerCapabilities.Supports(_capabilities?.Value, capabilityName)
+        || capabilityName == "linkedEditingRangeProvider" && !_linkedRegistrations.IsEmpty;
 
     private bool CanServeExperimental(string capabilityName)
     {

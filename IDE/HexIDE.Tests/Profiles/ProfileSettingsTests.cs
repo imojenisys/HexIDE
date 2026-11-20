@@ -31,6 +31,16 @@ public sealed class ProfileSettingsTests : IDisposable
         settings.ListMembersAsYouType.Should().Be(savedOverride);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LinkedEditingProfileDefaultAndSavedOverride(bool savedOverride)
+    {
+        if (savedOverride) File.WriteAllText(SettingsPath, """{"linkedEditing":false}""");
+        var settings = Create("""{"linkedEditing":true}""");
+        settings.LinkedEditing.Should().Be(!savedOverride);
+    }
+
     [Fact]
     [Trait("Issue", "4307")]
     public void ServerSettingsReplaceOneDefaultWholeAndResetWithoutTouchingOtherIdsOrProfile()

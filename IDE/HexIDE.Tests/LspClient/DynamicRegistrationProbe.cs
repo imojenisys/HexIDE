@@ -38,6 +38,14 @@ public class DynamicRegistrationProbe : IAsyncDisposable
 
     private sealed class RegisteringServer
     {
+        public JsonElement LinkedPosition;
+        [JsonRpcMethod("textDocument/linkedEditingRange", UseSingleObjectParameterDeserialization = true)]
+        public JsonElement Linked(JsonElement p)
+        {
+            LinkedPosition = p.Clone();
+            return JsonDocument.Parse("""{"ranges":[{"start":{"line":1,"character":0},"end":{"line":1,"character":1}},{"start":{"line":3,"character":7},"end":{"line":3,"character":8}}],"wordPattern":"[a-z]+"}""").RootElement.Clone();
+        }
+
         public JsonRpc? Rpc;
         public JsonElement ClientCapabilities;
         public readonly System.Collections.Concurrent.ConcurrentQueue<JsonElement> Changes = new();
@@ -136,14 +144,39 @@ public class DynamicRegistrationProbe : IAsyncDisposable
     }
 
     [Fact]
-    public async Task TheClientClaimsDynamicRegistrationOnlyForWatchedFiles()
+    public async Task LinkedEditingRegistersDynamicallyAndSendsTheCaretPosition()
+    {
+        var (client, server) = await ConnectedAsync();
+        server.ClientCapabilities.GetProperty("textDocument").GetProperty("linkedEditingRange")
+            .GetProperty("dynamicRegistration").GetBoolean().Should().BeTrue();
+        await server.Rpc!.InvokeWithParameterObjectAsync<JsonElement>("client/registerCapability", new
+        {
+            registrations = new[] { new { id = "links", method = "textDocument/linkedEditingRange", registerOptions = new { documentSelector = new[] { new { language = "vb6", scheme = "untitled" } } } } }
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        client.SupportsCapability("untitled:test.bas", "linkedEditingRangeProvider").Should().BeTrue();
+        client.SupportsCapability("file:///test.bas", "linkedEditingRangeProvider").Should().BeFalse();
+        var result = await client.RequestLinkedEditingRangesAsync("untitled:test.bas", new HexIDE.Lsp.Messages.Position(3, 7), TestContext.Current.CancellationToken);
+        result!.Ranges.Should().HaveCount(2);
+        result.WordPattern.Should().Be("[a-z]+");
+        server.LinkedPosition.GetProperty("textDocument").GetProperty("uri").GetString().Should().Be("untitled:test.bas");
+        server.LinkedPosition.GetProperty("position").GetProperty("line").GetInt32().Should().Be(3);
+        server.LinkedPosition.GetProperty("position").GetProperty("character").GetInt32().Should().Be(7);
+        await server.Rpc.InvokeWithParameterObjectAsync<JsonElement>("client/unregisterCapability", new
+        {
+            unregisterations = new[] { new { id = "links", method = "textDocument/linkedEditingRange" } }
+        }, cancellationToken: TestContext.Current.CancellationToken);
+        client.SupportsCapability("untitled:test.bas", "linkedEditingRangeProvider").Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TheClientClaimsDynamicRegistrationForWatchedFilesAndLinkedEditing()
     {
         var (_, server) = await ConnectedAsync();
         var caps = server.ClientCapabilities;
         var files = caps.GetProperty("workspace").GetProperty("didChangeWatchedFiles");
         files.GetProperty("dynamicRegistration").GetBoolean().Should().BeTrue();
         files.GetProperty("relativePatternSupport").GetBoolean().Should().BeTrue();
-        System.Text.RegularExpressions.Regex.Matches(caps.GetRawText(), "dynamicRegistration").Count.Should().Be(1);
+        System.Text.RegularExpressions.Regex.Matches(caps.GetRawText(), "dynamicRegistration").Count.Should().Be(2);
     }
 
     [Fact]

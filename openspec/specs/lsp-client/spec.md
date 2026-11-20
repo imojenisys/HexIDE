@@ -176,7 +176,7 @@ deduplicated workspace folders and source lists.
 
 
 ### Requirement: Registered watched-file notifications
-The client SHALL advertise dynamic registration only for `workspace/didChangeWatchedFiles`, including relative-pattern support. It SHALL honour registration and unregistration per connection, discard registrations on disconnect, and log and refuse unsupported methods. String globs and relative patterns with URI or WorkspaceFolder bases SHALL honour create/change/delete masks. Workspace-relative string globs SHALL follow additions and removals of workspace folders; relative patterns SHALL retain their own base. A registration that would recursively watch a filesystem root, including through the existing ancestor of a missing base, SHALL be logged and refused with `InvalidParams` without installing any part of the request. Matching disk changes and completed IDE writes SHALL be coalesced before notification, and SHALL reach only connections with matching registrations.
+The client SHALL advertise dynamic registration for `workspace/didChangeWatchedFiles`, including relative-pattern support, and `textDocument/linkedEditingRange`. It SHALL honour registration and unregistration per connection, discard registrations on disconnect, and log and refuse unsupported methods. String globs and relative patterns with URI or WorkspaceFolder bases SHALL honour create/change/delete masks. Workspace-relative string globs SHALL follow additions and removals of workspace folders; relative patterns SHALL retain their own base. A registration that would recursively watch a filesystem root, including through the existing ancestor of a missing base, SHALL be logged and refused with `InvalidParams` without installing any part of the request. Matching disk changes and completed IDE writes SHALL be coalesced before notification, and SHALL reach only connections with matching registrations.
 
 #### Scenario: A server registers configuration files
 - **WHEN** a server registers `**/pyproject.toml` and that file changes externally
@@ -190,6 +190,20 @@ The client SHALL advertise dynamic registration only for `workspace/didChangeWat
 #### Scenario: A registration ends
 - **WHEN** its id is unregistered or its connection drops
 - **THEN** it produces no further file events
+
+
+### Requirement: Server-provided linked editing ranges
+
+The client SHALL declare `textDocument.linkedEditingRange` with dynamic registration support and
+consume static or dynamic offers. Requests SHALL carry the document URI and caret position; replies
+SHALL expose `ranges` and optional `wordPattern`, or null. Registrations SHALL honour document selectors
+and cease serving when unregistered or disconnected. The editor's opt-in and mirroring rules belong to
+code-editor.
+
+#### Scenario: A server registers after initialization
+- **WHEN** a server dynamically registers `textDocument/linkedEditingRange` after `initialized`
+- **THEN** matching documents can request linked ranges at the caret's position
+- **AND** unregistering the registration removes that offer
 
 
 ### Requirement: Failed initialize handshakes are visible
