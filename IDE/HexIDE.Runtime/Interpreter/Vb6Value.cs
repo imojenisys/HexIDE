@@ -133,6 +133,9 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     /// </summary>
     public readonly bool HeldAsVariant;
 
+    // A Variant result from a Collection or a function carries HeldAsVariant too (#5117).
+    internal readonly bool ReadFromControlSlot;
+
     /// <summary>This value with a fixed type — a declared variable's value, or a literal.</summary>
     public Vb6Value AsFixedType() => new Vb6Value(Type, Value, true, DeclaredAs, stringBuffer: StringBuffer);
 
@@ -164,16 +167,21 @@ public readonly struct Vb6Value : IEquatable<Vb6Value>
     /// <summary>This reference as read through <paramref name="declaredClass"/> (null = through a Variant).</summary>
     public Vb6Value ViewedAs(string? declaredClass) => new Vb6Value(Type, Value, HasFixedType, declaredClass, HeldAsVariant, StringBuffer);
 
+    internal Vb6Value ViewedFromSlot(string? declaredClass) =>
+        new(Type, Value, HasFixedType, declaredClass, HeldAsVariant, StringBuffer, readFromControlSlot: Type == ValueType.Control);
+
     /// <summary>This value with <paramref name="array"/> in place of the array it holds, keeping its type and flags.</summary>
     internal Vb6Value WithArray(VBArray array) => new Vb6Value(Type, array, HasFixedType, DeclaredAs, HeldAsVariant);
 
-    private Vb6Value(ValueType type, object? value, bool hasFixedType = false, string? declaredAs = null, bool heldAsVariant = false, object? stringBuffer = null)
+    private Vb6Value(ValueType type, object? value, bool hasFixedType = false, string? declaredAs = null, bool heldAsVariant = false,
+        object? stringBuffer = null, bool readFromControlSlot = false)
     {
         Type = type;
         payload = stringBuffer ?? value;
         HasFixedType = hasFixedType;
         DeclaredAs = declaredAs;
         HeldAsVariant = heldAsVariant && !hasFixedType;
+        ReadFromControlSlot = readFromControlSlot;
     }
 
     public Vb6Value(int value)
