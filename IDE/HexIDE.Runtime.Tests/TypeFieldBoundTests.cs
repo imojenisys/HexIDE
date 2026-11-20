@@ -192,14 +192,14 @@ public class TypeFieldBoundTests : BaseVBTestFixture
         AssertDebugLog([new Vb6Value(1L), new Vb6Value(3L), new Vb6Value(7L)]);
     }
 
-    // VB6 behavior is unmeasured for a Public Type declared inside the allocating class (#4907).
+    // Row C2, measured native and p-code in #5042, oracle PR #5043.
     [Fact]
-    public async Task Public_allocation_before_type_in_its_own_class_keeps_refusal()
+    public async Task Public_type_after_its_allocation_in_a_private_class_is_a_compile_error()
     {
         Func<Task> run = () => RunClasses("Dim o As New Class1\no.Test",
             ("Class1", "Private x As T\n" + PrivateConstant + PublicType + "Public Sub Test()\n" + ReadBounds + "\nEnd Sub"));
-        (await run.Should().ThrowAsync<NotImplementedException>()).Which.Message.Should()
-            .EndWith("(#4907)");
+        (await run.Should().ThrowAsync<VBCompileErrorException>()).Which.Message.Should()
+            .EndWith("Cannot define a Public user-defined type within a private object module");
     }
 
     // vb6.exe SP6 native and p-code measurements: hexide-io/HexIDE#4925, case 4.
