@@ -37,6 +37,7 @@ public class ProfileBundleTests
     [InlineData("theme.json", "{\"colors\":42}", "theme", "InvalidPayload")]
     [InlineData("theme.json", null, "theme", "UnreadablePath")]
     [InlineData("settings.json", "{\"listMembersAsYouType\":\"false\"}", "settingsDefaults.listMembersAsYouType", "InvalidType")]
+    [InlineData("settings.json", "{\"showInlineValues\":\"false\"}", "settingsDefaults.showInlineValues", "InvalidType")]
     [InlineData("settings.json", "{\"window\":{}}", "settingsDefaults.window", "DisallowedSetting")]
     [InlineData("settings.json", "{\"tabWidth\":\"four\"}", "settingsDefaults.tabWidth", "InvalidType")]
     [InlineData("settings.json", "{\"stickyScrollDepth\":\"x\"}", "settingsDefaults.stickyScrollDepth", "InvalidType")]
