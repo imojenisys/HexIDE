@@ -122,6 +122,7 @@ public class StdioProcessLspTransportTests
         await rpc.NotifyAsync("exit");
         await sut.DisposeAsync();
         var disposed = elapsed.Elapsed;
+        try { await rpc.Completion; } catch { /* observe the test's read loop after transport shutdown */ }
         // 500 ms scheduling margin over the two-second total; clean exit has a tighter
         // 1.5 s ceiling so restoring the guard's fixed two-second delay fails too.
         var bound = TimeSpan.FromSeconds(mode == "tree-clean" ? 1.5 : 2.5);
