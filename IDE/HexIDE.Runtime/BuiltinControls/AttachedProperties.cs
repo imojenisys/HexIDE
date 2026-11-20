@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
 using HexIDE.Runtime.BuiltinTypes;
@@ -44,6 +45,7 @@ public class AttachedProperties
 
     static AttachedProperties()
     {
+        FontDecorationDrawing.AttachToTextPresenters();
         BackColorProperty.Changed.AddClassHandler<TemplatedControl>((control, e) =>
         {
             if (e.NewValue is VBColor color)
@@ -60,6 +62,11 @@ public class AttachedProperties
         });
         FontProperty.Changed.AddClassHandler<TemplatedControl>((control, e) =>
         {
+            if (control is VBLabel or VBCommandButton or VBCheckBox or VBOptionButton or VBFrame or VBTextBox or VBListBox)
+                Inline.SetTextDecorations(control, FontDecorationDrawing.For(e.GetNewValue<VBFont?>()));
+            else if (control is VBComboBox combo)
+                combo.UpdateEditDecorations();
+
             if (e.NewValue is VBFont font)
             {
                 control.FontFamily = font.ToFontFamily();
