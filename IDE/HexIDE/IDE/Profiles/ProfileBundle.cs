@@ -120,7 +120,7 @@ internal static class ProfileBundleLoader
                     kind == JsonValueKind.Number && property.Value.TryGetInt32(out _),
                 "activeTheme" or "activeKeymap" or "activeLanguage" => kind == JsonValueKind.String,
                 "requireVariableDeclaration" or "autoListMembers" or "listMembersAsYouType" or "autoQuickInfo" or "autoIndent"
-                    or "formatOnSave" or "showGrid" or "alignToGrid" or "promptForProjectOnStartup"
+                    or "showInlineValues" or "formatOnSave" or "showGrid" or "alignToGrid" or "promptForProjectOnStartup"
                     or "isStandardToolbarVisible" or "isEditToolbarVisible" or "isDebugToolbarVisible"
                     or "isFormEditorToolbarVisible" or "isMinimapVisible" =>
                     kind is JsonValueKind.True or JsonValueKind.False,
