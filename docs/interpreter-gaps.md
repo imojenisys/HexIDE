@@ -353,9 +353,12 @@ Now **Deferred**, with the real work named. None needs a bound AST; each is unim
   assignments copy every field deeply, and ReDim/Preserve/Erase and ByRef element locks follow the measurements.
   Array fields have indexed reads/writes and whole-array store checks. Constant-expression Type-field bounds
   resolve in declaration order ([#4595, measured](https://github.com/hexide-io/HexIDE/issues/4595));
-  private Types allocated above their declaration in their own module or class resolve from Consts above the Type,
+  Private Types allocated above their declaration in their own module or class resolve from Consts above the Type,
   including Consts below the variable and chains of preceding Consts ([#4734, measured](https://github.com/hexide-io/HexIDE/issues/4734), oracle PR #4800).
-  Public Types and allocation from another module retain their existing behaviour ([#4907](https://github.com/hexide-io/HexIDE/issues/4907)); inverted bounds and array fields As New remain refused, and so do Get/Put of UDT
+  A Public Type in a standard module follows the same rule, and a variable in another module or a class gets the Type's bounds
+  in the measured allocation orders ([#4907, measured](https://github.com/hexide-io/HexIDE/issues/4907), [oracle PR #5023](https://github.com/hexide-io/HexIDE/pull/5023)).
+  Allocating a Public Type above its declaration in its own class remains explicitly not implemented (#4907).
+  Inverted bounds and array fields As New remain refused, and so do Get/Put of UDT
   arrays and of Types containing array fields, whose record layout is unmeasured ([#4925](https://github.com/hexide-io/HexIDE/issues/4925)). ByVal UDT parameters are refused when a call
   binds them ([#4673’s measurements](https://github.com/hexide-io/HexIDE/issues/4673)); VB6 refuses the build, so one in a
   procedure that is never called goes uncaught here.
