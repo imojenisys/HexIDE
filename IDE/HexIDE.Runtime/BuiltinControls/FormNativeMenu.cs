@@ -119,6 +119,7 @@ internal static class FormNativeMenu
             }
             else
                 Item = new NativeMenuItemSeparator();
+            NativeMenuSource.Register(Item, source);
             source.PropertyChanged += Changed;
         }
 
@@ -146,6 +147,7 @@ internal static class FormNativeMenu
         private void Opening(object? sender, EventArgs args) => click(source);
         public void Dispose()
         {
+            NativeMenuSource.Remove(Item);
             source.PropertyChanged -= Changed;
             if (Item is NativeMenuItem item) item.Click -= Click;
             if (children is not null)

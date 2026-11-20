@@ -197,6 +197,46 @@ public class FormNativeMenuTests
     }
 
     [AvaloniaFact]
+    public void Native_items_expose_their_source_controls_until_the_window_closes()
+    {
+        Run(rig =>
+        {
+            var controls = rig.Window.GetLogicalDescendants().OfType<Control>()
+                .Where(c => c is VBMenu or VBMenuSeparator).ToArray();
+            var items = new[] { rig.Top, rig.Top.Menu!.Items[0], rig.Top.Menu.Items[1], rig.Top.Menu.Items[2],
+                ((NativeMenuItem)rig.Top.Menu.Items[2]).Menu!.Items[0], rig.Native.Items[1] };
+            foreach (var item in items)
+                NativeMenuSource.Of(item).Should().BeOneOf(controls);
+            NativeMenuSource.Of(items[2]).Should().BeOfType<VBMenuSeparator>();
+            rig.Window.Close();
+            foreach (var item in items)
+                NativeMenuSource.Of(item).Should().BeNull();
+        });
+    }
+
+    [AvaloniaFact]
+    public void Unloading_an_array_element_releases_its_native_source()
+    {
+        Run(rig =>
+        {
+            rig.Step(() => rig.Call("AddItem"));
+            var item = rig.Top.Menu!.Items[1];
+            var control = rig.Window.GetLogicalDescendants().OfType<VBMenu>()
+                .Single(c => VBProps.GetName(c) == "mnuArray" && VBProps.GetIndex(c) == 1);
+            NativeMenuSource.Of(item).Should().BeSameAs(control);
+            rig.Step(() => rig.Call("RemoveItem"));
+            NativeMenuSource.Of(item).Should().BeNull();
+        });
+    }
+
+    [AvaloniaFact]
+    public void An_unmirrored_native_item_has_no_source()
+    {
+        NativeMenuSource.Of(new NativeMenuItem("App item")).Should().BeNull();
+        NativeMenuSource.Of(new NativeMenuItemSeparator()).Should().BeNull();
+    }
+
+    [AvaloniaFact]
     public void Native_window_omits_bar_height_and_keeps_its_load_time_setting()
     {
         double height = 0;

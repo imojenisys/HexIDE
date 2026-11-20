@@ -26,6 +26,8 @@ public class AutomationRuntimeSeamTests
         ("HexIDE.Runtime.BuiltinControls.VBTimer", Controls, [Automation + "UiAutomationDriver.cs"]),
         ("HexIDE.Runtime.BuiltinControls.VBCommonDialog", Controls, [Automation + "UiAutomationDriver.cs"]),
         ("HexIDE.Runtime.BuiltinControls.VBProps", Controls, [Automation + "UiAutomationDriver.cs"]),
+        // #5102 requires the mirrored control's id; this follows FormNativeMenu when BuiltinControls moves.
+        ("HexIDE.Runtime.BuiltinControls.NativeMenuSource", Controls, [Automation + "NativeMenuBar.cs"]),
         ("HexIDE.Runtime.BuiltinControls.LockKeys", Controls, [Server + "HexIdeTools.cs"]),
         ("HexIDE.Runtime.BuiltinControls.LockKey", Controls, [Server + "HexIdeTools.cs"]),
         ("HexIDE.Runtime.BuiltinControls.LockKeySource", Controls, [Server + "HexIdeTools.cs"]),
