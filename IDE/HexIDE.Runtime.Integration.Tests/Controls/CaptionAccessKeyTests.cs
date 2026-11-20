@@ -91,7 +91,7 @@ public class CaptionAccessKeyTests
     // its border, the frame's from its header.
     private static TextBlock Caption(Control control) => control is VBLabel
         ? control.GetVisualDescendants().OfType<TextBlock>().Single()
-        : control.GetVisualDescendants().OfType<TextBlock>().Single(t => t.IsEffectivelyVisible && (t is VBAccessText or VBCaptionText));
+        : control.GetVisualDescendants().OfType<TextBlock>().Single(t => t is VBAccessText or VBCaptionText);
 
     private static void ShouldBePlain(TextBlock drawn, string text)
     {

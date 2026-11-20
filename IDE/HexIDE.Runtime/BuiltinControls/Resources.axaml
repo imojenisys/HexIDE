@@ -21,12 +21,6 @@
                                             BorderDarkDarkBrush="{DynamicResource {x:Static common:SystemColors.ControlDarkDarkBrushKey}}" />
                     <!-- The edge moves inward; the caption keeps its position. -->
                     <builtinControls:CommandButtonCaptionPanel>
-                        <ContentPresenter x:Name="CaptionHighlight"
-                                          Content="{TemplateBinding Content}"
-                                          ContentTemplate="{TemplateBinding ContentTemplate}"
-                                          Foreground="{DynamicResource {x:Static common:SystemColors.ControlLightLightBrushKey}}"
-                                          IsVisible="False"
-                                          RecognizesAccessKey="True" />
                         <ContentPresenter x:Name="PART_ContentPresenter"
                                           Content="{TemplateBinding Content}"
                                           ContentTemplate="{TemplateBinding ContentTemplate}"
@@ -41,9 +35,6 @@
         </Style>
         <Style Selector="^:disabled /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Foreground" Value="{DynamicResource {x:Static common:SystemColors.ControlDarkBrushKey}}" />
-        </Style>
-        <Style Selector="^:disabled /template/ ContentPresenter#CaptionHighlight">
-            <Setter Property="IsVisible" Value="True" />
         </Style>
         <Style Selector="^:default /template/ Border#DefaultFrame">
             <Setter Property="IsVisible" Value="True" />

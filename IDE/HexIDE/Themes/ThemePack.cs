@@ -39,6 +39,7 @@ internal static class ColorKeyMapping
             ["ControlDark"]             = (SystemColors.ControlDarkBrushKey,             true),
             ["ControlLight"]            = (SystemColors.ControlLightBrushKey,            true),
             ["ControlLightLight"]       = (SystemColors.ControlLightLightBrushKey,       true),
+            ["ControlLightLightColor"]  = (SystemColors.ControlLightLightColorKey,       false),
             ["ControlDarkDark"]         = (SystemColors.ControlDarkDarkBrushKey,         true),
             ["Menu"]                    = (SystemColors.MenuBrushKey,                    true),
             ["MenuText"]                = (SystemColors.MenuTextBrushKey,                true),

@@ -28,9 +28,8 @@ internal sealed class CommandButtonCaptionPanel : Panel
         foreach (var child in Children)
         {
             var size = child.DesiredSize;
-            var offset = child.Name == "CaptionHighlight" ? 1 : 0;
-            child.Arrange(new Rect(Math.Truncate((finalSize.Width - 1 - size.Width) / 2) + offset,
-                Math.Truncate((finalSize.Height - 1 - size.Height) / 2) + offset, size.Width, size.Height));
+            child.Arrange(new Rect(Math.Truncate((finalSize.Width - 1 - size.Width) / 2),
+                Math.Truncate((finalSize.Height - 1 - size.Height) / 2), size.Width, size.Height));
         }
         return finalSize;
     }

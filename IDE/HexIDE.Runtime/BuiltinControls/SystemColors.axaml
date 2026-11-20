@@ -19,6 +19,7 @@
     <SolidColorBrush x:Key="{x:Static common:SystemColors.ControlTextBrushKey}"         Color="#000000" />
     <SolidColorBrush x:Key="{x:Static common:SystemColors.ControlDarkBrushKey}"         Color="#808080" />
     <SolidColorBrush x:Key="{x:Static common:SystemColors.ControlLightBrushKey}"        Color="#FFFFFF" />
+    <Color x:Key="{x:Static common:SystemColors.ControlLightLightColorKey}">#FFFFFF</Color>
     <SolidColorBrush x:Key="{x:Static common:SystemColors.ControlLightLightBrushKey}"   Color="#FFFFFF" />
     <SolidColorBrush x:Key="{x:Static common:SystemColors.ControlDarkDarkBrushKey}"     Color="#404040" />
     <SolidColorBrush x:Key="{x:Static common:SystemColors.WindowFrameBrushKey}"         Color="#646464" />

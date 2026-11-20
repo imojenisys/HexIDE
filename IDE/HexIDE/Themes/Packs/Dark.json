@@ -27,6 +27,7 @@
     "ControlDark":              "#1E1E1E",
     "ControlLight":             "#3E3E42",
     "ControlLightLight":        "#4A4A4E",
+    "ControlLightLightColor":        "#4A4A4E",
     "ControlDarkDark":          "#141414",
     "Menu":                     "#2D2D30",
     "MenuText":                 "#D4D4D4",

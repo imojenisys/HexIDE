@@ -9,6 +9,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Classic.Avalonia.Theme;
+using Classic.CommonControls;
 using HexIDE.Integration.Tests.Views;
 using HexIDE.Runtime.BuiltinControls;
 
@@ -44,7 +45,7 @@ public class CommandButtonCaptionTests
             window.SetRenderScaling(scaling);
             Dispatcher.UIThread.RunJobs();
             var button = (VBCommandButton)ContainerRuntimeHarness.Child(canvas, "Command1");
-            var text = button.GetVisualDescendants().OfType<TextBlock>().Single(t => t.IsVisible);
+            var text = button.GetVisualDescendants().OfType<TextBlock>().Single();
             text.Bounds.Size.Should().Be(text.DesiredSize);
             var origin = text.TranslatePoint(default, button)!.Value;
             var tolerance = scaling == 1 ? 0 : 1 / scaling;
@@ -75,29 +76,24 @@ public class CommandButtonCaptionTests
             button.Opacity.Should().Be(1);
             var edge = button.GetVisualDescendants().OfType<ClassicBorderDecorator>().Single();
             var caption = button.GetVisualDescendants().OfType<ContentPresenter>().Single(p => p.Name == "PART_ContentPresenter");
-            var highlight = button.GetVisualDescendants().OfType<ContentPresenter>().Single(p => p.Name == "CaptionHighlight");
+            button.GetVisualDescendants().OfType<TextBlock>().Should().ContainSingle();
             caption.Foreground.Should().Be(edge.BorderDarkBrush);
-            highlight.Foreground.Should().Be(edge.BorderLightLightBrush);
-            highlight.IsVisible.Should().BeTrue();
-            var tolerance = scaling == 1 ? 0 : 1 / scaling;
-            var delta = highlight.TranslatePoint(default, button)!.Value - caption.TranslatePoint(default, button)!.Value;
-            delta.X.Should().BeApproximately(1, tolerance);
-            delta.Y.Should().BeApproximately(1, tolerance);
-            var primaryText = caption.GetVisualDescendants().OfType<TextBlock>().Single();
-            var copyText = highlight.GetVisualDescendants().OfType<TextBlock>().Single();
-            copyText.GetType().Should().Be(primaryText.GetType());
-            copyText.Text.Should().Be(primaryText.Text);
-            copyText.FontFamily.Should().Be(primaryText.FontFamily);
-            ((AccessText)copyText).AccessKey.Should().Be(((AccessText)primaryText).AccessKey);
+            var effect = caption.Effect.Should().BeOfType<DropShadowEffect>().Subject;
+            effect.OffsetX.Should().Be(1);
+            effect.OffsetY.Should().Be(1);
+            effect.BlurRadius.Should().Be(0);
+            effect.Opacity.Should().Be(1);
+            button.TryFindResource(SystemColors.ControlLightLightColorKey, out var highlightColor).Should().BeTrue();
+            effect.Color.Should().Be((Color)highlightColor!);
             var clipHost = caption.GetVisualParent()!;
-            highlight.GetVisualParent().Should().BeSameAs(clipHost);
             clipHost.Clip!.Bounds.Should().Be(new Rect(2, 2, button.Bounds.Width - 4, button.Bounds.Height - 4));
             var disabledOrigin = caption.TranslatePoint(default, button);
             var background = button.Background;
             button.IsEnabled = true;
             Dispatcher.UIThread.RunJobs();
             button.Background.Should().Be(background);
-            highlight.IsVisible.Should().BeFalse();
+            caption.Effect.Should().BeNull();
+            button.GetVisualDescendants().OfType<TextBlock>().Should().ContainSingle();
             caption.TranslatePoint(default, button).Should().Be(disabledOrigin);
         }
         finally { window.Close(); }

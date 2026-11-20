@@ -1,5 +1,10 @@
 using System;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Presenters;
+using Avalonia.Controls.Primitives;
+using Avalonia.Media;
+using Classic.CommonControls;
 using HexIDE.Runtime.AvaloniaInterop;
 using HexIDE.Runtime.Interpreter;
 
@@ -8,6 +13,33 @@ namespace HexIDE.Runtime.BuiltinControls;
 public class VBCommandButton : Button
 {
     protected override Type StyleKeyOverride => typeof(VBCommandButton);
+
+    private ContentPresenter? captionPresenter;
+
+    protected override void OnApplyTemplate(TemplateAppliedEventArgs e)
+    {
+        base.OnApplyTemplate(e);
+        captionPresenter = e.NameScope.Find<ContentPresenter>("PART_ContentPresenter");
+        UpdateCaptionEffect();
+    }
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == IsEffectivelyEnabledProperty)
+            UpdateCaptionEffect();
+    }
+
+    private void UpdateCaptionEffect()
+    {
+        if (captionPresenter == null)
+            return;
+        // A DynamicResource on an effect inside a style setter has no resource host (#4551 / #4586).
+        captionPresenter.Effect = !IsEffectivelyEnabled &&
+            this.TryFindResource(SystemColors.ControlLightLightColorKey, out var value) && value is Color color
+            ? new DropShadowEffect { OffsetX = 1, OffsetY = 1, BlurRadius = 0, Opacity = 1, Color = color }
+            : null;
+    }
 
     internal void SetDisplayAsDefault(bool value) => PseudoClasses.Set(":default", value);
 

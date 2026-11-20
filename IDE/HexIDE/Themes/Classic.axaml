@@ -40,6 +40,7 @@
     <SolidColorBrush x:Key="{x:Static commonControls:SystemColors.ControlTextBrushKey}"       Color="#000000" />
     <SolidColorBrush x:Key="{x:Static commonControls:SystemColors.ControlDarkBrushKey}"       Color="#808080" />
     <SolidColorBrush x:Key="{x:Static commonControls:SystemColors.ControlLightBrushKey}"      Color="#FFFFFF" />
+    <Color x:Key="{x:Static commonControls:SystemColors.ControlLightLightColorKey}">#FFFFFF</Color>
     <SolidColorBrush x:Key="{x:Static commonControls:SystemColors.ControlLightLightBrushKey}" Color="#FFFFFF" />
     <SolidColorBrush x:Key="{x:Static commonControls:SystemColors.ControlDarkDarkBrushKey}"   Color="#404040" />
     <!-- Window frame: the colour vb6.exe draws a Flat Fixed Single label's border in, measured on Windows 10 (#1077). It

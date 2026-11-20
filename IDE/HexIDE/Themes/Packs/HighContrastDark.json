@@ -17,6 +17,7 @@
     "ControlDark": "#FFFFFF",
     "ControlLight": "#FFFFFF",
     "ControlLightLight": "#FFFFFF",
+    "ControlLightLightColor": "#FFFFFF",
     "ControlDarkDark": "#FFFFFF",
     "WindowFrame": "#FFFFFF",
     "Menu": "#000000",
