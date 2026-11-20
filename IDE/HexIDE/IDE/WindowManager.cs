@@ -63,8 +63,12 @@ public class WindowManager : IWindowManager
     }
 
     private Window GetIdeDialogOwner(IClassicDesktopStyleApplicationLifetime desktop)
-        => desktop.MainWindow is { IsVisible: true, WindowState: not WindowState.Minimized } main
+    {
+        if (desktop.Windows.OfType<DialogWindow>().FirstOrDefault(window => window.IsActive && window.IsVisible) is { } dialog)
+            return dialog;
+        return desktop.MainWindow is { IsVisible: true, WindowState: not WindowState.Minimized } main
             ? main : GetTopWindow(desktop);
+    }
 
     public Task ShowManagedWindow(MDIWindow window) => ShowManagedWindow(window, blockBehind: true);
 

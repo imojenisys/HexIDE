@@ -79,6 +79,76 @@ public class IdeDialogOwnershipTests
         }
     }
 
+    // Owner selection for the Linux stacking regression measured in #5003.
+    [AvaloniaTheory]
+    [InlineData("modal")]
+    [InlineData("modeless")]
+    [InlineData("program")]
+    public async Task Message_box_uses_active_ide_dialog_or_visible_main_window(string kind)
+    {
+        var ide = new Window();
+        Window active = kind == "program" ? new Window() : new DialogWindow();
+        var desktop = Substitute.For<IClassicDesktopStyleApplicationLifetime>();
+        desktop.MainWindow.Returns(ide);
+        desktop.Windows.Returns(new[] { ide, active });
+        var manager = new WindowManager(Substitute.For<ILocalizationService>());
+        var previousLifetime = Application.Current!.ApplicationLifetime;
+        var lifetimeField = typeof(Application).GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Single(field => field.FieldType == typeof(IApplicationLifetime));
+        lifetimeField.SetValue(Application.Current, desktop);
+        try
+        {
+            ide.Show();
+            if (kind == "modal") _ = active.ShowDialog<bool>(ide);
+            else active.Show();
+            Activate(active);
+            var pending = manager.MessageBox("IDE message", null, MessageBoxButtons.Ok, MessageBoxIcon.None, null);
+            Dispatcher.UIThread.RunJobs();
+            var box = ide.OwnedWindows.Concat(active.OwnedWindows).Single(window => window != active);
+            box.Owner.Should().BeSameAs(kind == "program" ? ide : active);
+            box.Close();
+            (await pending).Should().Be(MessageBoxResult.None);
+        }
+        finally
+        {
+            foreach (var box in active.OwnedWindows.Concat(ide.OwnedWindows).Where(window => window != active).ToArray()) box.Close();
+            active.Close();
+            ide.Close();
+            lifetimeField.SetValue(Application.Current, previousLifetime);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task Ide_dialog_uses_active_ide_dialog()
+    {
+        var ide = new Window();
+        var active = new DialogWindow();
+        var desktop = Substitute.For<IClassicDesktopStyleApplicationLifetime>();
+        desktop.MainWindow.Returns(ide);
+        desktop.Windows.Returns(new Window[] { ide, active });
+        var manager = new WindowManager(Substitute.For<ILocalizationService>());
+        try
+        {
+            ide.Show();
+            _ = active.ShowDialog<bool>(ide);
+            Activate(active);
+            var dialog = Substitute.For<IDialog>();
+            dialog.Title.Returns("Nested IDE dialog");
+            var pending = manager.ShowDialog(desktop, dialog);
+            Dispatcher.UIThread.RunJobs();
+            var shown = ide.OwnedWindows.Concat(active.OwnedWindows).Single(window => window != active);
+            shown.Owner.Should().BeSameAs(active);
+            shown.Close(true);
+            (await pending).Should().BeTrue();
+        }
+        finally
+        {
+            foreach (var dialog in active.OwnedWindows.Concat(ide.OwnedWindows).Where(window => window != active).ToArray()) dialog.Close();
+            active.Close();
+            ide.Close();
+        }
+    }
+
     [AvaloniaTheory]
     [InlineData("visible")]
     [InlineData("hidden")]
