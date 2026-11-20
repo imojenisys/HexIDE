@@ -71,7 +71,8 @@ public class ListBoxComponentClass : ComponentBaseClass
             FlowDirection = instance.GetPropertyOrDefault(RightToLeftProperty) ? FlowDirection.RightToLeft : FlowDirection.LeftToRight,
             MultiSelect = instance.GetPropertyOrDefault(MultiSelectProperty),
             SavedStyle = VBLoader.RawNumber(instance, "Style") ?? 0,
-            Columns = VBLoader.RawNumber(instance, "Columns") ?? 0
+            Columns = VBLoader.RawNumber(instance, "Columns") ?? 0,
+            SortedChecks = VBLoader.RawDouble(instance, "Sorted") is { } sorted && sorted != 0
         };
     }
 

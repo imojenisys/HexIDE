@@ -131,7 +131,7 @@ public class ListBoxStyleColumnsTests : WindowTestFixture
         var (recorder, ctx, env, _) = await Loaded(style, columns);
         await ContainerRuntimeHarness.Run(ctx, env, $"List1.TopIndex = {target}\r\n");
         recorder.List.TopIndex.Should().Be(expectedTop);
-        recorder.Calls.Should().Equal($"List1_Scroll (-1, {expectedTop})");
+        recorder.Calls.Should().Equal($"List1_Scroll ({(style == 1 ? 0 : -1)}, {expectedTop})");
         recorder.Calls.Clear();
         await ContainerRuntimeHarness.Run(ctx, env, $"List1.TopIndex = {target}\r\n");
         recorder.Calls.Should().BeEmpty();
@@ -259,7 +259,6 @@ public class ListBoxStyleColumnsTests : WindowTestFixture
 
     [AvaloniaTheory]
     [InlineData("List1.Selected(5) = False", false)]
-    [InlineData("List1.Selected(5) = True", true)]
     public async Task Unmeasured_checkbox_writes_refuse_without_changing_state(string statement, bool checkFirst)
     {
         var (recorder, ctx, env, _) = await Loaded(1, 0);

@@ -63,7 +63,8 @@ public class VBListBox : ListBox
 
     internal int SavedStyle { get => savedStyle; init { savedStyle = value; ConfigureLayout(); } }
     internal int Columns { get => columns; init { columns = value; ConfigureLayout(); } }
-    private bool HasChecks => !designer && savedStyle == 1 && !IsMultiSelect;
+    internal bool HasChecks => !designer && savedStyle == 1 && !IsMultiSelect;
+    internal bool SortedChecks { get; init; }
     private bool HasColumns => !designer && columns > 0;
 
     internal void UsePlainDesignerLayout()
@@ -257,6 +258,8 @@ public class VBListBox : ListBox
                 focusIndex = anchorIndex = 0;
             else if (focusIndex >= ItemCount)
                 focusIndex = Math.Max(0, ItemCount - 1);
+            if (ItemCount == 0)
+                checks.Clear();
         };
     }
 
@@ -415,7 +418,36 @@ public class VBListBox : ListBox
     internal bool IsItemSelected(int index) => HasChecks ? checks.Contains(index) : IsMultiSelect ? Selection.IsSelected(index) : index == SelectedIndex;
 
     /// <summary>SelCount: how many items are selected.</summary>
-    internal int SelectedCount => IsMultiSelect ? Selection.SelectedIndexes.Count : SelectedIndex >= 0 ? 1 : 0;
+    internal int SelectedCount => HasChecks ? checks.Count : IsMultiSelect ? Selection.SelectedIndexes.Count : SelectedIndex >= 0 ? 1 : 0;
+
+    // Checkbox ListIndex names a position, while checks follow items (#4209, round 2).
+    internal void InsertCheckboxItem(int index, string text)
+    {
+        var position = ItemCount == 0 ? 0 : ListIndex;
+        MoveChecks(index, 1);
+        Items.Insert(index, text);
+        SelectedIndex = position;
+    }
+
+    internal void RemoveCheckboxItem(int index)
+    {
+        var position = ListIndex;
+        checks.Remove(index);
+        MoveChecks(index + 1, -1);
+        Items.RemoveAt(index);
+        if (position == index)
+            position = Math.Max(0, position - 1);
+        SelectedIndex = Math.Min(position, ItemCount - 1);
+    }
+
+    private void MoveChecks(int start, int offset)
+    {
+        var moved = new HashSet<int>();
+        foreach (var index in checks)
+            moved.Add(index >= start ? index + offset : index);
+        checks.Clear();
+        checks.UnionWith(moved);
+    }
 
     /// <summary>Text as VB6 reads it: the text of the item at ListIndex, or "".</summary>
     internal string ListIndexText => ListIndex >= 0 && ListIndex < ItemCount ? Items[ListIndex] as string ?? "" : "";
@@ -717,10 +749,14 @@ public class VBListBox : ListBox
     {
         if (HasChecks)
         {
-            if (!selected || checks.Contains(index))
-                throw new NotImplementedException("ListBox checkbox Selected False and repeated True are not measured (#4209)");
-            checks.Add(index);
-            SelectFromCode(index);
+            if (selected)
+            {
+                if (!checks.Add(index))
+                    return;
+                SelectFromCode(index);
+            }
+            else if (!checks.Remove(index))
+                throw new NotImplementedException("ListBox checkbox Selected False on an unchecked item is not measured (#4209)");
             RaiseItemCheck(index);
             this.ExecuteSub(ComponentBaseClass.ClickEvent);
             return;
