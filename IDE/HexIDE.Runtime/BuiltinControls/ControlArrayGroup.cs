@@ -154,7 +154,7 @@ public sealed class ControlArrayGroup : ICSharpProxy, ICSharpPropertyBag
         var position = below is not null ? menu.Items.IndexOf(below) + 1 : menu.Items.IndexOf(elements[elements.Keys.First()]);
         if (menu is VBMenuBar bar)
         {
-            AvaloniaInterop.MenuMembers.CheckRows(bar, added: item, position: position);
+            AvaloniaInterop.MenuMembers.ChangeRows(bar, added: item, position: position);
             bar.PrepareItem(item);
         }
         menu.Items.Insert(position, item);
@@ -173,14 +173,11 @@ public sealed class ControlArrayGroup : ICSharpProxy, ICSharpPropertyBag
         if (designTimeIndices.Contains(index))
             throw new VBRunTimeException(VBStandardError.CantUnloadControlsCreatedAtDesignTime);      // 362
         if (menuHosts.TryGetValue(index, out var rowHost) && rowHost is VBMenuBar rowBar)
-            AvaloniaInterop.MenuMembers.CheckRows(rowBar, control, visible: false);
+            AvaloniaInterop.MenuMembers.ChangeRows(rowBar, control, visible: false);
         if (hosts.TryGetValue(index, out var host))
             host.Children.Remove(control);
         if (menuHosts.TryGetValue(index, out var menu))
         {
-            if (menu is Menu bar && control.IsVisible
-                && !bar.Items.OfType<Control>().Any(other => !ReferenceEquals(other, control) && other.IsVisible))
-                AvaloniaInterop.MenuMembers.ChangeBar(bar, false);
             menu.Items.Remove(control);
         }
         elements.Remove(index);

@@ -4,6 +4,7 @@ using System.Threading;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
+using Avalonia.LogicalTree;
 using HexIDE.Runtime;
 using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.BuiltinControls;
@@ -52,7 +53,8 @@ public class FormOuterSizeTests
     private sealed record Run(List<string> Printed, List<System.Exception> Errors);
 
     /// <summary>Run Form1 as F5 does, with <paramref name="load"/> as its Load, then close it.</summary>
-    private static Run RunLoad(string frm, string load, string extra = "")
+    private static Run RunLoad(string frm, string load, string extra = "",
+        System.Action<Avalonia.Controls.Window>? afterRun = null)
     {
         var project = new ProjectDefinition(VBProjectType.EXE, "P");
         var code = "Private Sub Form_Load()\r\n" + load.ReplaceLineEndings("\r\n") + "\r\nEnd Sub\r\n";
@@ -71,7 +73,11 @@ public class FormOuterSizeTests
         {
             VBLoader.RunForm(form, CancellationToken.None, out var window);
             Dispatcher.UIThread.RunJobs();
-            window.Close();
+            try
+            {
+                if (run.Errors.Count == 0) afterRun?.Invoke(window);
+            }
+            finally { window.Close(); }
         }
         finally
         {
@@ -251,17 +257,11 @@ public class FormOuterSizeTests
     }
 
     [AvaloniaTheory]
-    [InlineData(true, false, true)]
-    [InlineData(false, false, true)]
-    [InlineData(false, true, true)]
-    [InlineData(false, false, false)]
-    [InlineData(false, true, false)]
-    public void MDI_and_wrapped_bar_changes_stay_refused(bool mdi, bool hidden, bool shown)
+    [InlineData(false, true)]
+    public void MDI_child_bar_changes_stay_refused(bool hidden, bool shown)
     {
-        var frm = Form(Style(1), "Form1", menu: true);
-        frm = mdi ? frm.Replace("   BorderStyle", "   MDIChild = -1\r\n   BorderStyle")
-            : frm.Replace("\"File\"", "\"" + new string('W', 100) + "\"")
-                .Replace("End\r\nAttribute", Menu.Replace("mnuFile", "mnuSecond") + "End\r\nAttribute");
+        var frm = Form(Style(1), "Form1", menu: true)
+            .Replace("   BorderStyle", "   MDIChild = -1\r\n   BorderStyle");
         if (hidden)
             frm = frm.Replace("mnuFile \r\n", "mnuFile \r\n      Visible = 0\r\n");
         var run = RunLoad(frm, (shown ? "Me.Show\nDoEvents\n" : "")
@@ -411,47 +411,64 @@ public class FormOuterSizeTests
         finally { MenuBarLayout.MeasureCaption = null; }
     }
 
+    // #4946, oracle PR #5001: console rows, native and p-code agreeing.
     [AvaloniaTheory]
-    [InlineData("mnuFoxtrot.Visible = False", false)]
-    [InlineData("mnuFoxtrot.Visible = False\nmnuEcho.Visible = False", true)]
-    public void Menu_edits_may_keep_but_cannot_change_the_row_count(string statements, bool refused)
+    [InlineData("V1", "", "mnuFoxtrot.Visible = False", 3420, 3420, 0, false)]
+    [InlineData("V2", "mnuFoxtrot.Visible = False", "mnuEcho.Visible = False\nmnuEcho.Visible = True", 3420, 3420, 0, false)]
+    [InlineData("V3", "mnuFoxtrot.Visible = False", "mnuEcho.Visible = False", 3420, 3705, 1, false)]
+    [InlineData("V4", "mnuFoxtrot.Visible = False\nmnuEcho.Visible = False", "mnuEcho.Visible = True\nmnuEcho.Visible = False", 3705, 3705, 0, false)]
+    [InlineData("C1", "mnuFoxtrot.Visible = False\nWidth = (Width - ScaleWidth) + 3420", "mnuBravo.Caption = \"&Bravoo\"", 3705, 3420, 1, false)]
+    [InlineData("C2", "mnuFoxtrot.Visible = False\nWidth = (Width - ScaleWidth) + 3420\nmnuBravo.Caption = \"&Bravoo\"", "mnuBravo.Caption = \"&Bravo\"", 3420, 3705, 1, false)]
+    [InlineData("C3", "mnuFoxtrot.Visible = False\nWidth = (Width - ScaleWidth) + 3420", "mnuBravo.Caption = \"&Bravoo\"\nmnuBravo.Caption = \"&Bravo\"", 3705, 3705, 0, false)]
+    [InlineData("L1", "mnuFoxtrot.Visible = False\nWidth = (Width - ScaleWidth) + 3420", "Load mnuArr(1)\nmnuArr(1).Visible = True", 3705, 3420, 1, false)]
+    [InlineData("L2", "mnuFoxtrot.Visible = False\nWidth = (Width - ScaleWidth) + 3420\nLoad mnuArr(1)\nmnuArr(1).Visible = True", "Unload mnuArr(1)", 3420, 3705, 1, false)]
+    [InlineData("L3", "mnuFoxtrot.Visible = False\nWidth = (Width - ScaleWidth) + 3420", "Load mnuArr(1)\nmnuArr(1).Visible = True\nUnload mnuArr(1)", 3705, 3705, 0, false)]
+    [InlineData("B1", "", "mnuAlpha.Visible = False\nmnuBravo.Visible = False\nmnuCharlie.Visible = False\nmnuDelta.Visible = False\nmnuEcho.Visible = False\nmnuFoxtrot.Visible = False", 3420, 4005, 1, false)]
+    [InlineData("B2", "mnuAlpha.Visible = False\nmnuBravo.Visible = False\nmnuCharlie.Visible = False\nmnuDelta.Visible = False\nmnuEcho.Visible = False\nmnuFoxtrot.Visible = False", "mnuAlpha.Visible = True\nmnuBravo.Visible = True\nmnuCharlie.Visible = True\nmnuDelta.Visible = True\nmnuEcho.Visible = True\nmnuFoxtrot.Visible = True", 4005, 3420, 1, false)]
+    [InlineData("V12", "mnuFoxtrot.Visible = False", "mnuEcho.Visible = False\nWidth = Width + 3000", 3420, 3705, 1, true)]
+    [InlineData("V13", "mnuFoxtrot.Visible = False\nmnuEcho.Visible = False\nWidth = Width + 3000", "mnuEcho.Visible = True\nWidth = Width - 3000", 3705, 3420, 1, true)]
+    public void Wrapped_menu_edits_land_at_the_next_message(string row, string setup, string statements,
+        int before, int after, int resizes, bool synchronous)
     {
-        MenuBarLayout.MeasureCaption = caption => ConsoleWidths[caption];
+        MenuBarLayout.MeasureCaption = caption => ConsoleWidths.TryGetValue(caption, out var width) ? width : 60;
         try
         {
-            var run = RunLoad(WrappedForm(false), "Me.Show\nDoEvents\nwatching = True\n" + statements
-                + "\nDoEvents\nDebug.Print CStr(ScaleHeight) & \" \" & CStr(Height)\nDebug.Print changes\nwatching = False", """
+            var frm = WrappedForm(false).Replace("End\r\nAttribute",
+                "   Begin VB.Menu mnuArr\r\n      Index = 0\r\n      Caption = \"Zed\"\r\n      Visible = 0\r\n   End\r\nEnd\r\nAttribute");
+            var run = RunLoad(frm, "Me.Show\nDoEvents\n" + setup + "\nDoEvents\nwatching = True\n" + statements + "\n" + """
+                Debug.Print CStr(ScaleHeight) & " " & CStr(Height)
+                Debug.Print changes
+                DoEvents
+                Debug.Print CStr(ScaleHeight) & " " & CStr(Height)
+                Debug.Print changes
+                Debug.Print observed
+                watching = False
+                """, """
                 Private watching As Boolean
                 Private changes As Integer
+                Private observed As Single
                 Private Sub Form_Resize()
-                    If watching Then changes = changes + 1
+                    If watching Then
+                        changes = changes + 1
+                        observed = ScaleHeight
+                    End If
                 End Sub
-                """);
-            if (refused)
-                run.Errors.Should().ContainSingle().Which.Should().BeOfType<System.NotImplementedException>()
-                    .Which.Message.Should().Contain("#4946");
-            else
-            {
-                run.Errors.Should().BeEmpty();
-                run.Printed.Select(line => line.Trim()).Should().Equal("3420 4440", "0");
-            }
-        }
-        finally { MenuBarLayout.MeasureCaption = null; }
-    }
-
-    [AvaloniaTheory]
-    [InlineData("", "mnuFile(0).Caption = \"FileFileFileFileFile\"")]
-    [InlineData("", "Load mnuFile(1)")]
-    [InlineData("Width = Width + 1440\nLoad mnuFile(1)\nWidth = Width - 1440", "Unload mnuFile(1)")]
-    public void Caption_Load_and_Unload_refuse_a_new_row_count(string setup, string statement)
-    {
-        MenuBarLayout.MeasureCaption = caption => ConsoleWidths.TryGetValue(caption, out var width) ? width : 200;
-        try
-        {
-            var frm = WrappedForm(true).Replace("Begin VB.Menu mnuFile", "Begin VB.Menu mnuFile\r\n      Index = 0");
-            var run = RunLoad(frm, "Me.Show\nDoEvents\n" + setup + "\n" + statement);
-            run.Errors.Should().ContainSingle().Which.Should().BeOfType<System.NotImplementedException>()
-                .Which.Message.Should().Contain("#4946");
+                """, window =>
+                {
+                    window.UpdateLayout();
+                    var bar = window.GetLogicalDescendants().OfType<VBMenuBar>().Single();
+                    var rows = after == 4005 ? 0 : after == 3705 ? 1 : 2;
+                    bar.IsVisible.Should().Be(rows > 0, row);
+                    if (rows == 0) return;
+                    bar.Height.Should().Be(MenuBarLayout.Height(rows), row);
+                    bar.Items.OfType<VBMenu>().Where(item => item.IsVisible)
+                        .Select(item => item.Bounds.Y).Distinct().Order().Should()
+                        .Equal(Enumerable.Range(0, rows).Select(index => index * 19d), row);
+                });
+            run.Errors.Should().BeEmpty(row);
+            run.Printed.Select(line => line.Trim()).Should().Equal(
+                (synchronous ? after : before) + " 4440", synchronous ? resizes.ToString() : "0",
+                after + " 4440", resizes.ToString(), resizes == 0 ? "0" : after.ToString());
         }
         finally { MenuBarLayout.MeasureCaption = null; }
     }
