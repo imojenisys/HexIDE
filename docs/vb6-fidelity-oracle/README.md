@@ -754,6 +754,7 @@ added afterwards.
 - [A module shared by two projects in a group (2026-11-21, #2756, design-time, IDE, SP6)](a-module-shared-by-two-projects-in-a-group.md#a-module-shared-by-two-projects-in-a-group-2026-11-21-2756-design-time-ide-sp6)
 - [A project's reference to another project of its group (2026-11-19, #4899, design-time and run, IDE, SP6)](a-projects-reference-to-another-project-of-its-group.md#a-projects-reference-to-another-project-of-its-group-2026-11-19-4899-design-time-and-run-ide-sp6)
 - [A file shared by two projects of a group (2026-11-21, #2756, IDE, SP6)](a-file-shared-by-two-projects-of-a-group.md#a-file-shared-by-two-projects-of-a-group-2026-11-21-2756-ide-sp6)
+- [Both copies changed, and a run of the other project (2026-11-21, #2756, IDE, SP6)](a-file-shared-by-two-projects-of-a-group.md#both-copies-changed-and-a-run-of-the-other-project-2026-11-21-2756-ide-sp6)
 - [How a running form stacks its controls (2026-10-23, #1497, IDE, release build)](how-a-running-form-stacks-its-controls.md#how-a-running-form-stacks-its-controls-2026-10-23-1497-ide-release-build)
 - [Too few arguments to an intrinsic (2026-10-23, #1512)](too-few-arguments-to-an-intrinsic.md#too-few-arguments-to-an-intrinsic-2026-10-23-1512)
 - [Print # and the ANSI best fit (2026-10-23, #1511)](print--and-the-ansi-best-fit.md#print--and-the-ansi-best-fit-2026-10-23-1511)

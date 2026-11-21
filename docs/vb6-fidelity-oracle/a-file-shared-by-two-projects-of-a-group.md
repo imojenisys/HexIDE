@@ -85,3 +85,56 @@ because of it.
 - Saving one project on its own rather than the group.
 - A change to a shared form's design, as opposed to its code.
 - Closing the group, or VB6, with copies unsaved.
+
+### Both copies changed, and a run of the other project (2026-11-21, #2756, IDE, SP6)
+
+**The questions.** The section above didn't measure two things. First, a run of one project while the other project's
+copy differs. Second, Save Project Group when **both** copies have unsaved changes, rather than one.
+
+**The probe.** VB6.EXE 6.00.9782 (SP6) in a clone of the oracle VM, driven on its console. A group, `g.vbg`, listed
+`P2.vbp` as its startup project, then `P1.vbp`. Both lived in one folder with:
+- `Own1.bas` (P1) and `Own2.bas` (P2), each a `Sub Main` showing `MsgBox "P1 " & SharedValue()` or `"P2 "`;
+- `Shared.bas`, listed by both, holding `Public Function SharedValue() As Long` / `SharedValue = 1`.
+
+Edits were Replace Alls in the module's code window, each changing `SharedValue = n` to another number.
+
+**The first steps** behaved as the section above records:
+- P1's copy changed to 2;
+- P2's copy refused while P1's window was open;
+- P1's window closed, the save question answered Yes, and the update question answered **No**.
+
+**A run uses its own project's copy.** P2's copy then opened showing `SharedValue = 1`, while the file held 2. F5 ran
+P2, the startup project, and its message box read `P2 1`.
+
+**No to the save question writes nothing.** P2's copy changed to 3 and its window closed. With No to `Shared (P2) is
+shared by other project(s). Would you like to save it?`, the file kept 2, and no update question followed.
+
+**Both copies changed.** P1's copy changed from 2 to 4 and its window closed, again with No. File > Save Project Group
+then showed, before anything else:
+
+```
+Multiple copies of the shared file '<path>\Shared.bas' have been modified.  In the following dialog, select the
+copy that should be saved.
+```
+
+That message has OK and Help. After OK, the usual `Save changes to the following files?` list came up, with `g.vbg`,
+`P1.vbp`, `Shared.bas`, `P2.vbp` and `Shared.bas`, every row selected.
+- **Yes with both copies selected** brought the same warning back. Nothing was written.
+- **With P2's `Shared.bas` row deselected,** Yes wrote `Shared.bas` holding P1's 4.
+- **Then came the update question,** `Would you like to update Shared in project(s) which share it with P1?`. With Yes,
+  P2's copy was replaced by the file's. Its code window showed `SharedValue = 4`, and F5 showed `P2 4`. P2's unsaved 3
+  was gone.
+- **What else was written:** `g.vbg` was rewritten after the update answer. `P1.vbp` and `P2.vbp` were never written.
+  Closing VB6 afterwards raised no save question.
+
+So when both copies have changed, VB6 makes the developer pick one, and won't save both. The other copy's unsaved edit
+is lost only through the update question's Yes, whose wording doesn't say that copy has unsaved changes.
+
+**What resisted explanation.** Straight after that update, P2's Project Explorer branch read `Module1 (Shared.bas)`,
+listed above `Own2`. Opened, the module was `P2 - Shared`, and the branch read `Shared (Shared.bas)` below `Own2`
+again. It was seen once and not repeated.
+
+### Not measured
+
+- **No to the update question** after Save Project Group, with the other copy still changed.
+- **A run of P1,** the non-startup project.
