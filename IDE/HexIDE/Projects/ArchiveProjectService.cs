@@ -142,8 +142,8 @@ public sealed class ArchiveProjectService
         }
         catch (ProjectLocalStatePathException ex)
         {
-            var reason = string.Format(localization.GetString("Str.Startup.Descriptor.ProjectLocalName"),
-                path, "projectFolder", ex.StatePath);
+            var reason = string.Format(localization.GetString("Str.ProjectLocalState.UnavailableFormat"),
+                ex.StatePath);
             message = string.Format(localization.GetString("Str.Archive.FolderErrorFormat"), reason);
             icon = MessageBoxIcon.Warning;
         }

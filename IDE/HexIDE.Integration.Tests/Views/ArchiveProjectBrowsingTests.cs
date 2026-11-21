@@ -2,6 +2,7 @@ using BrowserFolder = HexIDE.Projects.ContainerFolder;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -90,6 +91,54 @@ public sealed class ArchiveProjectBrowsingTests : IDisposable
         shown.Should().BeTrue();
         Directory.GetFileSystemEntries(stock).Should().BeEmpty();
         Directory.GetFileSystemEntries(brand).Should().HaveCount(1);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Linked_state_folder_refusal_explains_unavailability_instead_of_invalid_brand_name(bool checkDescriptorText)
+    {
+        var path = Write("linked.twinproj", "Module Main");
+        var target = Path.Combine(directory, "target");
+        var link = Path.Combine(directory, ".hexide");
+        Directory.CreateDirectory(target);
+        if (OperatingSystem.IsWindows())
+        {
+            using var process = Process.Start(new ProcessStartInfo("cmd.exe")
+            {
+                ArgumentList = { "/d", "/c", "mklink", "/J", link, target },
+                UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
+            })!;
+            await process.WaitForExitAsync();
+            if (process.ExitCode != 0)
+                throw Xunit.Sdk.SkipException.ForSkip("Cannot create directory junction: " + await process.StandardError.ReadToEndAsync());
+        }
+        else
+        {
+            try { Directory.CreateSymbolicLink(link, target); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                throw Xunit.Sdk.SkipException.ForSkip("Cannot create directory symbolic link: " + ex.Message);
+            }
+        }
+        try
+        {
+            localization.GetString("Str.ProjectLocalState.UnavailableFormat").Returns(
+                "{0} is a link or junction, or is no longer where it was found, so nothing is read from it or written to it.");
+            localization.GetString("Str.Startup.Descriptor.ProjectLocalName").Returns(
+                "{0}: Invalid project-local state name in '{1}': '{2}'.");
+            await archives.Open(path);
+            await archives.SynchronizeFolder(path);
+            var call = windows.ReceivedCalls().Single(c => c.GetMethodInfo().Name == nameof(IWindowManager.MessageBox));
+            var message = (string)call.GetArguments()[0]!;
+            message.Should().Contain(link);
+            if (checkDescriptorText)
+                message.Should().NotContain("Invalid project-local state name");
+            else
+                message.Should().Be($"Stopped: {link} is a link or junction, or is no longer where it was found, so nothing is read from it or written to it.");
+            Directory.GetFileSystemEntries(target).Should().BeEmpty();
+        }
+        finally { Directory.Delete(link); }
     }
 
     [AvaloniaTheory]
