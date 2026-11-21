@@ -1485,6 +1485,8 @@
     "Str.AIChat.ProjectCannotStart": "Nepavyksta paleisti projekto (nė vienas neįkeltas arba jau veikia)",
     "Str.AIChat.ProjectNotRunning": "Šiuo metu joks projektas neveikia",
     "Str.SessionEnd.UnsavedWork": "Neįrašyti pakeitimai: {0}",
-    "Str.Options.Addin.ReportedFailure": "Apie problemą pranešta {0}: {1}"
+    "Str.Options.Addin.ReportedFailure": "Apie problemą pranešta {0}: {1}",
+    "Str.Startup.Descriptor.ProjectLocalName": "{0}: Netinkamas projekto vietinės būsenos pavadinimas lauke '{1}': '{2}'.",
+    "Str.ProjectLocalState.ChooseFormat": "Rastos kelios projekto vietinės būsenos vietos. Kiekvienoje gali būti skirtinga išsaugota būsena. Nieko nebus rašoma, kol nepasirinksite vienos šiam seansui. Įveskite jos numerį arba atšaukite:\n{0}"
   }
 }

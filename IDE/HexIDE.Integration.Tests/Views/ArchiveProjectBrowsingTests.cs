@@ -57,6 +57,41 @@ public sealed class ArchiveProjectBrowsingTests : IDisposable
         return Path.Combine(root.FullName, "corpus", "office", "m365-x64", name);
     }
 
+    [AvaloniaFact]
+    public async Task Ambiguous_folder_sync_prompts_with_both_names_and_cancellation_writes_nothing()
+    {
+        var path = Write("choice.twinproj", "Module Main");
+        var stock = Path.Combine(directory, ".hexide");
+        var brand = Path.Combine(directory, ".rdcore");
+        Directory.CreateDirectory(stock);
+        Directory.CreateDirectory(brand);
+        File.WriteAllText(Path.Combine(brand, "project-state.json"), """{"kind":"hexide.project-state","version":1}""");
+        localization.GetString("Str.ProjectLocalState.ChooseFormat").Returns(
+            "Multiple saved states; choose one for this session or cancel. Nothing is written before choosing.\n{0}");
+        var shown = false;
+        windows.InputBox(Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<string>(), false).Returns(call =>
+        {
+            var prompt = call.ArgAt<string>(0);
+            var input = new HexIDE.Dialogs.InputBox { Prompt = prompt };
+            var window = new Window { Content = input, Width = 700, Height = 400 };
+            try
+            {
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+                input.GetLogicalDescendants().OfType<TextBlock>().Should().Contain(t =>
+                    t.Text != null && t.Text.Contains(stock, StringComparison.Ordinal) && t.Text.Contains(brand, StringComparison.Ordinal));
+                shown = true;
+            }
+            finally { window.Close(); }
+            return Task.FromResult<string?>(null);
+        });
+        await archives.Open(path);
+        await archives.SynchronizeFolder(path);
+        shown.Should().BeTrue();
+        Directory.GetFileSystemEntries(stock).Should().BeEmpty();
+        Directory.GetFileSystemEntries(brand).Should().HaveCount(1);
+    }
+
     [AvaloniaTheory]
     [InlineData("basic.xlsm", "Str.Office.ExcelObjects")]
     [InlineData("basic.docm", "Str.Office.WordObjects")]
