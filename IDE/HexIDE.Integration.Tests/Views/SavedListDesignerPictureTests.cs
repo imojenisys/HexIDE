@@ -8,6 +8,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Avalonia.Threading;
@@ -96,7 +97,8 @@ public class SavedListDesignerPictureTests
         return count;
     }
 
-    // Compare geometry, not antialiasing: designer pictures deliberately use greyscale text (#5121 round 2).
+    // Ink means R+G+B < 600. Both captures must use greyscale antialiasing: colour fringes can
+    // cross that threshold at different pixels on Windows, even with identical text geometry (#5121).
     private static (int Top, int Bottom, int Left, int Right) Ink(byte[] pixels, int width, int top, int bottom)
     {
         var points = Enumerable.Range(top, bottom - top).SelectMany(y =>
@@ -127,6 +129,7 @@ public class SavedListDesignerPictureTests
             try
             {
                 runtime.UpdateLayout();
+                TextOptions.SetTextRenderingMode(runtime, TextRenderingMode.Antialias);
                 using var target = new RenderTargetBitmap(new PixelSize(160, 90), new Vector(96, 96));
                 target.Render(runtime);
                 var pixels = new byte[160 * 90 * 4];
