@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using HexIDE.Runtime.Debugging;
 using HexIDE.Runtime.Interpreter;
 
 namespace HexIDE.Runtime.Tests;
@@ -13,18 +15,30 @@ public class NormalReturnUnwindTests : BaseVBTestFixture
     public async Task AWalkThatReturns_LeavesStackForTheNextWalk(int depth, bool stops, bool everyStatement)
         => await RunWalk(depth, stops, everyStatement);
 
-    // #5152's Windows guard: Linux's native stack probe already refuses Work 1000 on this 8 MiB stack.
-    [WindowsOnlyFact]
+    // A synchronous Work 1000 can hit the native stack guard before returning (#5152 Windows review).
+    [Fact]
     public async Task AWalkWithoutSuspension_LeavesStackForTheNextWalk()
-        => await RunWalk(1000, stops: false, everyStatement: false);
+        => await RunWalk(30, stops: false, everyStatement: false);
 
     private async Task RunWalk(int depth, bool stops, bool everyStatement)
     {
         await OnStack(() =>
         {
-            var (vb, dbg) = NewDebuggable(
+            var dbg = new DebugController();
+            var returningFrames = -1;
+            var walkPosts = -1;
+            var library = new StackProbeLibrary(debug, () =>
+            {
+                walkPosts = ((Pump)SynchronizationContext.Current!).Posts;
+                returningFrames = new StackTrace().GetFrames().Count(frame =>
+                    frame.GetMethod()?.DeclaringType?.Name.StartsWith("<RunProcedure>", StringComparison.Ordinal) == true);
+                // The Property Get end is breakpoint-only; print its result before another statement gate can yield.
+                // Then make Deep independent of platform stack-frame sizes and the time-slice clock.
+                dbg.TimeSliceMs = -1;
+            });
+            var vb = new BasicInterpreter(library, context, rootEnv,
                 "Dim maxDepth As Long\n" +
-                $"Work {depth}\n" +
+                $"Debug.Print Walk({depth})\n" +
                 "Deep 0\nDebug.Print maxDepth\n" +
                 "Sub Work(ByVal n As Long)\n" +
                 "  If n > 0 Then Work n - 1\n" +
@@ -33,8 +47,10 @@ public class NormalReturnUnwindTests : BaseVBTestFixture
                 "  On Error GoTo Done\n" +
                 "  maxDepth = d\n" +
                 "  Deep d + 1\n" +
-                "Done:\nEnd Sub\n", "M");
-            dbg.TimeSliceMs = everyStatement ? -1 : stops ? 15 : null;
+                "Done:\nEnd Sub\n" +
+                "Property Get Walk(ByVal n As Long) As Long\n  Work n\nEnd Property\n", "M") { DebugController = dbg };
+            // Stops already suspend every level; keep the clock out of the stack sample.
+            dbg.TimeSliceMs = everyStatement ? -1 : null;
             var pump = (Pump)SynchronizationContext.Current!;
             var hits = 0;
             if (stops)
@@ -51,8 +67,14 @@ public class NormalReturnUnwindTests : BaseVBTestFixture
             run.IsCompleted.Should().BeTrue("the walk must finish on the pumping thread");
             run.GetAwaiter().GetResult();
             hits.Should().Be(stops ? depth + 1 : 0);
-            TestContext.Current.TestOutputHelper?.WriteLine($"Work {depth}, stops={stops}, everyStatement={everyStatement}: {debug[0].Value}");
-            AssertDebugLog([new Vb6Value(4999L)]);
+            if (!stops && !everyStatement)
+                walkPosts.Should().Be(0, "the synchronous walk must not yield on its way down or back up");
+            TestContext.Current.TestOutputHelper?.WriteLine($"Work {depth}, stops={stops}, everyStatement={everyStatement}: " +
+                $"{returningFrames} RunProcedure frames at return, Deep reached {debug[1].Value}");
+            returningFrames.Should().BeInRange(0, BasicInterpreter.UnwindYieldEvery + 1,
+                "only one unwind interval plus its yielding boundary frame may remain");
+            debug.Should().HaveCount(2);
+            debug[1].Should().Be(new Vb6Value(4999L));
         });
     }
 
@@ -98,6 +120,20 @@ public class NormalReturnUnwindTests : BaseVBTestFixture
             run.GetAwaiter().GetResult();
             pump.Posts.Should().Be(0);
         });
+    }
+
+    private sealed class StackProbeLibrary(List<Vb6Value> log, Action sample) : MockStdLib(log), IBasicStandardLibrary
+    {
+        private bool sampled;
+        void IBasicStandardLibrary.DebugPrint(Vb6Value value)
+        {
+            if (!sampled)
+            {
+                sampled = true;
+                sample();
+            }
+            DebugPrint(value);
+        }
     }
 
     private static async Task OnStack(Action body)
