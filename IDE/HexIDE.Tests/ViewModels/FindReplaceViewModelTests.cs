@@ -159,6 +159,47 @@ public partial class FindReplaceViewModelTests
         editor.SelectionLength.Should().Be(5);
     }
 
+    // Measured in VB6 IDE SP6: #704 and docs/vb6-fidelity-oracle/find-next-where-the-next-search-starts.md.
+    [AvaloniaTheory]
+    [InlineData("abab", "ab", false, 2)]
+    [InlineData("aaaa", "aa", false, 2)]
+    [InlineData("aaa", "aa", false, 0)]
+    [InlineData("aaa", "a", true, 1)]
+    [InlineData("aaaa", "a.", true, 2)]
+    public void FindNext_DownResumesAtSelectedMatchEnd(string text, string search, bool pattern, int expected)
+    {
+        var editor = CreateMockEditor(text);
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = search;
+        sut.UsePatternMatching = pattern;
+
+        sut.FindNextCommand.Execute(null);
+        sut.FindNextCommand.Execute(null);
+
+        editor.SelectionStart.Should().Be(expected);
+        editor.SelectionLength.Should().Be(pattern ? (search == "a" ? 1 : 2) : search.Length);
+    }
+
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FindNext_DownUsesSelectionEndWhenCaretIsAtSelectionStart(bool pattern)
+    {
+        var editor = CreateMockEditor("aaaa");
+        SetActiveEditor(editor);
+        var sut = CreateSut();
+        sut.SearchText = "aa";
+        sut.UsePatternMatching = pattern;
+
+        sut.FindNextCommand.Execute(null);
+        editor.CaretOffset = editor.SelectionStart;
+        sut.FindNextCommand.Execute(null);
+
+        editor.SelectionStart.Should().Be(2);
+        editor.SelectionLength.Should().Be(2);
+    }
+
     [AvaloniaFact]
     public void FindNext_WrapsAround()
     {
