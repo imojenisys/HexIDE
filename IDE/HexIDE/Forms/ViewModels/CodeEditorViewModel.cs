@@ -282,6 +282,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
         ExternalDebugger = externalDebugger;
         CallStack = callStack;
         this.runScope = runScope;
+        ViewObjectCommand = new DelegateCommand(ViewObject,
+            () => runScope.RunningProject is null);
         this.statusBarService = statusBarService;
         this.localization = localization;
         Document.TextChanged += (_, _) =>
@@ -2773,6 +2775,8 @@ public partial class CodeEditorViewModel : BaseEditorWindowViewModel, ISearchabl
     public void SaveFormAs() => StartSave(() => SaveDocumentAsync(true));
 
     public void ViewCode() => editorService.EditCode(formDefinition);
+
+    public DelegateCommand ViewObjectCommand { get; }
 
     public void ViewObject() => editorService.EditForm(formDefinition);
 
