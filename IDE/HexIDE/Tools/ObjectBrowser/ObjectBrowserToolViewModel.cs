@@ -633,6 +633,21 @@ public partial class ObjectBrowserToolViewModel : Document
                     declarationPosition: sym.SelectionRange.Start));
             }
 
+            if ((classVm.FormDefinition ?? classVm.ModuleDefinition?.FormPart) is { } form)
+            {
+                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var component in form.Components.Skip(1))
+                {
+                    var name = component.GetPropertyOrDefault(VBProperties.NameProperty);
+                    if (name is { Length: > 0 } && names.Add(name))
+                        classVm.Members.Add(new OBMemberViewModel(name, OBMemberKind.Property,
+                            $"WithEvents {name} As {component.BaseClass.ClassName}"));
+                }
+                foreach (var prop in form.Components[0].BaseClass.Properties)
+                    classVm.Members.Add(new OBMemberViewModel(prop.Name, OBMemberKind.Property, $"Property {prop.Name}"));
+                classVm.Members.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+            }
+
             if (ReferenceEquals(SelectedClass, classVm))
                 PopulateFilteredMembers(classVm);
         }
