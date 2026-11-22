@@ -1,6 +1,8 @@
 using System;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Threading;
 using Avalonia.Interactivity;
 using HexIDE.Forms.ViewModels;
@@ -12,6 +14,12 @@ public partial class FontDialog : UserControl
     public FontDialog()
     {
         InitializeComponent();
+        ScriptBox.ItemTemplate = new FuncDataTemplate<string>((key, _) =>
+        {
+            var label = new TextBlock();
+            if (key != null) label.Bind(TextBlock.TextProperty, label.GetResourceObservable(key));
+            return label;
+        });
         AttachedToVisualTree += (_, _) => Dispatcher.UIThread.Post(() =>
         {
             if (TopLevel.GetTopLevel(this) == null) return;
