@@ -36,6 +36,12 @@ Upgrading these to IDE-written files needs an interactive session in the VM (aut
 console, then `schtasks /IT`). Worth doing the next time a question is "what does VB6 *write*" rather than
 "what does VB6 *accept*".
 
+The PropertyPage’s `VB_Exposed` line is `True`, the value VB6 writes when saving it in this Control
+project ([#1661](https://github.com/hexide-io/HexIDE/issues/1661),
+[oracle](../../docs/vb6-fidelity-oracle/a-usercontrols-and-a-propertypages-own-events.md)). Its former `False`
+was accepted by the compiler but is not stable across an IDE save. The focused save tests keep that
+`False` input to verify the rewrite; this corpus keeps the saved value for byte-for-byte round trips.
+
 ## Files
 
 | File | What it is for |
