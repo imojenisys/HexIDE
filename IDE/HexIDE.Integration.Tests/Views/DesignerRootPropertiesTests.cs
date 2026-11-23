@@ -55,10 +55,10 @@ public class DesignerRootPropertiesTests
         $"VERSION 5.00\r\nBegin VB.{kind} {name} \r\n   ClientHeight    =   3600\r\n   ClientLeft      =   0\r\n"
       + $"   ClientTop       =   0\r\n   ClientWidth     =   4800\r\nEnd\r\nAttribute VB_Name = \"{name}\"\r\n";
 
-    private static (FormDefinition File, FormEditViewModel Designer) Open(string kind, string name, ProjectDefinition? project = null)
+    private static (FormDefinition File, FormEditViewModel Designer) Open(string kind, string name, ProjectDefinition? project = null, string? text = null)
     {
         project ??= new ProjectDefinition(VBProjectType.EXE, "P");
-        var file = new FormDeserializer().Deserialize(project, File(kind, name), new NullSink())!;
+        var file = new FormDeserializer().Deserialize(project, text ?? File(kind, name), new NullSink())!;
         var localization = Substitute.For<ILocalizationService>();
         localization.GetString(Arg.Any<string>()).Returns(call => call.Arg<string>());
         return (file, new FormEditViewModel(null!, Substitute.For<IEventBus>(), Substitute.For<HexIDE.Projects.IProjectService>(),
@@ -244,6 +244,49 @@ public class DesignerRootPropertiesTests
                 CaptionGlyphs(caption).Should().ContainSingle();
             });
         }
+    }
+
+    [AvaloniaFact]
+    public void A_loaded_tool_window_draws_no_caption_icon()
+    {
+        var text = File("Form", "Form1").Replace("End\r\n", "   BorderStyle = 4 'Fixed ToolWindow\r\nEnd\r\n");
+        var (_, designer) = Open("Form", "Form1", text: text);
+        using (designer)
+        {
+            designer.Form.Instance.UnknownRawProperties.Should().NotContain(p => p.Name == "BorderStyle");
+            Caption(designer, caption =>
+            {
+                CaptionImages(caption).Should().BeEmpty();
+                CaptionGlyphs(caption).Should().BeEmpty();
+            });
+        }
+    }
+
+    [AvaloniaFact]
+    public void BorderStyle_row_updates_the_caption_through_undo_and_redo()
+    {
+        var bus = new EventBus();
+        var loc = Substitute.For<ILocalizationService>();
+        var form = new FormDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), FormComponentClass.Instance, "Form1");
+        using var designer = new FormEditViewModel(null!, bus, null!, null!, null!, Substitute.For<ISettingsService>(), loc).Initialize(form);
+        var dock = Substitute.For<IDocumentDockService>();
+        dock.ActiveDocument.Returns(designer);
+        var grid = new PropertiesToolViewModel(dock, bus, Substitute.For<IWindowManager>(), loc);
+        designer.SelectedComponent = designer.Form;
+        var row = grid.Properties.OfType<PropertyViewModel>().Single(p => p.PropertyClass == VBProperties.FormBorderStyleProperty);
+        Caption(designer, caption =>
+        {
+            CaptionImages(caption).Should().ContainSingle();
+            var original = Png((Bitmap)CaptionImages(caption).Single().Source!);
+            row.Value = Enum.ToObject(row.PropertyClass.PropertyType, 4);
+            CaptionImages(caption).Should().BeEmpty();
+            CaptionGlyphs(caption).Should().BeEmpty();
+            designer.UndoStack.Undo();
+            Png((Bitmap)CaptionImages(caption).Single().Source!).Should().Equal(original);
+            designer.UndoStack.Redo();
+            CaptionImages(caption).Should().BeEmpty();
+            CaptionGlyphs(caption).Should().BeEmpty();
+        });
     }
 
     [AvaloniaFact]

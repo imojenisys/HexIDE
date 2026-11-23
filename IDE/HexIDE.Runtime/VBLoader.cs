@@ -908,8 +908,11 @@ public class VBLoader
             source.CopyTo(bytes);
             image = bytes.ToArray();
         }
+        var borderStyle = form.TryGetProperty(VBProperties.FormBorderStyleProperty, out var style)
+            ? (int)style
+            : RawNumber(form, "BorderStyle") ?? (int)form.GetPropertyOrDefault(VBProperties.FormBorderStyleProperty);
         return (image, icon.Kind == AvaloniaInterop.FormIconKind.None,
-            RawNumber(form, "BorderStyle") is not (4 or 5) && RawNumber(form, "ControlBox") != 0);
+            borderStyle is not (4 or 5) && RawNumber(form, "ControlBox") != 0);
     }
 
     // The number on a property line HexIDE preserves without modelling it, as a Double, sign and fraction included:

@@ -65,7 +65,8 @@ public partial class ComponentInstanceViewModel : ObservableObject
 
     private void InstanceOnOnComponentPropertyChanged(ComponentInstance _, PropertyClass propertyClass)
     {
-        if (propertyClass == VBProperties.IconProperty && ReferenceEquals(this, parentViewModel.Form))
+        if ((propertyClass == VBProperties.IconProperty || propertyClass == VBProperties.FormBorderStyleProperty)
+            && ReferenceEquals(this, parentViewModel.Form))
             parentViewModel.RefreshCaptionIcon();
         else if (propertyClass == VBProperties.LeftProperty)
         {
