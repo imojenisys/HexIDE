@@ -44,6 +44,22 @@ SDK surface: the project and component models are covered because SDK signatures
 - **WHEN** a public member is added to `FormDefinition` without an API entry
 - **THEN** the build fails with RS0016 even though its source is outside `Addins/`
 
+### Requirement: Component classes SHALL describe their designer role and containment
+`IComponentClass` SHALL expose default members `ComponentRole Role => ComponentRole.Control` and
+`bool IsContainer => false`, so existing implementations retain control semantics without recompilation.
+`ComponentRole` SHALL define `Control`, `Form`, `Menu` and `Line`. The designer SHALL use this metadata
+for root, menu, line and container recognition rather than testing the Basic provider's concrete classes.
+The provider SHALL mark Form, Frame, PictureBox, UserControl and SSTab as containers. Menu-specific
+properties SHALL be resolved through each class's `PropertiesByName` lookup.
+
+#### Scenario: A component class describes a designer root
+- **WHEN** a component class reports `Role` as `Form`
+- **THEN** the designer recognises its instance as the root and uses its `DesignerDoubleClickEvent`
+
+#### Scenario: A component class describes a container
+- **WHEN** a class reports `IsContainer` as true and a control is dropped inside its instance
+- **THEN** the designer attaches the dropped control to that instance
+
 ### Requirement: Add-ins SHALL extend the IDE through a curated host surface
 An add-in SHALL receive a single host object at initialization and SHALL reach every IDE capability through
 it, and the IDE SHALL NOT require an add-in to reference its internal assemblies.

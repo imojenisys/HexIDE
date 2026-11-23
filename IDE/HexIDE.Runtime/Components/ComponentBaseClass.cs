@@ -44,7 +44,7 @@ public abstract class ComponentBaseClass : IDesignerComponentClass
 
     public IReadOnlyList<PropertyClass> Properties { get; }
 
-    public IReadOnlyDictionary<string, PropertyClass> PropertiesByName { get; }
+    public IReadOnlyDictionary<string, PropertyClass> PropertiesByName { get; protected set; }
 
     public IReadOnlyList<EventClass> Events { get; }
 
@@ -57,6 +57,9 @@ public abstract class ComponentBaseClass : IDesignerComponentClass
 
     /// <summary>Visible controls (default) have Width/Height/Visible; invisible ones (Timer) override false.</summary>
     public virtual bool IsVisual => true;
+
+    public virtual ComponentRole Role => ComponentRole.Control;
+    public virtual bool IsContainer => false;
 
     /// <summary>
     /// True for a control VB6 draws on its container's own surface rather than in a window of its own: the Label, Shape,
