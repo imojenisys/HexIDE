@@ -440,6 +440,13 @@ public partial class VB6BuiltIns
             layout |= MessageBoxLayout.Right;
         if ((style & VBMsgBoxStyle.vbMsgBoxRtlReading) != 0)
             layout |= MessageBoxLayout.RtlReading;
+        // #827: measured in rgb-qbcolor-and-msgboxs-style.md. A missing default falls back to the first.
+        var defaultButton = style & VBMsgBoxStyle.DefaultButtonBits;
+        if (defaultButton == VBMsgBoxStyle.vbDefaultButton2)
+            layout |= MessageBoxLayout.SecondButtonDefault;
+        else if (defaultButton == VBMsgBoxStyle.vbDefaultButton3
+            && buttons is MessageBoxButtons.AbortRetryIgnore or MessageBoxButtons.YesNoCancel)
+            layout |= MessageBoxLayout.ThirdButtonDefault;
         MessageBoxResult result;
         // Every loaded form refuses input while the box waits (SP6 native and p-code, oracle #834). The hold is
         // counted across overlapping boxes and survives a form hiding and showing; the event pump is unchanged.
