@@ -1498,6 +1498,26 @@
     "Str.Dialog.SharedFile.Update": "Kas soovite värskendada faili {0} projektides, mis jagavad seda projektiga {1}?",
     "Str.Dialog.SharedFile.DiscardChanges": "Faili {0} värskendamine projektis {1} tühistab selle projekti salvestamata muudatused. Kas soovite jätkata?",
     "Str.Dialog.SharedFile.DiskChanged": "Fail '{0}' on kettal muutunud pärast projekti {1} koopia laadimist või salvestamist. Kas soovite selle üle kirjutada?",
-    "Str.ProjectLocalState.SidecarUnavailableFormat": "Projekti {0} järjehoidjaid, katkestuspunkte ega muid kasutajapõhiseid sätteid selles seansis ei laadita ega salvestata.\n\n{1}"
+    "Str.ProjectLocalState.SidecarUnavailableFormat": "Projekti {0} järjehoidjaid, katkestuspunkte ega muid kasutajapõhiseid sätteid selles seansis ei laadita ega salvestata.\n\n{1}",
+    "Str.Tool.LanguageServers.Trial.Test": "Testi",
+    "Str.Tool.LanguageServers.Trial.Testing": "Testimine…",
+    "Str.Tool.LanguageServers.Trial.Result": "Ühendustesti tulemus",
+    "Str.Tool.LanguageServers.Trial.Declined": "Midagi ei käivitatud.",
+    "Str.Tool.LanguageServers.Trial.NotLaunchable": "Seda kirjet ei saa siit käivitada.",
+    "Str.Tool.LanguageServers.Trial.WaitingForWorkspace": "See server vajab avatud projekti.",
+    "Str.Tool.LanguageServers.Trial.Initialized": "Server lähtestati.",
+    "Str.Tool.LanguageServers.Trial.NoIdentity": "Server ei teatanud nime ega versiooni.",
+    "Str.Tool.LanguageServers.Trial.Identity": "Serveri teatatud: {0} {1}",
+    "Str.Tool.LanguageServers.Trial.Capabilities": "Avaldatud võimekused: {0}",
+    "Str.Tool.LanguageServers.Trial.DeclinedCapabilities": "Tagasi lükatud kliendi võimekused: {0}",
+    "Str.Tool.LanguageServers.Trial.Silent": "Server ühendati, kuid see ei vastanud initialize-päringule.",
+    "Str.Tool.LanguageServers.Trial.Artifact": "See kirje deklareerib tööruumifaili, mis luuakse nõusolekul ainult tegelikul käivitamisel. Selle puudumine võib seda tõrget selgitada.",
+    "Str.Tool.LanguageServers.Trial.Disabled": "See kirje on välja lülitatud. IDE ei käivita seda enne sisselülitamist.",
+    "Str.Tool.LanguageServers.Trial.Stopped": "Peatamine lõpetatud.",
+    "Str.Tool.LanguageServers.Trial.StopFailed": "Peatamine nurjus: {0}",
+    "Str.Tool.LanguageServers.Trial.Failed": "Serverit ei lähtestatud: {0}",
+    "Str.Tool.LanguageServers.Trial.ConfirmTitle": "Testi keeleserveri ühendust",
+    "Str.Tool.LanguageServers.Trial.ConfirmPrompt": "IDE pole seda varem käivitanud ega sellega ühendust loonud või on see vahepeal muutunud. Nõustumine käivitab selles arvutis programmi või loob ühenduse selle aadressiga.",
+    "Str.Tool.LanguageServers.Trial.Run": "Käivita"
   }
 }

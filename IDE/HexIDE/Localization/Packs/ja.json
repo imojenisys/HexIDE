@@ -1498,6 +1498,26 @@
     "Str.Dialog.SharedFile.Update": "{1} とファイルを共有するプロジェクト内の {0} を更新しますか?",
     "Str.Dialog.SharedFile.DiscardChanges": "プロジェクト {1} の {0} を更新すると、そのプロジェクトの未保存の変更が破棄されます。続行しますか?",
     "Str.Dialog.SharedFile.DiskChanged": "プロジェクト {1} のコピーが読み込まれたか保存されてから、ディスク上のファイル '{0}' が変更されています。上書きしますか?",
-    "Str.ProjectLocalState.SidecarUnavailableFormat": "{0} のブックマーク、ブレークポイント、その他のユーザーごとの設定は、このセッションでは読み込まれず、保存もされません。\n\n{1}"
+    "Str.ProjectLocalState.SidecarUnavailableFormat": "{0} のブックマーク、ブレークポイント、その他のユーザーごとの設定は、このセッションでは読み込まれず、保存もされません。\n\n{1}",
+    "Str.Tool.LanguageServers.Trial.Test": "テスト",
+    "Str.Tool.LanguageServers.Trial.Testing": "テスト中…",
+    "Str.Tool.LanguageServers.Trial.Result": "接続テストの結果",
+    "Str.Tool.LanguageServers.Trial.Declined": "何も実行されませんでした。",
+    "Str.Tool.LanguageServers.Trial.NotLaunchable": "このエントリはここから起動できません。",
+    "Str.Tool.LanguageServers.Trial.WaitingForWorkspace": "このサーバーには開いているプロジェクトが必要です。",
+    "Str.Tool.LanguageServers.Trial.Initialized": "サーバーが初期化されました。",
+    "Str.Tool.LanguageServers.Trial.NoIdentity": "サーバーから名前もバージョンも報告されませんでした。",
+    "Str.Tool.LanguageServers.Trial.Identity": "サーバーからの報告: {0} {1}",
+    "Str.Tool.LanguageServers.Trial.Capabilities": "通知された機能: {0}",
+    "Str.Tool.LanguageServers.Trial.DeclinedCapabilities": "拒否されたクライアント機能: {0}",
+    "Str.Tool.LanguageServers.Trial.Silent": "サーバーは接続しましたが、initialize に応答しませんでした。",
+    "Str.Tool.LanguageServers.Trial.Artifact": "このエントリはワークスペースファイルを宣言しています。このファイルは同意を得た通常の起動時にのみ生成されます。ファイルがないことが、この失敗の原因かもしれません。",
+    "Str.Tool.LanguageServers.Trial.Disabled": "このエントリは無効です。有効にするまで IDE は起動しません。",
+    "Str.Tool.LanguageServers.Trial.Stopped": "停止が完了しました。",
+    "Str.Tool.LanguageServers.Trial.StopFailed": "停止に失敗しました: {0}",
+    "Str.Tool.LanguageServers.Trial.Failed": "サーバーが初期化されませんでした: {0}",
+    "Str.Tool.LanguageServers.Trial.ConfirmTitle": "言語サーバーの接続をテスト",
+    "Str.Tool.LanguageServers.Trial.ConfirmPrompt": "IDE はこれを以前に起動または接続したことがないか、前回から変更されています。同意すると、このコンピューターでプログラムを起動するか、このアドレスに接続します。",
+    "Str.Tool.LanguageServers.Trial.Run": "実行"
   }
 }

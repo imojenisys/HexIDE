@@ -1498,6 +1498,26 @@
     "Str.Dialog.SharedFile.Update": "Wilt u {0} bijwerken in projecten die het bestand delen met {1}?",
     "Str.Dialog.SharedFile.DiscardChanges": "Als u {0} in project {1} bijwerkt, gaan de niet-opgeslagen wijzigingen van dat project verloren. Wilt u doorgaan?",
     "Str.Dialog.SharedFile.DiskChanged": "Het bestand '{0}' is op schijf gewijzigd sinds de kopie van project {1} is geladen of opgeslagen. Wilt u het overschrijven?",
-    "Str.ProjectLocalState.SidecarUnavailableFormat": "Bladwijzers, onderbrekingspunten en andere gebruikersinstellingen voor {0} worden in deze sessie niet geladen of opgeslagen.\n\n{1}"
+    "Str.ProjectLocalState.SidecarUnavailableFormat": "Bladwijzers, onderbrekingspunten en andere gebruikersinstellingen voor {0} worden in deze sessie niet geladen of opgeslagen.\n\n{1}",
+    "Str.Tool.LanguageServers.Trial.Test": "Testen",
+    "Str.Tool.LanguageServers.Trial.Testing": "Bezig met testen…",
+    "Str.Tool.LanguageServers.Trial.Result": "Resultaat van verbindingstest",
+    "Str.Tool.LanguageServers.Trial.Declined": "Er is niets uitgevoerd.",
+    "Str.Tool.LanguageServers.Trial.NotLaunchable": "Dit item kan hier niet worden gestart.",
+    "Str.Tool.LanguageServers.Trial.WaitingForWorkspace": "Deze server heeft een geopend project nodig.",
+    "Str.Tool.LanguageServers.Trial.Initialized": "De server is geïnitialiseerd.",
+    "Str.Tool.LanguageServers.Trial.NoIdentity": "De server heeft geen naam of versie gemeld.",
+    "Str.Tool.LanguageServers.Trial.Identity": "Gemeld door de server: {0} {1}",
+    "Str.Tool.LanguageServers.Trial.Capabilities": "Aangekondigde mogelijkheden: {0}",
+    "Str.Tool.LanguageServers.Trial.DeclinedCapabilities": "Geweigerde clientmogelijkheden: {0}",
+    "Str.Tool.LanguageServers.Trial.Silent": "De server heeft verbinding gemaakt maar heeft initialize niet beantwoord.",
+    "Str.Tool.LanguageServers.Trial.Artifact": "Dit item declareert een werkruimtebestand dat alleen bij een echte start met toestemming wordt gegenereerd. Het ontbreken ervan kan deze fout verklaren.",
+    "Str.Tool.LanguageServers.Trial.Disabled": "Dit item is uitgeschakeld. De IDE start het pas als het is ingeschakeld.",
+    "Str.Tool.LanguageServers.Trial.Stopped": "Stoppen voltooid.",
+    "Str.Tool.LanguageServers.Trial.StopFailed": "Stoppen mislukt: {0}",
+    "Str.Tool.LanguageServers.Trial.Failed": "De server is niet geïnitialiseerd: {0}",
+    "Str.Tool.LanguageServers.Trial.ConfirmTitle": "Verbinding met taalserver testen",
+    "Str.Tool.LanguageServers.Trial.ConfirmPrompt": "De IDE heeft dit nog niet gestart of er verbinding mee gemaakt, of het is sindsdien gewijzigd. Met uw toestemming wordt een programma op deze computer gestart of verbinding met dit adres gemaakt.",
+    "Str.Tool.LanguageServers.Trial.Run": "Uitvoeren"
   }
 }

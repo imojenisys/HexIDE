@@ -1498,6 +1498,26 @@
     "Str.Dialog.SharedFile.Update": "Ali želite posodobiti {0} v projektih, ki si jo delijo s projektom {1}?",
     "Str.Dialog.SharedFile.DiscardChanges": "Posodobitev {0} v projektu {1} bo zavrgla neshranjene spremembe tega projekta. Ali želite nadaljevati?",
     "Str.Dialog.SharedFile.DiskChanged": "Datoteka '{0}' se je na disku spremenila, odkar je bila kopija projekta {1} naložena ali shranjena. Ali jo želite prepisati?",
-    "Str.ProjectLocalState.SidecarUnavailableFormat": "Zaznamki, prekinitvene točke in druge uporabniške nastavitve za {0} v tej seji ne bodo naloženi niti shranjeni.\n\n{1}"
+    "Str.ProjectLocalState.SidecarUnavailableFormat": "Zaznamki, prekinitvene točke in druge uporabniške nastavitve za {0} v tej seji ne bodo naloženi niti shranjeni.\n\n{1}",
+    "Str.Tool.LanguageServers.Trial.Test": "Preizkusi",
+    "Str.Tool.LanguageServers.Trial.Testing": "Preizkušanje…",
+    "Str.Tool.LanguageServers.Trial.Result": "Rezultat preizkusa povezave",
+    "Str.Tool.LanguageServers.Trial.Declined": "Nič ni bilo zagnano.",
+    "Str.Tool.LanguageServers.Trial.NotLaunchable": "Tega vnosa od tukaj ni mogoče zagnati.",
+    "Str.Tool.LanguageServers.Trial.WaitingForWorkspace": "Ta strežnik potrebuje odprt projekt.",
+    "Str.Tool.LanguageServers.Trial.Initialized": "Strežnik je bil inicializiran.",
+    "Str.Tool.LanguageServers.Trial.NoIdentity": "Strežnik ni sporočil imena ali različice.",
+    "Str.Tool.LanguageServers.Trial.Identity": "Sporočil strežnik: {0} {1}",
+    "Str.Tool.LanguageServers.Trial.Capabilities": "Oglaševane zmožnosti: {0}",
+    "Str.Tool.LanguageServers.Trial.DeclinedCapabilities": "Zavrnjene zmožnosti odjemalca: {0}",
+    "Str.Tool.LanguageServers.Trial.Silent": "Strežnik se je povezal, vendar ni odgovoril na initialize.",
+    "Str.Tool.LanguageServers.Trial.Artifact": "Ta vnos določa datoteko delovnega prostora, ki se s soglasjem ustvari samo ob dejanskem zagonu. Njena odsotnost lahko pojasni to napako.",
+    "Str.Tool.LanguageServers.Trial.Disabled": "Ta vnos je izklopljen. IDE ga ne bo zagnal, dokler ne bo vklopljen.",
+    "Str.Tool.LanguageServers.Trial.Stopped": "Zaustavitev je končana.",
+    "Str.Tool.LanguageServers.Trial.StopFailed": "Zaustavitev ni uspela: {0}",
+    "Str.Tool.LanguageServers.Trial.Failed": "Strežnik ni bil inicializiran: {0}",
+    "Str.Tool.LanguageServers.Trial.ConfirmTitle": "Preizkusi povezavo z jezikovnim strežnikom",
+    "Str.Tool.LanguageServers.Trial.ConfirmPrompt": "IDE tega še ni zagnal ali se s tem povezal oziroma se je to od takrat spremenilo. S soglasjem se zažene program v tem računalniku ali vzpostavi povezava s tem naslovom.",
+    "Str.Tool.LanguageServers.Trial.Run": "Zaženi"
   }
 }

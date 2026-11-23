@@ -1498,6 +1498,26 @@
     "Str.Dialog.SharedFile.Update": "Искате ли да обновите {0} в проектите, които го споделят с {1}?",
     "Str.Dialog.SharedFile.DiscardChanges": "Обновяването на {0} в проект {1} ще отхвърли незаписаните промени в този проект. Искате ли да продължите?",
     "Str.Dialog.SharedFile.DiskChanged": "Файлът '{0}' е променен на диска след зареждането или записването на копието на проект {1}. Искате ли да го презапишете?",
-    "Str.ProjectLocalState.SidecarUnavailableFormat": "Отметките, точките на прекъсване и другите потребителски настройки за {0} няма да бъдат заредени или записани в тази сесия.\n\n{1}"
+    "Str.ProjectLocalState.SidecarUnavailableFormat": "Отметките, точките на прекъсване и другите потребителски настройки за {0} няма да бъдат заредени или записани в тази сесия.\n\n{1}",
+    "Str.Tool.LanguageServers.Trial.Test": "Тест",
+    "Str.Tool.LanguageServers.Trial.Testing": "Тестване…",
+    "Str.Tool.LanguageServers.Trial.Result": "Резултат от теста на връзката",
+    "Str.Tool.LanguageServers.Trial.Declined": "Нищо не е изпълнено.",
+    "Str.Tool.LanguageServers.Trial.NotLaunchable": "Този запис не може да бъде стартиран оттук.",
+    "Str.Tool.LanguageServers.Trial.WaitingForWorkspace": "Този сървър изисква отворен проект.",
+    "Str.Tool.LanguageServers.Trial.Initialized": "Сървърът е инициализиран.",
+    "Str.Tool.LanguageServers.Trial.NoIdentity": "Сървърът не съобщи име или версия.",
+    "Str.Tool.LanguageServers.Trial.Identity": "Съобщено от сървъра: {0} {1}",
+    "Str.Tool.LanguageServers.Trial.Capabilities": "Обявени възможности: {0}",
+    "Str.Tool.LanguageServers.Trial.DeclinedCapabilities": "Отказани възможности на клиента: {0}",
+    "Str.Tool.LanguageServers.Trial.Silent": "Сървърът се свърза, но не отговори на initialize.",
+    "Str.Tool.LanguageServers.Trial.Artifact": "Този запис декларира файл на работната област, който се генерира само при реално стартиране, със съгласие. Липсата му може да обясни този неуспех.",
+    "Str.Tool.LanguageServers.Trial.Disabled": "Този запис е изключен. IDE няма да го стартира, докато не бъде включен.",
+    "Str.Tool.LanguageServers.Trial.Stopped": "Спирането завърши.",
+    "Str.Tool.LanguageServers.Trial.StopFailed": "Неуспешно спиране: {0}",
+    "Str.Tool.LanguageServers.Trial.Failed": "Сървърът не се инициализира: {0}",
+    "Str.Tool.LanguageServers.Trial.ConfirmTitle": "Тест на връзката с езиковия сървър",
+    "Str.Tool.LanguageServers.Trial.ConfirmPrompt": "IDE не е стартирала това или не се е свързвала с него преди, или то е променено оттогава. Съгласието стартира програма на този компютър или установява връзка с този адрес.",
+    "Str.Tool.LanguageServers.Trial.Run": "Изпълнение"
   }
 }

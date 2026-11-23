@@ -1498,6 +1498,26 @@
     "Str.Dialog.SharedFile.Update": "Szeretné frissíteni a(z) {0} fájlt azokban a projektekben, amelyek a(z) {1} projekttel közösen használják?",
     "Str.Dialog.SharedFile.DiscardChanges": "A(z) {0} frissítése a(z) {1} projektben elveti a projekt nem mentett módosításait. Szeretné folytatni?",
     "Str.Dialog.SharedFile.DiskChanged": "A(z) '{0}' fájl megváltozott a lemezen a(z) {1} projekt példányának betöltése vagy mentése óta. Szeretné felülírni?",
-    "Str.ProjectLocalState.SidecarUnavailableFormat": "A(z) {0} könyvjelzői, töréspontjai és egyéb felhasználónkénti beállításai ebben a munkamenetben nem töltődnek be, és nem is mentődnek.\n\n{1}"
+    "Str.ProjectLocalState.SidecarUnavailableFormat": "A(z) {0} könyvjelzői, töréspontjai és egyéb felhasználónkénti beállításai ebben a munkamenetben nem töltődnek be, és nem is mentődnek.\n\n{1}",
+    "Str.Tool.LanguageServers.Trial.Test": "Tesztelés",
+    "Str.Tool.LanguageServers.Trial.Testing": "Tesztelés…",
+    "Str.Tool.LanguageServers.Trial.Result": "Kapcsolatteszt eredménye",
+    "Str.Tool.LanguageServers.Trial.Declined": "Semmi sem futott le.",
+    "Str.Tool.LanguageServers.Trial.NotLaunchable": "Ez a bejegyzés innen nem indítható el.",
+    "Str.Tool.LanguageServers.Trial.WaitingForWorkspace": "Ehhez a kiszolgálóhoz nyitott projekt szükséges.",
+    "Str.Tool.LanguageServers.Trial.Initialized": "A kiszolgáló inicializálása megtörtént.",
+    "Str.Tool.LanguageServers.Trial.NoIdentity": "A kiszolgáló nem közölt nevet vagy verziót.",
+    "Str.Tool.LanguageServers.Trial.Identity": "A kiszolgáló által közölt adatok: {0} {1}",
+    "Str.Tool.LanguageServers.Trial.Capabilities": "Meghirdetett képességek: {0}",
+    "Str.Tool.LanguageServers.Trial.DeclinedCapabilities": "Elutasított ügyfélképességek: {0}",
+    "Str.Tool.LanguageServers.Trial.Silent": "A kiszolgáló csatlakozott, de nem válaszolt az initialize kérésre.",
+    "Str.Tool.LanguageServers.Trial.Artifact": "Ez a bejegyzés olyan munkaterületfájlt határoz meg, amely csak tényleges indításkor, beleegyezéssel jön létre. A hiánya magyarázhatja ezt a hibát.",
+    "Str.Tool.LanguageServers.Trial.Disabled": "Ez a bejegyzés ki van kapcsolva. Az IDE nem indítja el, amíg be nem kapcsolják.",
+    "Str.Tool.LanguageServers.Trial.Stopped": "A leállítás befejeződött.",
+    "Str.Tool.LanguageServers.Trial.StopFailed": "A leállítás sikertelen: {0}",
+    "Str.Tool.LanguageServers.Trial.Failed": "A kiszolgáló inicializálása nem történt meg: {0}",
+    "Str.Tool.LanguageServers.Trial.ConfirmTitle": "Nyelvi kiszolgáló kapcsolatának tesztelése",
+    "Str.Tool.LanguageServers.Trial.ConfirmPrompt": "Az IDE ezt korábban még nem indította el, illetve nem csatlakozott hozzá, vagy azóta megváltozott. A beleegyezés egy programot indít el ezen a számítógépen, vagy csatlakozik ehhez a címhez.",
+    "Str.Tool.LanguageServers.Trial.Run": "Futtatás"
   }
 }
