@@ -2,9 +2,9 @@
 // Copyright (C) 2026 The HexIDE Authors
 // This file is part of HexIDE.Runtime.Tests.
 
-using HexIDE.Runtime.Editor;
+using HexIDE.Language;
 
-namespace HexIDE.Runtime.Tests;
+namespace HexIDE.Tests.ViewModels;
 
 public class VbKeywordNormalizerTests
 {

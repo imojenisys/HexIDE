@@ -2,7 +2,7 @@
 // Copyright (C) 2026 The HexIDE Authors
 // This file is part of HexIDE.Runtime.
 
-namespace HexIDE.Runtime.Editor;
+namespace HexIDE.Language;
 
 /// <summary>
 /// Normalizes VB6 keyword casing to PascalCase on a per-line basis.
@@ -12,7 +12,7 @@ namespace HexIDE.Runtime.Editor;
 /// Clean-room keyword list derived from the VB6 language specification.
 /// This class is in the MIT-licensed Runtime project.
 /// </remarks>
-public static class VbKeywordNormalizer
+internal static class VbKeywordNormalizer
 {
     private static readonly Dictionary<string, string> Keywords = BuildKeywordMap();
 
