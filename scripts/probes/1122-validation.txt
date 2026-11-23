@@ -1,0 +1,197 @@
+Issue #1122 validation, 2026-11-23
+Base: upstream/main 6d421e942. Linux/WSL; no twinBASIC compiler or IDE used.
+
+Changes label twinBASIC source previews and route them only to servers claiming
+both the extension and language. The bundled VB6 server was used as a synthetic
+wire peer under two registrations; this does not test a real twinBASIC server.
+Synthetic category 4 entries exercise the preview path without claiming that
+imported modules have that category in real twinBASIC.
+
+Teeth check
+-----------
+The baseline retained new signatures so the tests could compile, but disabled
+the label filter, returned null from the project label method, and omitted the
+session label on opens. That restores main's relevant behavior; it is not a
+separate checkout of main. The fix was then restored before the full runs.
+
+New routing class: 22 cases, 16 failed on that baseline, 6 regression guards
+passed. All 22 pass with the fix, including in the full IDE suite.
+Updated archive-session integration test: 1 failed on the baseline.
+
+Baseline failures (new tests):
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.LabelRoutesOpenRequestsChangesSaveAndClose(label: "TwInBaSiC", extension: ".bas", member: False)
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.LabelRoutesOpenRequestsChangesSaveAndClose(label: "twinbasic", extension: ".bas", member: False)
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.LabelRoutesOpenRequestsChangesSaveAndClose(label: "twinbasic", extension: ".cls", member: False)
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.LabelRoutesOpenRequestsChangesSaveAndClose(label: "twinbasic", extension: ".cls", member: True)
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Control.ctl", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Module.BAS", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Form.frm", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Object.dob", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Module.TWIN", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Class.CLS", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Page.pag", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ProjectLabelsOnlySourceExtensions(name: "Designer.dsr", expected: "twinbasic")
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.WorkspaceReplayRetainsTheLabel
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.ArchiveTabsSendTwinBasicFramesOnlyAndRetainLabelsOnReopen
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.LabelWithoutAClaimingServerRoutesNowhere
+- HexIDE.Tests.LspClient.TwinBasicRoutingTests.RenamedProjectHolderKeepsTheSessionLabel
+
+Updated integration failure:
+- ArchiveProjectBrowsingTests.Archive_text_sessions_open_reload_close_and_render_diagnostics
+
+Regression guards that pass on the baseline:
+- UnlabelledDocumentsKeepTheirRoutes: non-member .bas; Office-style member .cls
+- PublishedTwinPackMarkdownKeepsExtensionRouting: published sample.twinpack CHANGELOG.md
+- ProjectLabelsOnlySourceExtensions: CHANGELOG.md, #1.xml, Form.tbform
+
+Full checks
+-----------
+- Desktop Debug build: 0 warnings, 0 errors.
+- HexIDE.Tests: 10782 total; 10700 passed, 82 skipped, 0 failed; 54m 06s.
+  xUnit report checked: 0 errors; all 22 new routing cases passed.
+- HexIDE.Integration.Tests: 4613 passed, 0 failed, 0 skipped; 16m 44s.
+  xUnit report checked: 0 errors.
+- HexIDE.TwinBasic.Tests: 414 total; 412 passed, 2 skipped, 0 failed.
+  First restore was blocked by a read-only NuGet vulnerability-data cache;
+  retry used a clone-local NUGET_HTTP_CACHE_PATH with auditing left enabled.
+- HexIDE.VbLspServer.Tests: 838 passed, 0 failed, 0 skipped.
+- OpenSpec change: strict validation passed; archived through the CLI.
+  Live spec Purpose retained; live spec strict validation passed.
+- Tree hygiene: passed, 9 existing non-blocking warnings.
+- No guarded PublicAPI.Unshipped additions; MISSING_LANGUAGE counts unchanged.
+
+Skipped HexIDE.Tests cases (82; none is coverage for this change)
+--------------------------------------------------------------
+- HexIDE.Tests.IDE.CodeTrustTests.MacOS_reads_the_quarantine_attribute
+- HexIDE.Tests.IDE.CodeTrustTests.Windows_reads_the_Zone_Identifier_stream_beside_a_file
+- HexIDE.Tests.Projects.DuplicateProjectOpenTests.Opening_the_same_project_with_different_drive_and_folder_case_is_refused
+- HexIDE.Tests.Addins.PackageVerificationTests.Locked_signature_file_yields_Untrusted_not_an_exception
+- HexIDE.Tests.Projects.ContributedProjectTests.A_contributed_project_already_open_is_refused_when_opened_again_with_different_drive_and_folder_case
+- HexIDE.Tests.LspClient.WorkspaceArtifactProjectTests.ALocalTypeLibraryIsNamedFromItsFile
+- HexIDE.Tests.LspClient.WorkspaceArtifactProjectTests.TheTypeLibraryNamesOleAutomationStdole
+- HexIDE.Tests.Processes.ChildProcessJobTests.A_closed_job_refuses_a_process
+- HexIDE.Tests.Processes.ChildProcessJobTests.A_process_left_out_of_the_job_outlives_it
+- HexIDE.Tests.Processes.ChildProcessJobTests.Closing_the_job_ends_the_process_put_in_it
+- HexIDE.Tests.Server.ProcessWindowsToolTests.A_running_process_with_no_window_is_said_to_have_none_yet
+- HexIDE.Tests.Server.ProcessWindowsToolTests.A_minimized_program_is_read_as_minimized_and_visible
+- HexIDE.Tests.Server.ProcessWindowsToolTests.A_window_of_a_process_the_started_one_started_is_read_through_it
+- HexIDE.Tests.Server.ProcessWindowsToolTests.A_program_started_hidden_is_read_as_hidden_and_the_note_says_vbHide_did_it
+- HexIDE.Tests.IDE.ProjectLocalStateTests.Directory_junction_is_ignored_and_never_written_through
+- HexIDE.Tests.Projects.ClassModuleSaveFidelityTests.A_reload_from_disk_also_preserves_the_header
+- HexIDE.Tests.Projects.ClassModuleSaveFidelityTests.Saving_a_project_leaves_an_untouched_class_byte_identical
+- HexIDE.Tests.Projects.ClassModuleSaveFidelityTests.Editing_the_body_leaves_the_header_untouched
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"revocations.json\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"nested/HEXIDE-FIRSTPARTY.PUB\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"acme-ide.exe\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"revocations-cache.json\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"LICENSE\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"revocations.sig\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"brand.json\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"revocations-cache.signed\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"hexide-root.pub\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"branding/logo.png\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"HexIDE.exe\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_protected_files_are_refused_without_output(relative: \"revocations-cache.sig\")
+- HexIDE.Tests.Repack.WindowsRepackerTests.A_repacked_executable_says_it_is_the_brand_when_Windows_reads_it
+- HexIDE.Tests.Repack.WindowsRepackerTests.Every_file_but_the_executable_is_exactly_as_published
+- HexIDE.Tests.Repack.WindowsRepackerTests.The_icon_is_the_brands_with_nothing_left_of_stocks
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_files_reach_the_installable_payload_and_report
+- HexIDE.Tests.Repack.WindowsRepackerTests.A_default_profile_folder_travels_with_the_brand
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_output_ancestor_is_refused_before_staging
+- HexIDE.Tests.Repack.WindowsRepackerTests.A_brand_with_no_copyright_keeps_stocks_rather_than_claiming_none
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_missing_folder_is_refused
+- HexIDE.Tests.Repack.WindowsRepackerTests.The_installer_inputs_are_written_beside_the_build_and_not_inside_it
+- HexIDE.Tests.Repack.WindowsRepackerTests.A_run_that_fails_partway_leaves_nothing_behind
+- HexIDE.Tests.Repack.WindowsRepackerTests.A_branded_process_declares_that_identity_to_Windows
+- HexIDE.Tests.Repack.WindowsRepackerTests.The_brands_files_land_where_the_IDE_will_look_for_them
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_links_are_refused_at_the_root_or_inside
+- HexIDE.Tests.Repack.WindowsRepackerTests.Included_folder_below_a_link_is_allowed
+- HexIDE.Tests.Repack.WindowsRepackerTests.A_signed_stock_executable_comes_out_unsigned_and_the_run_says_so
+- HexIDE.Tests.UserDataPathTests.OnWindowsItIsUnderAppData
+- HexIDE.Tests.Projects.MadeProgramTests.A_made_program_starts_and_runs_its_Sub_Main
+- HexIDE.Tests.IDE.Vb6ToolchainReplacementTests.Absolute_Path32_Make_and_Run_use_that_folder
+- HexIDE.Tests.Profiles.ProfileContainmentTests.JunctionSwappedInAfterPreflightIsRefusedDuringRead
+- HexIDE.Tests.Profiles.ProfileContainmentTests.JunctionEscapeIsRefused
+- HexIDE.Tests.Infrastructure.WindowStateUnconfirmedTests.On_Windows_the_probe_does_not_guess
+- HexIDE.Tests.LspClient.TypeLibraryNamesTests.ALocalLinkToAShareIsNotALocalPath
+- HexIDE.Tests.Tools.ProjectTreeBuilderTests.ForwardSlashPath_NormalizesAndNests
+- HexIDE.Tests.Tools.ProjectTreeBuilderTests.CrossDriveMember_RendersAtRoot
+- HexIDE.Tests.Tools.ProjectTreeBuilderTests.AMemberWithNoRelativeForm_CaptionsItsAbsoluteLocation
+- HexIDE.Tests.Sidecar.UserSidecarSaveTests.TheProjectsOwnSidecarSpelledInAnotherCaseIsStillItsOwn
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Foreign_adapter_teardown_leaves_no_unobserved_fault
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Teardown_leaves_no_unobserved_fault(testClass: \"TraceOnTheWireTests\")
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Teardown_leaves_no_unobserved_fault(testClass: \"RenameWireShapeTests\")
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Teardown_leaves_no_unobserved_fault(testClass: \"CancellationWireShapeTests\")
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Teardown_leaves_no_unobserved_fault(testClass: \"WebSocketLspTransportTests\")
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Teardown_leaves_no_unobserved_fault(testClass: \"StdioProcessLspTransportTests\")
+- HexIDE.Tests.Infrastructure.UnobservedTaskProbeTests.Teardown_leaves_no_unobserved_fault(testClass: \"ShutdownWireShapeTests\")
+- HexIDE.Tests.LspClient.WireStressTests.ConcurrentConnectionsKeepEveryFrameValid
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.Saving_never_shrinks_or_deletes_a_companion_it_cannot_reproduce
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.AFormWhoseBlobsAreAllModelled_DoesNotRaiseTheLossFlag
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.A_form_whose_records_HexIDE_does_not_model_saves_both_halves_as_VB6_wrote_them
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.Dropping_a_blob_bearing_control_keeps_both_halves_in_step
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.A_second_save_still_leaves_the_companion_intact
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.The_form_records_that_it_lost_binary_fidelity
+- HexIDE.Tests.Projects.CompanionBinaryPreservationTests.A_form_that_reproduces_its_companion_is_never_denied_the_write
+- HexIDE.Tests.LspClient.TypeLibraryServicePathTests.GuidOnlyReferenceLoadsWindowsOleAutomationLibrary
+- HexIDE.Tests.Infrastructure.PlatformWindowProbeTests.Avalonia_still_creates_the_window_the_session_end_hook_answers_on
+- HexIDE.Tests.LspClient.LspDocumentSessionTests.AWindowsDriveLetterInTheOtherCaseStillMatches
+- HexIDE.Tests.Profiles.ProfileReaderSafetyTests.WindowsPipeHandleIsRefused
+- HexIDE.Tests.IDE.EditorServiceNavigationTests.AFileUriWhoseDriveLetterTheServerNormalisedStillResolves
+- HexIDE.Tests.Infrastructure.ProjectWriteSafetyTests.A_copy_that_cannot_be_removed_is_kept_and_named
+- HexIDE.Tests.Repack.LinuxRepackerTests.A_linux_build_is_refused_on_windows
+- HexIDE.Tests.Repack.MacRepackerTests.A_mac_build_is_repacked_as_one
+- HexIDE.Tests.Repack.MacRepackerTests.A_sealed_bundle_is_resealed_after_branding
+- HexIDE.Tests.Repack.MacRepackerTests.macOS_accepts_the_property_list_signature_and_icon
+- HexIDE.Tests.Repack.MacRepackerTests.A_mac_build_is_refused_on_windows
+
+Skipped HexIDE.TwinBasic.Tests cases (2; neither is coverage)
+---------------------------------------------------------
+- LiveCompilerTests.A_compiler_started_without_the_IDE_loads_a_project_attaches_every_channel_and_shuts_down
+- LiveCompilerTests.Root_initialization_and_shutdown_are_recorded
+Reason: the compiler runs only on Windows. Neither test invoked a compiler here.
+
+Run environment
+---------------
+Windows mount entries were removed from PATH. UseSharedCompilation=false,
+MSBUILDDISABLENODEREUSE=1 and DOTNET_CLI_USE_MSBUILD_SERVER=0 were exported.
+Each run used its own temporary XDG_RUNTIME_DIR. An initial test attempt failed
+before discovery when a reused build node could not write an obj directory;
+subsequent runs disabled node reuse. No project configuration was changed for it.
+
+Remaining live verification
+---------------------------
+The supervisor should open source previews with no twinBASIC server configured:
+no VB6 diagnostics and no VB6 didOpen frames. With a server claiming the extension
+and declaring twinbasic, check didOpen/didClose on open, reload, close and reopen,
+and confirm the tabs stay read-only and implicit Run/Make remain disabled.
+No real twinBASIC server is available in this run.
+
+Imported .bas/.cls container categories remain unmeasured here and unchanged.
+Greying remains scoped to #1691 as the brief requests. No implementation point
+in this run is left undone. Possible drift: none.
+
+Supervisor publication: Fixes #1122; Part of #5138. No commit, push or PR made.
+
+Files changed
+-------------
+- IDE/HexIDE.Core/Lsp/DocumentLanguage.cs
+- IDE/HexIDE.Core/Lsp/ILspClient.cs
+- IDE/HexIDE.Integration.Tests/Views/ArchiveProjectBrowsingTests.cs
+- IDE/HexIDE.Lsp/LspClientRegistry.cs
+- IDE/HexIDE.Lsp/VBLspClient.cs
+- IDE/HexIDE.Tests/LspClient/TwinBasicRoutingTests.cs
+- IDE/HexIDE/Forms/ViewModels/ArchiveDocumentViewModel.cs
+- IDE/HexIDE/Forms/ViewModels/LspDocumentSession.cs
+- IDE/HexIDE/IDE/RecentlyClosedDocuments.cs
+- IDE/HexIDE/Projects/ArchiveProjectService.cs
+- IDE/HexIDE/Projects/ContainerProject.cs
+- IDE/HexIDE/Projects/OfficeBrowserProject.cs
+- changelog.d/1122.md
+- docs/language-servers.md
+- docs/lsp-client.md
+- openspec/changes/archive/2026-11-23-label-twinbasic-archive-sources/proposal.md
+- openspec/changes/archive/2026-11-23-label-twinbasic-archive-sources/specs/archive-project-browsing/spec.md
+- openspec/changes/archive/2026-11-23-label-twinbasic-archive-sources/tasks.md
+- openspec/specs/archive-project-browsing/spec.md
+- scripts/probes/1122-validation.txt
