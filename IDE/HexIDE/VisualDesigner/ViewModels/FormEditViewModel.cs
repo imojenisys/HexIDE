@@ -718,7 +718,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         var menus = AllComponents.Where(IsMenu).ToList();
         var subItems = new HashSet<ComponentInstance>(ReferenceEqualityComparer.Instance);
         foreach (var menu in menus)
-            if (menu.Instance.GetPropertyOrDefault((PropertyClass<List<ComponentInstance>?>)menu.Instance.BaseClass.PropertiesByName[MenuPropertyNames.SubItems]) is { } children)
+            if (menu.Instance.GetPropertyOrDefault(MenuPropertyNames.SubItemsProperty) is { } children)
                 subItems.UnionWith(children);
         foreach (var menu in menus)
             if (!subItems.Contains(menu.Instance))
@@ -1778,7 +1778,7 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
         {
             if (menuViewModel.Menu != null)
             {
-                if (menuViewModel.Menu.TryGetProperty((PropertyClass<List<ComponentInstance>?>)menuViewModel.Menu.BaseClass.PropertiesByName[MenuPropertyNames.SubItems], out var subItems) &&
+                if (menuViewModel.Menu.TryGetProperty(MenuPropertyNames.SubItemsProperty, out var subItems) &&
                     subItems != null)
                     subItems.Clear();
             }
@@ -1800,9 +1800,9 @@ public partial class FormEditViewModel : BaseEditorWindowViewModel
                 topLevel.Add(AllComponents.First(c => c.Instance == menu));
             else
             {
-                var elements = parent.GetPropertyOrDefault((PropertyClass<List<ComponentInstance>?>)parent.BaseClass.PropertiesByName[MenuPropertyNames.SubItems]) ?? new();
+                var elements = parent.GetPropertyOrDefault(MenuPropertyNames.SubItemsProperty) ?? new();
                 elements.Add(menu);
-                parent.SetProperty((PropertyClass<List<ComponentInstance>?>)parent.BaseClass.PropertiesByName[MenuPropertyNames.SubItems], elements);
+                parent.SetProperty(MenuPropertyNames.SubItemsProperty, elements);
             }
 
             stack.Push((menuViewModel.Indent, menu));

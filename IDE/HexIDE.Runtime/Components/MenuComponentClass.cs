@@ -11,11 +11,6 @@ public class MenuComponentClass : ComponentBaseClass
     // a name VB6 gives no menu (#923 review).
     public MenuComponentClass() : base([CaptionProperty, EnabledProperty, CheckedProperty, WindowListProperty, HelpContextIDProperty, ShortcutProperty, NegotiatePositionProperty], null, hasBounds: false)
     {
-        // The menu tree is lookup metadata, not a property the form writer emits.
-        PropertiesByName = new Dictionary<string, PropertyClass>(PropertiesByName, StringComparer.OrdinalIgnoreCase)
-        {
-            [SubItemsProperty.Name] = SubItemsProperty
-        };
     }
 
     public static readonly PropertyClass<string> ShortcutProperty = new("Shortcut", "", PropertyCategory.Internal, "");

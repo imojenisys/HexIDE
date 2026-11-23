@@ -44,7 +44,7 @@ public abstract class ComponentBaseClass : IDesignerComponentClass
 
     public IReadOnlyList<PropertyClass> Properties { get; }
 
-    public IReadOnlyDictionary<string, PropertyClass> PropertiesByName { get; protected set; }
+    public IReadOnlyDictionary<string, PropertyClass> PropertiesByName { get; }
 
     public IReadOnlyList<EventClass> Events { get; }
 

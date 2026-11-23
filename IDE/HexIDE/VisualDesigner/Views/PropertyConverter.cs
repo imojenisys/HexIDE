@@ -15,7 +15,9 @@ public class PropertyConverter : IValueConverter
         {
             var property = parameter as PropertyClass;
             if (parameter is string name)
-                property = instance.Instance.BaseClass.PropertiesByName[name];
+                property = name == MenuPropertyNames.SubItems
+                    ? MenuPropertyNames.SubItemsProperty
+                    : instance.Instance.BaseClass.PropertiesByName[name];
             if (property is not null)
                 return instance.Instance.GetBoxedPropertyOrDefault(property);
         }

@@ -75,7 +75,7 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
             vm.Indent = level;
             FlatMenu.Add(vm);
             originalItems.Add((vm, level));
-            if (menu.GetPropertyOrDefault((PropertyClass<List<ComponentInstance>?>)menu.BaseClass.PropertiesByName[MenuPropertyNames.SubItems]) is { } subItems)
+            if (menu.GetPropertyOrDefault(MenuPropertyNames.SubItemsProperty) is { } subItems)
             {
                 foreach (var subItem in subItems)
                     AddRecur(subItem, level + 1);
@@ -225,9 +225,9 @@ public partial class MenuViewModel : ObservableObject
         Menu = menu;
         // Index is the preserved .frm line every control shares (#4284), not a menu property of its own.
         index = PropertyText.ArrayIndexOf(menu);
-        shortcut = menu.GetPropertyOrDefault((PropertyClass<string>)menu.BaseClass.PropertiesByName[MenuPropertyNames.Shortcut]) ?? "";
+        shortcut = menu.GetPropertyOrDefault(MenuPropertyNames.ShortcutProperty(menu.BaseClass)) ?? "";
         helpContextID = menu.GetPropertyOrDefault(VBProperties.HelpContextIDProperty);
-        negotiatePosition = menu.GetPropertyOrDefault((PropertyClass<int>)menu.BaseClass.PropertiesByName[MenuPropertyNames.NegotiatePosition]);
+        negotiatePosition = menu.GetPropertyOrDefault(MenuPropertyNames.NegotiatePositionProperty(menu.BaseClass));
         caption = menu.GetPropertyOrDefault(VBProperties.CaptionProperty) ?? "";
         name = menu.GetPropertyOrDefault(VBProperties.NameProperty) ?? "";
         isChecked = menu.GetPropertyOrDefault(VBProperties.CheckedProperty);
@@ -238,9 +238,9 @@ public partial class MenuViewModel : ObservableObject
 
     internal bool HasChanges => Menu is null
         || index != PropertyText.ArrayIndexOf(Menu)
-        || shortcut != Menu.GetPropertyOrDefault((PropertyClass<string>)Menu.BaseClass.PropertiesByName[MenuPropertyNames.Shortcut])
+        || shortcut != Menu.GetPropertyOrDefault(MenuPropertyNames.ShortcutProperty(Menu.BaseClass))
         || helpContextID != Menu.GetPropertyOrDefault(VBProperties.HelpContextIDProperty)
-        || negotiatePosition != Menu.GetPropertyOrDefault((PropertyClass<int>)Menu.BaseClass.PropertiesByName[MenuPropertyNames.NegotiatePosition])
+        || negotiatePosition != Menu.GetPropertyOrDefault(MenuPropertyNames.NegotiatePositionProperty(Menu.BaseClass))
         || caption != (Menu.GetPropertyOrDefault(VBProperties.CaptionProperty) ?? "")
         || name != (Menu.GetPropertyOrDefault(VBProperties.NameProperty) ?? "")
         || isEnable != Menu.GetPropertyOrDefault(VBProperties.EnabledProperty)
@@ -258,9 +258,9 @@ public partial class MenuViewModel : ObservableObject
 
         if (index != PropertyText.ArrayIndexOf(menu))
             menu.SetUntypedProperty(VBProperties.DesignIndexProperty, index?.ToString(CultureInfo.InvariantCulture) ?? "");
-        SetIfChanged((PropertyClass<string>)menu.BaseClass.PropertiesByName[MenuPropertyNames.Shortcut], shortcut);
+        SetIfChanged(MenuPropertyNames.ShortcutProperty(menu.BaseClass), shortcut);
         SetIfChanged(VBProperties.HelpContextIDProperty, helpContextID);
-        SetIfChanged((PropertyClass<int>)menu.BaseClass.PropertiesByName[MenuPropertyNames.NegotiatePosition], negotiatePosition);
+        SetIfChanged(MenuPropertyNames.NegotiatePositionProperty(menu.BaseClass), negotiatePosition);
         SetIfChanged(VBProperties.CaptionProperty, caption);
         SetIfChanged(VBProperties.NameProperty, name);
         SetIfChanged(VBProperties.EnabledProperty, isEnable);
