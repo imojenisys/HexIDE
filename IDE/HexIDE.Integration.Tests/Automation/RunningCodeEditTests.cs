@@ -173,6 +173,10 @@ public class RunningCodeEditTests : IAsyncDisposable
             setup.ProjectRunnerService.RunProject(project);
             await Task.Yield();
             setup.DebugController.State.Should().Be(DebugState.Paused);
+            await setup.LspClient.OpenDocumentAsync(new Uri(form.AbsolutePath).AbsoluteUri, form.Code,
+                TestContext.Current.CancellationToken);
+            LanguageServerLeakGuard.Launched.Values.Should().Contain(l => l.Test == TestContext.Current.Test!.TestDisplayName,
+                "the paused code window starts the bundled server in the temporary project directory");
             var code = form.Code;
             string? error;
             bool success;
@@ -204,6 +208,9 @@ public class RunningCodeEditTests : IAsyncDisposable
             setup.ProjectRunnerService.EndProject();
             await Task.Yield();
             setup.ProjectManager.UnloadAllProjects();
+            await DisposeAsync();
+            LanguageServerLeakGuard.StillRunning().Should().NotContain(l => l.Test == TestContext.Current.Test!.TestDisplayName,
+                "the language server must exit before deleting its working directory on Windows");
             Directory.Delete(directory, true);
         }
     }
@@ -213,7 +220,11 @@ public class RunningCodeEditTests : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (composition is not null) await composition.DisposeAsync();
+        if (composition is { } owned)
+        {
+            composition = null;
+            await owned.DisposeAsync();
+        }
         GC.SuppressFinalize(this);
     }
 
