@@ -9,12 +9,15 @@ using Avalonia.Threading;
 using HexIDE.Runtime.BuiltinTypes;
 using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Components;
+using HexIDE.Runtime.Dialogs;
 using HexIDE.Runtime.Interpreter;
 
 namespace HexIDE.Runtime;
 
 public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
 {
+
+    protected override bool IsEnabledCore => base.IsEnabledCore && !MessageBoxFormHold.IsHeld(this);
 
     private VBWindowContext windowContext;
 
@@ -182,6 +185,8 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
+        if (change.Property == MessageBoxFormHold.CountProperty)
+            UpdateIsEffectivelyEnabled();
         // Shown, Resize the first time since the form loaded (#994). Win32 doesn't report a client resize when minimizing,
         // where VB6 raises Resize with WindowState already 1, so the state is watched too.
         if (change.Property == IsVisibleProperty && IsVisible)
@@ -288,6 +293,7 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
         // Sub Main). Activated posts the events (#994), except Me.Show inside Load's measured exception (#2436).
         if ((windowContext.Loading || !wasShown) && IsEnabled && heldBy is null)
             windowContext.Program?.Activated(windowContext);
+        MessageBoxFormHold.RefreshNative(this);
     }
 
     private void ClearLeavingOwnership()
@@ -303,6 +309,7 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
     {
         ClearLeavingOwnership();
         Hide();
+        MessageBoxFormHold.RefreshNative(this);
     }
 
     public bool IsShown => IsVisible;

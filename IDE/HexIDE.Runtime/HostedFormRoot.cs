@@ -5,6 +5,7 @@ using Avalonia;
 using Avalonia.Controls;
 using HexIDE.IDE;
 using HexIDE.Runtime.Interpreter;
+using HexIDE.Runtime.Dialogs;
 
 namespace HexIDE.Runtime;
 
@@ -16,6 +17,15 @@ namespace HexIDE.Runtime;
 /// </summary>
 public sealed class HostedFormRoot : Decorator, IModuleExecutionRoot, IFormView
 {
+    protected override bool IsEnabledCore => base.IsEnabledCore && !MessageBoxFormHold.IsHeld(this);
+
+    protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
+    {
+        base.OnPropertyChanged(change);
+        if (change.Property == MessageBoxFormHold.CountProperty)
+            UpdateIsEffectivelyEnabled();
+    }
+
     private readonly IHostedForm hosted;
     public VBWindowContext Context { get; }
 
