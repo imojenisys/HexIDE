@@ -608,7 +608,7 @@ public class ServerApplyEditTests : IAsyncDisposable
             var definition = new RelatedDocumentDefinition(first.Owner, "Notes.md", path);
             first.Owner.AddRelatedDocument(definition);
             var a = new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(), localization,
-                Substitute.For<ISettingsService>()).Initialize(definition);
+                Substitute.For<ISettingsService>(), null).Initialize(definition);
             windows.Add(a);
             await a.FlushDocumentAsync();
             var before = a.Document.Text;
@@ -651,7 +651,7 @@ public class ServerApplyEditTests : IAsyncDisposable
             var definition = new RelatedDocumentDefinition(first.Owner, "Notes.md", path);
             first.Owner.AddRelatedDocument(definition);
             var related = new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(), localization,
-                Substitute.For<ISettingsService>()).Initialize(definition);
+                Substitute.For<ISettingsService>(), null).Initialize(definition);
             windows.Add(related);
             await related.FlushDocumentAsync();
             if (refusal == "stale") related.Document.Insert(0, "typed");

@@ -263,7 +263,7 @@ public class EditorRedockTests
                 var path = System.IO.Path.Combine(directory, name);
                 System.IO.File.WriteAllText(path, "Sub Greet()\r\nEnd Sub\r\n");
                 models.Add(new RelatedDocumentEditorViewModel(registry, Substitute.For<IWindowManager>(),
-                    Substitute.For<ILocalizationService>(), settings).Initialize(new RelatedDocumentDefinition(project, name, path)));
+                    Substitute.For<ILocalizationService>(), settings, null).Initialize(new RelatedDocumentDefinition(project, name, path)));
             }
             await Until(() => other.Count("textDocument/didOpen") == 1 && first.Count("textDocument/didOpen") == 3);
             var before = first.Count(method);

@@ -69,7 +69,7 @@ public class ServerApplyEditModifiedTests
             Substitute.For<HexIDE.Debugging.IBreakpointService>(), Substitute.For<HexIDE.Runtime.Debugging.IDebugController>(),
             Substitute.For<HexIDE.Debugging.IRunScope>(), localization);
         editors = new EditorService(dock, NewEditor,
-            () => new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(), localization, settings),
+            () => new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(), localization, settings, null),
             () => throw new InvalidOperationException(), () => throw new InvalidOperationException(), () => manager, localization);
         var path = Path.Combine(Path.GetTempPath(), $"hexide-4043-{Guid.NewGuid():N}.txt");
         try

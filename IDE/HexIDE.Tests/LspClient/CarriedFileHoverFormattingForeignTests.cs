@@ -41,7 +41,7 @@ public class CarriedFileHoverFormattingForeignTests
             var settings = Substitute.For<ISettingsService>();
             settings.TabWidth.Returns(2);
             using var model = new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(),
-                Substitute.For<ILocalizationService>(), settings).Initialize(new RelatedDocumentDefinition(
+                Substitute.For<ILocalizationService>(), settings, null).Initialize(new RelatedDocumentDefinition(
                     new ProjectDefinition(VBProjectType.EXE, "P"), "carried.cpp", path));
             await ForeignServerWait.ForDiagnostics(parsed.Task, capture, "cpp", TimeSpan.FromSeconds(30));
             var hover = await model.RequestHoverAsync(new Position(0, 5), token);

@@ -70,7 +70,7 @@ public sealed class DocumentTabsModifiedTests : IDisposable
         var path = Path.Combine(dir, "notes.txt");
         File.WriteAllText(path, content);
         return Made(new RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(),
-            Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>())
+            Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>(), null)
             .Initialize(new RelatedDocumentDefinition(project, "notes.txt", path)));
     }
 

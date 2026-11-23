@@ -78,7 +78,7 @@ public class ImplicitDocumentNamingTests
         var file = new RelatedDocumentDefinition(project, "snipmod", null);
         project.AddRelatedDocument(file);
         return new HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel(Substitute.For<ILspClient>(),
-            Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>()).Initialize(file);
+            Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>(), null).Initialize(file);
     }
 
     [AvaloniaFact]

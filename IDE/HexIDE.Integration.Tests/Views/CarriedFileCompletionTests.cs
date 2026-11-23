@@ -59,7 +59,7 @@ public class CarriedFileCompletionTests : IDisposable
         var path = Path.Combine(directory, "carried.cpp");
         File.WriteAllText(path, text);
         var model = new RelatedDocumentEditorViewModel(client, Substitute.For<IWindowManager>(),
-            Substitute.For<ILocalizationService>(), settings).Initialize(new RelatedDocumentDefinition(
+            Substitute.For<ILocalizationService>(), settings, null).Initialize(new RelatedDocumentDefinition(
                 new ProjectDefinition(VBProjectType.EXE, "P"), "carried.cpp", path));
         models.Add(model);
         var view = new RelatedDocumentEditorView { DataContext = model };

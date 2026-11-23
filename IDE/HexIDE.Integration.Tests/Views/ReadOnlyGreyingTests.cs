@@ -496,6 +496,7 @@ public class ReadOnlyGreyingTests : IDisposable
         var grey = ((ISolidColorBrush)view.FindResource("InactiveCodeTextBrush")!).Color;
         ColoursOn(editor, LineOf(editor, "Debug.Print 101")).Should().Contain(c => c != grey);
         await WaitForConditionalEvaluation(view);
+        await view.PendingDocumentLinks;
         lsp.ClearReceivedCalls();
         selector.SelectedIndex = target;
         await WaitForConditionalEvaluation(view);
@@ -1083,7 +1084,7 @@ public class ReadOnlyGreyingTests : IDisposable
         System.IO.File.WriteAllText(path, "# Notes\none\ntwo\nthree\n");
         try
         {
-            using var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>())
+            using var vm = new RelatedDocumentEditorViewModel(lsp, Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(), Substitute.For<HexIDE.IDE.ISettingsService>(), null)
                 .Initialize(new RelatedDocumentDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "notes.md", path));
             var view = new RelatedDocumentEditorView { DataContext = vm };
             var window = new Window { Content = view, Width = 900, Height = 700 };

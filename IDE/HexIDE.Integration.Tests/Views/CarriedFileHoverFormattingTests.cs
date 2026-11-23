@@ -55,7 +55,7 @@ public sealed class CarriedFileHoverFormattingTests : IDisposable
         File.WriteAllText(path, "a\nb");
         var settings = Substitute.For<ISettingsService>();
         settings.TabWidth.Returns(7);
-        model = new RelatedDocumentEditorViewModel(actualClient ?? client, dialogs, localization, settings)
+        model = new RelatedDocumentEditorViewModel(actualClient ?? client, dialogs, localization, settings, null)
             .Initialize(new RelatedDocumentDefinition(new ProjectDefinition(VBProjectType.EXE, "P"), "carried.cpp", path));
         window = new Window { Content = new RelatedDocumentEditorView { DataContext = model }, Width = 900, Height = 600 };
         window.Show();

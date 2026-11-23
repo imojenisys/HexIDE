@@ -321,10 +321,10 @@ public class DockFactoryTests
             Substitute.For<IEventBus>());
         using var first = new HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel(
             Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(),
-            Substitute.For<ISettingsService>());
+            Substitute.For<ISettingsService>(), null);
         using var second = new HexIDE.Forms.ViewModels.RelatedDocumentEditorViewModel(
             Substitute.For<ILspClient>(), Substitute.For<IWindowManager>(), Substitute.For<ILocalizationService>(),
-            Substitute.For<ISettingsService>());
+            Substitute.For<ISettingsService>(), null);
         service.OpenDocument(first);
         var focused = factory.DocumentDock!.FocusedDockable;
 
