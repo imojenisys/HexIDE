@@ -6,6 +6,7 @@ using HexIDE.IDE;
 using HexIDE.Localization;
 using HexIDE.Runtime.Components;
 using HexIDE.Runtime.ProjectElements;
+using HexIDE.Runtime.Serialization;
 using HexIDE.VisualDesigner;
 
 namespace HexIDE.Integration.Tests.Views;
@@ -41,6 +42,20 @@ public class FormBorderStyleTests
         form.GetPropertyOrDefault(VBProperties.ShowInTaskbarProperty).Should().Be(taskbar);
     }
 
+    private static void Saved(FormEditViewModel designer, int style, bool min, bool max, bool taskbar)
+    {
+        var saved = new FormSerializer().Serialize(designer.FormDefinition!, "Form1.frm").frmText;
+        var lines = saved.ReplaceLineEndings("\n").Split('\n');
+        foreach (var (name, value) in new[] { ("MinButton", min), ("MaxButton", max), ("ShowInTaskbar", taskbar) })
+        {
+            var line = lines.Where(l => l.TrimStart().StartsWith(name + " ")).ToArray();
+            if (value) line.Should().BeEmpty(name + " is omitted when True");
+            else line.Should().Equal("   " + name.PadRight(16) + "=   0   'False");
+        }
+        if (style == 2) saved.Should().NotContain("BorderStyle");
+        else lines.Should().Contain(l => l.StartsWith("   BorderStyle     =   " + style + "  '"));
+    }
+
     [AvaloniaTheory]
     [InlineData(0, true, true, false)]
     [InlineData(1, false, false, true)]
@@ -54,18 +69,23 @@ public class FormBorderStyleTests
         form.UnknownRawProperties.Add(new("ControlBox", ["   ControlBox      =   0   'False"]));
         Set(designer, style);
         Values(form, min, max, taskbar);
+        Saved(designer, style, min, max, taskbar);
         form.UnknownRawPropertyLines.Should().Contain("   ControlBox      =   0   'False");
         designer.UndoStack.Undo();
         Convert.ToInt32(form.GetBoxedPropertyOrDefault(Border(form))).Should().Be(2);
         Values(form, true, true, true);
+        Saved(designer, 2, true, true, true);
         designer.CanUndo.Should().BeFalse();
         designer.UndoStack.Redo();
         Values(form, min, max, taskbar);
+        Saved(designer, style, min, max, taskbar);
         Set(designer, 2);
         Values(form, true, true, true);
+        Saved(designer, 2, true, true, true);
         designer.UndoStack.Undo();
         Convert.ToInt32(form.GetBoxedPropertyOrDefault(Border(form))).Should().Be(style);
         Values(form, min, max, taskbar);
+        Saved(designer, style, min, max, taskbar);
     }
 
     [AvaloniaFact]
@@ -78,13 +98,17 @@ public class FormBorderStyleTests
         form.UnknownRawProperties.Add(new("ControlBox", ["   ControlBox      =   0   'False"]));
         Set(designer, 1);
         Values(form, false, false, true);
+        Saved(designer, 1, false, false, true);
         Set(designer, 2);
         Values(form, true, true, true);
+        Saved(designer, 2, true, true, true);
         form.UnknownRawPropertyLines.Should().Contain("   ControlBox      =   0   'False");
         Set(designer, 3);
         form.SetProperty(VBProperties.MaxButtonProperty, true);
+        Saved(designer, 3, false, true, false);
         Set(designer, 1);
         Values(form, false, false, true);
+        Saved(designer, 1, false, false, true);
     }
 
     [AvaloniaTheory]
@@ -98,6 +122,7 @@ public class FormBorderStyleTests
         form.SetProperty(VBProperties.MinButtonProperty, false);
         Set(designer, 0);
         Values(form, false, max, false);
+        Saved(designer, 0, false, max, false);
     }
 
     [AvaloniaTheory]
@@ -112,6 +137,7 @@ public class FormBorderStyleTests
         form.SetProperty(VBProperties.ShowInTaskbarProperty, false);
         Set(designer, style);
         Values(form, false, style == 2, false);
+        Saved(designer, style, false, style == 2, false);
         if (style == 2) designer.CanUndo.Should().BeFalse();
         else
         {
