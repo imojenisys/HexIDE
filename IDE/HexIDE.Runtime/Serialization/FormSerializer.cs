@@ -359,6 +359,11 @@ public class FormSerializer
                 && instance.GetPropertyOrDefault(VBProperties.ComboStyleProperty) == VBComboStyle.DropdownCombo)
                 continue;
 
+            // The form's default style is omitted even when explicitly set (#1596).
+            if (prop == VBProperties.FormBorderStyleProperty
+                && instance.GetPropertyOrDefault(VBProperties.FormBorderStyleProperty) == VBFormBorderStyle.Sizable)
+                continue;
+
             // VB6's designer never writes a Dropdown List's Text, and its run time ignores one (measured, #926).
             if (prop == VBProperties.TextProperty && instance.BaseClass is ComboBoxComponentClass
                 && ComboBoxComponentClass.IsDropdownList(instance))
