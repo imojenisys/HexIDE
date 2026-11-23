@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.LogicalTree;
 using Avalonia.Platform;
 using Avalonia.Threading;
 using HexIDE.Runtime.Interpreter;
@@ -12,7 +15,7 @@ namespace HexIDE.Runtime.Dialogs;
 // Separate from Form.Enabled: answering a box must not overwrite the program's own setting (#834).
 internal sealed class MessageBoxFormHold : IDisposable
 {
-    internal static readonly AttachedProperty<int> CountProperty =
+    private static readonly AttachedProperty<int> CountProperty =
         AvaloniaProperty.RegisterAttached<Control, Control, int>("MessageBoxHoldCount");
     private static readonly AttachedProperty<State?> StateProperty =
         AvaloniaProperty.RegisterAttached<Control, Control, State?>("MessageBoxHoldState");
@@ -49,6 +52,20 @@ internal sealed class MessageBoxFormHold : IDisposable
     }
 
     internal static bool IsHeld(Control root) => root.GetValue(CountProperty) > 0;
+
+    // VB mouse bridges observe handled events too; they must respect the hold on their form root.
+    internal static bool IsInputHeld(Control control) =>
+        control.FindLogicalAncestorOfType<IFormView>() is Control root && IsHeld(root);
+
+    // Hold input at the root without disabling its controls, which would grey them (#834 review).
+    internal static void HoldInput(Control root)
+    {
+        foreach (var input in new RoutedEvent[] { InputElement.PointerPressedEvent, InputElement.PointerReleasedEvent,
+                     InputElement.PointerMovedEvent, InputElement.PointerWheelChangedEvent, InputElement.KeyDownEvent,
+                     InputElement.KeyUpEvent, InputElement.TextInputEvent })
+            root.AddHandler(input, new EventHandler<RoutedEventArgs>((_, e) => e.Handled |= IsHeld(root)),
+                RoutingStrategies.Tunnel, handledEventsToo: true);
+    }
 
     // The host chooses the owner before disabling native windows can change which window is active.
     internal static void EnterNative()

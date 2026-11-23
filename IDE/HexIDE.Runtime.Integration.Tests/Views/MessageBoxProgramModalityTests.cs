@@ -1,18 +1,21 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Input.Raw;
 using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HexIDE.IDE;
 using HexIDE.Runtime.BuiltinTypes;
+using HexIDE.Runtime.BuiltinControls;
 using HexIDE.Runtime.Interpreter;
 using HexIDE.Runtime.ProjectElements;
 using HexIDE.Runtime.Serialization;
@@ -40,7 +43,7 @@ public class MessageBoxProgramModalityTests
         internal VBFormRuntime Other => (VBFormRuntime)Owner.Context.Program!.LoadedForms[1].FormWindow!;
         internal readonly Task Running;
 
-        internal Run()
+        internal Run(string controls = "", string code = "")
         {
             var project = new ProjectDefinition(VBProjectType.EXE, "P");
             foreach (var name in new[] { "Form1", "Form2" })
@@ -51,6 +54,7 @@ public class MessageBoxProgramModalityTests
                        Caption = "{{name}}"
                        ClientWidth = 4500
                        ClientHeight = 3000
+                    {{controls}}
                     End
                     Attribute VB_Name = "{{name}}"
                     Private Sub Form_MouseDown(Button As Integer, Shift As Integer, X As Single, Y As Single)
@@ -59,6 +63,7 @@ public class MessageBoxProgramModalityTests
                     Private Sub Form_Click()
                         Debug.Print "{{name}} click"
                     End Sub
+                    {{code}}
                     Public Sub HideSelf()
                         Me.Visible = False
                     End Sub
@@ -155,9 +160,9 @@ public class MessageBoxProgramModalityTests
         finally { if (context is not null) System.Threading.ExecutionContext.Restore(context); }
     }
 
-    private static void Click(VBFormRuntime window)
+    private static void Click(VBFormRuntime window, int x = 80)
     {
-        var point = new Point(80, 70);
+        var point = new Point(x, 70);
         window.MouseMove(point);
         window.MouseDown(point, MouseButton.Left);
         window.MouseUp(point, MouseButton.Left);
@@ -189,18 +194,15 @@ public class MessageBoxProgramModalityTests
         Click(run.Other);
         Click(run.Owner);
         run.Printed.Should().BeEmpty();
-        // The pump already holds handlers behind the box on main. Effective enablement and the log after answering
-        // distinguish discarded input from events queued to run when the waiting statement returns.
-        var otherEnabled = run.Other.IsEffectivelyEnabled;
-        var ownerEnabled = run.Owner.IsEffectivelyEnabled;
+        // The pump already holds handlers behind the box on main. Check after answering too, so input queued
+        // behind the statement cannot masquerade as discarded input.
         run.Answer(run.Boxes.Count - 1);
         await waiting;
         run.Printed.Should().BeEmpty("clicks made while the box waited must not run later either");
-        otherEnabled.Should().BeFalse();
-        ownerEnabled.Should().BeFalse();
 
-        Click(run.Owner);
-        Click(run.Other);
+        // A different point makes this a single click, independent of the headless double-click interval.
+        Click(run.Owner, 110);
+        Click(run.Other, 110);
         run.Printed.Should().Equal("Form1 down", "Form1 click", "Form2 down", "Form2 click");
         run.Errors.Should().BeEmpty();
     }
@@ -216,12 +218,13 @@ public class MessageBoxProgramModalityTests
         await run.Code($"Form2.Enabled = {before}");
         var waiting = run.OpenBox();
         await run.Code($"Form2.Enabled = {after}");
-        run.Other.IsEffectivelyEnabled.Should().BeFalse("program code cannot release the box's hold");
+        Click(run.Other);
+        run.Printed.Should().BeEmpty();
         run.Answer(0);
         await waiting;
         run.Other.IsEnabled.Should().Be(after);
-        run.Other.IsEffectivelyEnabled.Should().Be(after);
-        Click(run.Other);
+        run.Printed.Should().BeEmpty("an Enabled assignment cannot release the box's input hold");
+        Click(run.Other, 110);
         run.Printed.Should().Equal(after ? ["Form2 down", "Form2 click"] : []);
         run.Errors.Should().BeEmpty();
     }
@@ -257,7 +260,7 @@ public class MessageBoxProgramModalityTests
     [AvaloniaTheory]
     [InlineData(0)]
     [InlineData(1)]
-    public async Task Forms_stay_disabled_until_the_last_box_is_answered(int first)
+    public async Task Forms_refuse_input_until_the_last_box_is_answered(int first)
     {
         using var run = new Run();
         var native = run.RecordNativeEnablement();
@@ -266,19 +269,20 @@ public class MessageBoxProgramModalityTests
         var two = builtins.EvaluateBuiltInFunction("MsgBox", [new Vb6Value("two")]);
         Pump();
         run.Answer(first);
-        run.Other.IsEffectivelyEnabled.Should().BeFalse();
-        run.Owner.IsEffectivelyEnabled.Should().BeFalse();
+        Click(run.Other);
+        Click(run.Owner);
+        run.Printed.Should().BeEmpty();
         native.Should().ContainKeys(run.Owner, run.Other);
         native[run.Owner].Last().Enabled.Should().BeFalse();
         native[run.Other].Last().Enabled.Should().BeFalse();
         run.Answer(1 - first);
         await Task.WhenAll(one, two);
-        run.Owner.IsEffectivelyEnabled.Should().BeTrue();
-        run.Other.IsEffectivelyEnabled.Should().BeTrue();
+        run.Printed.Should().BeEmpty("input held by either box must not run after the last answer");
         native[run.Owner].Last().Should().Be((true, 0), "restoration follows Avalonia's owned-dialog cleanup");
         native[run.Other].Last().Enabled.Should().BeTrue();
-        Click(run.Owner);
-        Click(run.Other);
+        // A different point makes this a single click, independent of the headless double-click interval.
+        Click(run.Owner, 110);
+        Click(run.Other, 110);
         run.Printed.Should().Equal("Form1 down", "Form1 click", "Form2 down", "Form2 click");
         run.Errors.Should().BeEmpty();
     }
@@ -325,6 +329,194 @@ public class MessageBoxProgramModalityTests
         run.Errors.Should().BeEmpty();
     }
 
+    // #834's review asks for unchanged drawing (reasoned from native top-level disablement, not a new oracle row).
+    // TestApp renders with Skia and UseHeadlessDrawing = false, as ClassicRenderTests does.
+    [AvaloniaTheory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    public async Task A_held_forms_controls_keep_their_enabled_look(double scaling)
+    {
+        using var run = new Run("""
+            Begin VB.CommandButton Command1
+               Caption = "Press me"
+               Left = 300
+               Top = 300
+               Width = 1500
+               Height = 450
+            End
+            Begin VB.TextBox Text1
+               Text = "Still enabled"
+               Left = 300
+               Top = 1050
+               Width = 2250
+               Height = 450
+            End
+            """);
+        run.Other.SetRenderScaling(scaling);
+        Pump();
+        var button = run.Other.GetVisualDescendants().OfType<VBCommandButton>().Single();
+        var text = run.Other.GetVisualDescendants().OfType<VBTextBox>().Single();
+        button.IsEffectivelyEnabled.Should().BeTrue();
+        text.IsEffectivelyEnabled.Should().BeTrue();
+        using var before = run.Other.CaptureRenderedFrame() ?? throw new InvalidOperationException("no frame");
+        var waiting = run.OpenBox();
+        waiting.IsCompleted.Should().BeFalse();
+        using var during = run.Other.CaptureRenderedFrame() ?? throw new InvalidOperationException("no frame");
+        // Check pixels before enablement, so the baseline demonstrates the visible regression too.
+        during.PixelSize.Should().Be(before.PixelSize);
+        Pixels(during).Should().Equal(Pixels(before), "holding input must leave the form's appearance alone");
+        button.IsEffectivelyEnabled.Should().BeTrue();
+        text.IsEffectivelyEnabled.Should().BeTrue();
+        run.Answer(0);
+        await waiting;
+        run.Errors.Should().BeEmpty();
+    }
+
+    private static byte[] Pixels(Avalonia.Media.Imaging.Bitmap bitmap)
+    {
+        var pixels = new byte[bitmap.PixelSize.Width * bitmap.PixelSize.Height * 4];
+        var pin = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+        try { bitmap.CopyPixels(new PixelRect(bitmap.PixelSize), pin.AddrOfPinnedObject(), pixels.Length, bitmap.PixelSize.Width * 4); }
+        finally { pin.Free(); }
+        return pixels;
+    }
+
+    // The managed route also covers hosted roots, which have no native window to disable (#834 review).
+    [AvaloniaTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Held_roots_block_all_seven_input_routes_without_disabling_controls(bool hosted)
+    {
+        using var run = new Run();
+        Window window = run.Other;
+        Control root = window;
+        if (hosted)
+        {
+            window = new Window { Width = 300, Height = 200 };
+            var host = Substitute.For<IHostedForm>();
+            host.Window.Returns(window);
+            host.When(h => h.SetContent(Arg.Any<object>())).Do(call => window.Content = call.Arg<object>());
+            root = new HostedFormRoot(host, new StandaloneStandardLib(window, "P"));
+        }
+        var target = new Border { Background = Brushes.White, Focusable = true };
+        if (root is HostedFormRoot hostedRoot)
+            hostedRoot.SetContent(target);
+        else
+            window.Content = target;
+        var events = new List<string>();
+        foreach (var input in new RoutedEvent[] { InputElement.PointerPressedEvent, InputElement.PointerReleasedEvent,
+                     InputElement.PointerMovedEvent, InputElement.PointerWheelChangedEvent, InputElement.KeyDownEvent,
+                     InputElement.KeyUpEvent, InputElement.TextInputEvent })
+            target.AddHandler(input, new EventHandler<RoutedEventArgs>((_, e) => events.Add(e.RoutedEvent!.Name)));
+        var form = new VbObject(run.Owner.Context.FormInstance!.ClassDef, new()) { FormWindow = window };
+        void Input()
+        {
+            window.MouseMove(new Point(40, 40));
+            window.MouseMove(new Point(50, 50));
+            window.MouseDown(new Point(50, 50), MouseButton.Left);
+            window.MouseUp(new Point(50, 50), MouseButton.Left);
+            window.MouseWheel(new Point(50, 50), new Vector(0, 1));
+            window.KeyPress(Key.X, RawInputModifiers.None, PhysicalKey.X, null);
+            window.KeyTextInput("x");
+            window.KeyRelease(Key.X, RawInputModifiers.None, PhysicalKey.X, null);
+            Pump();
+        }
+        try
+        {
+            window.Show();
+            Pump();
+            target.Focus().Should().BeTrue();
+            Input();
+            events.Distinct().Should().BeEquivalentTo("PointerPressed", "PointerReleased", "PointerMoved",
+                "PointerWheelChanged", "KeyDown", "KeyUp", "TextInput");
+            events.Clear();
+            using (new Dialogs.MessageBoxFormHold([form]))
+            {
+                Input();
+                events.Should().BeEmpty();
+                target.IsEffectivelyEnabled.Should().BeTrue();
+            }
+            Input();
+            events.Distinct().Should().BeEquivalentTo("PointerPressed", "PointerReleased", "PointerMoved",
+                "PointerWheelChanged", "KeyDown", "KeyUp", "TextInput");
+        }
+        finally { if (hosted) window.Close(); }
+    }
+
+    [AvaloniaFact]
+    public async Task Held_controls_discard_mouse_events_and_text_edits()
+    {
+        using var run = new Run("""
+            Begin VB.CommandButton Command1
+               Caption = "Press me"
+               Left = 300
+               Top = 300
+               Width = 1500
+               Height = 450
+            End
+            Begin VB.TextBox Text1
+               Text = "unchanged"
+               Left = 300
+               Top = 1050
+               Width = 2250
+               Height = 450
+            End
+            Begin VB.ListBox List1
+               Left = 2700
+               Top = 300
+               Width = 1500
+               Height = 2100
+            End
+            """, """
+            Private Sub Command1_Click()
+                Debug.Print "button click"
+            End Sub
+            Private Sub Command1_MouseDown(Button As Integer, Shift As Integer, X As Single, Y As Single)
+                Debug.Print "button down"
+            End Sub
+            Private Sub Command1_MouseUp(Button As Integer, Shift As Integer, X As Single, Y As Single)
+                Debug.Print "button up"
+            End Sub
+            Private Sub Command1_MouseMove(Button As Integer, Shift As Integer, X As Single, Y As Single)
+                Debug.Print "button move"
+            End Sub
+            Private Sub Text1_MouseDown(Button As Integer, Shift As Integer, X As Single, Y As Single)
+                Debug.Print "text down"
+            End Sub
+            Private Sub List1_Click()
+                Debug.Print "list click"
+            End Sub
+            """);
+        var button = run.Other.GetVisualDescendants().OfType<VBCommandButton>().Single();
+        var text = run.Other.GetVisualDescendants().OfType<VBTextBox>().Single();
+        var list = run.Other.GetVisualDescendants().OfType<VBListBox>().Single();
+        await run.Code("Form2.List1.AddItem \"first\"");
+        await run.Code("Form2.List1.AddItem \"second\"");
+        text.Focus().Should().BeTrue();
+        var waiting = run.OpenBox();
+        foreach (var control in new Control[] { button, text, list })
+        {
+            var point = control.TranslatePoint(new Point(10, 10), run.Other)!.Value;
+            run.Other.MouseMove(point);
+            run.Other.MouseDown(point, MouseButton.Left);
+            run.Other.MouseUp(point, MouseButton.Left);
+        }
+        run.Other.KeyTextInput("x");
+        Pump();
+        text.Text.Should().Be("unchanged");
+        list.SelectedIndex.Should().Be(-1);
+        run.Answer(0);
+        await waiting;
+        run.Printed.Should().BeEmpty("handled-event mouse bridges must discard held input too");
+        var click = button.TranslatePoint(new Point(10, 10), run.Other)!.Value;
+        run.Other.MouseMove(click);
+        run.Other.MouseDown(click, MouseButton.Left);
+        run.Other.MouseUp(click, MouseButton.Left);
+        Pump();
+        run.Printed.Should().Contain("button down", "button click", "button up");
+        run.Errors.Should().BeEmpty();
+    }
+
     [AvaloniaFact]
     public void A_hosted_forms_root_also_holds_input_without_changing_its_Enabled_setting()
     {
@@ -348,13 +540,11 @@ public class MessageBoxProgramModalityTests
                 window.MouseDown(new Point(50, 50), MouseButton.Left);
                 window.MouseUp(new Point(50, 50), MouseButton.Left);
                 presses.Should().Be(0);
-                root.IsEffectivelyEnabled.Should().BeFalse();
                 root.IsEnabled.Should().BeTrue("the hold leaves the program's setting alone");
             }
             window.MouseDown(new Point(80, 70), MouseButton.Left);
             window.MouseUp(new Point(80, 70), MouseButton.Left);
             presses.Should().Be(1);
-            root.IsEffectivelyEnabled.Should().BeTrue();
         }
         finally { window.Close(); }
     }

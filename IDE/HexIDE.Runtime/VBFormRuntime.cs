@@ -17,8 +17,6 @@ namespace HexIDE.Runtime;
 public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
 {
 
-    protected override bool IsEnabledCore => base.IsEnabledCore && !MessageBoxFormHold.IsHeld(this);
-
     private VBWindowContext windowContext;
 
     public VBWindowContext Context => windowContext;
@@ -72,6 +70,7 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
     
     public VBFormRuntime()
     {
+        MessageBoxFormHold.HoldInput(this);
         AddHandler(GotFocusEvent, (_, e) =>
         {
             if (e is FocusChangedEventArgs moved && FindControl(this, moved.NewFocusedElement as ILogical) is { } control)
@@ -185,8 +184,6 @@ public class VBFormRuntime : Window, IModuleExecutionRoot, IFormView
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
     {
         base.OnPropertyChanged(change);
-        if (change.Property == MessageBoxFormHold.CountProperty)
-            UpdateIsEffectivelyEnabled();
         // Shown, Resize the first time since the form loaded (#994). Win32 doesn't report a client resize when minimizing,
         // where VB6 raises Resize with WindowState already 1, so the state is watched too.
         if (change.Property == IsVisibleProperty && IsVisible)
