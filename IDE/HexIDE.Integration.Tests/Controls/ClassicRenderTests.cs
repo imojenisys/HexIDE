@@ -199,7 +199,8 @@ public class ClassicRenderTests
     {
         foreach (var height in new[] { 19, 21, 24, 25 })
         {
-            var box = new VBTextBox { Text = "hello", Width = 120, Height = height };
+            // Keep the line small enough to fit on Windows too; the next test covers taller fonts being clipped.
+            var box = new VBTextBox { Text = "hello", FontSize = 11, Width = 120, Height = height };
             var window = BuildHost(box);
             try
             {
