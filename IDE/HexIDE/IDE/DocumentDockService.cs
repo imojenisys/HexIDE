@@ -31,12 +31,13 @@ public sealed class DocumentDockService : IDocumentDockService, IDisposable
         foreach (var area in f.DocumentAreas.ToArray())
         {
             var tabs = area.VisibleDockables?.ToArray() ?? [];
+            var activeDesigner = area.ActiveDockable is HexIDE.VisualDesigner.FormEditViewModel;
             for (var i = 0; i < tabs.Length; i++)
                 if (tabs[i] is HexIDE.VisualDesigner.FormEditViewModel designer)
                     suspendedDesigners.Add((designer, area, i, tabs[(i + 1)..]));
             foreach (var entry in suspendedDesigners.Where(e => ReferenceEquals(e.Area, area)))
                 area.VisibleDockables!.Remove(entry.Tab);
-            if (area.ActiveDockable is HexIDE.VisualDesigner.FormEditViewModel)
+            if (activeDesigner)
                 area.ActiveDockable = area.VisibleDockables?.LastOrDefault();
         }
         UpdateActiveDocument();

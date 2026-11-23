@@ -1,8 +1,14 @@
 using HexIDE.Runtime.Serialization;
 using System.Text;
+using System.Windows.Input;
 using System.Text.Json;
+using Avalonia.Labs.Input;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Headless;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
 using System.Reflection;
 using HexIDE.Automation;
 using AvaloniaEdit;
@@ -21,6 +27,134 @@ namespace HexIDE.Integration.Tests.Automation;
 
 public class RunningCodeEditTests : IAsyncDisposable
 {
+    [AvaloniaTheory]
+    [InlineData("immediate", false, false)]
+    [InlineData("locals", false, false)]
+    [InlineData("watch", false, false)]
+    [InlineData("project", false, false)]
+    [InlineData("browser", false, false)]
+    [InlineData("palette", false, false)]
+    [InlineData("stack", false, false)]
+    [InlineData("immediate", true, false)]
+    [InlineData("locals", true, false)]
+    [InlineData("watch", true, false)]
+    [InlineData("project", true, false)]
+    [InlineData("browser", true, false)]
+    [InlineData("palette", true, false)]
+    [InlineData("stack", true, false)]
+    [InlineData("project", false, true)]
+    [InlineData("project", true, true)]
+    [InlineData("project-document", true, false)]
+    public async Task Paused_run_keeps_other_View_commands_routed_from_keyboard_focus(string destination, bool codeOpen, bool focusProject)
+    {
+        var setup = Composition;
+        var root = setup.Root;
+        var window = ToolbarAutomationNameTests.ShowMainView();
+        var view = (MainView)window.Content!;
+        view.DataTemplates.Add(new ViewLocator());
+        view.DataContext = root;
+        var previousMain = Static.MainView;
+        Static.MainView = view;
+        var project = new ProjectDefinition(VBProjectType.EXE, "P");
+        var form = new FormDefinition(project, FormComponentClass.Instance, "Form1");
+        project.AddForm(form);
+        // A statement stop already reveals and focuses code; an idle Break exposes the lost designer focus.
+        if (destination == "stack") form.UpdateCode(form.Code + "\r\nPrivate Sub Form_Load()\r\nDebug.Print 0\r\nEnd Sub\r\n");
+        setup.ProjectManager.AddProject(project);
+        var command = destination switch
+        {
+            "immediate" or "project-document" => ApplicationCommands.OpenImmediateCommand,
+            "locals" => ApplicationCommands.OpenLocalsCommand,
+            "watch" => ApplicationCommands.OpenWatchesCommand,
+            "project" => ApplicationCommands.OpenProjectExplorerCommand,
+            "browser" => ApplicationCommands.OpenObjectBrowserCommand,
+            "palette" => ApplicationCommands.OpenColorPaletteCommand,
+            _ => ApplicationCommands.OpenCallStackCommand,
+        };
+        var designerCommands = new[] { ApplicationCommands.ViewObjectCommand, ApplicationCommands.OpenPropertiesCommand,
+            ApplicationCommands.OpenFormLayoutCommand, ApplicationCommands.OpenToolBoxCommand };
+        try
+        {
+            await SettleFocus();
+            foreach (var tab in setup.DocumentDockService.AllTabs.ToArray())
+                setup.DocumentDockService.TryCloseAny(t => ReferenceEquals(t, tab));
+            root.SetToolWindowVisible("Immediate", false).Error.Should().BeNull();
+            if (destination == "project-document") setup.EditorService.EditProject(project);
+            else if (codeOpen) setup.EditorService.EditCode(form);
+            setup.EditorService.EditForm(form);
+            await SettleFocus();
+            var designer = view.GetVisualDescendants().OfType<HexIDE.VisualDesigner.FormEditView>()
+                .Single(v => v.IsEffectivelyVisible);
+            var source = designer.FindControl<Control>("FormContainer")!;
+            source.Focus().Should().BeTrue();
+            if (focusProject)
+            {
+                root.OpenProjectExplorerTool();
+                await SettleFocus();
+                source = (Control)window.FocusManager!.GetFocusedElement()!;
+            }
+            foreach (var designCommand in designerCommands)
+                designCommand.CanExecute(null, source).Should().BeTrue();
+            command.CanExecute(null, source).Should().BeTrue();
+
+            setup.ProjectRunnerService.RunProject(project, stepInto: destination == "stack");
+            await SettleFocus();
+            if (destination != "stack")
+            {
+                setup.ProjectRunnerService.BreakCurrentProject();
+                await SettleFocus();
+            }
+            setup.DebugController.State.Should().Be(DebugState.Paused);
+            var focused = window.FocusManager!.GetFocusedElement() as Control;
+            TestContext.Current.TestOutputHelper!.WriteLine($"Window focus: {focused}; command target: {CommandManager.FocusedElement}");
+            ((ICommand)command).CanExecute(null).Should().BeTrue(destination);
+            focused.Should().NotBeNull();
+            command.CanExecute(null, focused!).Should().BeTrue(destination);
+            if (focusProject) focused.Should().BeSameAs(source);
+            else if (destination == "project-document")
+                focused!.GetVisualAncestors().Prepend(focused).Should().Contain(v => v is HexIDE.Forms.Views.ProjectDocumentView);
+            else if (codeOpen || destination == "stack")
+                focused!.GetVisualAncestors().Should().Contain(v => v is HexIDE.Forms.Views.CodeEditorView);
+            else focused.Should().BeSameAs(view);
+            foreach (var designCommand in designerCommands)
+                designCommand.CanExecute(null, focused!).Should().BeFalse();
+            if (command.Gestures.FirstOrDefault() is { } gesture)
+            {
+                var modifiers = Enum.Parse<RawInputModifiers>(gesture.KeyModifiers.ToString());
+                var key = Enum.Parse<PhysicalKey>(gesture.Key.ToString());
+                window.KeyPressQwerty(key, modifiers);
+                window.KeyReleaseQwerty(key, modifiers);
+                await SettleFocus();
+                if (destination == "browser")
+                    setup.DocumentDockService.ActiveTab.Should().BeOfType<HexIDE.Tools.ObjectBrowser.ObjectBrowserToolViewModel>();
+                else
+                {
+                    var tool = destination switch
+                    {
+                        "project" => "ProjectGroup",
+                        "stack" => "CallStack",
+                        _ => "Immediate",
+                    };
+                    root.GetToolWindows().Single(t => t.Name == tool).Visible.Should().BeTrue();
+                }
+            }
+        }
+        finally
+        {
+            setup.ProjectRunnerService.EndProject();
+            await SettleFocus();
+            setup.ProjectManager.UnloadAllProjects();
+            window.Close();
+            Static.MainView = previousMain;
+        }
+    }
+
+    private static async Task SettleFocus()
+    {
+        for (var i = 0; i < 3; i++)
+            await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+    }
+
     // VB6 SP6 measurements: docs/vb6-fidelity-oracle/the-vb6-ides-own-windows-designer-tab-dialog-keys-and-run-mode.md (#870).
     [AvaloniaTheory]
     [InlineData(true, true)]

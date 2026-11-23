@@ -80,7 +80,7 @@
 | Item | Shortcut | Status | Notes |
 |---|---|---|---|
 | Code | F7 | Done | Opens code editor for active form/module and focuses its text area (#3393) |
-| Object | Shift+F7 | Done | Opens form designer for active form. Disabled throughout an in-box run; designer tabs return at End with their undo history, selection, area and order (#870). External debug sessions keep their existing behaviour |
+| Object | Shift+F7 | Done | Opens form designer for active form. Disabled throughout an in-box run; designer tabs return at End with their undo history, selection, area and order (#870). Other View commands and their keys retain their normal availability when suspension removes the focused designer (headless checked; supervisor live check pending). External debug sessions keep their existing behaviour |
 | Definition | — | Done | LSP go-to-definition |
 | Last Position | — | Stub | Always disabled |
 | Recent edit locations | — | Done | View → Recent Edits: module, line and preview; session-only, newest 50; coalesces within 10 lines; locations follow text edits (#1999) |

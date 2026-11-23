@@ -320,6 +320,7 @@ public partial class MainViewViewModel : ObservableObject
     private readonly AddinToolWindowService _addinToolWindowService;
 
     internal event Action? PauseFocusRequested;
+    internal event Action? DesignersSuspending;
     internal event Action<IDockable, bool>? KeyboardFocusRequested;
 
     public class DockFactory : Factory
@@ -2769,7 +2770,11 @@ public partial class MainViewViewModel : ObservableObject
         if (running && dockFactory.SuspendedLayout is null)
         {
             dockFactory.SuspendedLayout = dockFactory.CaptureManifest(Layout);
-            if (documentDockService is DocumentDockService documents) documents.SuspendDesigners();
+            if (documentDockService is DocumentDockService documents)
+            {
+                DesignersSuspending?.Invoke();
+                documents.SuspendDesigners();
+            }
             foreach (var tool in new Tool[] { ToolBox, Properties, FormLayout })
                 if (IsToolInLayout(tool))
                 {

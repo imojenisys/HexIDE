@@ -38,6 +38,10 @@ sessions SHALL retain their existing behaviour.
 - **AND** View Object, Properties Window, Form Layout Window and Toolbox, their buttons and keys (F4 and
   Shift+F7), and the Project Explorer's View Object and Properties are disabled and requeried
 - **AND** Property Pages stays disabled, while View Code and the Project Explorer remain available
+- **AND** Immediate, Locals, Watch, Call Stack, Project Explorer, Object Browser and Color Palette retain
+  their normal availability through the focused control
+- **AND** if the suspended designer held keyboard focus, focus moves to the document now active in its area,
+  or to the main view when that area has no document, so routed commands and their keys remain reachable
 - **AND** `set_control_property`, `move_control`, `add_control`, `invoke_designer_undo`, `invoke_designer_redo`,
   `invoke_format_command` and `view_designer` refuse unchanged, explain that a project is running and the designer
   is shut until it ends, and name `stop_project`

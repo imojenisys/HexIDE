@@ -689,7 +689,9 @@ position, and so does a refused step. What VB6 does with the caret there hasn't 
   [the oracle rows](vb6-fidelity-oracle/the-vb6-ides-own-windows-designer-tab-dialog-keys-and-run-mode.md#a-forms-designer-while-a-run-is-paused-2026-11-21-870-ide-sp6).
 - **HexIDE:** in-box runs suspend designer tabs without losing their undo history or selection, hide the design
   tools without saving the temporary layout, disable the opening commands and refuse designer automation.
-  At every run end the tabs and previously visible tools return. This prevents designer header changes moving
+  Suspending the focused designer keeps the other View commands and their keys reachable, by focusing the
+  remaining active document or the main view. At every run end the tabs and previously visible tools return.
+  This prevents designer header changes moving
   breakpoints while the interpreter still uses the text it parsed at start.
 - **Status:** **fixed**, #870. External debug sessions keep their existing behaviour; their line identities
   belong to the adapter. UserControl design-time execution, Add's break-mode submenu and Project Explorer's
