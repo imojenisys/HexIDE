@@ -128,9 +128,16 @@ The synchronizer SHALL recover interrupted legacy synchronization before moving 
 - **THEN** existing recovery completes before the projection is verified and moved
 
 #### Scenario: A legacy conflict
-- **WHEN** the old tree or tracked manifest differs from its baseline, or both layouts exist for the file
+- **WHEN** the old tree or tracked manifest differs from its baseline, or both layouts exist for the file without a migration record
 - **THEN** synchronization refuses, naming the path and reason, and retains existing data without migrating it
 
 #### Scenario: Another legacy project remains
 - **WHEN** one of two projects in the same state root moves to the new layout
 - **THEN** the other project's legacy directories remain usable until its own synchronization
+
+#### Scenario: An interrupted layout move
+- **WHEN** a verified migration stops after recording the move and before completing it
+- **THEN** the next synchronization verifies ownership, ignore rules, and the tree against its manifest and baseline (or current saved file for a clone), then finishes the recorded move
+- **AND** tree, manifest and baseline bytes are preserved, and empty legacy directories are removed
+- **AND** both layouts without a record of a move are still refused
+- **AND** neither layout can be synchronized concurrently during the move, and no directory containing an engine-held handle is moved

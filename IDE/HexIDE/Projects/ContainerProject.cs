@@ -14,7 +14,6 @@ public interface IContainerProject
     string ContainerPath { get; }
     string Name { get; }
     ContainerFolder Root { get; }
-    bool CanSynchronizeFolder { get; }
     bool SupportsLanguageServers { get; }
     bool IsLocked { get; }
     string? NoticeKey { get; }
@@ -86,7 +85,6 @@ internal sealed class TwinBasicBrowserProject : IContainerProject, ICompoundFold
     public string ContainerPath => snapshot.ContainerPath;
     public string Name => snapshot.Name;
     public ContainerFolder Root { get; }
-    public bool CanSynchronizeFolder => FolderFormat != null;
     public ICompoundFolderFormat FolderFormat => TwinBasicFolderFormat.Instance;
     public bool SupportsLanguageServers => true;
     public bool IsLocked => false;

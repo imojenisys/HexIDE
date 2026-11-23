@@ -466,8 +466,8 @@ public sealed class ArchiveSourceFolderTests : IDisposable
         // Captured from main's ArchiveSourceFolder, before extracting the engine (#5148).
         var manifest = Directory.GetFiles(Path.Combine(directory, ".hexide"), "project.twinproj.json", SearchOption.AllDirectories)
             .Should().ContainSingle().Which;
-        File.ReadAllBytes(manifest).Should().Equal(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory,
-            "Fixtures", "impexp.source-folder.json")));
+        File.ReadAllBytes(manifest).Should().Equal(Encoding.UTF8.GetBytes(File.ReadAllText(Path.Combine(AppContext.BaseDirectory,
+            "Fixtures", "impexp.source-folder.json")).ReplaceLineEndings(Environment.NewLine)));
     }
 
     [Fact]
@@ -589,6 +589,149 @@ public sealed class ArchiveSourceFolderTests : IDisposable
         engine.Synchronize(Source, Token);
         checkedLease.Should().BeTrue();
         Sync().Changed.Should().BeFalse();
+    }
+
+    [Fact]
+    public void A_long_portable_project_name_can_move_without_exceeding_the_filename_limit()
+    {
+        Save(FileNode("main", "data"));
+        var name = new string('a', 230) + ".twinproj";
+        var source = Path.Combine(directory, name);
+        File.Move(Source, source);
+        var engine = new ArchiveSourceFolder();
+        engine.Synchronize(source, Token);
+        PutInLegacy(name);
+        engine.Synchronize(source, Token).Changed.Should().BeFalse();
+        File.ReadAllText(Path.Combine(directory, ".hexide", name, "main")).Should().Be("data");
+        Directory.Exists(Path.Combine(directory, ".hexide", ".twinproj")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Moving_a_directory_with_an_engine_lease_is_refused_on_every_platform()
+    {
+        Save(FileNode("main", "data")); Sync(); PutInLegacy();
+        var move = typeof(CompoundSourceFolder).GetMethod("MoveDirectory",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+            .CreateDelegate<Action<string, string>>();
+        var checkedLease = false;
+        var engine = new ArchiveSourceFolder
+        {
+            Checkpoint = point =>
+            {
+                if (point != "legacy-verified") return;
+                checkedLease = true;
+                FluentActions.Invoking(() => move(LegacyControl, LegacyControl + ".moved"))
+                    .Should().ThrowExactly<IOException>();
+            }
+        };
+        engine.Synchronize(Source, Token);
+        checkedLease.Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("migration-recorded")]
+    [InlineData("migration-manifest-directory")]
+    [InlineData("migration-state-directory")]
+    [InlineData("migration-control-created")]
+    [InlineData("migration-owner-written")]
+    [InlineData("migration-new-lease")]
+    [InlineData("migration-tree-moved")]
+    [InlineData("migration-manifest-moved")]
+    [InlineData("migration-state-.gitignore")]
+    [InlineData("migration-state-baseline.json")]
+    [InlineData("migration-state-transaction")]
+    [InlineData("migration-state-transaction", 2)]
+    [InlineData("migration-old-lock-removed")]
+    [InlineData("migration-old-owner-removed")]
+    [InlineData("migration-old-control-removed")]
+    [InlineData("migration-attributes")]
+    [InlineData("migration-cleaned")]
+    [InlineData("migration-record-removed")]
+    public void Interrupted_migration_finishes_without_changing_projection_bytes(string checkpoint, int occurrence = 1)
+    {
+        Save(FileNode("main", "previous")); Sync();
+        Save(FileNode("main", "data")); Sync(); PutInLegacy();
+        var tree = Inventory(LegacyTarget);
+        var manifest = File.ReadAllBytes(LegacyManifest);
+        var baseline = File.ReadAllBytes(Path.Combine(LegacyControl, "baseline.json"));
+        var state = Inventory(LegacyControl).Where(p => !p.StartsWith("lock:") && !p.StartsWith("owner:")).ToArray();
+        var seen = 0;
+        var engine = new ArchiveSourceFolder
+        {
+            Checkpoint = point =>
+            {
+                if (point != checkpoint || ++seen != occurrence) return;
+                FluentActions.Invoking(() => Sync()).Should().ThrowExactly<IOException>();
+                throw new InjectedFailure();
+            }
+        };
+        FluentActions.Invoking(() => engine.Synchronize(Source, Token)).Should().ThrowExactly<InjectedFailure>();
+        Sync().Changed.Should().BeFalse();
+        Inventory(Target).Should().Equal(tree);
+        File.ReadAllBytes(Manifest).Should().Equal(manifest);
+        File.ReadAllBytes(Path.Combine(Control, "baseline.json")).Should().Equal(baseline);
+        Inventory(Control).Where(p => !p.StartsWith("lock:") && !p.StartsWith("owner:")).Should().Equal(state);
+        Directory.Exists(Path.Combine(directory, ".hexide", ".twinproj")).Should().BeFalse();
+        Directory.Exists(Path.Combine(directory, ".hexide", ".twinproj-sync")).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("migration-recorded", false)]
+    [InlineData("migration-owner-written", false)]
+    [InlineData("migration-tree-moved", true)]
+    [InlineData("migration-state-baseline.json", true)]
+    public void Edited_tree_after_migration_record_refuses_without_disk_changes(string checkpoint, bool moved)
+    {
+        Save(FileNode("main", "data")); Sync(); PutInLegacy();
+        var engine = new ArchiveSourceFolder
+        {
+            Checkpoint = point => { if (point == checkpoint) throw new InjectedFailure(); }
+        };
+        FluentActions.Invoking(() => engine.Synchronize(Source, Token)).Should().ThrowExactly<InjectedFailure>();
+        var edited = Path.Combine(moved ? Target : LegacyTarget, "main");
+        File.WriteAllText(edited, "edited after interruption");
+        RefusesWithoutChanges("*" + edited + "*");
+    }
+
+    [Theory]
+    [InlineData("migration-recorded")]
+    [InlineData("migration-control-created")]
+    [InlineData("migration-owner-written")]
+    [InlineData("migration-tree-moved")]
+    [InlineData("migration-manifest-moved")]
+    [InlineData("migration-cleaned")]
+    public void Interrupted_clone_migration_is_verified_and_adopted(string checkpoint)
+    {
+        Save(FileNode("main", "data")); Sync(); PutInLegacy();
+        Directory.Delete(LegacyControl, recursive: true);
+        var manifest = File.ReadAllBytes(LegacyManifest);
+        var engine = new ArchiveSourceFolder
+        {
+            Checkpoint = point => { if (point == checkpoint) throw new InjectedFailure(); }
+        };
+        FluentActions.Invoking(() => engine.Synchronize(Source, Token)).Should().ThrowExactly<InjectedFailure>();
+        Sync().Changed.Should().BeFalse();
+        File.ReadAllBytes(Manifest).Should().Equal(manifest);
+        File.ReadAllBytes(Path.Combine(Control, "baseline.json")).Should().Equal(manifest);
+        File.ReadAllText(Path.Combine(Target, "main")).Should().Be("data");
+        Directory.Exists(Path.Combine(directory, ".hexide", ".twinproj")).Should().BeFalse();
+        Directory.Exists(Path.Combine(directory, ".hexide", ".twinproj-sync")).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("owner")]
+    [InlineData(".gitignore")]
+    [InlineData("baseline.json")]
+    public void Changed_migration_metadata_refuses_without_disk_changes(string name)
+    {
+        Save(FileNode("main", "data")); Sync(); PutInLegacy();
+        var engine = new ArchiveSourceFolder
+        {
+            Checkpoint = point => { if (point == "migration-manifest-moved") throw new InjectedFailure(); }
+        };
+        FluentActions.Invoking(() => engine.Synchronize(Source, Token)).Should().ThrowExactly<InjectedFailure>();
+        File.AppendAllText(Path.Combine(LegacyControl, name), "edited");
+        RefusesWithoutChanges("*Existing data is retained.*");
     }
 
     [Fact]

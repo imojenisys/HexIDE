@@ -20,6 +20,8 @@ internal interface ICompoundFolderFormat
 /// <summary>Explicit, one-way projection of a saved archive. All previous trees are retained for recovery.</summary>
 internal sealed class CompoundSourceFolder(ICompoundFolderFormat format)
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> OpenFiles = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private const int Limit = 64 * 1024 * 1024;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
     internal Action<string>? Checkpoint { get; set; }
@@ -83,8 +85,7 @@ internal sealed class CompoundSourceFolder(ICompoundFolderFormat format)
         ProjectLocalState.WriteFolderMarker(root);
         var lockPath = Path.Combine(paths.Control, "lock");
         CheckAncestors(lockPath);
-        using var lease = new FileStream(lockPath, FileMode.OpenOrCreate,
-            FileAccess.ReadWrite, FileShare.None);
+        using var lease = new Lease(lockPath, FileMode.OpenOrCreate);
         var ignore = Path.Combine(paths.Control, ".gitignore");
         if (!Exists(ignore)) WriteNew(ignore, "*\n"u8.ToArray());
         else if (!ReadBounded(ignore).AsSpan().SequenceEqual("*\n"u8))
@@ -402,6 +403,10 @@ internal sealed class CompoundSourceFolder(ICompoundFolderFormat format)
     {
         CheckAncestors(source);
         CheckAncestors(destination);
+        var prefix = Path.GetFullPath(source) + Path.DirectorySeparatorChar;
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (OpenFiles.Keys.Any(path => path.StartsWith(prefix, comparison)))
+            throw Conflict("A synchronization handle is open inside the directory", source);
         Directory.Move(source, destination);
     }
     private static void DeleteFile(string path)
@@ -413,55 +418,165 @@ internal sealed class CompoundSourceFolder(ICompoundFolderFormat format)
     private void Migrate(string source, string root, Locations paths, Manifest current, byte[] currentBytes)
     {
         var old = new Locations(source, root, legacy: true);
-        if (!new[] { old.Target, old.Manifest, old.Control }.Any(Exists)) return;
-        foreach (var path in new[] { old.Target, old.Manifest, old.Control }) CheckAncestors(path);
-        if (new[] { paths.Target, paths.Manifest, paths.Control }.Any(Exists))
+        // This record stays outside every directory being transferred or removed.
+        var recordName = Hash(Encoding.UTF8.GetBytes(Path.GetFileName(source).ToUpperInvariant()));
+        var recordPath = Path.Combine(root, ".sync-" + recordName + ".migration.json");
+        var recorded = Exists(recordPath);
+        if (!recorded && !new[] { old.Target, old.Manifest, old.Control }.Any(Exists))
+            return;
+        foreach (var path in new[] { old.Target, old.Manifest, old.Control, paths.Target, paths.Manifest, paths.Control, recordPath })
+            CheckAncestors(path);
+        if (!recorded && new[] { paths.Target, paths.Manifest, paths.Control }.Any(Exists))
             throw Conflict("Both synchronization layouts exist", paths.Target);
         ValidateAttributes(old);
-        FileStream? lease = null;
+        Lease? oldLease = null;
+        Lease? newLease = null;
+        Lease? recordLease = null;
         try
         {
-            if (Exists(old.Control))
+            Migration? migration = null;
+            if (recorded)
             {
-                var owner = Path.Combine(old.Control, "owner");
+                recordLease = new Lease(recordPath, FileMode.Open);
+                if (recordLease.Length > Limit) throw Conflict("Recovery metadata changed", recordPath);
+                var bytes = new byte[checked((int)recordLease.Length)];
+                recordLease.ReadExactly(bytes);
+                migration = Deserialize<Migration>(bytes);
+                if (migration.Version != 1 || !IsHash(migration.ManifestHash))
+                    throw Conflict("Recovery metadata changed", recordPath);
+            }
+            foreach (var control in new[] { old.Control, paths.Control })
+            {
+                if (!Exists(control)) continue;
+                CheckTreeLinks(control);
+                var owner = Path.Combine(control, "owner");
+                // A recorded move can stop between creating the new directory and writing its owner,
+                // or between removing the old owner and its now-empty directory.
+                if (recorded && !Exists(owner) && !Directory.EnumerateFileSystemEntries(control).Any()) continue;
                 if (!File.Exists(owner) || !ReadBounded(owner).AsSpan().SequenceEqual("HexIDE archive source synchronization v1\n"u8))
-                    throw Conflict("The synchronization state directory is not owned by HexIDE", old.Control);
-                var ignore = Path.Combine(old.Control, ".gitignore");
+                    throw Conflict("The synchronization state directory is not owned by HexIDE", control);
+                var ignore = Path.Combine(control, ".gitignore");
                 if (Exists(ignore) && !ReadBounded(ignore).AsSpan().SequenceEqual("*\n"u8))
                     throw Conflict("The local synchronization ignore rule was changed", ignore);
-                var lockPath = Path.Combine(old.Control, "lock");
-                CheckAncestors(lockPath);
-                // Retain the exclusive writer lease while its directory moves, including on Windows.
-                lease = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.Delete);
-                Recover(old);
+                var lockPath = Path.Combine(control, "lock");
+                // Do not recreate a removed old lock while merely checking a recorded move.
+                if (recorded && !Exists(lockPath)) continue;
+                var lease = new Lease(lockPath, FileMode.Open);
+                if (control == old.Control) oldLease = lease;
+                else newLease = lease;
             }
-            if (Exists(old.Target) || Exists(old.Manifest) || Exists(old.Baseline))
+            if (!recorded) Recover(old);
+            var target = MigrationPath(old.Target, paths.Target);
+            var manifestPath = MigrationPath(old.Manifest, paths.Manifest);
+            var baselinePath = MigrationPath(old.Baseline, paths.Baseline);
+            var hasBaseline = Exists(baselinePath);
+            var expected = hasBaseline ? ReadBounded(baselinePath) : currentBytes;
+            var hasProjection = Exists(target) || Exists(manifestPath) || hasBaseline;
+            if (migration != null && (migration.ManifestHash != Hash(expected) || migration.HasProjection != hasProjection ||
+                migration.HasBaseline != hasBaseline))
+                throw Conflict("Recovery metadata changed", manifestPath);
+            if (hasProjection)
             {
-                var hasBaseline = File.Exists(old.Baseline);
-                var expected = hasBaseline ? ReadBounded(old.Baseline) : currentBytes;
-                if (!File.Exists(old.Manifest) || !ReadBounded(old.Manifest).SequenceEqual(expected))
-                    throw hasBaseline ? Conflict("The tracked manifest was changed or removed", old.Manifest)
-                        : Conflict("The folder has no matching synchronization baseline", old.Target);
-                VerifyTree(old.Target, hasBaseline ? ParseManifest(expected) : current);
+                if (!File.Exists(manifestPath) || !ReadBounded(manifestPath).SequenceEqual(expected))
+                    throw hasBaseline ? Conflict("The tracked manifest was changed or removed", manifestPath)
+                        : Conflict("The folder has no matching synchronization baseline", target);
+                VerifyTree(target, hasBaseline ? ParseManifest(expected) : current);
             }
-            // Validate all retained state before moving any of it, including previous transaction trees.
-            if (Exists(old.Control)) CheckTreeLinks(old.Control);
             Checkpoint?.Invoke("legacy-verified");
-            CreateDirectory(Path.GetDirectoryName(paths.Manifest)!);
-            CreateDirectory(Path.GetDirectoryName(paths.Control)!);
-            if (Exists(old.Target)) MoveDirectory(old.Target, paths.Target);
-            if (Exists(old.Manifest))
+            if (!recorded)
             {
-                CheckAncestors(old.Manifest);
-                CheckAncestors(paths.Manifest);
-                File.Move(old.Manifest, paths.Manifest);
+                CheckAncestors(recordPath);
+                recordLease = new Lease(recordPath, FileMode.CreateNew);
+                recordLease.Write(JsonSerializer.SerializeToUtf8Bytes(new Migration(1, Hash(expected), hasProjection, hasBaseline)));
+                recordLease.Flush(flushToDisk: true);
             }
-            if (Exists(old.Control)) MoveDirectory(old.Control, paths.Control);
+            Checkpoint?.Invoke("migration-recorded");
+            CreateDirectory(Path.GetDirectoryName(paths.Manifest)!);
+            Checkpoint?.Invoke("migration-manifest-directory");
+            CreateDirectory(Path.GetDirectoryName(paths.Control)!);
+            Checkpoint?.Invoke("migration-state-directory");
+            CreateDirectory(paths.Control);
+            Checkpoint?.Invoke("migration-control-created");
+            var newOwner = Path.Combine(paths.Control, "owner");
+            if (!Exists(newOwner)) WriteNew(newOwner, "HexIDE archive source synchronization v1\n"u8);
+            Checkpoint?.Invoke("migration-owner-written");
+            newLease ??= new Lease(Path.Combine(paths.Control, "lock"), FileMode.OpenOrCreate);
+            Checkpoint?.Invoke("migration-new-lease");
+            if (Exists(old.Target)) MoveDirectory(old.Target, paths.Target);
+            Checkpoint?.Invoke("migration-tree-moved");
+            if (Exists(old.Manifest)) MoveFile(old.Manifest, paths.Manifest);
+            Checkpoint?.Invoke("migration-manifest-moved");
+            if (Directory.Exists(old.Control))
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(old.Control).Order(StringComparer.Ordinal))
+                {
+                    var name = Path.GetFileName(entry);
+                    if (name is "owner" or "lock") continue;
+                    var destination = Path.Combine(paths.Control, name);
+                    if (Directory.Exists(entry)) MoveDirectory(entry, destination);
+                    else MoveFile(entry, destination);
+                    Checkpoint?.Invoke("migration-state-" + (Directory.Exists(destination) ? "transaction" : name));
+                }
+                oldLease?.Dispose();
+                oldLease = null;
+                DeleteFile(Path.Combine(old.Control, "lock"));
+                Checkpoint?.Invoke("migration-old-lock-removed");
+                DeleteFile(Path.Combine(old.Control, "owner"));
+                Checkpoint?.Invoke("migration-old-owner-removed");
+                RemoveEmpty(old.Control);
+            }
+            Checkpoint?.Invoke("migration-old-control-removed");
             EnsureAttributes(paths);
+            Checkpoint?.Invoke("migration-attributes");
             RemoveLegacyDirectories(old);
+            Checkpoint?.Invoke("migration-cleaned");
+            recordLease!.Dispose();
+            recordLease = null;
+            DeleteFile(recordPath);
+            Checkpoint?.Invoke("migration-record-removed");
         }
-        finally { lease?.Dispose(); }
+        finally
+        {
+            oldLease?.Dispose();
+            newLease?.Dispose();
+            recordLease?.Dispose();
+        }
     }
+
+    private static string MigrationPath(string old, string current)
+    {
+        if (Exists(old) && Exists(current)) throw Conflict("Both synchronization layouts exist", current);
+        return Exists(old) ? old : current;
+    }
+
+    private static void MoveFile(string source, string destination)
+    {
+        CheckAncestors(source);
+        CheckAncestors(destination);
+        File.Move(source, destination);
+    }
+
+    private sealed class Lease : FileStream
+    {
+        internal Lease(string path, FileMode mode) : base(CheckedPath(path), mode, FileAccess.ReadWrite, FileShare.None)
+        {
+            OpenFiles.TryAdd(Path.GetFullPath(path), 0);
+        }
+
+        private static string CheckedPath(string path)
+        {
+            CheckAncestors(path);
+            return path;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) OpenFiles.TryRemove(Path.GetFullPath(Name), out _);
+        }
+    }
+
+    private sealed record Migration(int Version, string ManifestHash, bool HasProjection, bool HasBaseline);
 
     private static void RemoveLegacyDirectories(Locations old)
     {
