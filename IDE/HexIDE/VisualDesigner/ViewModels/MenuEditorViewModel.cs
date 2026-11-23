@@ -21,6 +21,10 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
 
     public List<MenuViewModel> Deleted { get; } = new();
 
+    private readonly IWindowManager? windowManager;
+    private readonly ILocalizationService? localization;
+    private readonly IEnumerable<string> controlNames = [];
+
     private MenuViewModel blankMenu = null!;
     private readonly List<(MenuViewModel Menu, int Indent)> originalItems = new();
     internal bool HasLayoutChanges => !ItemsToApply.Select(menu => (menu, menu.Indent)).SequenceEqual(originalItems);
@@ -87,6 +91,14 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
         SelectedMenu = blankMenu;
     }
 
+    internal MenuEditorViewModel(FormEditViewModel form, IWindowManager windowManager,
+        IEnumerable<string> controlNames, ILocalizationService localization) : this(form, localization)
+    {
+        this.windowManager = windowManager;
+        this.localization = localization;
+        this.controlNames = controlNames;
+    }
+
     private void AddBlankRow()
     {
         blankMenu = new MenuViewModel();
@@ -106,6 +118,12 @@ public partial class MenuEditorViewModel : ObservableObject, IDialog
 
     public void Accept()
     {
+        if (localization is not null && ComponentNaming.MenuRefusalFor(ItemsToApply, controlNames, localization) is { } refusal)
+        {
+            SelectedMenu = refusal.Row;
+            _ = windowManager!.MessageBox(refusal.Message, Title, MessageBoxButtons.Ok, MessageBoxIcon.Error);
+            return;
+        }
         CloseRequested?.Invoke(true);
     }
 
