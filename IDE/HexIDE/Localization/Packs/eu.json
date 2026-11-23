@@ -2,6 +2,7 @@
   "name": "Basque",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Menuko kontrolen matrizeko elementuek elkarren ondoan eta azpimenu berean egon behar dute",
     "Str.Dialog.MenuEditor.Msg.NoName": "Menu-kontrolak izena izan behar du",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Objektu-izen baliogabea: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Menu-kontrolen matrizeko elementuak indizea izan behar du",

@@ -2,6 +2,7 @@
   "name": "Russian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Элементы массива элементов управления меню должны располагаться подряд и в одном подменю",
     "Str.Dialog.MenuEditor.Msg.NoName": "Элемент меню должен иметь имя",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Недопустимое имя объекта: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Элемент массива элементов меню должен иметь индекс",

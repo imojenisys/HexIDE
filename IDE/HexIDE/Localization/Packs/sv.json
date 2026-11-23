@@ -2,6 +2,7 @@
   "name": "Swedish",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementen i en menykontrollmatris måste vara sammanhängande och finnas i samma undermeny",
     "Str.Dialog.MenuEditor.Msg.NoName": "Menykontrollen måste ha ett namn",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Ogiltigt objektnamn: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Elementet i menykontrollmatrisen måste ha ett index",

@@ -2,6 +2,7 @@
   "name": "Galician",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Os elementos da matriz de controis de menú deben ser contiguos e estar no mesmo submenú",
     "Str.Dialog.MenuEditor.Msg.NoName": "O control de menú debe ter un nome",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Nome de obxecto non válido: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "O elemento da matriz de controis de menú debe ter un índice",

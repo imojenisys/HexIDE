@@ -2,6 +2,7 @@
   "name": "Vietnamese",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Các phần tử mảng điều khiển menu phải liền nhau và nằm trong cùng một menu con",
     "Str.Dialog.MenuEditor.Msg.NoName": "Điều khiển trình đơn phải có tên",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Tên đối tượng không hợp lệ: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Phần tử mảng điều khiển trình đơn phải có chỉ số",

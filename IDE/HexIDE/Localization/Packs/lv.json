@@ -2,6 +2,7 @@
   "name": "Latvian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Izvēlnes vadīklu masīva elementiem jābūt secīgiem un vienā apakšizvēlnē",
     "Str.Dialog.MenuEditor.Msg.NoName": "Izvēlnes vadīklai jābūt nosaukumam",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Nederīgs objekta nosaukums: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Izvēlnes vadīklu masīva elementam jābūt indeksam",

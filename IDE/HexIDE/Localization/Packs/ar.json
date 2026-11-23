@@ -2,6 +2,7 @@
   "name": "Arabic",
   "direction": "rtl",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "يجب أن تكون عناصر مصفوفة عناصر تحكم القائمة متجاورة وضمن القائمة الفرعية نفسها",
     "Str.Dialog.MenuEditor.Msg.NoName": "يجب أن يكون لعنصر تحكم القائمة اسم",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "اسم كائن غير صالح: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "يجب أن يكون لعنصر مصفوفة عناصر تحكم القائمة فهرس",

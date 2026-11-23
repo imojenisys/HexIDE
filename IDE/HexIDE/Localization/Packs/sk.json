@@ -2,6 +2,7 @@
   "name": "Slovak",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Prvky poľa ovládacích prvkov ponuky musia susediť a byť v rovnakej podponuke",
     "Str.Dialog.MenuEditor.Msg.NoName": "Ovládací prvok ponuky musí mať názov",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Neplatný názov objektu: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Prvok poľa ovládacích prvkov ponuky musí mať index",

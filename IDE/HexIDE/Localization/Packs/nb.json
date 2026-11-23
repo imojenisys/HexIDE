@@ -2,6 +2,7 @@
   "name": "Norwegian Bokmål",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementene i en menykontrollmatrise må være sammenhengende og i samme undermeny",
     "Str.Dialog.MenuEditor.Msg.NoName": "Menykontrollen må ha et navn",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Ugyldig objektnavn: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Elementet i menykontrollmatrisen må ha en indeks",

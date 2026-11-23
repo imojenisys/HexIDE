@@ -2,6 +2,7 @@
   "name": "Serbian (Latin)",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementi niza kontrola menija moraju biti uzastopni i unutar istog podmenija",
     "Str.Dialog.MenuEditor.Msg.NoName": "Kontrola menija mora imati ime",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Nevažeće ime objekta: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Element niza kontrola menija mora imati indeks",

@@ -2,6 +2,7 @@
   "name": "Chinese (Simplified)",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "菜单控件数组元素必须相邻且位于同一子菜单中",
     "Str.Dialog.MenuEditor.Msg.NoName": "菜单控件必须有名称",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "无效的对象名: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "菜单控件数组元素必须有索引",

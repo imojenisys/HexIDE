@@ -2,6 +2,7 @@
   "name": "Romanian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementele matricei de controale de meniu trebuie să fie consecutive și în același submeniu",
     "Str.Dialog.MenuEditor.Msg.NoName": "Controlul de meniu trebuie să aibă un nume",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Nume de obiect nevalid: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Elementul tabloului de controale de meniu trebuie să aibă un index",

@@ -2,6 +2,7 @@
   "name": "Slovenian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementi polja menijskih kontrolnikov morajo biti zaporedni in v istem podmeniju",
     "Str.Dialog.MenuEditor.Msg.NoName": "Kontrolnik menija mora imeti ime",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Neveljavno ime predmeta: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Element polja kontrolnikov menija mora imeti indeks",

@@ -2,6 +2,7 @@
   "name": "Greek",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Τα στοιχεία του πίνακα στοιχείων ελέγχου μενού πρέπει να είναι διαδοχικά και στο ίδιο υπομενού",
     "Str.Dialog.MenuEditor.Msg.NoName": "Το στοιχείο ελέγχου μενού πρέπει να έχει όνομα",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Μη έγκυρο όνομα αντικειμένου: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Το στοιχείο του πίνακα στοιχείων ελέγχου μενού πρέπει να έχει δείκτη",

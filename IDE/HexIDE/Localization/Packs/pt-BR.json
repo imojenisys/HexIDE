@@ -2,6 +2,7 @@
   "name": "Portuguese (Brazil)",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Os elementos da matriz de controles de menu devem ser contíguos e estar no mesmo submenu",
     "Str.Dialog.MenuEditor.Msg.NoName": "O controle de menu deve ter um nome",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "O elemento da matriz de controles de menu deve ter um índice",
     "Str.Dialog.MenuEditor.Msg.IndexesAscending": "Os índices da matriz de controles de menu devem estar em ordem crescente",

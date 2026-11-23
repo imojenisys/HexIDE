@@ -2,6 +2,7 @@
   "name": "Indonesian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elemen larik kontrol menu harus berurutan dan berada dalam submenu yang sama",
     "Str.Dialog.MenuEditor.Msg.NoName": "Kontrol menu harus memiliki nama",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Nama objek tidak valid: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Elemen larik kontrol menu harus memiliki indeks",

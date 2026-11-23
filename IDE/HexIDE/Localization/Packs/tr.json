@@ -2,6 +2,7 @@
   "name": "Turkish",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Menü denetim dizisi öğeleri bitişik ve aynı alt menü içinde olmalıdır",
     "Str.Dialog.MenuEditor.Msg.NoName": "Menü denetiminin bir adı olmalıdır",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Geçersiz nesne adı: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Menü denetim dizisinin öğesinin bir dizini olmalıdır",

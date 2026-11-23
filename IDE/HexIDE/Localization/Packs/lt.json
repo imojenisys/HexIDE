@@ -2,6 +2,7 @@
   "name": "Lithuanian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Meniu valdiklių masyvo elementai turi eiti iš eilės ir būti tame pačiame submeniu",
     "Str.Dialog.MenuEditor.Msg.NoName": "Meniu valdiklis turi turėti pavadinimą",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Netinkamas objekto pavadinimas: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Meniu valdiklių masyvo elementas turi turėti indeksą",

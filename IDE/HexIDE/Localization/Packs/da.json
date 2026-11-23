@@ -2,6 +2,7 @@
   "name": "Danish",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementerne i en menukontrolmatrix skal være sammenhængende og i samme undermenu",
     "Str.Dialog.MenuEditor.Msg.NoName": "Menukontrolelementet skal have et navn",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Ugyldigt objektnavn: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Elementet i menukontrolelementmatricen skal have et indeks",

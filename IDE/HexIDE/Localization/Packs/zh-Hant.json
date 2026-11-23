@@ -2,6 +2,7 @@
   "name": "Chinese (Traditional)",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "功能表控制項陣列元素必須相鄰且位於同一子功能表中",
     "Str.Dialog.MenuEditor.Msg.NoName": "功能表控制項必須有名稱",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "無效的物件名稱: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "功能表控制項陣列元素必須有索引",

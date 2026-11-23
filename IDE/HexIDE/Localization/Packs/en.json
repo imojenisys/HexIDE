@@ -2,6 +2,7 @@
   "name": "English",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Menu control array elements must be contiguous and within the same submenu",
     "Str.Dialog.MenuEditor.Msg.NoName": "Menu control must have a name",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Not a legal object name: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Menu control array element must have an index",

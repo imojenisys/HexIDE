@@ -2,6 +2,7 @@
   "name": "Dutch",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementen van een menubesturingselementarray moeten aaneengesloten zijn en zich in hetzelfde submenu bevinden",
     "Str.Dialog.MenuEditor.Msg.NoName": "Het menubesturingselement moet een naam hebben",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Ongeldige objectnaam: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Het element van de menubesturingselementmatrix moet een index hebben",

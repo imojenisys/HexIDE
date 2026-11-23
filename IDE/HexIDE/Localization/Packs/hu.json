@@ -2,6 +2,7 @@
   "name": "Hungarian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "A menüvezérlő-tömb elemeinek egymás mellett és ugyanabban az almenüben kell lenniük",
     "Str.Dialog.MenuEditor.Msg.NoName": "A menüvezérlőnek nevet kell adni",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Érvénytelen objektumnév: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "A menüvezérlő-tömb elemének indexszel kell rendelkeznie",

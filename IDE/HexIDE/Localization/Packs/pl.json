@@ -2,6 +2,7 @@
   "name": "Polish",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Elementy tablicy kontrolek menu muszą być kolejne i znajdować się w tym samym podmenu",
     "Str.Dialog.MenuEditor.Msg.NoName": "Kontrolka menu musi mieć nazwę",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Nieprawidłowa nazwa obiektu: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Element tablicy kontrolek menu musi mieć indeks",

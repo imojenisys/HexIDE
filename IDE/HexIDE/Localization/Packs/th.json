@@ -2,6 +2,7 @@
   "name": "Thai",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "สมาชิกของอาร์เรย์ตัวควบคุมเมนูต้องอยู่ติดกันและอยู่ในเมนูย่อยเดียวกัน",
     "Str.Dialog.MenuEditor.Msg.NoName": "ตัวควบคุมเมนูต้องมีชื่อ",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "ชื่อวัตถุไม่ถูกต้อง: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "สมาชิกอาร์เรย์ตัวควบคุมเมนูต้องมีดัชนี",

@@ -2,6 +2,7 @@
   "name": "Bulgarian",
   "direction": "ltr",
   "strings": {
+    "Str.Dialog.MenuEditor.Msg.NotContiguous": "Елементите на масива от контроли за меню трябва да са последователни и в едно и също подменю",
     "Str.Dialog.MenuEditor.Msg.NoName": "Контролата на менюто трябва да има име",
     "Str.Dialog.MenuEditor.Msg.NotLegalName": "Невалидно име на обект: '{0}'",
     "Str.Dialog.MenuEditor.Msg.ArrayNeedsIndex": "Елементът на масива от контроли на менюто трябва да има индекс",
