@@ -44,7 +44,7 @@ public class ComponentRegistry : IComponentRegistry
         new(ShapeComponentClass.Instance, "Geo.Shape"),
     ];
 
-    public IReadOnlyList<RuntimeLibrary> Libraries => ControlLibraries.All;
+    public IReadOnlyList<IControlLibrary> Libraries => ControlLibraries.All;
 
     // Built on first use, so these classes load only once a project references one of their libraries, as they always did.
     private IReadOnlyList<LibraryControl>? libraryControls;

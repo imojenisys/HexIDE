@@ -46,3 +46,13 @@ static HexIDE.Runtime.Components.DesignerInset.operator !=(HexIDE.Runtime.Compon
 static HexIDE.Runtime.Components.DesignerInset.operator ==(HexIDE.Runtime.Components.DesignerInset left, HexIDE.Runtime.Components.DesignerInset right) -> bool
 ~override HexIDE.Runtime.Components.DesignerInset.Equals(object obj) -> bool
 ~override HexIDE.Runtime.Components.DesignerInset.ToString() -> string
+HexIDE.Runtime.Components.IControlLibrary
+HexIDE.Runtime.Components.IControlLibrary.Description.get -> string!
+HexIDE.Runtime.Components.IControlLibrary.File.get -> string!
+HexIDE.Runtime.Components.IControlLibrary.FormLine.get -> string!
+HexIDE.Runtime.Components.IControlLibrary.Guid.get -> string!
+HexIDE.Runtime.Components.IControlLibrary.IsNamedBy(HexIDE.Runtime.ProjectElements.ObjectReference reference) -> bool
+HexIDE.Runtime.Components.IControlLibrary.IsNamedBy(HexIDE.Runtime.ProjectElements.VbReference! reference) -> bool
+HexIDE.Runtime.Components.IControlLibrary.Name.get -> string!
+HexIDE.Runtime.Components.IControlLibrary.ProjectLine.get -> string!
+HexIDE.Runtime.Components.IControlLibrary.TypeName(string! className) -> string!
