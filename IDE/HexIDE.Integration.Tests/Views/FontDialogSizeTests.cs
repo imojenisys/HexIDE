@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls;
 using Avalonia.Headless;
@@ -173,6 +174,40 @@ public class FontDialogSizeTests
             Dispatcher.UIThread.RunJobs();
             RoundTrip(PropertyFontBox.Chosen(font, answer!)).Charset.Should().Be(0);
         }, charset: 161, coverage: _ => FontCodePageCoverage.Latin1 | FontCodePageCoverage.Greek);
+    }
+
+    [AvaloniaFact]
+    public void Closed_script_box_reports_the_localized_selection_to_automation()
+    {
+        WithDialog((window, view, vm, font) =>
+        {
+            var script = view.FindControl<ComboBox>("ScriptBox")!;
+            script.IsDropDownOpen.Should().BeFalse();
+            script.SelectedIndex.Should().Be(1);
+            ControlAutomationPeer.CreatePeerForElement(script)!.GetProvider<IValueProvider>()!
+                .Value.Should().Be("Greek");
+            script.IsDropDownOpen = true;
+            Dispatcher.UIThread.RunJobs();
+            ControlAutomationPeer.CreatePeerForElement(script.ContainerFromIndex(1)!)!
+                .GetName().Should().Be("Greek");
+            script.IsDropDownOpen = false;
+            Dispatcher.UIThread.RunJobs();
+            ControlAutomationPeer.CreatePeerForElement(script)!.GetProvider<IValueProvider>()!
+                .Value.Should().Be("Greek");
+        }, charset: 161, coverage: _ => FontCodePageCoverage.Latin1 | FontCodePageCoverage.Greek);
+    }
+
+    [AvaloniaFact]
+    public void An_unavailable_saved_script_leaves_the_box_empty()
+    {
+        WithDialog((window, view, vm, font) =>
+        {
+            var script = view.FindControl<ComboBox>("ScriptBox")!;
+            script.SelectedIndex.Should().Be(-1);
+            script.PlaceholderText.Should().BeNullOrEmpty();
+            script.GetVisualDescendants().OfType<TextBlock>()
+                .Where(text => text.IsEffectivelyVisible).Should().OnlyContain(text => string.IsNullOrEmpty(text.Text));
+        }, charset: 161, coverage: _ => FontCodePageCoverage.Latin1);
     }
 
     private static VBFont RoundTrip(VBFont font)
