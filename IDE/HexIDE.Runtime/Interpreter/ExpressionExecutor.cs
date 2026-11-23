@@ -107,17 +107,30 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
         if (context.Length != 2)
             throw new Exception("This should only be called for two operands instructions");
         // Every binary operator's operands come through here: an object stands for its default member (#174).
-        var left = await EvaluateScalarFast(context[0]);
-        var right = await EvaluateScalarFast(context[1]);
+        var expression = BinaryOperatorText(context[0]);
+        var left = await ControlMembers.ReadDefaultValue(await EvaluateScalarFast(context[0]), expression);
+        var right = await ControlMembers.ReadDefaultValue(await EvaluateScalarFast(context[1]), expression);
         return (left, right);
+    }
+
+    private static string BinaryOperatorText(VB6Parser.ValueStmtContext operand)
+    {
+        var parent = operand.Parent;
+        for (var i = 1; i < parent.ChildCount; i++)
+            if (parent.GetChild(i) is ITerminalNode token && !string.IsNullOrWhiteSpace(token.GetText()))
+                return token.GetText();
+        throw new InvalidOperationException("Binary operator expected");
     }
 
     public async Task<(Vb6Value, Vb6Value)> GetTwoValuesSameTypesOrNull(VB6Parser.ValueStmtContext[] context)
     {
+        var expression = BinaryOperatorText(context[0]);
         var leftRaw = await EvaluateValueFast(context[0]);
         var leftValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(leftRaw, callerFrames: stmtFrames), context[0]);
+        leftValue = await ControlMembers.ReadDefaultValue(leftValue, expression);
         var rightRaw = await EvaluateValueFast(context[1]);
         var rightValue = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(rightRaw, callerFrames: stmtFrames), context[1]);
+        rightValue = await ControlMembers.ReadDefaultValue(rightValue, expression);
         if (leftValue.IsOddByteString || rightValue.IsOddByteString)
         {
             if (!(leftRaw.IsOddByteString || leftRaw.Type == Vb6Value.ValueType.String)
@@ -2633,7 +2646,7 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     public override async Task<object?> VisitVsNegation(VB6Parser.VsNegationContext context)
     {
-        return Negation(await EvaluateScalarFast(context.valueStmt()), context);
+        return Negation(await ControlMembers.ReadDefaultValue(await EvaluateScalarFast(context.valueStmt()), "-"), context);
     }
 
     internal static Vb6Value Negation(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)
@@ -2647,7 +2660,8 @@ public partial class ExpressionExecutor : VB6Visitor<Task<object?>>
 
     public override async Task<object?> VisitVsNot(VB6Parser.VsNotContext context)
     {
-        return Not(ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(await EvaluateValueFast(context.valueStmt()), "Not", stmtFrames), context), context);
+        var value = ObjectAsValue.Scalar(await interpreter.ResolveDefaultMember(await EvaluateValueFast(context.valueStmt()), "Not", stmtFrames), context);
+        return Not(await ControlMembers.ReadDefaultValue(value, "Not"), context);
     }
 
     internal static Vb6Value Not(Vb6Value value, Antlr4.Runtime.ParserRuleContext context)

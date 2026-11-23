@@ -22,15 +22,19 @@ internal static class ControlMembers
         _ => null,
     };
 
-    internal static ValueTask<Vb6Value> ReadDefaultValue(Vb6Value value, string expression, bool intrinsicOnly = true)
+    internal static async ValueTask<Vb6Value> ReadDefaultValue(Vb6Value value, string expression, bool intrinsicOnly = true)
     {
         if (DefaultMember(value) is { } member)
-            return new(Read(value, member, null));
+        {
+            var result = await Read(value, member, null);
+            // A late-bound default reads as a Variant (#5504, SP6 native and p-code).
+            return IsLateBoundListReference(value) ? result.AsVariant() : result;
+        }
         if (value.Type == Vb6Value.ValueType.Control && value.Value is Control control
             && (!intrinsicOnly || ControlObjectType.IsIntrinsic(VB6BuiltIns.ControlTypeName(control))))
             throw new NotImplementedException($"`{expression}` reads a default member, which is not implemented (#790). "
                 + "Name the property, or use Set to keep the reference.");
-        return new(value);
+        return value;
     }
 
     // VB.Control declarations also reach dispatch with the bare Control view.
