@@ -64,6 +64,9 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
     private ISearchableDocument? _selectionDocument;
     private TextAnchor? _selectionStart;
     private TextAnchor? _selectionEnd;
+    private ISearchableDocument? _searchDocument;
+    private TextAnchor? _searchStart;
+    private bool _wrapped;
     private bool _busy;
     private List<ISearchableDocument>? _scopeDocuments;
 
@@ -136,9 +139,22 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
 
     private void OnScopeChanged()
     {
+        ResetSearch();
         _selectionDocument = null;
         OnPropertyChanged(nameof(SelectedScopeIndex));
     }
+
+    internal void ResetSearch()
+    {
+        _searchDocument = null;
+        _searchStart = null;
+        _wrapped = false;
+    }
+
+    private void OnDirectionChanged() => ResetSearch();
+    private void OnMatchCaseChanged() => ResetSearch();
+    private void OnWholeWordOnlyChanged() => ResetSearch();
+    private void OnUsePatternMatchingChanged() => ResetSearch();
 
     internal Task FindNextAsync() => RunAsync(ExecuteFindNext);
     internal Task ReplaceAllAsync() => RunAsync(ExecuteReplaceAllAsync);
@@ -208,6 +224,7 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
 
     private void OnSearchTextChanged()
     {
+        ResetSearch();
         FindNextCommand.RaiseCanExecutedChanged();
         ReplaceOneCommand.RaiseCanExecutedChanged();
         ReplaceAllCommand.RaiseCanExecutedChanged();
@@ -343,7 +360,7 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
         target.CaretOffset = Direction == FindDirection.Down ? offset + length : offset;
     }
 
-    private void ExecuteFindNext()
+    private async Task ExecuteFindNext()
     {
         var editor = GetActiveEditor();
         if (editor is null)
@@ -352,10 +369,16 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
             return;
         }
 
+        if ((Scope is FindScope.CurrentModule or FindScope.CurrentProcedure) && ValidPattern())
+        {
+            await FindInRegionAsync(editor);
+            return;
+        }
+
         var result = FindInScope(editor);
         if (result is null)
         {
-            _windowManager.MessageBox(
+            _ = _windowManager.MessageBox(
                 string.Format(_localization.GetString(ProtectedMatchesInScope(editor) > 0
                     ? "Str.FindReplace.Msg.ReadOnlyTextOnly" : "Str.FindReplace.Msg.NotFound"), SearchText),
                 _localization.GetString("Str.FindReplace.Msg.TitleFind"),
@@ -367,7 +390,61 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
         SelectMatch(result.Value.document, result.Value.offset, result.Value.length);
     }
 
-    private void ExecuteReplaceOne()
+    private bool ValidPattern()
+    {
+        if (!UsePatternMatching) return true;
+        try { _ = new Regex(SearchText); return true; }
+        catch (ArgumentException) { return false; }
+    }
+
+    private async Task FindInRegionAsync(ISearchableDocument editor)
+    {
+        if (!ReferenceEquals(_searchDocument, editor))
+        {
+            ResetSearch();
+            _searchDocument = editor;
+            _searchStart = editor.Document.CreateAnchor(editor.CaretOffset);
+            _searchStart.SurviveDeletion = true;
+            _searchStart.MovementType = AnchorMovementType.BeforeInsertion;
+        }
+        bool Refused(int offset, int length) => editor.IsReadOnlyRegion(offset, length)
+            || (_wrapped && (Direction == FindDirection.Down
+                ? offset >= _searchStart!.Offset : offset + length <= _searchStart!.Offset));
+
+        var match = FindNext(editor.Document, editor.CaretOffset, editor.SelectionStart, editor.SelectionLength,
+            allowWrap: false, Refused);
+        if (match is null && !_wrapped)
+        {
+            var answer = await _windowManager.MessageBox(
+                _localization.GetString(Direction == FindDirection.Down
+                    ? "Str.FindReplace.Msg.WrapDown" : "Str.FindReplace.Msg.WrapUp"),
+                buttons: MessageBoxButtons.YesNo, icon: MessageBoxIcon.Question);
+            if (answer != MessageBoxResult.Yes) return;
+            _wrapped = true;
+            var from = Direction == FindDirection.Down ? 0 : editor.Document.TextLength + 1;
+            match = FindNext(editor.Document, from, 0, 0, allowWrap: false, Refused);
+        }
+        if (match is { } found)
+        {
+            SelectMatch(editor, found.offset, found.length);
+            return;
+        }
+
+        var anywhere = FindNext(editor.Document,
+            Direction == FindDirection.Down ? 0 : editor.Document.TextLength + 1,
+            0, 0, allowWrap: false, editor.IsReadOnlyRegion);
+        ResetSearch();
+        if (anywhere is not null)
+            await _windowManager.MessageBox(_localization.GetString("Str.FindReplace.Msg.RegionSearched"),
+                buttons: MessageBoxButtons.Ok, icon: MessageBoxIcon.Warning);
+        else
+            await _windowManager.MessageBox(
+                string.Format(_localization.GetString(ProtectedMatchesInScope(editor) > 0
+                    ? "Str.FindReplace.Msg.ReadOnlyTextOnly" : "Str.FindReplace.Msg.NotFound"), SearchText),
+                _localization.GetString("Str.FindReplace.Msg.TitleFind"), MessageBoxButtons.Ok, MessageBoxIcon.Information);
+    }
+
+    private async Task ExecuteReplaceOne()
     {
         var editor = GetActiveEditor();
         if (editor is null)
@@ -400,7 +477,7 @@ public partial class FindReplaceViewModel : ObservableObject, IDialog
         }
 
         // Find next
-        ExecuteFindNext();
+        await ExecuteFindNext();
     }
 
     private async Task ExecuteReplaceAllAsync()
