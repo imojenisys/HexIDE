@@ -17,13 +17,17 @@ internal interface ICompoundFolderFormat
     void ValidateManifest(byte[] bytes);
 }
 
-/// <summary>Explicit, one-way projection of a saved archive. All previous trees are retained for recovery.</summary>
+/// <summary>Explicit, one-way projection of a saved archive. Previous trees are retained for recovery, with verified old transactions pruned after successful changes.</summary>
 internal sealed class CompoundSourceFolder(ICompoundFolderFormat format)
 {
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> OpenFiles = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private const int Limit = 64 * 1024 * 1024;
+    private const int RetainedTransactionCount = 10;
+    private const int RetainedTransactionDays = 7;
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
+    internal TimeProvider Clock { get; init; } = TimeProvider.System;
+
     internal Action<string>? Checkpoint { get; set; }
     internal DistributionIdentity Identity { get; init; } = Distribution.Current;
     internal string? ChosenRoot { get; set; }
@@ -170,7 +174,55 @@ internal sealed class CompoundSourceFolder(ICompoundFolderFormat format)
         Checkpoint?.Invoke("manifest-written");
         WriteAtomic(paths, paths.Baseline, manifestBytes);
         DeleteFile(paths.Journal);
+        Prune(paths.Control, transaction);
         return new(paths.Target, true);
+    }
+
+    internal void Prune(string control, string completedTransaction)
+    {
+        // Sync has already succeeded. I/O and access failures must leave recovery data behind
+        // without changing that result, and a failure for one candidate must not stop the next.
+        try
+        {
+            CheckAncestors(control);
+            var journal = Path.Combine(control, "pending.json");
+            if (Exists(journal)) return;
+            var candidates = new List<(string Path, DateTime Modified)>();
+            foreach (var candidate in Directory.GetDirectories(control))
+            {
+                if (!Guid.TryParseExact(Path.GetFileName(candidate), "N", out _)) continue;
+                try
+                {
+                    CheckAncestors(candidate);
+                    var metadata = Path.Combine(candidate, "new.json");
+                    ParseManifest(ReadBounded(metadata));
+                    candidates.Add((candidate, File.GetLastWriteTimeUtc(metadata)));
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+            var cutoff = Clock.GetUtcNow().UtcDateTime.AddDays(-RetainedTransactionDays);
+            foreach (var candidate in candidates.OrderByDescending(c => c.Modified).Skip(RetainedTransactionCount))
+            {
+                if (candidate.Modified >= cutoff || Path.GetFileName(candidate.Path) == completedTransaction) continue;
+                try
+                {
+                    if (Exists(journal)) return;
+                    CheckTreeLinks(candidate.Path);
+                    foreach (var (tree, metadata) in new[] { ("previous", "old.json"), ("next", "new.json") })
+                    {
+                        var path = Path.Combine(candidate.Path, tree);
+                        if (Exists(path) || tree == "previous" && Exists(Path.Combine(candidate.Path, metadata)))
+                            VerifyTree(path, ParseManifest(ReadBounded(Path.Combine(candidate.Path, metadata))));
+                    }
+                    Directory.Delete(candidate.Path, recursive: true);
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
     private void Recover(Locations paths)
