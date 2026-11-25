@@ -66,12 +66,12 @@ internal static class DesktopStartup
         {
             // First, before add-ins load and before the startup project opens: the provider's themes are what the first
             // designer draws with (#5396). In recovery sessions too, where VB6 projects still open.
-            BasicProviderComposition.Register(setup.HexIdeHost);
+            var provider = BasicProviderComposition.Register(setup.HexIdeHost);
 
             // The registry also guards loading in recovery sessions.
             var loader = setup.AddinLoader;
             loader.LoadAll(setup.HexIdeHost);
-            DisposeOnShutdown(desktop, loader);
+            DisposeOnShutdown(desktop, loader, provider);
 
             startupProject.Attach(desktop.MainWindow!, setup.ContributedProjects, loader.PromptPendingConsentAsync);
 
@@ -144,12 +144,19 @@ internal static class DesktopStartup
     }
 
     internal static void DisposeOnShutdown(IClassicDesktopStyleApplicationLifetime desktop, IAddinLoader loader)
+        => DisposeOnShutdown(desktop, loader, null);
+
+    internal static void DisposeOnShutdown(IClassicDesktopStyleApplicationLifetime desktop, IAddinLoader loader, IDisposable? provider)
     {
         // App's handlers run first: this hook is invoked at the end of OnFrameworkInitializationCompleted.
         // Keep this on ShutdownRequested so disposal precedes closing any consent dialog (#547).
         desktop.ShutdownRequested += (_, e) =>
         {
-            if (!e.Cancel) loader.Dispose();
+            if (!e.Cancel)
+            {
+                loader.Dispose();
+                provider?.Dispose();
+            }
         };
     }
 }
