@@ -92,6 +92,7 @@ A test that reaches the provider only at run time, through the application's com
 | `Projects/AddProjectGroupTests.cs` | split |
 | `Projects/ArchiveProjectOpenTests.cs` | split |
 | `Projects/ClassModuleSaveFidelityTests.cs` | split |
+| `Projects/CodeTextFormatTests.cs` | split |
 | `Projects/CompanionBinaryPreservationTests.cs` | split |
 | `Projects/ConflictingFormNamesTests.cs` | split |
 | `Projects/ContributedFormTests.cs` | split |
@@ -198,7 +199,6 @@ A test that reaches the provider only at run time, through the application's com
 | `ViewModels/ProjectToolViewModelTests.cs` | split |
 | `ViewModels/PropertyFilterTests.cs` | split |
 | `ViewModels/RawPropertyRowsTests.cs` | split |
-| `ViewModels/ReadOnlyRegionReaderSeamTests.cs` | split |
 | `ViewModels/ReadOnlyRegionWriterSeamTests.cs` | split |
 | `ViewModels/ReadOnlySectionProviderTests.cs` | split |
 | `ViewModels/ReferencesViewModelTests.cs` | split |

@@ -76,20 +76,17 @@ removals; Release checks additions only because Desktop's automation server is D
 | type | HexIDE | HexIDE.Runtime.Interpreter.Vb6Value |
 | type | HexIDE | HexIDE.Runtime.Interpreter.VbObject |
 | type | HexIDE | HexIDE.Runtime.Interpreter.VbSettingsStores |
-| type | HexIDE | HexIDE.Runtime.Serialization.CodeWindowText |
 | type | HexIDE | HexIDE.Runtime.Serialization.FormCodeText |
 | type | HexIDE | HexIDE.Runtime.Serialization.FormDeserializer |
 | type | HexIDE | HexIDE.Runtime.Serialization.FormSerializer |
 | type | HexIDE | HexIDE.Runtime.Serialization.FrxDeserializer |
 | type | HexIDE | HexIDE.Runtime.Serialization.GroupDeserializer |
 | type | HexIDE | HexIDE.Runtime.Serialization.GroupSerializer |
-| type | HexIDE | HexIDE.Runtime.Serialization.LineEdits |
 | type | HexIDE | HexIDE.Runtime.Serialization.ModuleFileFormat |
 | type | HexIDE | HexIDE.Runtime.Serialization.PreservedControlText |
 | type | HexIDE | HexIDE.Runtime.Serialization.ProjectLoader |
 | type | HexIDE | HexIDE.Runtime.Serialization.ProjectLoader+Result |
 | type | HexIDE | HexIDE.Runtime.Serialization.ProjectSerializer |
-| type | HexIDE | HexIDE.Runtime.Serialization.Reduction |
 | type | HexIDE | HexIDE.Runtime.Serialization.RichTextBoxPersistence |
 | type | HexIDE | HexIDE.Runtime.Serialization.UnmodelledControl |
 | type | HexIDE | HexIDE.Runtime.Serialization.Vb6ReadOnlyRegionReader |
@@ -106,5 +103,4 @@ removals; Release checks additions only because Desktop's automation server is D
 | type | HexIDE.Desktop | HexIDE.Runtime.Components.FormComponentClass |
 | type | HexIDE.Desktop | HexIDE.Runtime.Components.InBox.SSTabComponentClass |
 | type | HexIDE.Desktop | HexIDE.Runtime.Components.MenuComponentClass |
-| type | HexIDE.Desktop | HexIDE.Runtime.Serialization.CodeWindowText |
 | type | HexIDE.Desktop | HexIDE.Runtime.Serialization.UnmodelledControl |

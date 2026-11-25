@@ -163,6 +163,7 @@ public sealed class ContributedFormTests : IDisposable
 
     public ContributedFormTests()
     {
+        Vb6ProjectType.RegisterOwn(_types);
         Directory.CreateDirectory(_dir);
         File.WriteAllText(ProjectFile, "a project");
         WriteForm();

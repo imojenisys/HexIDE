@@ -219,6 +219,17 @@ in `code-editor`.
 - **THEN** its text is the format's prefix for that form followed by the form's code, and its read-only regions are the
   positions the reader gives
 
+### Requirement: The IDE SHALL ask the format for language-specific code text rules
+The IDE SHALL ask the project's format for the leading Attribute block, the module name in a preserved header and
+whether text is a designer file (#5637, part of #3411). A format without VB headers SHALL default to an empty block,
+the supplied fallback name and false respectively. Code-window text, length-based buffer splits and formatting-edit
+reduction SHALL live in Core, independent of the Basic provider.
+
+#### Scenario: A contributed module without a registered member format
+- **GIVEN** no registered format reads the contributed project's members
+- **WHEN** a code module is read
+- **THEN** its whole text is kept as code, with no header split
+
 ### Requirement: Writes to read-only text SHALL follow the format's rules and writer
 The IDE SHALL decide writes into read-only regions through the format's rules (`IReadOnlyRegionRules`), and SHALL let the
 format name its read-only text in refusals and save notes (#3680, #3716). Where the format decides nothing, the IDE SHALL
