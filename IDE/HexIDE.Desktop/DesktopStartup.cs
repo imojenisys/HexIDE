@@ -14,6 +14,12 @@ namespace HexIDE.Desktop;
 
 internal static class DesktopStartup
 {
+    /// <summary>
+    /// Only tests read this handle to release the composed provider's registrations. The product never disposes it:
+    /// its themes must remain while windows close, as described by BasicProviderComposition.Register.
+    /// </summary>
+    internal static HexIDE.Runtime.BasicProvider? ComposedProvider { get; set; }
+
     public static void Register()
     {
         HexIDE.Static.IsRecoveryMode = ServerOptions.Profile == "none";
@@ -66,12 +72,12 @@ internal static class DesktopStartup
         {
             // First, before add-ins load and before the startup project opens: the provider's themes are what the first
             // designer draws with (#5396). In recovery sessions too, where VB6 projects still open.
-            var provider = BasicProviderComposition.Register(setup.HexIdeHost);
+            ComposedProvider = BasicProviderComposition.Register(setup.HexIdeHost);
 
             // The registry also guards loading in recovery sessions.
             var loader = setup.AddinLoader;
             loader.LoadAll(setup.HexIdeHost);
-            DisposeOnShutdown(desktop, loader, provider);
+            DisposeOnShutdown(desktop, loader);
 
             startupProject.Attach(desktop.MainWindow!, setup.ContributedProjects, loader.PromptPendingConsentAsync);
 
@@ -144,19 +150,12 @@ internal static class DesktopStartup
     }
 
     internal static void DisposeOnShutdown(IClassicDesktopStyleApplicationLifetime desktop, IAddinLoader loader)
-        => DisposeOnShutdown(desktop, loader, null);
-
-    internal static void DisposeOnShutdown(IClassicDesktopStyleApplicationLifetime desktop, IAddinLoader loader, IDisposable? provider)
     {
         // App's handlers run first: this hook is invoked at the end of OnFrameworkInitializationCompleted.
         // Keep this on ShutdownRequested so disposal precedes closing any consent dialog (#547).
         desktop.ShutdownRequested += (_, e) =>
         {
-            if (!e.Cancel)
-            {
-                loader.Dispose();
-                provider?.Dispose();
-            }
+            if (!e.Cancel) loader.Dispose();
         };
     }
 }

@@ -32,7 +32,8 @@ internal static class BasicProviderComposition
     /// designer drawn already has the provider's themes.
     /// </summary>
     /// <returns>
-    /// The provider, owned by desktop startup and disposed after add-ins on an accepted shutdown request.
+    /// The provider. It isn't disposed at shutdown: its themes stay until the process ends, so a window still closing keeps
+    /// drawing as it did.
     /// </returns>
     internal static BasicProvider? Register(IHexIdeHost host)
     {

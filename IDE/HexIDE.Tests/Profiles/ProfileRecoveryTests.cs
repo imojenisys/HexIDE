@@ -164,12 +164,11 @@ public sealed class ProfileRecoveryTests : IDisposable
             Static.IsRecoveryMode.Should().BeTrue();
             await using var owner = new StartupComposition();
             var setup = owner.Setup;
+            using var loader = setup.AddinLoader;
             var window = new Avalonia.Controls.Window();
-            using var desktop = new Avalonia.Controls.ApplicationLifetimes.ClassicDesktopStyleApplicationLifetime { MainWindow = window };
+            var desktop = new Avalonia.Controls.ApplicationLifetimes.ClassicDesktopStyleApplicationLifetime { MainWindow = window };
             var basicAreas = LanguagePackAreas.Current.Areas.Count(a => a.OwnerId == "hexide.basic");
             Static.DesktopStartupHook!(setup, desktop);
-            // Keep the headless session's dispatcher alive after the startup cleanup handles the request.
-            desktop.ShutdownRequested += (_, e) => e.Cancel = true;
             var manager = Substitute.For<IProjectManager>();
             var projects = new HexIDE.Projects.ProjectService(
                 () => throw new InvalidOperationException("Unexpected project dialog"),
@@ -178,11 +177,9 @@ public sealed class ProfileRecoveryTests : IDisposable
                 Substitute.For<IUserSidecarService>(), new FileBaselineStore(),
                 Substitute.For<ILocalizationService>(), Substitute.For<IHeaderRefresher>(), InBoxRegistry.Create());
             try { await Static.StartupProjectHook!(projects, manager); }
-            finally
-            {
-                desktop.TryShutdown();
-                window.Close();
-            }
+            finally { window.Close(); }
+            DesktopStartup.ComposedProvider?.Dispose();
+            DesktopStartup.ComposedProvider = null;
             manager.Received(1).AddProject(Arg.Is<HexIDE.Runtime.ProjectElements.ProjectDefinition>(
                 p => p.Name == "Explicit" && p.Modules.Count == 1));
             using (new AddinLanguagePackService().Register(
