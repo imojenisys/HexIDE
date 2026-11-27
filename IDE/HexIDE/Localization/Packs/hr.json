@@ -544,6 +544,8 @@
     "Str.Designer.Context.Delete": "_Izbriši",
     "Str.Designer.Context.BringToFront": "Premjesti u prvi plan",
     "Str.Designer.Context.SendToBack": "Premjesti u pozadinu",
+    "Str.Designer.MoveControlFormat": "Premještanje: {0}",
+    "Str.Designer.MoveControlsFormat": "Premještanje kontrola ({0})",
     "Str.Designer.PreviewForm": "Pretpregled obrasca",
     "Str.Designer.Context.ViewCode": "Prikaži kod",
     "Str.Designer.Context.AlignToGrid": "Poravnaj s mrežom",

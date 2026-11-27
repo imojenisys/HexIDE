@@ -552,6 +552,8 @@
     "Str.Designer.Context.Delete": "_Odstranit",
     "Str.Designer.Context.BringToFront": "Přenést do popředí",
     "Str.Designer.Context.SendToBack": "Přenést do pozadí",
+    "Str.Designer.MoveControlFormat": "Přesunutí: {0}",
+    "Str.Designer.MoveControlsFormat": "Přesunutí ovládacích prvků ({0})",
     "Str.Designer.PreviewForm": "Náhled formuláře",
     "Str.Designer.Context.ViewCode": "Zobrazit kód",
     "Str.Designer.Context.AlignToGrid": "Zarovnat k mřížce",

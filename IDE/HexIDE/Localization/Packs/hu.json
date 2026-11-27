@@ -511,6 +511,8 @@
     "Str.Designer.Context.Delete": "_Törlés",
     "Str.Designer.Context.BringToFront": "Előrehozás",
     "Str.Designer.Context.SendToBack": "Hátraküldés",
+    "Str.Designer.MoveControlFormat": "Áthelyezés: {0}",
+    "Str.Designer.MoveControlsFormat": "Áthelyezés: {0} vezérlőelem",
     "Str.Designer.PreviewForm": "Űrlap előnézete",
     "Str.Designer.Context.ViewCode": "Kód megtekintése",
     "Str.Designer.Context.AlignToGrid": "Rácshoz igazítás",

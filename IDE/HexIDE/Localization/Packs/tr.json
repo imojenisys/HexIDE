@@ -514,6 +514,8 @@
     "Str.Designer.Context.Delete": "_Sil",
     "Str.Designer.Context.BringToFront": "Öne Getir",
     "Str.Designer.Context.SendToBack": "Arkaya Gönder",
+    "Str.Designer.MoveControlFormat": "Taşı: {0}",
+    "Str.Designer.MoveControlsFormat": "Taşı: {0} denetim",
     "Str.Designer.PreviewForm": "Form Önizlemesi",
     "Str.Designer.Context.ViewCode": "Kodu Görüntüle",
     "Str.Designer.Context.AlignToGrid": "Izgaraya Hizala",

@@ -519,6 +519,8 @@
     "Str.Designer.Context.Delete": "_Slet",
     "Str.Designer.Context.BringToFront": "Placér forrest",
     "Str.Designer.Context.SendToBack": "Placér bagest",
+    "Str.Designer.MoveControlFormat": "Flyt: {0}",
+    "Str.Designer.MoveControlsFormat": "Flyt: {0} kontrolelementer",
     "Str.Designer.PreviewForm": "Forhåndsvis formular",
     "Str.Designer.Context.ViewCode": "Vis kode",
     "Str.Designer.Context.AlignToGrid": "Justér efter gitter",

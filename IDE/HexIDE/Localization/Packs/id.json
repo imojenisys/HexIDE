@@ -553,6 +553,8 @@
     "Str.Designer.Context.Delete": "_Hapus",
     "Str.Designer.Context.BringToFront": "Bawa ke Depan",
     "Str.Designer.Context.SendToBack": "Kirim ke Belakang",
+    "Str.Designer.MoveControlFormat": "Pindahkan: {0}",
+    "Str.Designer.MoveControlsFormat": "Pindahkan: {0} kontrol",
     "Str.Designer.PreviewForm": "Pratinjau Formulir",
     "Str.Designer.Context.ViewCode": "Lihat Kode",
     "Str.Designer.Context.AlignToGrid": "Sejajarkan ke Kisi",

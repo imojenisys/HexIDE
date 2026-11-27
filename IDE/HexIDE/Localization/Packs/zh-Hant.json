@@ -547,6 +547,8 @@
     "Str.Designer.Context.Delete": "刪除(_D)",
     "Str.Designer.Context.BringToFront": "移到最上層",
     "Str.Designer.Context.SendToBack": "移到最下層",
+    "Str.Designer.MoveControlFormat": "移動：{0}",
+    "Str.Designer.MoveControlsFormat": "移動：{0} 個控制項",
     "Str.Designer.PreviewForm": "預覽表單",
     "Str.Designer.Context.ViewCode": "檢視程式碼",
     "Str.Designer.Context.AlignToGrid": "對齊格線",

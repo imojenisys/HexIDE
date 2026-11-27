@@ -586,6 +586,8 @@
     "Str.Designer.Context.Delete": "削除(_D)",
     "Str.Designer.Context.BringToFront": "最前面へ移動",
     "Str.Designer.Context.SendToBack": "最背面へ移動",
+    "Str.Designer.MoveControlFormat": "移動: {0}",
+    "Str.Designer.MoveControlsFormat": "移動: {0} 個のコントロール",
     "Str.Designer.PreviewForm": "フォームのプレビュー",
     "Str.Designer.Context.ViewCode": "コードの表示",
     "Str.Designer.Context.AlignToGrid": "グリッドに合わせる",

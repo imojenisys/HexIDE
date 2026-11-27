@@ -552,6 +552,8 @@
     "Str.Designer.Context.Delete": "_Supprimer",
     "Str.Designer.Context.BringToFront": "Mettre au premier plan",
     "Str.Designer.Context.SendToBack": "Mettre à l'arrière-plan",
+    "Str.Designer.MoveControlFormat": "Déplacer : {0}",
+    "Str.Designer.MoveControlsFormat": "Déplacer : {0} contrôles",
     "Str.Designer.PreviewForm": "Aperçu du formulaire",
     "Str.Designer.Context.ViewCode": "Afficher le code",
     "Str.Designer.Context.AlignToGrid": "Aligner sur la grille",

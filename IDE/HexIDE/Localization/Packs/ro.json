@@ -472,6 +472,8 @@
     "Str.Designer.Context.Delete": "_Șterge",
     "Str.Designer.Context.BringToFront": "Adu în prim-plan",
     "Str.Designer.Context.SendToBack": "Trimite în fundal",
+    "Str.Designer.MoveControlFormat": "Mutare: {0}",
+    "Str.Designer.MoveControlsFormat": "Mutare: {0} controale",
     "Str.Designer.PreviewForm": "Previzualizează formularul",
     "Str.Designer.Context.ViewCode": "Vizualizează codul",
     "Str.Designer.Context.AlignToGrid": "Aliniază la grilă",

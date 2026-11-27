@@ -553,6 +553,8 @@
     "Str.Designer.Context.Delete": "_Usuń",
     "Str.Designer.Context.BringToFront": "Przenieś na wierzch",
     "Str.Designer.Context.SendToBack": "Przenieś na spód",
+    "Str.Designer.MoveControlFormat": "Przeniesienie: {0}",
+    "Str.Designer.MoveControlsFormat": "Przeniesienie formantów ({0})",
     "Str.Designer.PreviewForm": "Podgląd formularza",
     "Str.Designer.Context.ViewCode": "Pokaż kod",
     "Str.Designer.Context.AlignToGrid": "Wyrównaj do siatki",

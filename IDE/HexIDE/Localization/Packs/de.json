@@ -552,6 +552,8 @@
     "Str.Designer.Context.Delete": "_Löschen",
     "Str.Designer.Context.BringToFront": "In den Vordergrund",
     "Str.Designer.Context.SendToBack": "In den Hintergrund",
+    "Str.Designer.MoveControlFormat": "Verschieben: {0}",
+    "Str.Designer.MoveControlsFormat": "Verschieben: {0} Steuerelemente",
     "Str.Designer.PreviewForm": "Formularvorschau",
     "Str.Designer.Context.ViewCode": "Code anzeigen",
     "Str.Designer.Context.AlignToGrid": "Am Raster ausrichten",

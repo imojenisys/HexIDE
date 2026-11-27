@@ -514,6 +514,8 @@
     "Str.Designer.Context.Delete": "Видалити",
     "Str.Designer.Context.BringToFront": "На передній план",
     "Str.Designer.Context.SendToBack": "На задній план",
+    "Str.Designer.MoveControlFormat": "Переміщення: {0}",
+    "Str.Designer.MoveControlsFormat": "Переміщення елементів керування ({0})",
     "Str.Designer.PreviewForm": "Попередній перегляд форми",
     "Str.Designer.Context.ViewCode": "Переглянути код",
     "Str.Designer.Context.AlignToGrid": "Вирівняти за сіткою",

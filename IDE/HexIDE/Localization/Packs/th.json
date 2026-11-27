@@ -472,6 +472,8 @@
     "Str.Designer.Context.Delete": "ลบ",
     "Str.Designer.Context.BringToFront": "นำมาไว้ด้านหน้า",
     "Str.Designer.Context.SendToBack": "ส่งไปไว้ด้านหลัง",
+    "Str.Designer.MoveControlFormat": "ย้าย: {0}",
+    "Str.Designer.MoveControlsFormat": "ย้าย: {0} ตัวควบคุม",
     "Str.Designer.PreviewForm": "แสดงตัวอย่างฟอร์ม",
     "Str.Designer.Context.ViewCode": "ดูโค้ด",
     "Str.Designer.Context.AlignToGrid": "จัดแนวให้ตรงตาราง",

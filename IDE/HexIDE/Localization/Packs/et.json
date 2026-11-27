@@ -477,6 +477,8 @@
     "Str.Designer.Context.Delete": "_Kustuta",
     "Str.Designer.Context.BringToFront": "Too ette",
     "Str.Designer.Context.SendToBack": "Saada taha",
+    "Str.Designer.MoveControlFormat": "Teisaldamine: {0}",
+    "Str.Designer.MoveControlsFormat": "Juhtelementide teisaldamine ({0})",
     "Str.Designer.PreviewForm": "Vormi eelvaade",
     "Str.Designer.Context.ViewCode": "Kuva kood",
     "Str.Designer.Context.AlignToGrid": "Joonda ruudustikuga",

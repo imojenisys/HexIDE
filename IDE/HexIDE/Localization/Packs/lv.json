@@ -511,6 +511,8 @@
     "Str.Designer.Context.Delete": "_Dzēst",
     "Str.Designer.Context.BringToFront": "Pārvietot priekšplānā",
     "Str.Designer.Context.SendToBack": "Pārvietot aizmugurē",
+    "Str.Designer.MoveControlFormat": "Pārvietošana: {0}",
+    "Str.Designer.MoveControlsFormat": "Vadīklu pārvietošana ({0})",
     "Str.Designer.PreviewForm": "Priekšskatīt formu",
     "Str.Designer.Context.ViewCode": "Skatīt kodu",
     "Str.Designer.Context.AlignToGrid": "Līdzināt režģim",

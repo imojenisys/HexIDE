@@ -510,6 +510,8 @@
     "Str.Designer.Context.Delete": "_Suprimeix",
     "Str.Designer.Context.BringToFront": "Porta al davant",
     "Str.Designer.Context.SendToBack": "Envia al darrere",
+    "Str.Designer.MoveControlFormat": "Moviment: {0}",
+    "Str.Designer.MoveControlsFormat": "Moviment de {0} controls",
     "Str.Designer.PreviewForm": "Previsualitza el formulari",
     "Str.Designer.Context.ViewCode": "Visualitza el codi",
     "Str.Designer.Context.AlignToGrid": "Alinea a la quadrícula",

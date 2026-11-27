@@ -511,6 +511,8 @@
     "Str.Designer.Context.Delete": "_Šalinti",
     "Str.Designer.Context.BringToFront": "Perkelti į priekį",
     "Str.Designer.Context.SendToBack": "Perkelti į galą",
+    "Str.Designer.MoveControlFormat": "Perkėlimas: {0}",
+    "Str.Designer.MoveControlsFormat": "Valdiklių perkėlimas ({0})",
     "Str.Designer.PreviewForm": "Formos peržiūra",
     "Str.Designer.Context.ViewCode": "Rodyti kodą",
     "Str.Designer.Context.AlignToGrid": "Lygiuoti prie tinklelio",

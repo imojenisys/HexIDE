@@ -509,6 +509,8 @@
     "Str.Designer.Context.Delete": "_Delete",
     "Str.Designer.Context.BringToFront": "Bring to Front",
     "Str.Designer.Context.SendToBack": "Send to Back",
+    "Str.Designer.MoveControlFormat": "Move: {0}",
+    "Str.Designer.MoveControlsFormat": "Move: {0} controls",
     "Str.Designer.PreviewForm": "Preview Form",
     "Str.Designer.Context.ViewCode": "View Code",
     "Str.Designer.Context.AlignToGrid": "Align to Grid",

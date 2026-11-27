@@ -510,6 +510,8 @@
     "Str.Designer.Context.Delete": "Изтриване",
     "Str.Designer.Context.BringToFront": "На преден план",
     "Str.Designer.Context.SendToBack": "На заден план",
+    "Str.Designer.MoveControlFormat": "Преместване: {0}",
+    "Str.Designer.MoveControlsFormat": "Преместване на контроли ({0})",
     "Str.Designer.PreviewForm": "Преглед на формуляра",
     "Str.Designer.Context.ViewCode": "Преглед на кода",
     "Str.Designer.Context.AlignToGrid": "Подравняване по мрежата",

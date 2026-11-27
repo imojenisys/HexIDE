@@ -552,6 +552,8 @@
     "Str.Designer.Context.Delete": "_Eliminar",
     "Str.Designer.Context.BringToFront": "Traer al frente",
     "Str.Designer.Context.SendToBack": "Enviar al fondo",
+    "Str.Designer.MoveControlFormat": "Mover: {0}",
+    "Str.Designer.MoveControlsFormat": "Mover: {0} controles",
     "Str.Designer.PreviewForm": "Vista previa del formulario",
     "Str.Designer.Context.ViewCode": "Ver código",
     "Str.Designer.Context.AlignToGrid": "Alinear a la cuadrícula",

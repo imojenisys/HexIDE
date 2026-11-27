@@ -553,6 +553,8 @@
     "Str.Designer.Context.Delete": "_Slett",
     "Str.Designer.Context.BringToFront": "Flytt forrest",
     "Str.Designer.Context.SendToBack": "Flytt bakerst",
+    "Str.Designer.MoveControlFormat": "Flytt: {0}",
+    "Str.Designer.MoveControlsFormat": "Flytt: {0} kontroller",
     "Str.Designer.PreviewForm": "Forhåndsvis skjema",
     "Str.Designer.Context.ViewCode": "Vis kode",
     "Str.Designer.Context.AlignToGrid": "Juster etter rutenett",

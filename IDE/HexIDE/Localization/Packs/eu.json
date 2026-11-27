@@ -477,6 +477,8 @@
     "Str.Designer.Context.Delete": "E_zabatu",
     "Str.Designer.Context.BringToFront": "Ekarri aurrera",
     "Str.Designer.Context.SendToBack": "Bidali atzera",
+    "Str.Designer.MoveControlFormat": "Lekuz aldatu: {0}",
+    "Str.Designer.MoveControlsFormat": "Lekuz aldatu: {0} kontrol",
     "Str.Designer.PreviewForm": "Inprimakiaren aurrebista",
     "Str.Designer.Context.ViewCode": "Ikusi kodea",
     "Str.Designer.Context.AlignToGrid": "Lerrokatu saretara",

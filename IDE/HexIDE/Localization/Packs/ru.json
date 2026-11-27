@@ -514,6 +514,8 @@
     "Str.Designer.Context.Delete": "Удалить",
     "Str.Designer.Context.BringToFront": "На передний план",
     "Str.Designer.Context.SendToBack": "На задний план",
+    "Str.Designer.MoveControlFormat": "Перемещение: {0}",
+    "Str.Designer.MoveControlsFormat": "Перемещение элементов управления ({0})",
     "Str.Designer.PreviewForm": "Предпросмотр формы",
     "Str.Designer.Context.ViewCode": "Показать код",
     "Str.Designer.Context.AlignToGrid": "Выровнять по сетке",
