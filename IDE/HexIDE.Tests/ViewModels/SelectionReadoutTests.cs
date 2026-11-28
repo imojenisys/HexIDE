@@ -15,6 +15,29 @@ public class SelectionReadoutTests
 {
     private sealed class NullSink : IDeserializeErrorSink { public void LogError(string message) { } }
 
+    private const string TwoButtons = """
+        VERSION 5.00
+        Begin VB.Form Form1
+           Caption = "Form1"
+           ClientHeight = 3090
+           ClientWidth = 4680
+           ScaleMode = 1
+           Begin VB.CommandButton Command1
+              Left = 240
+              Top = 240
+              Width = 1215
+              Height = 495
+           End
+           Begin VB.CommandButton Command2
+              Left = 2400
+              Top = 1200
+              Width = 1215
+              Height = 495
+           End
+        End
+        Attribute VB_Name = "Form1"
+        """;
+
     // Measured rows: #1641 and docs/vb6-fidelity-oracle/what-vb6s-properties-window-shows-a-position-in.md (#5233).
     // The fractional height deliberately follows the Properties window's 25.533, rather than the readout's 25.53.
     [AvaloniaTheory]
@@ -44,21 +67,54 @@ public class SelectionReadoutTests
             End
             Attribute VB_Name = "Form1"
             """;
-        var form = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "P"), source,
-            new NullSink())!;
-        using var designer = new FormEditViewModel(null!, new EventBus(), Substitute.For<IProjectService>(),
-            Substitute.For<IEditorService>(), Substitute.For<IWindowManager>(), Substitute.For<ISettingsService>(),
-            Substitute.For<ILocalizationService>()).Initialize(form);
-        var dock = Substitute.For<IDocumentDockService>();
-        var focus = new FocusedProjectUtil(dock, Substitute.For<IProjectManager>());
-        dock.ActiveDocument.Returns(designer);
-        dock.PropertyChanged += Raise.Event<PropertyChangedEventHandler>(dock,
-            new PropertyChangedEventArgs(nameof(dock.ActiveDocument)));
-        designer.SelectedComponent = designer.AllComponents.Single(c =>
-            c.Instance.GetPropertyOrDefault(VBProperties.NameProperty) == selected);
+        using var designer = OpenDesigner(source, out var focus);
+        SelectControl(designer, selected);
 
         focus.FocusedComponentPosition.Should().Be(position);
         focus.FocusedComponentSize.Should().Be(size);
+    }
+
+    [AvaloniaFact]
+    public void Changing_a_previously_selected_control_leaves_the_readouts_on_the_current_selection()
+    {
+        using var designer = OpenDesigner(TwoButtons, out var focus);
+        var first = SelectControl(designer, "Command1");
+        SelectControl(designer, "Command2");
+
+        first.Left += 10;
+        first.Width += 4;
+
+        (focus.FocusedComponentPosition, focus.FocusedComponentSize).Should().Be(("2400, 1200", "1215 x 495"));
+    }
+
+    [AvaloniaFact]
+    public void Reselecting_a_control_shows_its_current_position_and_size()
+    {
+        using var designer = OpenDesigner(TwoButtons, out var focus);
+        var first = SelectControl(designer, "Command1");
+        SelectControl(designer, "Command2");
+        first.Left += 10;
+        first.Width += 4;
+
+        SelectControl(designer, "Command1");
+
+        focus.FocusedComponentPosition.Should().Be("390, 240");
+        focus.FocusedComponentSize.Should().Be("1275 x 495");
+    }
+
+    [AvaloniaFact]
+    public void Moving_and_resizing_the_selected_control_updates_the_readouts()
+    {
+        using var designer = OpenDesigner(TwoButtons, out var focus);
+        var first = SelectControl(designer, "Command1");
+        focus.FocusedComponentPosition.Should().Be("240, 240");
+        focus.FocusedComponentSize.Should().Be("1215 x 495");
+
+        first.Left += 10;
+        first.Width += 4;
+
+        focus.FocusedComponentPosition.Should().Be("390, 240");
+        focus.FocusedComponentSize.Should().Be("1275 x 495");
     }
 
     [Fact]
@@ -68,5 +124,27 @@ public class SelectionReadoutTests
 
         focus.FocusedComponentPosition.Should().Be("0, 0");
         focus.FocusedComponentSize.Should().Be("0, 0");
+    }
+
+    private static FormEditViewModel OpenDesigner(string source, out FocusedProjectUtil focus)
+    {
+        var form = new FormDeserializer().Deserialize(new ProjectDefinition(VBProjectType.EXE, "P"), source,
+            new NullSink())!;
+        var designer = new FormEditViewModel(null!, new EventBus(), Substitute.For<IProjectService>(),
+            Substitute.For<IEditorService>(), Substitute.For<IWindowManager>(), Substitute.For<ISettingsService>(),
+            Substitute.For<ILocalizationService>()).Initialize(form);
+        var dock = Substitute.For<IDocumentDockService>();
+        focus = new FocusedProjectUtil(dock, Substitute.For<IProjectManager>());
+        dock.ActiveDocument.Returns(designer);
+        dock.PropertyChanged += Raise.Event<PropertyChangedEventHandler>(dock,
+            new PropertyChangedEventArgs(nameof(dock.ActiveDocument)));
+        return designer;
+    }
+
+    private static ComponentInstanceViewModel SelectControl(FormEditViewModel designer, string name)
+    {
+        var component = designer.AllComponents.Single(c => c.Instance.GetPropertyOrDefault(VBProperties.NameProperty) == name);
+        designer.SelectedComponent = component;
+        return component;
     }
 }
